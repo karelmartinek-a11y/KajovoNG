@@ -1,0 +1,48 @@
+{
+  "db_path": "kajovo.sqlite",
+  "log_dir": "LOG",
+  "cache_dir": "cache",
+  "batch_poll_interval_s": 4.0,
+  "batch_timeout_s": 3600,
+  "default_model": "gpt-4o-mini",
+  "default_temperature": 0.2,
+  "dry_run_modify": false,
+  "retry": {
+    "max_attempts": 6,
+    "base_delay_s": 0.8,
+    "max_delay_s": 20.0,
+    "jitter_s": 0.25,
+    "circuit_breaker_failures": 6,
+    "circuit_breaker_cooldown_s": 20.0
+  },
+  "logging": {
+    "max_total_mb": 2048,
+    "max_runs": 200,
+    "encrypt_logs": false,
+    "mask_secrets": false
+  },
+  "pricing": {
+    "source_url": "",
+    "cache_ttl_hours": 72,
+    "auto_refresh_on_start": true
+  },
+  "security": {
+    "allow_upload_sensitive": false,
+    "deny_extensions_in": [
+      ".exe",".dll",".zip",".7z",".rar",".png",".jpg",".jpeg",".gif",".pdf",".db",".sqlite",".pkl",".pt",".onnx"
+    ],
+    "deny_globs_in": [
+      "**/.git/**","**/node_modules/**","**/venv/**","**/.venv/**","**/LOG/**"
+    ]
+  },
+  "smtp": {
+    "host": "smtp.example.com",
+    "port": 587,
+    "username": "",
+    "password": "",
+    "use_tls": true,
+    "use_ssl": false,
+    "from_email": "",
+    "to_email": ""
+  }
+}

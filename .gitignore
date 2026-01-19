@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+LOG/
+cache/
+diagnostics/
+RUN_*/
+TEST_*/
+kajovo.sqlite
+kajovo_state.json
+kajovo_settings.json
