@@ -4,6 +4,7 @@ import os, json
 from dataclasses import dataclass, asdict, field
 from typing import List, Optional
 from .utils import ensure_dir
+from .secret_store import get_secret, set_secret
 
 DEFAULT_SETTINGS_FILE = "kajovo_settings.json"
 DEFAULT_DENY_EXTENSIONS = [
@@ -49,8 +50,8 @@ class LoggingPolicy:
 
 @dataclass
 class PricingPolicy:
-    # Default to public OpenAI pricing JSON (GitHub mirror); fallback model fetch is used if unavailable.
-    source_url: str = "https://raw.githubusercontent.com/openai/openai-python/refs/heads/main/pricing.json"
+    # Use official OpenAI pricing page as primary source.
+    source_url: str = "https://openai.com/api/pricing/"
     cache_ttl_hours: int = 72
     auto_refresh_on_start: bool = True
 
@@ -122,9 +123,22 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
 
     s = AppSettings()
     merge(s, raw)
+    # Backward compatibility: migrate plaintext secrets to OS keyring / env store.
+    if s.smtp.password:
+        set_secret("smtp_password", s.smtp.password)
+    if s.ssh.password:
+        set_secret("ssh_password", s.ssh.password)
+    s.smtp.password = get_secret("smtp_password") or ""
+    s.ssh.password = get_secret("ssh_password") or ""
     return s
 
 def save_settings(s: AppSettings, path: str = DEFAULT_SETTINGS_FILE) -> None:
     ensure_dir(os.path.dirname(os.path.abspath(path)) or ".")
+    set_secret("smtp_password", s.smtp.password or "")
+    set_secret("ssh_password", s.ssh.password or "")
+    payload = asdict(s)
+    # Never persist credentials in plaintext JSON.
+    payload.setdefault("smtp", {})["password"] = ""
+    payload.setdefault("ssh", {})["password"] = ""
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(asdict(s), f, ensure_ascii=False, indent=2, default=str)
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)

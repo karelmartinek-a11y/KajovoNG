@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import os, json, time
+import os, json, time, re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 import requests
+from bs4 import BeautifulSoup
 
 
 @dataclass
@@ -87,30 +88,64 @@ class PriceTable:
         try:
             r = requests.get(url, timeout=timeout_s)
             r.raise_for_status()
-            data = r.json()
-            rows = {}
-            for row in data.get("rows", []):
-                try:
-                    pr = PriceRow.from_dict(row)
-                    if pr.model:
-                        rows[pr.model] = pr
-                except Exception:
-                    continue
-            if not rows:
-                return False, "price_table: empty rows"
-            self.update_from_rows(rows, verified=True, source=f"URL {url}")
-            return True, "OK"
+            ctype = (r.headers.get("content-type") or "").lower()
+            rows: Dict[str, PriceRow] = {}
+
+            if "json" in ctype:
+                data = r.json()
+                for row in data.get("rows", []):
+                    try:
+                        pr = PriceRow.from_dict(row)
+                        if pr.model:
+                            rows[pr.model] = pr
+                    except Exception:
+                        continue
+                if rows:
+                    self.update_from_rows(rows, verified=True, source=f"URL {url}")
+                    return True, "OK"
+
+            parsed_rows = self._parse_official_pricing_html(r.text)
+            if parsed_rows:
+                self.update_from_rows(parsed_rows, verified=False, source=f"official pricing page (unverified parse) {url}")
+                return False, "Použit neověřený/odhadnutý parsing oficiální pricing stránky."
+
+            return self._fallback_with_reason("Nepodařilo se parsovat pricing data z URL.")
         except Exception as e:
-            self.verified = False
-            # fallback to builtin pricing so app remains usable
-            fallback_rows = PriceTable.builtin_fallback().rows
-            if fallback_rows:
-                try:
-                    self.update_from_rows(fallback_rows, verified=False, source="builtin fallback")
-                except Exception:
-                    pass
             reason = str(e).splitlines()[0] if str(e) else "neznámá chyba"
-            return False, f"URL ceníku nedostupná (fallback): {reason}"
+            return self._fallback_with_reason(f"URL ceníku nedostupná: {reason}")
+
+    def _parse_official_pricing_html(self, html: str) -> Dict[str, PriceRow]:
+        rows: Dict[str, PriceRow] = {}
+        if not html:
+            return rows
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            text = soup.get_text("\n", strip=True)
+        except Exception:
+            text = html
+        model_re = re.compile(r"\b(gpt-[a-z0-9\-]+)\b", re.IGNORECASE)
+        price_re = re.compile(r"\$\s*([0-9]+(?:\.[0-9]+)?)")
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        for i, ln in enumerate(lines):
+            mm = model_re.search(ln)
+            if not mm:
+                continue
+            model = mm.group(1).lower()
+            window = " ".join(lines[i:i+6])
+            vals = [float(m.group(1)) for m in price_re.finditer(window)]
+            if len(vals) >= 2:
+                rows[model] = PriceRow(model=model, input_per_1k=vals[0], output_per_1k=vals[1])
+        return rows
+
+    def _fallback_with_reason(self, reason: str) -> Tuple[bool, str]:
+        self.verified = False
+        fallback_rows = PriceTable.builtin_fallback().rows
+        if fallback_rows:
+            try:
+                self.update_from_rows(fallback_rows, verified=False, source="builtin fallback (estimate)")
+            except Exception:
+                pass
+        return False, f"{reason} Použit neověřeno/odhad fallback."
 
     def get(self, model: str) -> Optional[PriceRow]:
         return self.rows.get(model)
