@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
 )
 
-from ..core.config import AppSettings, SMTPSettings, save_settings, DEFAULT_SETTINGS_FILE
+from ..core.config import AppSettings, SMTPSettings, save_settings, load_settings, DEFAULT_SETTINGS_FILE
 from ..core.openai_client import OpenAIClient
 from ..core.pipeline import RunWorker, UiRunConfig
 from ..core.pricing import PriceTable
@@ -54,6 +54,7 @@ from ..core.retry import CircuitBreaker, with_retry
 from ..core.runlog import RunLogger, find_last_incomplete_run
 from ..core.notifications import send_smtp_notification
 from ..core.utils import ensure_dir, new_run_id
+from ..core.secret_store import get_secret
 
 from ..core.model_capabilities import ModelCapabilitiesCache, ModelProbeWorker, ModelCapabilities
 from ..core.contracts import parse_json_strict, extract_text_from_response
@@ -725,7 +726,7 @@ class MainWindow(QMainWindow):
         except Exception:
             self.sp_smtp_port.setValue(587)
         self.ed_smtp_user.setText(getattr(smtp, "username", ""))
-        self.ed_smtp_pwd.setText(getattr(smtp, "password", ""))
+        self.ed_smtp_pwd.setText(get_secret("smtp_password") or "")
         self.chk_smtp_tls.setChecked(bool(getattr(smtp, "use_tls", True)))
         self.chk_smtp_ssl.setChecked(bool(getattr(smtp, "use_ssl", False)))
         self.ed_smtp_from.setText(getattr(smtp, "from_email", ""))
@@ -970,7 +971,7 @@ class MainWindow(QMainWindow):
                 "user": self.ed_ssh_user.text(),
                 "host": self.ed_ssh_host.text(),
                 "key": self.ed_ssh_key.text(),
-                "password": self.ed_ssh_pwd.text(),
+                "password": "",
             },
             "attached_file_ids": self.files_panel.attached_ids(),
             "attached_vector_store_ids": self.vector_panel.attached_ids() if hasattr(self, "vector_panel") else [],
@@ -992,7 +993,7 @@ class MainWindow(QMainWindow):
                     "host": self.ed_smtp_host.text(),
                     "port": int(self.sp_smtp_port.value()),
                     "user": self.ed_smtp_user.text(),
-                    "password": self.ed_smtp_pwd.text(),
+                    "password": "",
                     "tls": bool(self.chk_smtp_tls.isChecked()),
                     "ssl": bool(self.chk_smtp_ssl.isChecked()),
                     "from": self.ed_smtp_from.text(),
@@ -1039,7 +1040,7 @@ class MainWindow(QMainWindow):
         self.ed_ssh_user.setText(ssh.get("user", ""))
         self.ed_ssh_host.setText(ssh.get("host", ""))
         self.ed_ssh_key.setText(ssh.get("key", ""))
-        self.ed_ssh_pwd.setText(ssh.get("password", ""))
+        self.ed_ssh_pwd.setText(get_secret("ssh_password") or "")
         settings = state.get("settings", {}) or {}
         self.chk_mask.setChecked(bool(settings.get("mask", self.chk_mask.isChecked())))
         self.chk_encrypt.setChecked(bool(settings.get("encrypt", self.chk_encrypt.isChecked())))
@@ -1060,7 +1061,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.ed_smtp_user.setText(smtp_state.get("user", self.ed_smtp_user.text()))
-        self.ed_smtp_pwd.setText(smtp_state.get("password", self.ed_smtp_pwd.text()))
+        self.ed_smtp_pwd.setText(get_secret("smtp_password") or self.ed_smtp_pwd.text())
         self.chk_smtp_tls.setChecked(bool(smtp_state.get("tls", self.chk_smtp_tls.isChecked())))
         self.chk_smtp_ssl.setChecked(bool(smtp_state.get("ssl", self.chk_smtp_ssl.isChecked())))
         self.ed_smtp_from.setText(smtp_state.get("from", self.ed_smtp_from.text()))
@@ -1158,7 +1159,7 @@ class MainWindow(QMainWindow):
         self.ed_ssh_user.setText(ssh.user or "")
         self.ed_ssh_host.setText(ssh.host or "")
         self.ed_ssh_key.setText(ssh.key or "")
-        self.ed_ssh_pwd.setText(ssh.password or "")
+        self.ed_ssh_pwd.setText(get_secret("ssh_password") or "")
 
     def _save_ssh_settings(self) -> None:
         user = self.ed_ssh_user.text().strip()
@@ -2322,7 +2323,7 @@ class MainWindow(QMainWindow):
             content = "(nelze načíst readmerepair.txt)"
 
         self.log("Diagnostics OUT: readmerepair.txt detected.")
-        if msg_question(self, "Repair", f"Nalezen {EXPECTED_REPAIR_README}. Spustit repair script?") != QMessageBox.Yes:
+        if msg_question(self, "Repair", f"Nalezen {EXPECTED_REPAIR_README}. Automatické spuštění je defaultně vypnuté. Chcete pokračovat ručně?") != QMessageBox.Yes:
             return
 
         candidates = [
@@ -2338,10 +2339,22 @@ class MainWindow(QMainWindow):
 
         log_path = os.path.join(out_dir, "_repair_exec_log.txt")
         try:
+            import hashlib
+            with open(script, "rb") as sf:
+                sha256 = hashlib.sha256(sf.read()).hexdigest()
+            preview = (content[:2000] + "\n..." ) if len(content) > 2000 else content
+            warn = (
+                "POZOR: spouštíte nedůvěryhodný repair script.\n\n"
+                f"Script: {os.path.basename(script)}\n"
+                f"SHA256: {sha256}\n\n"
+                f"Obsah {EXPECTED_REPAIR_README}:\n{preview}"
+            )
+            if msg_question(self, "Repair warning", warn) != QMessageBox.Yes:
+                return
             if os.name == "nt" and script.lower().endswith(".bat"):
-                p = subprocess.run([script], cwd=out_dir, capture_output=True, text=True, shell=True)
+                p = subprocess.run(["cmd", "/c", script], cwd=out_dir, capture_output=True, text=True, shell=False)
             else:
-                p = subprocess.run(["bash", script], cwd=out_dir, capture_output=True, text=True)
+                p = subprocess.run(["bash", script], cwd=out_dir, capture_output=True, text=True, shell=False)
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(
                     "READMEREPAIR:\n"

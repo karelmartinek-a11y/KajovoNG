@@ -46,8 +46,8 @@ class PricingPanel(QWidget):
         self.lbl_status = QLabel("")
         self.lbl_summary = QLabel("")
         self.lbl_audit = QLabel("")
-        self.btn_refresh = QPushButton("Refresh (URL)")
-        self.btn_refresh_api = QPushButton("Fetch via GPT-4.1")
+        self.btn_refresh = QPushButton("Refresh (official URL)")
+        self.btn_refresh_api = QPushButton("Fetch via GPT-4.1 (odhad)")
         self.btn_reload_receipts = QPushButton("Reload receipts")
         self.btn_audit = QPushButton("Audit LOG pricing")
         self.btn_export = QPushButton("Export receipts JSON")
@@ -246,7 +246,7 @@ class PricingPanel(QWidget):
                 self._log("Pricing model output empty.")
                 msg_warning(self, "Pricing", "Výstup nelze parsovat jako price table.")
                 return
-            self.pt.update_from_rows(rows, verified=False)
+            self.pt.update_from_rows(rows, verified=False, source="GPT-4.1 estimate (unverified)")
             try:
                 self.pt.save_cache()
             except Exception:

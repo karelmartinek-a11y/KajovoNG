@@ -13,7 +13,7 @@ Tento projekt implementuje desktop aplikaci **Kája** pro Windows 10/11 (PySide6
 1) Instalace:
 - `scripts\install.bat` (nebo `scripts\install.ps1`)
 2) Nastav API klíč:
-- v aplikaci tlačítko **API-KEY** (uloží `OPENAI_API_KEY` do user env proměnné a do aktuálního běhu)
+- v aplikaci tlačítko **API-KEY** (uloží do `OPENAI_API_KEY`; citlivé údaje aplikace ukládá mimo plaintext JSON přes OS keyring / env fallback)
 3) Spuštění:
 - `scripts\run.bat` (nebo `scripts\run.ps1`)
 
@@ -63,3 +63,22 @@ Záložka **VECTOR STORES** umožní:
 - List files ve vybraném store
 - Add file_id do store
 - Remove soubor ze store
+
+
+## Security hardening
+- Citlivé údaje (SMTP/SSH hesla) se neukládají do `kajovo_settings.json`; používá se OS keyring (Credential Manager/Keychain/libsecret) nebo env fallback.
+- Repair skripty v Diagnostics OUT jsou defaultně OFF a vyžadují explicitní potvrzení, zobrazení obsahu `readmerepair.txt` a SHA256 skriptu.
+- SSH diagnostika používá strict host key checking (`RejectPolicy`) a volitelný pin přes `KAJOVO_SSH_HOSTKEY_SHA256`.
+
+## Virtual environment
+- Projekt používá jednotně `.venv` (instalace i run skripty). Nepoužívejte paralelní `venv` pro stejný checkout.
+
+## Pricing
+- Primární zdroj je oficiální stránka OpenAI pricing (`https://openai.com/api/pricing/`).
+- Pokud parsování selže, aplikace explicitně označí data jako **neověřeno/odhad** a použije fallback ceník.
+
+## Rotace secrets (doporučeno ihned)
+1. Zneplatni původní OpenAI API klíč a vytvoř nový.
+2. Změň SMTP heslo/app-password.
+3. Změň SSH hesla/klíče a ověř host key fingerprint.
+4. Vyčisti lokální pracovní soubory (`kajovo_settings.json`, `kajovo_state.json`, `*.sqlite`, `LOG/`, `cache/`) mimo git historii.
