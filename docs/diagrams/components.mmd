@@ -1,0 +1,22 @@
+flowchart TB
+  subgraph app
+    main[kajovo.app.main]
+  end
+  subgraph ui
+    mw[mainwindow]
+    bp[batch_panel]
+    fp[filepanel]
+  end
+  subgraph core
+    pipe[pipeline]
+    cli[openai_client]
+    util[utils]
+    rec[receipt]
+  end
+  main --> mw
+  mw --> bp
+  mw --> fp
+  bp --> cli
+  fp --> pipe
+  pipe --> util
+  pipe --> rec

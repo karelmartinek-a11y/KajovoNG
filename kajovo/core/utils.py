@@ -43,3 +43,15 @@ def is_versing_snapshot_dir(dir_name: str, root_name: str) -> bool:
         return False
     tail = dir_name[len(root_name):]
     return bool(re.fullmatch(r"\d{12}", tail))
+
+
+def safe_join_under_root(root: str, unsafe_rel_path: str) -> str:
+    """Join a potentially unsafe relative path under root and block traversal.
+
+    Raises ValueError when the resulting path escapes the provided root.
+    """
+    root_abs = os.path.abspath(root)
+    candidate = os.path.abspath(os.path.join(root_abs, unsafe_rel_path))
+    if os.path.commonpath([root_abs, candidate]) != root_abs:
+        raise ValueError(f"Path escapes target root: {unsafe_rel_path}")
+    return candidate

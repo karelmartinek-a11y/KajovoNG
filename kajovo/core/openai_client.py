@@ -28,7 +28,7 @@ class OpenAIClient:
             headers["Content-Type"] = "application/json"
             r = self.session.request(method, url, headers=headers, json=json_body, timeout=timeout)
         else:
-            r = requests.request(method, url, headers={"Authorization": f"Bearer {self.api_key}"}, data=json_body, files=files, timeout=timeout)
+            r = self.session.request(method, url, headers={"Authorization": f"Bearer {self.api_key}"}, data=json_body, files=files, timeout=timeout)
         if r.status_code >= 400:
             raise OpenAIError(f"{method} {path} -> {r.status_code}: {r.text[:4000]}")
         if r.headers.get("content-type","").startswith("application/json"):

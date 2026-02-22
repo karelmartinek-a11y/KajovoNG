@@ -1,4 +1,4 @@
-# Kájovo — Kája (desktop orchestrátor pro OpenAI Responses)
+# KájovoHotel — desktop orchestrátor pro OpenAI Responses
 
 Tento projekt implementuje desktop aplikaci **Kája** pro Windows 10/11 (PySide6), která umí:
 - Generovat projekt do OUT (A: GENERATE)
@@ -82,3 +82,14 @@ Záložka **VECTOR STORES** umožní:
 2. Změň SMTP heslo/app-password.
 3. Změň SSH hesla/klíče a ověř host key fingerprint.
 4. Vyčisti lokální pracovní soubory (`kajovo_settings.json`, `kajovo_state.json`, `*.sqlite`, `LOG/`, `cache/`) mimo git historii.
+
+
+## Architecture diagrams
+- docs/ARCHITECTURE.md
+- docs/diagrams/system-context.mmd
+- docs/diagrams/main-flow.mmd
+- docs/diagrams/key-sequence.mmd
+- docs/diagrams/components.mmd
+
+## Testing
+- `python -m unittest discover -s tests -v`

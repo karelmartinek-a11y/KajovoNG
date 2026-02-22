@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from ..core.openai_client import OpenAIClient
 from ..core.retry import with_retry, CircuitBreaker
+from ..core.utils import safe_join_under_root
 from .widgets import BusyPopup
 
 
@@ -190,8 +191,8 @@ class BatchPanel(QWidget):
             content = f.get("content", "")
             if not path:
                 continue
-            dest = os.path.join(dest_root, path)
             try:
+                dest = safe_join_under_root(dest_root, path)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(content)
@@ -248,8 +249,8 @@ class BatchPanel(QWidget):
             if chunk_count and len(parts) < chunk_count:
                 errors.append(f"Incomplete chunks for {path}: {len(parts)}/{chunk_count}")
             content = "".join(parts[idx] for idx in indexes)
-            dest = os.path.join(target_dir, path)
             try:
+                dest = safe_join_under_root(target_dir, path)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(content)

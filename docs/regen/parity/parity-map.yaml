@@ -1,0 +1,13 @@
+modules:
+  core.batch_download:
+    status: DONE
+    evidence:
+      - docs/regen/01-security-audit/verification.md
+  core.http_client:
+    status: DONE
+    evidence:
+      - docs/regen/01-security-audit/verification.md
+  docs.security_baseline:
+    status: DONE
+    evidence:
+      - docs/SECURITY.md

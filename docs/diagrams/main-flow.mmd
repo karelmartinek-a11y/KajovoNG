@@ -1,0 +1,6 @@
+flowchart TD
+  start([Start run]) --> prep[Collect settings/input]
+  prep --> req[Send request via OpenAIClient]
+  req --> resp[Parse response contracts]
+  resp --> write[Write files under OUT root]
+  write --> log[Persist run logs + receipt]
