@@ -1,0 +1,10 @@
+sequenceDiagram
+  participant U as User
+  participant B as BatchPanel
+  participant C as OpenAIClient
+  participant FS as Filesystem
+  U->>B: Download batch output
+  B->>C: file_content(output_file_id)
+  C-->>B: jsonl payload
+  B->>B: validate path with safe_join_under_root
+  B->>FS: write files into OUT only
