@@ -395,35 +395,37 @@ class MainWindow(QMainWindow):
         self.chk_diag_win_out = QCheckBox("Windows OUT (execute repair script if present)")
         self.chk_diag_ssh_in = QCheckBox("SSH IN (collect)")
         self.chk_diag_ssh_out = QCheckBox("SSH OUT (execute repair script if present)")
+        self.chk_ssh_pin_required = QCheckBox("SSH pin required (KAJOVO_SSH_HOSTKEY_SHA256)")
 
         dg.addWidget(self.chk_diag_win_in, 0, 0, 1, 2)
         dg.addWidget(self.chk_diag_win_out, 1, 0, 1, 2)
         dg.addWidget(self.chk_diag_ssh_in, 2, 0, 1, 2)
         dg.addWidget(self.chk_diag_ssh_out, 3, 0, 1, 2)
+        dg.addWidget(self.chk_ssh_pin_required, 4, 0, 1, 3)
 
-        dg.addWidget(QLabel("SSH user"), 4, 0)
+        dg.addWidget(QLabel("SSH user"), 5, 0)
         self.ed_ssh_user = QLineEdit()
         self.ed_ssh_user.setPlaceholderText("root")
-        dg.addWidget(self.ed_ssh_user, 4, 1)
+        dg.addWidget(self.ed_ssh_user, 5, 1)
 
-        dg.addWidget(QLabel("SSH host"), 5, 0)
+        dg.addWidget(QLabel("SSH host"), 6, 0)
         self.ed_ssh_host = QLineEdit()
         self.ed_ssh_host.setPlaceholderText("10.0.0.1")
-        dg.addWidget(self.ed_ssh_host, 5, 1)
+        dg.addWidget(self.ed_ssh_host, 6, 1)
 
-        dg.addWidget(QLabel("SSH key"), 6, 0)
+        dg.addWidget(QLabel("SSH key"), 7, 0)
         self.ed_ssh_key = QLineEdit()
-        dg.addWidget(self.ed_ssh_key, 6, 1)
+        dg.addWidget(self.ed_ssh_key, 7, 1)
         self.btn_ssh_key = QPushButton("Browse")
-        dg.addWidget(self.btn_ssh_key, 6, 2)
+        dg.addWidget(self.btn_ssh_key, 7, 2)
         self.btn_ssh_key.clicked.connect(lambda: self._browse_file(self.ed_ssh_key))
 
-        dg.addWidget(QLabel("SSH key password"), 7, 0)
+        dg.addWidget(QLabel("SSH key password"), 8, 0)
         self.ed_ssh_pwd = QLineEdit()
         self.ed_ssh_pwd.setEchoMode(QLineEdit.Password)
-        dg.addWidget(self.ed_ssh_pwd, 7, 1)
+        dg.addWidget(self.ed_ssh_pwd, 8, 1)
         self.btn_ssh_save = QPushButton("Save SSH")
-        dg.addWidget(self.btn_ssh_save, 7, 2)
+        dg.addWidget(self.btn_ssh_save, 8, 2)
         self.btn_ssh_save.clicked.connect(self._save_ssh_settings)
 
         right.addWidget(g_diag)
@@ -972,6 +974,7 @@ class MainWindow(QMainWindow):
                 "host": self.ed_ssh_host.text(),
                 "key": self.ed_ssh_key.text(),
                 "password": "",
+                "pin_required": bool(self.chk_ssh_pin_required.isChecked()),
             },
             "attached_file_ids": self.files_panel.attached_ids(),
             "attached_vector_store_ids": self.vector_panel.attached_ids() if hasattr(self, "vector_panel") else [],
@@ -1040,6 +1043,7 @@ class MainWindow(QMainWindow):
         self.ed_ssh_user.setText(ssh.get("user", ""))
         self.ed_ssh_host.setText(ssh.get("host", ""))
         self.ed_ssh_key.setText(ssh.get("key", ""))
+        self.chk_ssh_pin_required.setChecked(bool(ssh.get("pin_required", False)))
         self.ed_ssh_pwd.setText(get_secret("ssh_password") or "")
         settings = state.get("settings", {}) or {}
         self.chk_mask.setChecked(bool(settings.get("mask", self.chk_mask.isChecked())))
@@ -1154,11 +1158,13 @@ class MainWindow(QMainWindow):
             self.ed_ssh_user.clear()
             self.ed_ssh_host.clear()
             self.ed_ssh_key.clear()
+            self.chk_ssh_pin_required.setChecked(False)
             self.ed_ssh_pwd.clear()
             return
         self.ed_ssh_user.setText(ssh.user or "")
         self.ed_ssh_host.setText(ssh.host or "")
         self.ed_ssh_key.setText(ssh.key or "")
+        self.chk_ssh_pin_required.setChecked(bool(getattr(ssh, "pin_required", False)))
         self.ed_ssh_pwd.setText(get_secret("ssh_password") or "")
 
     def _save_ssh_settings(self) -> None:
@@ -1172,6 +1178,7 @@ class MainWindow(QMainWindow):
             self.s.ssh.host = host
             self.s.ssh.key = self.ed_ssh_key.text().strip()
             self.s.ssh.password = self.ed_ssh_pwd.text()
+            self.s.ssh.pin_required = bool(self.chk_ssh_pin_required.isChecked())
             save_settings(self.s, DEFAULT_SETTINGS_FILE)
             self.log("SSH settings saved.")
             msg_info(self, "SSH", "SSH nastavení uloženo.")
@@ -1552,24 +1559,48 @@ class MainWindow(QMainWindow):
         self.on_go()
 
     def _kill_worker_if_running(self):
-        if self.worker and self.worker.isRunning():
-            self.log("Force stopping RUN thread...")
+        if not (self.worker and self.worker.isRunning()):
+            return
+
+        self.log("STOP: worker still running after cooperative request, waiting extra grace period...")
+        try:
+            if self.worker.wait(2000):
+                self.log("STOP: worker finished cooperatively during grace period.")
+                return
+        except Exception as e:
+            self.log(f"STOP: wait before force-stop failed: {e}")
+
+        self.log("Force stopping RUN thread (terminate fallback).")
+        try:
+            self.worker.terminate()
+            self.worker.wait(2000)
+        except Exception as e:
+            self.log(f"STOP: terminate fallback failed: {e}")
+
+        if self.run_logger:
             try:
-                self.worker.terminate()
-                self.worker.wait(2000)
-            except Exception:
-                pass
-            self._dispose_worker()
-            if self.progress_dialog:
-                try:
-                    self.progress_dialog.close()
-                except Exception:
-                    pass
-                self.progress_dialog = None
+                self.run_logger.update_state(
+                    {
+                        "status": "force_killed",
+                        "force_killed_at": time.time(),
+                        "reason": "ui.terminate_fallback",
+                    }
+                )
+                self.run_logger.event("ui.worker.force_kill", {"reason": "terminate_fallback"})
+            except Exception as e:
+                self.log(f"STOP: failed to write force-kill marker: {e}")
+
+        self._dispose_worker()
+        if self.progress_dialog:
             try:
-                self._progress_timer.stop()
-            except Exception:
-                pass
+                self.progress_dialog.close()
+            except Exception as e:
+                self.log(f"STOP: failed to close progress dialog after force-stop: {e}")
+            self.progress_dialog = None
+        try:
+            self._progress_timer.stop()
+        except Exception as e:
+            self.log(f"STOP: failed to stop progress timer after force-stop: {e}")
 
     def _toggle_maximize(self):
         if self.isMaximized():
@@ -2086,6 +2117,11 @@ class MainWindow(QMainWindow):
                 self.log(f"Oversize file_ids allowed as text-only (>32MB): {', '.join(oversize_ids)}")
             self.log(f"Oversize file_ids filtered (>{32}MB): {', '.join(oversize_ids)}")
 
+        pin_required = bool(self.chk_ssh_pin_required.isChecked())
+        os.environ["KAJOVO_SSH_PIN_REQUIRED"] = "1" if pin_required else "0"
+        if pin_required:
+            self.log("SSH diagnostics policy: pin required is enabled.")
+
         cfg = UiRunConfig(
             project=self.ed_project.text().strip(),
             prompt=self.txt_prompt.toPlainText(),
@@ -2127,8 +2163,8 @@ class MainWindow(QMainWindow):
         self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
         try:
             self.progress_dialog.chk_bzz.setChecked(bool(self._bzz_default))
-        except Exception:
-            pass
+        except Exception as e:
+            self.log(f"Progress dialog init warning (chk_bzz): {e}")
         self.progress_dialog.show()
 
         self.worker.progress.connect(self.pb.setValue)
@@ -2161,9 +2197,9 @@ class MainWindow(QMainWindow):
                 return
         try:
             self.worker.request_stop()
-        except Exception:
-            pass
-        self.log("Stop requested.")
+        except Exception as e:
+            self.log(f"STOP: request_stop failed: {e}")
+        self.log("Stop requested (cooperative).")
         QTimer.singleShot(1500, self._kill_worker_if_running)
 
     def on_run_ok(self, result: dict):
@@ -2284,19 +2320,20 @@ class MainWindow(QMainWindow):
             self.log("Stopping model probe before exit...")
             try:
                 self.probe_worker.request_stop()
-            except Exception:
-                pass
+            except Exception as e:
+                self.log(f"Probe stop request failed: {e}")
             if not self.probe_worker.wait(2000):
+                self.log("Model probe still running, applying terminate fallback on exit.")
                 try:
                     self.probe_worker.terminate()
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.log(f"Probe terminate fallback failed: {e}")
                 self.probe_worker.wait(1000)
             try:
                 if hasattr(self, "_probe_busy") and self._probe_busy:
                     self._probe_busy.close()
-            except Exception:
-                pass
+            except Exception as e:
+                self.log(f"Failed to close probe busy popup: {e}")
         self._dispose_probe_worker()
 
         if self.progress_dialog:
