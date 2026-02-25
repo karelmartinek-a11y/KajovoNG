@@ -18,20 +18,6 @@ from .retry import CircuitBreaker, with_retry
 from .utils import new_run_id
 
 
-def split_text(text: str, max_chars: int) -> List[str]:
-    if not text:
-        return []
-    if max_chars <= 0:
-        return [text]
-    out: List[str] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        out.append(text[i:i + max_chars])
-        i += max_chars
-    return out
-
-
 PLACEHOLDER_RE = re.compile(r"\{\{\s*step\.(\d+)\.(response_id|json)\s*\}\}")
 
 
@@ -74,6 +60,31 @@ PRESET_PROMPTS_SCHEMA: Dict[str, Any] = {
             },
         }
     },
+}
+
+JSON_ONLY_DEVELOPER_MESSAGE = {
+    "type": "message",
+    "role": "developer",
+    "content": [
+        {
+            "type": "input_text",
+            "text": "Return ONLY valid JSON. Do not include any extra text outside JSON.",
+        }
+    ],
+}
+
+PROMPTS_JSON_DEVELOPER_MESSAGE = {
+    "type": "message",
+    "role": "developer",
+    "content": [
+        {
+            "type": "input_text",
+            "text": (
+                "Return ONLY valid JSON that exactly matches the prompt list schema. "
+                "No markdown, no prose, no extra keys outside schema."
+            ),
+        }
+    ],
 }
 
 
@@ -194,6 +205,30 @@ class CascadeRunWorker(QThread):
                 if expected_type == "string" and not isinstance(val, str):
                     raise RuntimeError(f"JSON key '{k}' musí být string")
 
+    def _normalize_content_parts(self, resolved_content_json: Any, idx: int) -> List[Dict[str, Any]]:
+        if isinstance(resolved_content_json, list):
+            out: List[Dict[str, Any]] = []
+            for part in resolved_content_json:
+                if not isinstance(part, dict):
+                    raise RuntimeError(f"input_content_json list musí obsahovat object part (krok {idx})")
+                out.append(part)
+            return out
+        if isinstance(resolved_content_json, dict):
+            return [resolved_content_json]
+        raise RuntimeError(f"input_content_json musí být object nebo list (krok {idx})")
+
+    def _extract_input_file_ids(self, parts: List[Dict[str, Any]]) -> set[str]:
+        ids: set[str] = set()
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            if str(part.get("type") or "") != "input_file":
+                continue
+            fid = str(part.get("file_id") or "").strip()
+            if fid:
+                ids.add(fid)
+        return ids
+
     def run(self):
         run_id = new_run_id()
         self.logger = CascadeLogger(self.settings.log_dir, run_id, project_name=self.cfg.project)
@@ -248,28 +283,23 @@ class CascadeRunWorker(QThread):
                 resolved_prev_expr = self._resolve_text(step.previous_response_id_expr or "", context).strip()
                 resolved_content_json = self._resolve_json(step.input_content_json, context) if step.input_content_json is not None else None
 
-                content_parts: List[Dict[str, Any]] = []
-                for chunk in split_text(resolved_input_text, 20000):
-                    if chunk:
-                        content_parts.append({"type": "input_text", "text": chunk})
-                for fid in file_ids:
-                    if fid:
-                        content_parts.append({"type": "input_file", "file_id": fid})
                 if resolved_content_json is not None:
-                    if isinstance(resolved_content_json, list):
-                        for part in resolved_content_json:
-                            if not isinstance(part, dict):
-                                raise RuntimeError(f"input_content_json list musí obsahovat object part (krok {idx})")
-                            content_parts.append(part)
-                    elif isinstance(resolved_content_json, dict):
-                        content_parts.append(resolved_content_json)
-                    else:
-                        raise RuntimeError(f"input_content_json musí být object nebo list (krok {idx})")
+                    content_parts = self._normalize_content_parts(resolved_content_json, idx)
+                else:
+                    content_parts = [{"type": "input_text", "text": resolved_input_text}]
+
+                existing_file_ids = self._extract_input_file_ids(content_parts)
+                for fid in file_ids:
+                    if not fid or fid in existing_file_ids:
+                        continue
+                    content_parts.append({"type": "input_file", "file_id": fid})
+                    existing_file_ids.add(fid)
+
+                input_messages: List[Dict[str, Any]] = []
 
                 payload: Dict[str, Any] = {
                     "model": step.model,
                     "instructions": resolved_instructions,
-                    "input": [{"type": "message", "role": "user", "content": content_parts}],
                 }
                 if step.temperature is not None:
                     payload["temperature"] = float(step.temperature)
@@ -278,17 +308,26 @@ class CascadeRunWorker(QThread):
 
                 schema = self._schema_for_step(step)
                 if step.output_type == "json":
-                    if schema is None:
-                        raise RuntimeError(f"Krok {idx}: output_type=json, ale chybí schema.")
-                    self._validate_schema_minimal(schema)
-                    payload["response_format"] = {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": f"cascade_step_{idx:02d}_schema",
-                            "strict": True,
-                            "schema": schema,
-                        },
-                    }
+                    if schema is not None:
+                        self._validate_schema_minimal(schema)
+                        payload["text"] = {
+                            "format": {
+                                "type": "json_schema",
+                                "name": f"cascade_step_{idx:02d}_schema",
+                                "strict": True,
+                                "schema": schema,
+                            }
+                        }
+                    else:
+                        payload["text"] = {"format": {"type": "json_object"}}
+
+                    if step.output_schema_kind == "prompts":
+                        input_messages.append(copy.deepcopy(PROMPTS_JSON_DEVELOPER_MESSAGE))
+                    else:
+                        input_messages.append(copy.deepcopy(JSON_ONLY_DEVELOPER_MESSAGE))
+
+                input_messages.append({"type": "message", "role": "user", "content": content_parts})
+                payload["input"] = input_messages
 
                 self.logger.save_json("requests", f"cascade_step_{idx:02d}", payload)
                 self._emit_status(base_p, 55, f"OpenAI request krok {idx}")

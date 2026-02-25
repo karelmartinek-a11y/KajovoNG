@@ -111,14 +111,14 @@ class CascadePanel(QWidget):
         self.txt_instructions = QPlainTextEdit()
         self.txt_instructions.setPlaceholderText("Instructions")
         self.txt_input_text = QPlainTextEdit()
-        self.txt_input_text.setPlaceholderText("Input text")
+        self.txt_input_text.setPlaceholderText("Input text (used only when Input Content JSON is empty)")
         self.txt_input_content = QPlainTextEdit()
-        self.txt_input_content.setPlaceholderText("Input content raw JSON (list/object)")
+        self.txt_input_content.setPlaceholderText("Input content parts JSON (Responses API list/object, has priority)")
         iv.addWidget(QLabel("Instructions"))
         iv.addWidget(self.txt_instructions)
-        iv.addWidget(QLabel("Input Text"))
+        iv.addWidget(QLabel("Input Text (použije se jen když je Input Content JSON prázdné)"))
         iv.addWidget(self.txt_input_text)
-        iv.addWidget(QLabel("Input Content JSON"))
+        iv.addWidget(QLabel("Input Content JSON (přímá definice content parts, má prioritu)"))
         iv.addWidget(self.txt_input_content)
         lv.addWidget(box_input)
 
@@ -435,8 +435,6 @@ class CascadePanel(QWidget):
             input_content = self._parse_input_content()
             schema_kind = self._pick_schema_kind()
             output_type = "json" if self.rb_out_json.isChecked() else "text"
-            if output_type == "json" and schema_kind is None:
-                raise ValueError("Pro JSON output musí být zvolené schema.")
             if output_type == "text" and schema_kind is not None:
                 raise ValueError("Schema lze použít jen pro JSON output.")
         except ValueError as e:
@@ -449,6 +447,8 @@ class CascadePanel(QWidget):
         step.instructions = self.txt_instructions.toPlainText()
         step.input_text = self.txt_input_text.toPlainText()
         step.input_content_json = input_content
+        if step.input_content_json is not None and step.input_text.strip():
+            msg_warning(self, "Kaskáda", "Input Text bude ignorován, protože Input Content JSON má prioritu.")
         step.previous_response_id_expr = self.ed_prev_resp.text().strip() or None
         step.output_type = output_type
         step.output_schema_kind = schema_kind
