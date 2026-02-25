@@ -32,7 +32,7 @@ def main():
 
     settings = load_settings()
     w = MainWindow(settings)
-    w.showMaximized()
+    w.show()
     sys.exit(app.exec())
 
 if __name__ == "__main__":

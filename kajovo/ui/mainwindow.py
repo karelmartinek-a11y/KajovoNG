@@ -18,7 +18,7 @@ import shutil
 import glob
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QEvent, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTabWidget,
     QTableWidget,
@@ -70,7 +71,7 @@ from .cascade_panel import CascadePanel
 from .response_request_panel import ResponseRequestPanel
 from .progress_dialog import ProgressDialog
 from .theme import DARK_STYLESHEET
-from .widgets import TitleBar, BusyPopup, style_progress_bar
+from .widgets import BusyPopup, style_progress_bar
 
 EXPECTED_REPAIR_README = "readmerepair.txt"
 
@@ -91,7 +92,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.app_title = "Kájovo NG v2.0"
         self.setWindowTitle(self.app_title)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint)
+        self.setWindowFlags(Qt.Window)
         self.resize(1280, 860)
 
         # normalize paths to keep LOG/cache inside repo root
@@ -147,25 +148,6 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(10, 10, 10, 10)
         v.setSpacing(8)
 
-        self.titlebar = TitleBar(self.app_title)
-        self.titlebar.request_close.connect(self.close)
-        self.titlebar.request_minimize.connect(self.showMinimized)
-        # Robust fallback: pokud metoda chybí (např. po částečném ReRun loadu), vytvoř ji.
-        if not hasattr(self, "_toggle_maximize"):
-            def _toggle_maximize_fallback():
-                if self.isMaximized():
-                    self.showNormal()
-                else:
-                    self.showMaximized()
-                try:
-                    self.titlebar.set_maximized(self.isMaximized())
-                    self.titlebar.lbl.setText(self.app_title)
-                except Exception:
-                    pass
-            self._toggle_maximize = _toggle_maximize_fallback  # type: ignore
-        self.titlebar.request_toggle_max.connect(self._toggle_maximize)
-        v.addWidget(self.titlebar)
-
         self.tabs = QTabWidget()
         v.addWidget(self.tabs, 1)
 
@@ -181,18 +163,18 @@ class MainWindow(QMainWindow):
         self.tab_pricing = QWidget()
         self.tab_reqresp = QWidget()
         self.tab_help = QWidget()
-        self.tabs.addTab(self.tab_run, "RUN")
-        self.tabs.addTab(self.tab_files, "FILES API")
-        self.tabs.addTab(self.tab_cascade, "KASKÁDA")
-        self.tabs.addTab(self.tab_vector, "VECTOR STORES")
-        self.tabs.addTab(self.tab_settings, "SETTINGS")
-        self.tabs.addTab(self.tab_smtp, "SMTP")
-        self.tabs.addTab(self.tab_models, "MODELS")
-        self.tabs.addTab(self.tab_batch, "BATCH")
-        self.tabs.addTab(self.tab_git, "GITHUB")
-        self.tabs.addTab(self.tab_pricing, "PRICING")
-        self.tabs.addTab(self.tab_reqresp, "REQUEST/RESPONSE")
-        self.tabs.addTab(self.tab_help, "HELP")
+        self.tabs.addTab(self._scroll_tab(self.tab_run), "RUN")
+        self.tabs.addTab(self._scroll_tab(self.tab_files), "FILES API")
+        self.tabs.addTab(self._scroll_tab(self.tab_cascade), "KASKÁDA")
+        self.tabs.addTab(self._scroll_tab(self.tab_vector), "VECTOR STORES")
+        self.tabs.addTab(self._scroll_tab(self.tab_settings), "SETTINGS")
+        self.tabs.addTab(self._scroll_tab(self.tab_smtp), "SMTP")
+        self.tabs.addTab(self._scroll_tab(self.tab_models), "MODELS")
+        self.tabs.addTab(self._scroll_tab(self.tab_batch), "BATCH")
+        self.tabs.addTab(self._scroll_tab(self.tab_git), "GITHUB")
+        self.tabs.addTab(self._scroll_tab(self.tab_pricing), "PRICING")
+        self.tabs.addTab(self._scroll_tab(self.tab_reqresp), "REQUEST/RESPONSE")
+        self.tabs.addTab(self._scroll_tab(self.tab_help), "HELP")
 
         self._build_run_tab()
         self._build_files_tab()
@@ -226,10 +208,13 @@ class MainWindow(QMainWindow):
         self._auto_probe_models_on_start()
         self._auto_refresh_pricing()
         self._start_pricing_audit_loop()
-        try:
-            self.titlebar.set_maximized(self.isMaximized())
-        except Exception:
-            pass
+
+    def _scroll_tab(self, widget: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidget(widget)
+        return scroll
 
     # ---------- build tabs ----------
     def _build_run_tab(self):
@@ -1648,25 +1633,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log(f"STOP: failed to stop progress timer after force-stop: {e}")
 
-    def _toggle_maximize(self):
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
-        try:
-            self.titlebar.set_maximized(self.isMaximized())
-            self.titlebar.lbl.setText(self.app_title)
-        except Exception:
-            pass
-
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if event.type() == QEvent.WindowStateChange:
-            try:
-                self.titlebar.set_maximized(self.isMaximized())
-            except Exception:
-                pass
-
     def _browse_dir(self, target: QLineEdit):
         d = dialog_select_dir(self, "Select directory", target.text() or os.getcwd())
         if d:
@@ -2321,7 +2287,6 @@ class MainWindow(QMainWindow):
         if self.progress_dialog:
             self.progress_dialog.close()
             self.progress_dialog = None
-        self.titlebar.lbl.setText(self.app_title)
         self.pb.setValue(100)
         self.pb_sub.setValue(100)
 
@@ -2369,7 +2334,6 @@ class MainWindow(QMainWindow):
         if self.progress_dialog:
             self.progress_dialog.close()
             self.progress_dialog = None
-        self.titlebar.lbl.setText(self.app_title)
         msg_critical(self, "RUN failed", err)
 
     def _dispose_worker(self, timeout_ms: int = 10000):
