@@ -12,13 +12,13 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from .cascade_log import CascadeLogger
 from .cascade_types import CascadeDefinition, CascadeStep
-from .contracts import extract_text_from_response, parse_json_strict
+from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths
 from .openai_client import OpenAIClient
 from .retry import CircuitBreaker, with_retry
-from .utils import new_run_id
+from .utils import ensure_dir, new_run_id, safe_join_under_root
 
 
-PLACEHOLDER_RE = re.compile(r"\{\{\s*step\.(\d+)\.(response_id|json)\s*\}\}")
+PLACEHOLDER_RE = re.compile(r"\{\{\s*step\.(\d+)\.(response_id|json|out_file_path|out_file_id)(?::([^}]+))?\s*\}\}")
 
 
 PRESET_MANIFEST_SCHEMA: Dict[str, Any] = {
@@ -76,6 +76,10 @@ PRESET_PROMPTS_SCHEMA: Dict[str, Any] = {
             "type": "number",
             "description": "Volitelné unix timestamp poslední změny (float).",
         },
+        "default_out_dir": {
+            "type": "string",
+            "description": "Volitelný fallback OUT adresář pro běh Kaskády.",
+        },
         "steps": {
             "type": "array",
             "description": "Sekvence kroků kompatibilních s CascadeStep.from_dict().",
@@ -126,6 +130,11 @@ PRESET_PROMPTS_SCHEMA: Dict[str, Any] = {
                         "enum": ["manifest", "prompts", "custom", None],
                     },
                     "output_schema_custom": {"type": ["object", "null"]},
+                    "expected_out_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Volitelné relativní cesty souborů očekávaných v OUT manifestu tohoto kroku.",
+                    },
                 },
                 "required": [
                     "title",
@@ -140,6 +149,7 @@ PRESET_PROMPTS_SCHEMA: Dict[str, Any] = {
                     "output_type",
                     "output_schema_kind",
                     "output_schema_custom",
+                    "expected_out_files",
                 ],
             },
         },
@@ -235,14 +245,23 @@ class CascadeRunWorker(QThread):
         def repl(match: re.Match[str]) -> str:
             idx = int(match.group(1))
             key = match.group(2)
+            rel_suffix = (match.group(3) or "").strip()
             if key == "response_id":
                 return str(context.get(f"step.{idx}.response_id", ""))
-            val = context.get(f"step.{idx}.json")
-            if val is None:
-                return ""
-            if isinstance(val, str):
-                return val
-            return json.dumps(val, ensure_ascii=False)
+            if key == "json":
+                val = context.get(f"step.{idx}.json")
+                if val is None:
+                    return ""
+                if isinstance(val, str):
+                    return val
+                return json.dumps(val, ensure_ascii=False)
+            if key in ("out_file_path", "out_file_id"):
+                if not rel_suffix:
+                    return ""
+                norm_rel = rel_suffix.replace("\\", "/").strip().lstrip("/")
+                storage_key = f"step.{idx}.{key}:{norm_rel}"
+                return str(context.get(storage_key, ""))
+            return ""
 
         return PLACEHOLDER_RE.sub(repl, text)
 
@@ -318,6 +337,97 @@ class CascadeRunWorker(QThread):
                 ids.add(fid)
         return ids
 
+    def _normalize_expected_rel_path(self, rel_path: str) -> str:
+        rel = str(rel_path or "").strip().replace("\\", "/")
+        rel = rel.lstrip("/")
+        if not rel:
+            raise RuntimeError("Expected output file path nesmí být prázdný.")
+        parts = [p for p in rel.split("/") if p]
+        if any(p == ".." for p in parts):
+            raise RuntimeError(f"Expected output file path obsahuje '..': {rel_path}")
+        return "/".join(parts)
+
+    def _select_out_dir_for_step(self) -> str:
+        runtime_out = (self.cfg.out_dir or "").strip()
+        if runtime_out:
+            return runtime_out
+        return (self.cfg.cascade.default_out_dir or "").strip()
+
+    def _save_manifest_to_out(self, files: List[Dict[str, Any]], out_dir: str, step_idx: int) -> Dict[str, Any]:
+        out_abs = os.path.abspath(out_dir)
+        ensure_dir(out_abs)
+        saved: List[Dict[str, Any]] = []
+        for row in files:
+            rel = self._normalize_expected_rel_path(str(row.get("path") or ""))
+            content = str(row.get("content") or "")
+            dst = safe_join_under_root(out_abs, rel.replace("/", os.sep))
+            ensure_dir(os.path.dirname(dst))
+            with open(dst, "w", encoding="utf-8", newline="\n") as f:
+                f.write(content)
+            saved.append({"path": rel, "dst": dst, "bytes": os.path.getsize(dst)})
+        self.logger.save_json("manifests", f"cascade_step_{step_idx:02d}_out_saved_map", {"saved": saved, "out_dir": out_abs})
+        return {"saved": saved, "out_dir": out_abs}
+
+    def _process_expected_out_files(
+        self,
+        *,
+        step: CascadeStep,
+        idx: int,
+        json_output: Any,
+        context: Dict[str, Any],
+        client: OpenAIClient,
+    ) -> Dict[str, Any]:
+        expected = [self._normalize_expected_rel_path(x) for x in (step.expected_out_files or []) if str(x).strip()]
+        if not expected:
+            return {}
+        out_dir = self._select_out_dir_for_step()
+        if not out_dir:
+            raise RuntimeError(
+                f"Krok {idx}: expected_out_files vyžaduje OUT adresář. Nastav RUN OUT nebo default_out_dir v definici Kaskády."
+            )
+        if not isinstance(json_output, dict):
+            raise RuntimeError(f"Krok {idx}: očekáván JSON object s manifestem souborů.")
+        files = json_output.get("files")
+        if not isinstance(files, list):
+            raise RuntimeError(f"Krok {idx}: očekáván JSON manifest se seznamem 'files'.")
+        normalized_manifest: List[Dict[str, Any]] = []
+        for row in files:
+            if not isinstance(row, dict):
+                raise RuntimeError(f"Krok {idx}: položka files[] musí být object.")
+            rel = self._normalize_expected_rel_path(str(row.get("path") or ""))
+            normalized_manifest.append({
+                "path": rel,
+                "content": str(row.get("content") or ""),
+                "purpose": row.get("purpose"),
+                "encoding": row.get("encoding"),
+                "mode": row.get("mode"),
+            })
+        validate_paths(normalized_manifest)
+        self._save_manifest_to_out(normalized_manifest, out_dir, idx)
+
+        manifest_paths = {row["path"] for row in normalized_manifest}
+        missing_manifest = [rel for rel in expected if rel not in manifest_paths]
+        if missing_manifest:
+            raise RuntimeError(
+                f"Krok {idx}: v manifestu chybí expected soubory: {', '.join(missing_manifest)}"
+            )
+
+        out_abs = os.path.abspath(out_dir)
+        out_files: Dict[str, Dict[str, str]] = {}
+        for rel in expected:
+            abs_path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
+            if not os.path.isfile(abs_path):
+                raise RuntimeError(f"Krok {idx}: expected soubor neexistuje po uložení: {rel}")
+            up = with_retry(lambda p=abs_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
+            fid = str(up.get("id") or "").strip()
+            if not fid:
+                raise RuntimeError(f"Krok {idx}: upload expected souboru nevrátil file_id: {rel}")
+            context[f"step.{idx}.out_file_path:{rel}"] = abs_path
+            context[f"step.{idx}.out_file_id:{rel}"] = fid
+            out_files[rel] = {"path": abs_path, "file_id": fid}
+            self.logger.event("cascade.step.out_file.upload", {"idx": idx, "path": rel, "abs_path": abs_path, "file_id": fid})
+        return out_files
+
     def run(self):
         run_id = new_run_id()
         self.logger = CascadeLogger(self.settings.log_dir, run_id, project_name=self.cfg.project)
@@ -339,6 +449,7 @@ class CascadeRunWorker(QThread):
             context: Dict[str, Any] = {}
             per_step_response_ids: Dict[str, str] = {}
             per_step_json: Dict[str, Any] = {}
+            per_step_out_files: Dict[str, Dict[str, Dict[str, str]]] = {}
             last_response_id = ""
 
             total = max(1, len(self.cfg.cascade.steps or []))
@@ -350,7 +461,11 @@ class CascadeRunWorker(QThread):
                 self._emit_status(base_p, 0, f"Krok {idx}/{total}: {step_label}")
                 self.logger.event("cascade.step.start", {"idx": idx, "title": step_label, "model": step.model})
 
-                file_ids = list(step.files_existing_ids or [])
+                file_ids: List[str] = []
+                for fid_expr in step.files_existing_ids or []:
+                    resolved_fid = self._resolve_text(fid_expr, context).strip()
+                    if resolved_fid:
+                        file_ids.append(resolved_fid)
                 for local_path in step.files_local_paths or []:
                     self._check_stop()
                     resolved_path = self._resolve_text(local_path, context)
@@ -429,13 +544,24 @@ class CascadeRunWorker(QThread):
                     per_step_response_ids[str(idx)] = response_id
                     last_response_id = response_id
 
+                parsed_json: Optional[Dict[str, Any]] = None
                 if step.output_type == "json":
                     text = extract_text_from_response(response)
-                    parsed = parse_json_strict(text)
-                    self._validate_json_output(parsed, schema or {})
-                    context[f"step.{idx}.json"] = parsed
-                    per_step_json[str(idx)] = parsed
-                    self.logger.save_json("misc", f"cascade_step_{idx:02d}_json", parsed)
+                    parsed_json = parse_json_strict(text)
+                    self._validate_json_output(parsed_json, schema or {})
+                    context[f"step.{idx}.json"] = parsed_json
+                    per_step_json[str(idx)] = parsed_json
+                    self.logger.save_json("misc", f"cascade_step_{idx:02d}_json", parsed_json)
+
+                expected_map = self._process_expected_out_files(
+                    step=step,
+                    idx=idx,
+                    json_output=parsed_json,
+                    context=context,
+                    client=client,
+                )
+                if expected_map:
+                    per_step_out_files[str(idx)] = expected_map
 
                 self.logger.event(
                     "cascade.step.ok",
@@ -445,6 +571,7 @@ class CascadeRunWorker(QThread):
                         "response_id": response_id,
                         "json_output": bool(step.output_type == "json"),
                         "file_ids": file_ids,
+                        "expected_out_files": list(step.expected_out_files or []),
                     },
                 )
                 self._emit_status(int(idx * 100 / total), 100, f"Krok {idx} dokončen")
@@ -455,6 +582,7 @@ class CascadeRunWorker(QThread):
                 "response_id": last_response_id,
                 "step_response_ids": per_step_response_ids,
                 "step_json_outputs": per_step_json,
+                "step_out_files": per_step_out_files,
             }
             self.logger.update_state({
                 "status": "completed",
@@ -464,6 +592,7 @@ class CascadeRunWorker(QThread):
                 "result": {
                     "step_response_ids": per_step_response_ids,
                     "step_json_outputs": per_step_json,
+                    "step_out_files": per_step_out_files,
                 },
             })
             self.logger.event("cascade.completed", result)

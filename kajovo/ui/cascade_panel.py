@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.cascade_types import CascadeDefinition, CascadeStep
-from .widgets import dialog_input_text, dialog_open_file, msg_critical, msg_info, msg_warning
+from .widgets import dialog_input_text, dialog_open_file, dialog_select_dir, msg_critical, msg_info, msg_warning
 
 
 class CascadePanel(QWidget):
@@ -64,6 +64,14 @@ class CascadePanel(QWidget):
         top.addWidget(self.btn_save_as)
         top.addWidget(self.btn_load)
         root.addLayout(top)
+
+        out_row = QHBoxLayout()
+        out_row.addWidget(QLabel("Default OUT directory (Kaskáda)"))
+        self.ed_default_out_dir = QLineEdit()
+        self.btn_default_out_browse = QPushButton("Browse")
+        out_row.addWidget(self.ed_default_out_dir, 1)
+        out_row.addWidget(self.btn_default_out_browse)
+        root.addLayout(out_row)
 
         split = QSplitter(Qt.Orientation.Horizontal)
         root.addWidget(split, 1)
@@ -160,6 +168,20 @@ class CascadePanel(QWidget):
         ov.addWidget(self.btn_schema_custom)
         lv.addWidget(box_out)
 
+        box_expected = QGroupBox("Expected output files (QFILE-like)")
+        ev = QVBoxLayout(box_expected)
+        self.chk_expected_out_files = QCheckBox("Enable expected output files")
+        self.lst_expected_out_files = QListWidget()
+        expected_btns = QHBoxLayout()
+        self.btn_add_expected_out_file = QPushButton("Add")
+        self.btn_remove_expected_out_file = QPushButton("Remove")
+        expected_btns.addWidget(self.btn_add_expected_out_file)
+        expected_btns.addWidget(self.btn_remove_expected_out_file)
+        ev.addWidget(self.chk_expected_out_files)
+        ev.addWidget(self.lst_expected_out_files, 1)
+        ev.addLayout(expected_btns)
+        lv.addWidget(box_expected)
+
         editor_buttons = QHBoxLayout()
         self.cb_insert_var = QComboBox()
         self.cb_insert_var.addItem("{{step.1.response_id}}")
@@ -203,6 +225,9 @@ class CascadePanel(QWidget):
         self.btn_add_file_ids.clicked.connect(self._add_file_ids)
         self.btn_add_local_file.clicked.connect(self._add_local_file)
         self.btn_remove_file.clicked.connect(self._remove_selected_file)
+        self.btn_add_expected_out_file.clicked.connect(self._add_expected_out_file)
+        self.btn_remove_expected_out_file.clicked.connect(self._remove_expected_out_file)
+        self.chk_expected_out_files.toggled.connect(self._update_expected_out_enabled)
 
         self.btn_save_step.clicked.connect(self.save_current_step)
         self.btn_insert_var.clicked.connect(self.insert_variable)
@@ -214,6 +239,8 @@ class CascadePanel(QWidget):
         self.chk_schema_prompts.toggled.connect(self._schema_choice_guard)
         self.chk_schema_custom.toggled.connect(self._schema_choice_guard)
         self.btn_schema_custom.clicked.connect(self._choose_custom_schema)
+
+        self.btn_default_out_browse.clicked.connect(self._browse_default_out_dir)
 
         self.btn_refresh_saved.clicked.connect(self.refresh_saved_list)
         self.btn_save.clicked.connect(self.save_current)
@@ -240,6 +267,29 @@ class CascadePanel(QWidget):
 
     def _cascade_path(self, name: str) -> str:
         return os.path.join(self.cascade_dir, f"{self._sanitize_name(name)}.json")
+
+    def _normalize_expected_rel_path(self, raw: str) -> str:
+        rel = (raw or "").strip().replace("\\", "/")
+        rel = rel.lstrip("/")
+        parts = [p for p in rel.split("/") if p]
+        if not parts:
+            raise ValueError("Expected output path nesmí být prázdný.")
+        if any(p == ".." for p in parts):
+            raise ValueError(f"Expected output path nesmí obsahovat '..': {raw}")
+        return "/".join(parts)
+
+    def _collect_expected_out_files(self) -> List[str]:
+        if not self.chk_expected_out_files.isChecked():
+            return []
+        out: List[str] = []
+        seen = set()
+        for i in range(self.lst_expected_out_files.count()):
+            rel = self._normalize_expected_rel_path(self.lst_expected_out_files.item(i).text())
+            if rel in seen:
+                raise ValueError(f"Duplicita expected output path: {rel}")
+            seen.add(rel)
+            out.append(rel)
+        return out
 
     def available_cascades(self) -> List[str]:
         if not os.path.isdir(self.cascade_dir):
@@ -271,6 +321,7 @@ class CascadePanel(QWidget):
 
     def get_definition(self) -> CascadeDefinition:
         self.definition.name = self.ed_name.text().strip() or self.definition.name
+        self.definition.default_out_dir = self.ed_default_out_dir.text().strip()
         self.definition.updated_at = float(time.time())
         return self.definition
 
@@ -300,10 +351,15 @@ class CascadePanel(QWidget):
         self.cb_prev_var.clear()
         self.cb_prev_var.addItem("")
         self.cb_insert_var.clear()
-        for i in range(1, len(self.definition.steps) + 1):
+        for i, step in enumerate(self.definition.steps, start=1):
             self.cb_prev_var.addItem(f"{{{{step.{i}.response_id}}}}")
             self.cb_insert_var.addItem(f"{{{{step.{i}.response_id}}}}")
             self.cb_insert_var.addItem(f"{{{{step.{i}.json}}}}")
+            self.cb_insert_var.addItem(f"{{{{step.{i}.out_file_path:REL_PATH}}}}")
+            self.cb_insert_var.addItem(f"{{{{step.{i}.out_file_id:REL_PATH}}}}")
+            for rel in (step.expected_out_files or []):
+                self.cb_insert_var.addItem(f"{{{{step.{i}.out_file_path:{rel}}}}}")
+                self.cb_insert_var.addItem(f"{{{{step.{i}.out_file_id:{rel}}}}}")
         self.cb_prev_var.blockSignals(False)
         self.cb_insert_var.blockSignals(False)
 
@@ -387,6 +443,12 @@ class CascadePanel(QWidget):
         self.ed_schema_custom_path.setText("<inline schema>" if step.output_schema_kind == "custom" and step.output_schema_custom else "")
         self._update_schema_enabled()
 
+        self.lst_expected_out_files.clear()
+        for rel in (step.expected_out_files or []):
+            self.lst_expected_out_files.addItem(rel)
+        self.chk_expected_out_files.setChecked(bool(step.expected_out_files))
+        self._update_expected_out_enabled()
+
         first = index == 0
         self.ed_prev_resp.setEnabled(not first)
         self.cb_prev_var.setEnabled(not first)
@@ -435,6 +497,7 @@ class CascadePanel(QWidget):
             input_content = self._parse_input_content()
             schema_kind = self._pick_schema_kind()
             output_type = "json" if self.rb_out_json.isChecked() else "text"
+            expected_out_files = self._collect_expected_out_files()
             if output_type == "text" and schema_kind is not None:
                 raise ValueError("Schema lze použít jen pro JSON output.")
         except ValueError as e:
@@ -452,6 +515,7 @@ class CascadePanel(QWidget):
         step.previous_response_id_expr = self.ed_prev_resp.text().strip() or None
         step.output_type = output_type
         step.output_schema_kind = schema_kind
+        step.expected_out_files = expected_out_files
         if schema_kind != "custom":
             step.output_schema_custom = None
         elif step.output_schema_custom is None:
@@ -545,6 +609,46 @@ class CascadePanel(QWidget):
         for it in self.lst_files.selectedItems():
             self.lst_files.takeItem(self.lst_files.row(it))
 
+    def _add_expected_out_file(self):
+        text, ok = dialog_input_text(self, "Expected output file", "Relativní cesta souboru vůči OUT")
+        if not ok:
+            return
+        raw = text.strip()
+        if not raw:
+            return
+        try:
+            rel = self._normalize_expected_rel_path(raw)
+        except ValueError as e:
+            msg_warning(self, "Kaskáda", str(e))
+            return
+        for i in range(self.lst_expected_out_files.count()):
+            if self.lst_expected_out_files.item(i).text() == rel:
+                msg_warning(self, "Kaskáda", f"Expected output path už existuje: {rel}")
+                return
+        self.lst_expected_out_files.addItem(rel)
+        self.chk_expected_out_files.setChecked(True)
+        self._update_expected_out_enabled()
+
+    def _remove_expected_out_file(self):
+        for it in self.lst_expected_out_files.selectedItems():
+            self.lst_expected_out_files.takeItem(self.lst_expected_out_files.row(it))
+        if self.lst_expected_out_files.count() == 0:
+            self.chk_expected_out_files.setChecked(False)
+        self._update_expected_out_enabled()
+
+    def _update_expected_out_enabled(self):
+        enabled = self.chk_expected_out_files.isChecked()
+        self.lst_expected_out_files.setEnabled(enabled)
+        self.btn_add_expected_out_file.setEnabled(enabled)
+        self.btn_remove_expected_out_file.setEnabled(enabled)
+
+    def _browse_default_out_dir(self):
+        start_dir = self.ed_default_out_dir.text().strip() or os.getcwd()
+        path = dialog_select_dir(self, "Default OUT directory (Kaskáda)", start_dir)
+        if path:
+            self.ed_default_out_dir.setText(path)
+            self.definition.default_out_dir = path.strip()
+
     def _on_prev_var_selected(self, text: str):
         if text:
             self.ed_prev_resp.setText(text)
@@ -567,6 +671,7 @@ class CascadePanel(QWidget):
             return
         name = self.ed_name.text().strip() or self.definition.name
         self.definition.name = name
+        self.definition.default_out_dir = self.ed_default_out_dir.text().strip()
         if self.definition.created_at <= 0:
             self.definition.created_at = float(time.time())
         self.definition.updated_at = float(time.time())
@@ -609,6 +714,7 @@ class CascadePanel(QWidget):
         self.definition = definition
         self.current_file_path = path
         self.ed_name.setText(definition.name)
+        self.ed_default_out_dir.setText(definition.default_out_dir or "")
         self.current_step_index = 0
         if not self.definition.steps:
             self.definition.steps.append(CascadeStep(title="Krok 1"))

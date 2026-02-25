@@ -19,6 +19,7 @@ class CascadeStep:
     output_type: str = "text"  # text|json
     output_schema_kind: Optional[str] = None  # manifest|prompts|custom|None
     output_schema_custom: Optional[Dict[str, Any]] = None
+    expected_out_files: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -34,6 +35,7 @@ class CascadeStep:
             "output_type": self.output_type,
             "output_schema_kind": self.output_schema_kind,
             "output_schema_custom": self.output_schema_custom,
+            "expected_out_files": list(self.expected_out_files or []),
         }
 
     @classmethod
@@ -69,6 +71,7 @@ class CascadeStep:
             output_type=output_type,
             output_schema_kind=output_schema_kind,
             output_schema_custom=custom_schema,
+            expected_out_files=[str(x) for x in (data.get("expected_out_files") or []) if str(x).strip()],
         )
 
 
@@ -76,6 +79,7 @@ class CascadeStep:
 class CascadeDefinition:
     name: str
     steps: List[CascadeStep] = field(default_factory=list)
+    default_out_dir: str = ""
     created_at: float = field(default_factory=lambda: float(time.time()))
     updated_at: float = field(default_factory=lambda: float(time.time()))
     version: int = 1
@@ -87,6 +91,7 @@ class CascadeDefinition:
             "created_at": float(self.created_at or time.time()),
             "updated_at": float(self.updated_at or time.time()),
             "steps": [s.to_dict() for s in (self.steps or [])],
+            "default_out_dir": self.default_out_dir,
         }
 
     @classmethod
@@ -119,6 +124,7 @@ class CascadeDefinition:
         return cls(
             name=str(data.get("name") or "Unnamed Cascade"),
             steps=steps,
+            default_out_dir=str(data.get("default_out_dir") or "").strip(),
             created_at=created_at,
             updated_at=updated_at,
             version=version,
