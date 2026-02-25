@@ -22,44 +22,129 @@ PLACEHOLDER_RE = re.compile(r"\{\{\s*step\.(\d+)\.(response_id|json)\s*\}\}")
 
 
 PRESET_MANIFEST_SCHEMA: Dict[str, Any] = {
+    "description": "Souborový manifest pro přímé uložení do OUT (kompatibilní s interním save pipeline).",
     "type": "object",
     "required": ["files"],
     "additionalProperties": False,
     "properties": {
+        "mode": {"type": "string", "description": "Volitelné označení režimu (např. patches)."},
+        "root": {"type": "string", "description": "Volitelný kořen projektu pro orientaci."},
         "files": {
             "type": "array",
+            "minItems": 1,
             "items": {
                 "type": "object",
-                "required": ["path"],
-                "additionalProperties": True,
+                "required": ["path", "content"],
+                "additionalProperties": False,
                 "properties": {
-                    "path": {"type": "string"},
-                    "file_id": {"type": "string"},
-                    "notes": {"type": "string"},
+                    "path": {"type": "string", "description": "Relativní cesta souboru vůči OUT."},
+                    "content": {"type": "string", "description": "Textový obsah souboru (UTF-8)."},
+                    "purpose": {"type": "string", "description": "Volitelný účel souboru (metadata)."},
+                    "encoding": {
+                        "type": "string",
+                        "description": "Volitelné metadata o kódování, typicky utf-8 nebo base64.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "description": "Volitelná akce pro kompatibilitu (např. add/modify).",
+                    },
                 },
             },
-        }
+        },
+        "note": {"type": "string", "description": "Volitelná poznámka k dávce změn."},
     },
 }
 
 PRESET_PROMPTS_SCHEMA: Dict[str, Any] = {
+    "description": "Definice kaskády promptů; JSON lze rovnou uložit a načíst v Kaskádě.",
     "type": "object",
-    "required": ["prompts"],
     "additionalProperties": False,
     "properties": {
-        "prompts": {
+        "version": {
+            "type": "integer",
+            "description": "Verze CascadeDefinition (kladné celé číslo, běžně 1).",
+        },
+        "name": {
+            "type": "string",
+            "description": "Název kaskády pro zobrazení v UI.",
+        },
+        "created_at": {
+            "type": "number",
+            "description": "Volitelné unix timestamp vytvoření (float).",
+        },
+        "updated_at": {
+            "type": "number",
+            "description": "Volitelné unix timestamp poslední změny (float).",
+        },
+        "steps": {
             "type": "array",
+            "description": "Sekvence kroků kompatibilních s CascadeStep.from_dict().",
             "items": {
                 "type": "object",
-                "required": ["name", "text"],
-                "additionalProperties": True,
+                "additionalProperties": False,
                 "properties": {
-                    "name": {"type": "string"},
-                    "text": {"type": "string"},
+                    "title": {"type": "string", "description": "Krátký název kroku."},
+                    "model": {
+                        "type": "string",
+                        "description": "Model pro konkrétní krok; zvol podle účelu (plánování vs. generování kódu).",
+                    },
+                    "temperature": {"type": ["number", "null"]},
+                    "instructions": {
+                        "type": "string",
+                        "description": "Pole instructions (developer-level instrukce API requestu).",
+                    },
+                    "input_text": {
+                        "type": "string",
+                        "description": "Jednoduchý text uživatelského vstupu. Použij když neposíláš strukturované content parts.",
+                    },
+                    "input_content_json": {
+                        "type": ["array", "object", "null"],
+                        "description": (
+                            "Volitelné Responses API content parts (dict/list). "
+                            "Pokud je vyplněno, odešle se 1:1 do payload[\"input\"][user].content. "
+                            "Používej pro input_file, multimodální části nebo přesnou strukturu."
+                        ),
+                    },
+                    "files_existing_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "files_local_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "previous_response_id_expr": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "Volitelný výraz pro previous_response_id. "
+                            "Podporované placeholdery: {{step.N.response_id}} a {{step.N.json}}. Pokud implementace podporuje out-file placeholdery, lze použít i {{step.N.out_file_id:REL_PATH}} a {{step.N.out_file_path:REL_PATH}}."
+                        ),
+                    },
+                    "output_type": {"type": "string", "enum": ["text", "json"]},
+                    "output_schema_kind": {
+                        "type": ["string", "null"],
+                        "enum": ["manifest", "prompts", "custom", None],
+                    },
+                    "output_schema_custom": {"type": ["object", "null"]},
                 },
+                "required": [
+                    "title",
+                    "model",
+                    "temperature",
+                    "instructions",
+                    "input_text",
+                    "input_content_json",
+                    "files_existing_ids",
+                    "files_local_paths",
+                    "previous_response_id_expr",
+                    "output_type",
+                    "output_schema_kind",
+                    "output_schema_custom",
+                ],
             },
-        }
+        },
     },
+    "required": ["version", "name", "steps"],
 }
 
 JSON_ONLY_DEVELOPER_MESSAGE = {
@@ -80,8 +165,12 @@ PROMPTS_JSON_DEVELOPER_MESSAGE = {
         {
             "type": "input_text",
             "text": (
-                "Return ONLY valid JSON that exactly matches the prompt list schema. "
-                "No markdown, no prose, no extra keys outside schema."
+                "Return ONLY valid JSON matching the schema exactly (no markdown, no prose, no extra keys). "
+                "The output must be a loadable CascadeDefinition with version, name and steps compatible with CascadeStep. "
+                "Use steps[].instructions for developer-style behavior and steps[].input_text for plain user text; "
+                "use steps[].input_content_json only when you need structured Responses API content parts sent 1:1. "
+                "When chaining future values, use placeholders like {{step.N.response_id}} or {{step.N.json}}; if supported by runtime, you may also use {{step.N.out_file_id:REL_PATH}} and {{step.N.out_file_path:REL_PATH}}. "
+                "Recommend an appropriate model in each step.model (e.g., lighter model for planning, stronger for code generation)."
             ),
         }
     ],
