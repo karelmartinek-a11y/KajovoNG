@@ -48,6 +48,8 @@ from PySide6.QtWidgets import (
 from ..core.config import AppSettings, SMTPSettings, save_settings, load_settings, DEFAULT_SETTINGS_FILE
 from ..core.openai_client import OpenAIClient
 from ..core.pipeline import RunWorker, UiRunConfig
+from ..core.cascade_pipeline import CascadeRunWorker, CascadeRunConfig
+from ..core.cascade_types import CascadeDefinition
 from ..core.pricing import PriceTable
 from ..core.receipt import ReceiptDB
 from ..core.retry import CircuitBreaker, with_retry
@@ -64,6 +66,7 @@ from .vectorstores_panel import VectorStoresPanel
 from .batch_panel import BatchPanel
 from .github_panel import GitHubPanel
 from .pricing_panel import PricingPanel
+from .cascade_panel import CascadePanel
 from .response_request_panel import ResponseRequestPanel
 from .progress_dialog import ProgressDialog
 from .theme import DARK_STYLESHEET
@@ -168,6 +171,7 @@ class MainWindow(QMainWindow):
 
         self.tab_run = QWidget()
         self.tab_files = QWidget()
+        self.tab_cascade = QWidget()
         self.tab_vector = QWidget()
         self.tab_settings = QWidget()
         self.tab_smtp = QWidget()
@@ -179,6 +183,7 @@ class MainWindow(QMainWindow):
         self.tab_help = QWidget()
         self.tabs.addTab(self.tab_run, "RUN")
         self.tabs.addTab(self.tab_files, "FILES API")
+        self.tabs.addTab(self.tab_cascade, "KASKÁDA")
         self.tabs.addTab(self.tab_vector, "VECTOR STORES")
         self.tabs.addTab(self.tab_settings, "SETTINGS")
         self.tabs.addTab(self.tab_smtp, "SMTP")
@@ -191,6 +196,7 @@ class MainWindow(QMainWindow):
 
         self._build_run_tab()
         self._build_files_tab()
+        self._build_cascade_tab()
         self._build_vector_tab()
         self._build_settings_tab()
         self._build_smtp_tab()
@@ -216,6 +222,7 @@ class MainWindow(QMainWindow):
 
         self._maybe_resume_hint()
         self._refresh_models_best_effort()
+        self.refresh_run_cascades()
         self._auto_probe_models_on_start()
         self._auto_refresh_pricing()
         self._start_pricing_audit_loop()
@@ -244,7 +251,7 @@ class MainWindow(QMainWindow):
         row += 1
         top.addWidget(QLabel("Mode"), row, 0)
         self.cb_mode = QComboBox()
-        self.cb_mode.addItems(["GENERATE", "MODIFY", "QA", "QFILE"])
+        self.cb_mode.addItems(["GENERATE", "MODIFY", "QA", "QFILE", "KASKADA"])
         self.cb_mode.setMaximumWidth(160)
         self.cb_mode.currentTextChanged.connect(self.on_mode_changed)
         top.addWidget(self.cb_mode, row, 1)
@@ -257,6 +264,20 @@ class MainWindow(QMainWindow):
         self.ed_response_id.setPlaceholderText("Volitelné: navázat na existující response")
         self.ed_response_id.setMaximumWidth(260)
         top.addWidget(self.ed_response_id, row, 4)
+
+        self.row_cascade_selector = QWidget()
+        row_c_l = QHBoxLayout(self.row_cascade_selector)
+        row_c_l.setContentsMargins(0, 0, 0, 0)
+        row_c_l.addWidget(QLabel("Vybraná kaskáda"))
+        self.cb_run_cascade = QComboBox()
+        self.cb_run_cascade.setMinimumWidth(280)
+        self.btn_run_cascade_refresh = QPushButton("Refresh")
+        row_c_l.addWidget(self.cb_run_cascade)
+        row_c_l.addWidget(self.btn_run_cascade_refresh)
+        row_c_l.addStretch(1)
+        top.addWidget(self.row_cascade_selector, row, 0, 1, 3)
+        self.row_cascade_selector.setVisible(False)
+        self.btn_run_cascade_refresh.clicked.connect(self.refresh_run_cascades)
         self.txt_attached_summary = QPlainTextEdit()
         self.txt_attached_summary.setReadOnly(True)
         self.txt_attached_summary.setPlaceholderText("Files/VS připojené k RUN")
@@ -519,6 +540,31 @@ class MainWindow(QMainWindow):
         self.vector_panel.logline.connect(self.log)
         self.vector_panel.attached_changed.connect(self.on_vs_attached_changed)
         v.addWidget(self.vector_panel, 1)
+
+    def _build_cascade_tab(self):
+        v = QVBoxLayout(self.tab_cascade)
+        v.setContentsMargins(10, 10, 10, 10)
+        self.cascade_panel = CascadePanel(self.s, self._current_model_list)
+        v.addWidget(self.cascade_panel, 1)
+
+    def _current_model_list(self) -> List[str]:
+        if self.all_models:
+            return list(self.all_models)
+        return [self.cb_model.itemText(i) for i in range(self.cb_model.count())]
+
+    def refresh_run_cascades(self):
+        try:
+            self.cascade_panel.refresh_saved_list()
+        except Exception:
+            pass
+        self.cb_run_cascade.clear()
+        paths = []
+        if hasattr(self, "cascade_panel"):
+            base = self.cascade_panel.cascade_dir
+            for n in self.cascade_panel.available_cascades():
+                paths.append((n, os.path.join(base, n)))
+        for label, full in paths:
+            self.cb_run_cascade.addItem(label, full)
 
     def _build_model_tab(self):
         v = QVBoxLayout(self.tab_models)
@@ -1811,6 +1857,11 @@ class MainWindow(QMainWindow):
         self.cb_model.blockSignals(False)
         if self.cb_model.count() > 0:
             self.on_model_changed(self.cb_model.currentText())
+        try:
+            if hasattr(self, "cascade_panel"):
+                self.cascade_panel.refresh_models()
+        except Exception:
+            pass
         self._refresh_model_tab()
 
     def _refresh_model_tab(self):
@@ -2030,9 +2081,16 @@ class MainWindow(QMainWindow):
 
     def on_mode_changed(self, mode: str):
         is_qfile = mode == "QFILE"
-        self.chk_send_as_c.setEnabled(not is_qfile)
+        is_cascade = mode == "KASKADA"
+        self.chk_send_as_c.setEnabled((not is_qfile) and (not is_cascade))
         if is_qfile:
             self.chk_send_as_c.setChecked(False)
+        if is_cascade:
+            self.chk_send_as_c.setChecked(False)
+        self.ed_response_id.setEnabled(not is_cascade)
+        self.row_cascade_selector.setVisible(is_cascade)
+        if is_cascade:
+            self.refresh_run_cascades()
 
     def on_go(self):
         if self.worker is not None:
@@ -2044,6 +2102,9 @@ class MainWindow(QMainWindow):
 
         mode = self.cb_mode.currentText()
         send_as_c = bool(self.chk_send_as_c.isChecked())
+        if mode == "KASKADA":
+            send_as_c = False
+            self.chk_send_as_c.setChecked(False)
         if not self._validate_paths(mode, send_as_c):
             return
 
@@ -2074,6 +2135,50 @@ class MainWindow(QMainWindow):
                     "Kaskádu nelze spustit s tímto modelem.",
                 )
                 return
+
+        if mode == "KASKADA":
+            if self.cb_run_cascade.count() == 0:
+                msg_warning(self, "Kaskáda", "Není vybraná uložená kaskáda.")
+                return
+            cpath = str(self.cb_run_cascade.currentData() or "").strip()
+            if not cpath or not os.path.isfile(cpath):
+                msg_warning(self, "Kaskáda", "Vybraná kaskáda neexistuje.")
+                return
+            try:
+                with open(cpath, "r", encoding="utf-8") as f:
+                    cdef = CascadeDefinition.from_dict(json.load(f))
+            except Exception as e:
+                msg_critical(self, "Kaskáda", f"Načtení kaskády selhalo: {e}")
+                return
+            cfg_c = CascadeRunConfig(
+                project=self.ed_project.text().strip(),
+                cascade=cdef,
+                in_dir=self.ed_in.text().strip(),
+                out_dir=self.ed_out.text().strip(),
+            )
+            self._last_run_send_as_c = False
+            self.run_logger = None
+            self.log(f"KASKÁDA started: {os.path.basename(cpath)}")
+            self.worker = CascadeRunWorker(cfg_c, self.s, self.api_key, self.db, self.price_table)
+            self._progress_last_ts = time.time()
+            self._progress_timer.start()
+            self.progress_dialog = ProgressDialog(self)
+            self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
+            self.progress_dialog.show()
+            self.worker.progress.connect(self.pb.setValue)
+            self.worker.progress.connect(lambda v: self.progress_dialog.set_progress(v) if self.progress_dialog else None)
+            self.worker.progress.connect(lambda _: self._mark_progress_activity())
+            self.worker.subprogress.connect(self.pb_sub.setValue)
+            self.worker.subprogress.connect(lambda v: self.progress_dialog.set_subprogress(v) if self.progress_dialog else None)
+            self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
+            self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
+            self.worker.status.connect(lambda _: self._mark_progress_activity())
+            self.worker.logline.connect(self.log)
+            self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)
+            self.worker.finished_ok.connect(self.on_run_ok)
+            self.worker.finished_err.connect(self.on_run_err)
+            self.worker.start()
+            return
 
         self._last_run_send_as_c = bool(send_as_c)
         run_id = new_run_id()
@@ -2203,7 +2308,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1500, self._kill_worker_if_running)
 
     def on_run_ok(self, result: dict):
-        rid = self.run_logger.run_id if self.run_logger else ""
+        rid = self.run_logger.run_id if self.run_logger else str((result or {}).get("run_id") or "")
         is_batch = bool(self._last_run_send_as_c or (result.get("mode") == "C"))
         batch_id = str(result.get("batch_id") or "") if isinstance(result, dict) else ""
         notify_on_end = False
@@ -2221,7 +2326,7 @@ class MainWindow(QMainWindow):
         self.pb_sub.setValue(100)
 
         last_resp_id = str(result.get("response_id") or "")
-        if last_resp_id:
+        if last_resp_id and self.ed_response_id.isEnabled():
             self.ed_response_id.setText(last_resp_id)
 
         resp_text = ""
