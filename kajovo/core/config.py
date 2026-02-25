@@ -86,6 +86,7 @@ class SSHSettings:
     host: str = ""
     key: str = ""
     password: str = ""
+    pin_required: bool = False
 
 
 @dataclass

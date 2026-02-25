@@ -42,9 +42,13 @@ def collect_ssh_diagnostics(
     if password:
         connect_kwargs["password"] = password
 
+    pin = os.environ.get("KAJOVO_SSH_HOSTKEY_SHA256", "").strip()
+    pin_required = os.environ.get("KAJOVO_SSH_PIN_REQUIRED", "").strip().lower() in ("1", "true", "yes", "on")
+    if pin_required and not pin:
+        raise RuntimeError("SSH host key pin is required (set KAJOVO_SSH_HOSTKEY_SHA256).")
+
     log(f"SSH connecting to {user}@{host} with strict host-key policy (RejectPolicy).")
     cli.connect(**connect_kwargs)
-    pin = os.environ.get("KAJOVO_SSH_HOSTKEY_SHA256", "").strip()
     if pin:
         remote = cli.get_transport().get_remote_server_key()
         got = remote.get_fingerprint().hex()
