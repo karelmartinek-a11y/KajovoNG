@@ -33,15 +33,24 @@ _JSON_OBJ_RE = re.compile(r"(\{.*\})", re.DOTALL)
 def parse_json_strict(text: str) -> Dict[str, Any]:
     text = text.strip()
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except Exception:
-        m = _JSON_OBJ_RE.search(text)
-        if m:
-            try:
-                return json.loads(m.group(1))
-            except Exception:
-                pass
-        raise ContractError("Response is not valid JSON (strict contract violated).")
+        parsed = None
+
+    if isinstance(parsed, dict):
+        return parsed
+    if parsed is not None:
+        raise ContractError("Response JSON must be an object.")
+
+    m = _JSON_OBJ_RE.search(text)
+    if m:
+        try:
+            parsed2 = json.loads(m.group(1))
+            if isinstance(parsed2, dict):
+                return parsed2
+        except Exception:
+            pass
+    raise ContractError("Response is not valid JSON (strict contract violated).")
 
 def validate_paths(files: List[Dict[str, Any]]) -> None:
     seen = set()
