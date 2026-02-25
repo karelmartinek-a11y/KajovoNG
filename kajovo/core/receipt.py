@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS receipts (
 );
 CREATE INDEX IF NOT EXISTS idx_receipts_created_at ON receipts(created_at);
 CREATE INDEX IF NOT EXISTS idx_receipts_project ON receipts(project);
+CREATE INDEX IF NOT EXISTS idx_receipts_run_id ON receipts(run_id);
+CREATE INDEX IF NOT EXISTS idx_receipts_response_id ON receipts(response_id);
+CREATE INDEX IF NOT EXISTS idx_receipts_batch_id ON receipts(batch_id);
 '''
 
 @dataclass
@@ -55,8 +58,10 @@ class ReceiptDB:
         self._ensure()
 
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.db_path)
+        con = sqlite3.connect(self.db_path, timeout=10.0)
         con.row_factory = sqlite3.Row
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=NORMAL")
         return con
 
     def _ensure(self) -> None:
