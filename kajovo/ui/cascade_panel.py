@@ -44,8 +44,8 @@ class CascadePanel(QWidget):
         self.current_file_path = ""
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(6, 6, 6, 6)
-        root.setSpacing(8)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(6)
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Název kaskády"))
@@ -74,6 +74,7 @@ class CascadePanel(QWidget):
         root.addLayout(out_row)
 
         split = QSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
         root.addWidget(split, 1)
 
         # LEFT: editor kroku
@@ -118,10 +119,13 @@ class CascadePanel(QWidget):
         iv = QVBoxLayout(box_input)
         self.txt_instructions = QPlainTextEdit()
         self.txt_instructions.setPlaceholderText("Instructions")
+        self.txt_instructions.setMinimumHeight(96)
         self.txt_input_text = QPlainTextEdit()
         self.txt_input_text.setPlaceholderText("Input text (used only when Input Content JSON is empty)")
+        self.txt_input_text.setMinimumHeight(82)
         self.txt_input_content = QPlainTextEdit()
         self.txt_input_content.setPlaceholderText("Input content parts JSON (Responses API list/object, has priority)")
+        self.txt_input_content.setMinimumHeight(82)
         iv.addWidget(QLabel("Instructions"))
         iv.addWidget(self.txt_instructions)
         iv.addWidget(QLabel("Input Text (použije se jen když je Input Content JSON prázdné)"))
@@ -206,19 +210,26 @@ class CascadePanel(QWidget):
         self.btn_add_step = QPushButton("Přidat krok")
         self.btn_delete_step = QPushButton("Smazat krok")
         self.btn_duplicate_step = QPushButton("Duplikovat krok")
+        self.btn_move_step_up = QPushButton("↑ Nahoru")
+        self.btn_move_step_down = QPushButton("↓ Dolů")
         actions.addWidget(self.btn_add_step)
         actions.addWidget(self.btn_delete_step)
         actions.addWidget(self.btn_duplicate_step)
+        actions.addWidget(self.btn_move_step_up)
+        actions.addWidget(self.btn_move_step_down)
         rv.addLayout(actions)
 
         split.addWidget(left)
         split.addWidget(right)
         split.setStretchFactor(0, 2)
         split.setStretchFactor(1, 1)
+        split.setSizes([980, 460])
 
         self.btn_add_step.clicked.connect(self.add_step)
         self.btn_delete_step.clicked.connect(self.delete_selected_step)
         self.btn_duplicate_step.clicked.connect(self.duplicate_selected_step)
+        self.btn_move_step_up.clicked.connect(self.move_selected_step_up)
+        self.btn_move_step_down.clicked.connect(self.move_selected_step_down)
         self.lst_steps.currentRowChanged.connect(self.on_step_selected)
         self.lst_steps.model().rowsMoved.connect(self._on_steps_reordered)
 
@@ -238,6 +249,9 @@ class CascadePanel(QWidget):
         self.chk_schema_manifest.toggled.connect(self._schema_choice_guard)
         self.chk_schema_prompts.toggled.connect(self._schema_choice_guard)
         self.chk_schema_custom.toggled.connect(self._schema_choice_guard)
+        self.chk_schema_manifest.toggled.connect(self._ensure_json_output_when_schema_checked)
+        self.chk_schema_prompts.toggled.connect(self._ensure_json_output_when_schema_checked)
+        self.chk_schema_custom.toggled.connect(self._ensure_json_output_when_schema_checked)
         self.btn_schema_custom.clicked.connect(self._choose_custom_schema)
 
         self.btn_default_out_browse.clicked.connect(self._browse_default_out_dir)
@@ -256,8 +270,14 @@ class CascadePanel(QWidget):
         current = self.cb_step_model.currentText()
         self.cb_step_model.clear()
         self.cb_step_model.addItems(models)
+        preferred = str(getattr(self.s, "default_model", "") or "").strip()
         if current:
             idx = self.cb_step_model.findText(current)
+            if idx >= 0:
+                self.cb_step_model.setCurrentIndex(idx)
+                return
+        if preferred:
+            idx = self.cb_step_model.findText(preferred)
             if idx >= 0:
                 self.cb_step_model.setCurrentIndex(idx)
 
@@ -365,7 +385,9 @@ class CascadePanel(QWidget):
 
     def add_step(self):
         models = list(self._model_provider() or [])
-        step = CascadeStep(title=f"Krok {len(self.definition.steps)+1}", model=(models[0] if models else ""))
+        preferred = str(getattr(self.s, "default_model", "") or "").strip()
+        model = preferred if preferred in models else (models[0] if models else "")
+        step = CascadeStep(title=f"Krok {len(self.definition.steps)+1}", model=model)
         self.definition.steps.append(step)
         self.current_step_index = len(self.definition.steps) - 1
         self._refresh_step_list()
@@ -388,6 +410,22 @@ class CascadePanel(QWidget):
         cp = copy.deepcopy(self.definition.steps[i])
         cp.title = (cp.title or "Krok") + " (copy)"
         self.definition.steps.insert(i + 1, cp)
+        self.current_step_index = i + 1
+        self._refresh_step_list()
+
+    def move_selected_step_up(self):
+        i = self.lst_steps.currentRow()
+        if i <= 0 or i >= len(self.definition.steps):
+            return
+        self.definition.steps[i - 1], self.definition.steps[i] = self.definition.steps[i], self.definition.steps[i - 1]
+        self.current_step_index = i - 1
+        self._refresh_step_list()
+
+    def move_selected_step_down(self):
+        i = self.lst_steps.currentRow()
+        if i < 0 or i >= (len(self.definition.steps) - 1):
+            return
+        self.definition.steps[i + 1], self.definition.steps[i] = self.definition.steps[i], self.definition.steps[i + 1]
         self.current_step_index = i + 1
         self._refresh_step_list()
 
@@ -552,6 +590,10 @@ class CascadePanel(QWidget):
                 c.blockSignals(True)
                 c.setChecked(False)
                 c.blockSignals(False)
+
+    def _ensure_json_output_when_schema_checked(self, checked: bool):
+        if checked and not self.rb_out_json.isChecked():
+            self.rb_out_json.setChecked(True)
 
     def _update_schema_enabled(self):
         on = self.rb_out_json.isChecked()
