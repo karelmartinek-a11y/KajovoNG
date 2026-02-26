@@ -79,7 +79,7 @@ def main():
     settings = load_settings()
     w = MainWindow(settings)
     w.setWindowIcon(app_icon)
-    w.show()
+    w.showMaximized()
     sys.exit(app.exec())
 
 if __name__ == "__main__":
