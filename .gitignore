@@ -12,3 +12,6 @@ kajovo.sqlite
 kajovo_state.json
 kajovo/kajovo_state.json
 kajovo_settings.json
+
+# generated branding assets
+resources/app_icon.png
