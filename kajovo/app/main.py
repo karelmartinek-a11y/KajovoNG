@@ -7,8 +7,8 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFontDatabase, QFont, QIcon, QPixmap
 from PySide6.QtCore import Qt, QCoreApplication
 
-from ..core.config import load_settings
-from ..ui.mainwindow import MainWindow
+from kajovo.core.config import load_settings
+from kajovo.ui.mainwindow import MainWindow
 
 def _project_root() -> Path:
     if getattr(sys, "frozen", False):
