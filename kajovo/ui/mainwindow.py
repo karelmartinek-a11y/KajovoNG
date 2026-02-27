@@ -8,10 +8,10 @@ from .widgets import (
     dialog_open_file,
     dialog_save_file,
     dialog_select_dir,
+    open_in_file_manager,
 )
 
 import os
-import subprocess
 import json
 import time
 import shutil
@@ -2313,10 +2313,8 @@ class MainWindow(QMainWindow):
         if (not is_batch) and out_dir and os.path.isdir(out_dir):
             if msg_question(self, "Open OUT", "Otevřít OUT složku?") == QMessageBox.Yes:
                 try:
-                    if os.name == "nt":
-                        os.startfile(out_dir)  # type: ignore
-                    else:
-                        subprocess.Popen(["xdg-open", out_dir])
+                    if not open_in_file_manager(out_dir):
+                        self._log_ui(f"Nepodařilo se otevřít OUT složku: {out_dir}")
                 except Exception:
                     pass
         if is_batch:

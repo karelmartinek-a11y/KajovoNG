@@ -1,5 +1,12 @@
 from __future__ import annotations
-from .widgets import msg_info, msg_warning, msg_critical, msg_question, dialog_select_dir
+from .widgets import (
+    msg_info,
+    msg_warning,
+    msg_critical,
+    msg_question,
+    dialog_select_dir,
+    open_in_file_manager,
+)
 
 import json
 import os
@@ -349,11 +356,8 @@ class BatchPanel(QWidget):
                 if target_dir and os.path.isdir(target_dir):
                     if msg_question(self, "Batch", f"Otevřít OUT složku? ({target_dir})") == QMessageBox.Yes:
                         try:
-                            if os.name == "nt":
-                                os.startfile(target_dir)  # type: ignore
-                            else:
-                                import subprocess
-                                subprocess.Popen(["xdg-open", target_dir])
+                            if not open_in_file_manager(target_dir):
+                                self.logline.emit(f"Nepodařilo se otevřít složku: {target_dir}")
                         except Exception:
                             pass
             except Exception as e:

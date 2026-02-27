@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import List
 
 from PySide6.QtWidgets import (
@@ -15,8 +19,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
 )
-from PySide6.QtCore import Qt, QPoint, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, QPoint, Signal, QUrl
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import QApplication
 from .theme import DARK_STYLESHEET
 
@@ -156,6 +160,29 @@ def dialog_input_text(parent: QWidget, title: str, label: str, default: str = ""
     dlg.resize(520, 220)
     ok = dlg.exec() == QDialog.Accepted
     return (dlg.textValue(), ok)
+
+
+def open_in_file_manager(path: str) -> bool:
+    """Open path in OS file manager across Windows, macOS and Linux."""
+    if not path:
+        return False
+    target = Path(path).expanduser().resolve()
+    if not target.exists():
+        return False
+
+    if QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
+        return True
+
+    try:
+        if os.name == "nt":
+            os.startfile(str(target))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)])
+        else:
+            subprocess.Popen(["xdg-open", str(target)])
+        return True
+    except Exception:
+        return False
 
 class StyledMessageDialog(QDialog):
     def __init__(
