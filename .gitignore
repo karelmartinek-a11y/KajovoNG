@@ -15,3 +15,13 @@ kajovo_settings.json
 
 # generated branding assets
 resources/app_icon.png
+dist/
+build/
+node_modules/
+*.egg-info/
+.pytest_cache/
+.tmp/
+.coverage
+coverage/
+out/
+.parcel-cache/
