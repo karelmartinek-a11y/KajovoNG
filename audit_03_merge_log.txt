@@ -1,0 +1,383 @@
+Forensic merge log start
+=== Branch origin/codex/fix-build-for-mac-and-windows-exe ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/fix-build-for-mac-and-windows-exe already merged -> skip
+$ git log -1 --name-status origin/codex/fix-build-for-mac-and-windows-exe
+commit 94710cc26d8c0778e707052dde88c87883ef2801
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Fri Feb 27 20:24:42 2026 +0100
+
+    ui: make OUT folder opening cross-platform
+
+M	kajovo/ui/batch_panel.py
+M	kajovo/ui/mainwindow.py
+M	kajovo/ui/widgets.py
+
+=== Branch origin/codex/conduct-forensic-audit-on-cascade-features ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/conduct-forensic-audit-on-cascade-features already merged -> skip
+$ git log -1 --name-status origin/codex/conduct-forensic-audit-on-cascade-features
+commit 380707831c824d14fbf1e3addc356a61f9657d43
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Thu Feb 26 20:35:27 2026 +0100
+
+    ui: stabilize cascade tab behavior and window startup
+
+M	kajovo/app/main.py
+M	kajovo/ui/cascade_panel.py
+M	kajovo/ui/mainwindow.py
+
+=== Branch origin/codex/update-build-process-for-cross-platform-support ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/update-build-process-for-cross-platform-support already merged -> skip
+$ git log -1 --name-status origin/codex/update-build-process-for-cross-platform-support
+commit 9c60a65759ce00a8c813a2395724aa27b7c98f73
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Thu Feb 26 16:48:23 2026 +0100
+
+    build: remove committed binary icons and keep generated assets
+
+M	.gitignore
+A	Build/README.md
+A	Build/assets/.gitignore
+A	Build/assets/README.md
+A	Build/build_macos.sh
+A	Build/build_windows.ps1
+A	Build/generate_icons.py
+M	kajovo/app/main.py
+
+=== Branch origin/codex/analyze-program-for-cross-platform-compatibility ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/analyze-program-for-cross-platform-compatibility already merged -> skip
+$ git log -1 --name-status origin/codex/analyze-program-for-cross-platform-compatibility
+commit 2419d47396106496b7746a86804536074dea5e1b
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Thu Feb 26 16:17:43 2026 +0100
+
+    docs: add windows-macos forensic compatibility analysis
+
+A	docs/CROSS_PLATFORM_FORENSIC_ANALYSIS.md
+
+=== Branch origin/codex/fix-window-behavior-and-layout ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/fix-window-behavior-and-layout already merged -> skip
+$ git log -1 --name-status origin/codex/fix-window-behavior-and-layout
+commit 8956fe7226aa7ae4b2f71dcfdffc86975eb9ebf3
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Wed Feb 25 23:39:49 2026 +0100
+
+    ui: restore native window chrome and scrollable tabs
+
+M	kajovo/app/main.py
+M	kajovo/ui/mainwindow.py
+
+=== Branch origin/codex/add-expected-output-file-support-in-cascade ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/add-expected-output-file-support-in-cascade already merged -> skip
+$ git log -1 --name-status origin/codex/add-expected-output-file-support-in-cascade
+commit 4ec5155a3adbce2b304a89c6e387903f56335f68
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Wed Feb 25 23:36:06 2026 +0100
+
+    kaskada: add expected OUT files and file placeholders
+
+M	kajovo/core/cascade_pipeline.py
+M	kajovo/core/cascade_types.py
+M	kajovo/ui/cascade_panel.py
+
+=== Branch origin/codex/update-json-presets-for-cascade ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/update-json-presets-for-cascade already merged -> skip
+$ git log -1 --name-status origin/codex/update-json-presets-for-cascade
+commit 2d51f47f9facac24753d1c550b03e94087a0a63d
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Wed Feb 25 23:27:29 2026 +0100
+
+    core: align cascade preset schemas with manifest and loadable definitions
+
+M	kajovo/core/cascade_pipeline.py
+
+=== Branch origin/codex/stabilize-request-builder-for-cascade ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/stabilize-request-builder-for-cascade already merged -> skip
+$ git log -1 --name-status origin/codex/stabilize-request-builder-for-cascade
+commit 4837a0a97e68b3b935ffbf2620f803be224fc52c
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Wed Feb 25 23:14:13 2026 +0100
+
+    cascade: fix Responses API payload mapping and JSON format
+
+M	kajovo/core/cascade_pipeline.py
+M	kajovo/ui/cascade_panel.py
+
+=== Branch origin/codex/implement-cascade-feature-in-kajovong ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/implement-cascade-feature-in-kajovong already merged -> skip
+$ git log -1 --name-status origin/codex/implement-cascade-feature-in-kajovong
+commit 84626d5c0ec09cbd89640dd2e1bc98b35a61461e
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Wed Feb 25 20:34:44 2026 +0100
+
+    ui/core: add standalone KASKADA pipeline and editor
+
+A	kajovo/core/cascade_log.py
+A	kajovo/core/cascade_pipeline.py
+A	kajovo/core/cascade_types.py
+A	kajovo/ui/cascade_panel.py
+M	kajovo/ui/mainwindow.py
+
+=== Branch origin/codex/harden-ui-worker-lifecycle-termination ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/harden-ui-worker-lifecycle-termination already merged -> skip
+$ git log -1 --name-status origin/codex/harden-ui-worker-lifecycle-termination
+commit b38540639697fd60b32b67b1da00a2d1a4c2e8cd
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Wed Feb 25 15:33:29 2026 +0100
+
+    ui/core: harden worker stop flow and add optional SSH pin-required mode
+
+M	kajovo/core/config.py
+M	kajovo/core/diagnostics/ssh.py
+M	kajovo/ui/mainwindow.py
+
+=== Branch origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5 ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5 already merged -> skip
+$ git log -1 --name-status origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5
+commit b20c09020fe2c5d06403a6121b6f07f008038fdb
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Wed Feb 25 13:50:05 2026 +0100
+
+    core: harden openai, run logging, and receipts audit baseline
+
+A	docs/FORENSIC_AUDIT_REPORT.md
+A	docs/REQUIRED_FIXES_ROADMAP.md
+M	kajovo/core/contracts.py
+M	kajovo/core/openai_client.py
+M	kajovo/core/receipt.py
+M	kajovo/core/runlog.py
+A	tests/test_core_audit_regressions.py
+
+=== Branch origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel already merged -> skip
+$ git log -1 --name-status origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel
+commit 5f407c2c43776918c2e421480489859a5be0446a
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Wed Feb 25 13:49:56 2026 +0100
+
+    core: harden openai, run logging, and receipts audit baseline
+
+A	docs/FORENSIC_AUDIT_REPORT.md
+A	docs/REQUIRED_FIXES_ROADMAP.md
+M	kajovo/core/contracts.py
+M	kajovo/core/openai_client.py
+M	kajovo/core/receipt.py
+M	kajovo/core/runlog.py
+A	tests/test_core_audit_regressions.py
+
+=== Branch origin/codex/conduct-comprehensive-python-security-audit ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/conduct-comprehensive-python-security-audit already merged -> skip
+$ git log -1 --name-status origin/codex/conduct-comprehensive-python-security-audit
+commit 4c71b071e11c5444e9da3ec4514cc8d4c22e98fb
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Sun Feb 22 09:11:29 2026 +0100
+
+    chore: add baseline pre-commit hooks and github actions ci
+
+A	.github/workflows/ci.yml
+A	.pre-commit-config.yaml
+M	README.md
+A	docs/ARCHITECTURE.md
+A	docs/CONTRIBUTING.md
+A	docs/SECURITY.md
+A	docs/diagrams/components.mmd
+A	docs/diagrams/key-sequence.mmd
+A	docs/diagrams/main-flow.mmd
+A	docs/diagrams/system-context.mmd
+A	docs/regen/01-security-audit/verification.md
+A	docs/regen/parity/parity-map.yaml
+M	kajovo/core/openai_client.py
+M	kajovo/core/utils.py
+M	kajovo/ui/batch_panel.py
+A	tests/test_security_regressions.py
+
+=== Branch origin/codex/remove-secrets-from-repository-and-rotate ===
+$ git checkout main
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+
+$ git status -sb
+## main...origin/main
+?? audit_01_status_pre.txt
+?? audit_02_branches_remote_sorted.txt
+?? audit_03_merge_log.txt
+?? merge_candidates.txt
+?? merge_runner.py
+
+Branch origin/codex/remove-secrets-from-repository-and-rotate already merged -> skip
+$ git log -1 --name-status origin/codex/remove-secrets-from-repository-and-rotate
+commit 052f2d719931b45a99982c1feed8f3eb5a99e158
+Author: karelmartinek-a11y <karel.martinek@post.cz>
+Date:   Sat Feb 21 16:00:20 2026 +0100
+
+    security: move secrets to keyring and harden repair/pricing
+
+M	.gitignore
+A	LICENSE
+M	README.md
+A	THIRD_PARTY_NOTICES.md
+M	kajovo/core/config.py
+A	kajovo/core/diagnostics/__init__.py
+A	kajovo/core/diagnostics/ssh.py
+M	kajovo/core/pricing.py
+A	kajovo/core/secret_store.py
+M	kajovo/ui/mainwindow.py
+M	kajovo/ui/pricing_panel.py
+M	requirements.txt
+
+Forensic merge log end

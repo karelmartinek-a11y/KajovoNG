@@ -1,0 +1,70 @@
+Deleting origin/codex/fix-build-for-mac-and-windows-exe
+$ git push origin --delete codex/fix-build-for-mac-and-windows-exe
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/fix-build-for-mac-and-windows-exe
+
+Deleting origin/codex/conduct-forensic-audit-on-cascade-features
+$ git push origin --delete codex/conduct-forensic-audit-on-cascade-features
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/conduct-forensic-audit-on-cascade-features
+
+Deleting origin/codex/update-build-process-for-cross-platform-support
+$ git push origin --delete codex/update-build-process-for-cross-platform-support
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/update-build-process-for-cross-platform-support
+
+Deleting origin/codex/analyze-program-for-cross-platform-compatibility
+$ git push origin --delete codex/analyze-program-for-cross-platform-compatibility
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/analyze-program-for-cross-platform-compatibility
+
+Deleting origin/codex/fix-window-behavior-and-layout
+$ git push origin --delete codex/fix-window-behavior-and-layout
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/fix-window-behavior-and-layout
+
+Deleting origin/codex/add-expected-output-file-support-in-cascade
+$ git push origin --delete codex/add-expected-output-file-support-in-cascade
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/add-expected-output-file-support-in-cascade
+
+Deleting origin/codex/update-json-presets-for-cascade
+$ git push origin --delete codex/update-json-presets-for-cascade
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/update-json-presets-for-cascade
+
+Deleting origin/codex/stabilize-request-builder-for-cascade
+$ git push origin --delete codex/stabilize-request-builder-for-cascade
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/stabilize-request-builder-for-cascade
+
+Deleting origin/codex/implement-cascade-feature-in-kajovong
+$ git push origin --delete codex/implement-cascade-feature-in-kajovong
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/implement-cascade-feature-in-kajovong
+
+Deleting origin/codex/harden-ui-worker-lifecycle-termination
+$ git push origin --delete codex/harden-ui-worker-lifecycle-termination
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/harden-ui-worker-lifecycle-termination
+
+Deleting origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5
+$ git push origin --delete codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5
+
+Deleting origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel
+$ git push origin --delete codex/conduct-forensic-audit-for-kajovong/kajovohotel
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/conduct-forensic-audit-for-kajovong/kajovohotel
+
+Deleting origin/codex/conduct-comprehensive-python-security-audit
+$ git push origin --delete codex/conduct-comprehensive-python-security-audit
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/conduct-comprehensive-python-security-audit
+
+Deleting origin/codex/remove-secrets-from-repository-and-rotate
+$ git push origin --delete codex/remove-secrets-from-repository-and-rotate
+To https://github.com/karelmartinek-a11y/KajovoNG.git
+ - [deleted]         codex/remove-secrets-from-repository-and-rotate
+

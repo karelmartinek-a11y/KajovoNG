@@ -1,0 +1,22 @@
+.gitignore diff:
+diff --git a/.gitignore b/.gitignore
+index 18c5138..2bb5f62 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -15,3 +15,13 @@ kajovo_settings.json
+
+ # generated branding assets
+ resources/app_icon.png
++dist/
++build/
++node_modules/
++*.egg-info/
++.pytest_cache/
++.tmp/
++.coverage
++coverage/
++out/
++.parcel-cache/
+warning: v pracovní kopii .gitignore bude následující LF nahrazeno CRLF
+
+Odstranìná trackovaná generovaná data: žádná

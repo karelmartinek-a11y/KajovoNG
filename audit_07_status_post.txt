@@ -1,0 +1,54 @@
+git status -sb:
+## main...origin/main
+ M audit_07_status_post.txt
+M  docs/kajovoFRA.md
+
+
+git log --oneline --decorate -n 50:
+5f8ec3d (HEAD -> main, tag: baseline-20260227, origin/main, origin/HEAD) docs: add kajovoFRA forensic audit report
+73eedf5 docs: note forensic reborne baseline
+feef141 chore: reborne audit cleanup (gitignore + untrack generated artifacts)
+cb1ca56 Merge pull request #14 from karelmartinek-a11y/codex/fix-build-for-mac-and-windows-exe
+94710cc ui: make OUT folder opening cross-platform
+a9bd449 (tag: pred-auditem-forensic) build: generate icons from logo with pillow
+893e1ca Merge pull request #13 from karelmartinek-a11y/codex/conduct-forensic-audit-on-cascade-features
+3807078 ui: stabilize cascade tab behavior and window startup
+0fcfde4 add zip helper, diagnostics, and new UI assets
+a24525b Merge pull request #12 from karelmartinek-a11y/codex/update-build-process-for-cross-platform-support
+9c60a65 build: remove committed binary icons and keep generated assets
+206ab22 Merge pull request #11 from karelmartinek-a11y/codex/analyze-program-for-cross-platform-compatibility
+2419d47 docs: add windows-macos forensic compatibility analysis
+7bd45a9 Merge pull request #3 from karelmartinek-a11y/codex/conduct-forensic-audit-for-kajovong/kajovohotel
+9b4d5ac Merge pull request #10 from karelmartinek-a11y/codex/fix-window-behavior-and-layout
+8956fe7 ui: restore native window chrome and scrollable tabs
+a46e618 Merge pull request #9 from karelmartinek-a11y/codex/add-expected-output-file-support-in-cascade
+4ec5155 kaskada: add expected OUT files and file placeholders
+ad9893b Merge pull request #8 from karelmartinek-a11y/codex/update-json-presets-for-cascade
+2d51f47 core: align cascade preset schemas with manifest and loadable definitions
+c24b6a8 Merge pull request #7 from karelmartinek-a11y/codex/stabilize-request-builder-for-cascade
+4837a0a cascade: fix Responses API payload mapping and JSON format
+fd63e17 Merge pull request #6 from karelmartinek-a11y/codex/implement-cascade-feature-in-kajovong
+84626d5 ui/core: add standalone KASKADA pipeline and editor
+b54bff9 Merge pull request #5 from karelmartinek-a11y/codex/harden-ui-worker-lifecycle-termination
+b385406 ui/core: harden worker stop flow and add optional SSH pin-required mode
+aa86588 Merge pull request #4 from karelmartinek-a11y/codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5
+b20c090 core: harden openai, run logging, and receipts audit baseline
+5f407c2 core: harden openai, run logging, and receipts audit baseline
+21602d9 Merge pull request #2 from karelmartinek-a11y/codex/conduct-comprehensive-python-security-audit
+4c71b07 chore: add baseline pre-commit hooks and github actions ci
+e8bcf4c Merge pull request #1 from karelmartinek-a11y/codex/remove-secrets-from-repository-and-rotate
+052f2d7 security: move secrets to keyring and harden repair/pricing
+aeb418f chore: track ttf with lfs
+56f98fd initial commit
+
+
+git tag --list (posledních 50):
+baseline-20260227
+pre-reborne-20260227
+pred-auditem-forensic
+
+
+git branch -r (po prune):
+  origin/HEAD -> origin/main
+  origin/main
+

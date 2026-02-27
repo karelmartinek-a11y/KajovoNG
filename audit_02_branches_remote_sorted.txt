@@ -1,0 +1,25 @@
+git fetch --all --prune --tags output:
+git fetch --all --prune --tags executed (no output)
+git tag -a pre-reborne-20260227 -m  State before Forensic Reborne Audit (created)
+git push origin pre-reborne-20260227 output: [new tag] pre-reborne-20260227 -> pre-reborne-20260227
+git checkout main output: branch ahead by 1 commit (already on main)
+git reset --hard origin/main output: HEAD is now at cb1ca56 Merge ...
+  origin/HEAD                                                         -> origin/main
+  origin/main                                                         cb1ca56 Merge pull request #14 from karelmartinek-a11y/codex/fix-build-for-mac-and-windows-exe
+  origin/codex/fix-build-for-mac-and-windows-exe                      94710cc ui: make OUT folder opening cross-platform
+  origin/codex/conduct-forensic-audit-on-cascade-features             3807078 ui: stabilize cascade tab behavior and window startup
+  origin/codex/update-build-process-for-cross-platform-support        9c60a65 build: remove committed binary icons and keep generated assets
+  origin/codex/analyze-program-for-cross-platform-compatibility       2419d47 docs: add windows-macos forensic compatibility analysis
+  origin/codex/fix-window-behavior-and-layout                         8956fe7 ui: restore native window chrome and scrollable tabs
+  origin/codex/add-expected-output-file-support-in-cascade            4ec5155 kaskada: add expected OUT files and file placeholders
+  origin/codex/update-json-presets-for-cascade                        2d51f47 core: align cascade preset schemas with manifest and loadable definitions
+  origin/codex/stabilize-request-builder-for-cascade                  4837a0a cascade: fix Responses API payload mapping and JSON format
+  origin/codex/implement-cascade-feature-in-kajovong                  84626d5 ui/core: add standalone KASKADA pipeline and editor
+  origin/codex/harden-ui-worker-lifecycle-termination                 b385406 ui/core: harden worker stop flow and add optional SSH pin-required mode
+  origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5 b20c090 core: harden openai, run logging, and receipts audit baseline
+  origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel        5f407c2 core: harden openai, run logging, and receipts audit baseline
+  origin/codex/conduct-comprehensive-python-security-audit            4c71b07 chore: add baseline pre-commit hooks and github actions ci
+  origin/codex/remove-secrets-from-repository-and-rotate              052f2d7 security: move secrets to keyring and harden repair/pricing
+git fetch --all --prune (post-merge cleanup, no output) 
+git fetch --all --prune (post-commit refresh)
+git fetch --all --prune (final refresh)
