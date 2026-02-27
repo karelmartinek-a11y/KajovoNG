@@ -174,6 +174,10 @@ class VectorStoresPanel(QWidget):
         self.btn_create = QPushButton("Create")
         self.btn_delete = QPushButton("Delete")
         self.btn_delete_all = QPushButton("Del ALL")
+        self.btn_refresh.setToolTip("Načte seznam vector store.")
+        self.btn_create.setToolTip("Vytvoří novou vector store.")
+        self.btn_delete.setToolTip("Smaže vybrané vector store (včetně souborů).")
+        self.btn_delete_all.setToolTip("Smaže všechny vector store (včetně souborů).")
         top.addWidget(self.btn_refresh)
         top.addWidget(self.btn_create)
         top.addWidget(self.btn_delete)
@@ -195,7 +199,9 @@ class VectorStoresPanel(QWidget):
 
         attach_row = QHBoxLayout()
         self.btn_attach = QPushButton("Attach →")
+        self.btn_attach.setToolTip("Připojí vybrané vector_store_id do RUN requestu.")
         self.btn_detach = QPushButton("← Detach")
+        self.btn_detach.setToolTip("Odebere vybrané vector_store_id z RUN requestu.")
         attach_row.addStretch(1)
         attach_row.addWidget(self.btn_attach)
         attach_row.addWidget(self.btn_detach)
@@ -215,10 +221,15 @@ class VectorStoresPanel(QWidget):
         file_row = QHBoxLayout()
         self.ed_file_id = QLineEdit()
         self.ed_file_id.setPlaceholderText("file_id (from Files API)")
+        self.ed_file_id.setToolTip("Zadej file_id z Files API, které chceš přidat do vybrané vector store.")
         self.btn_add_file = QPushButton("Add file")
+        self.btn_add_file.setToolTip("Přidá file_id do vybrané vector store.")
         self.btn_add_from_files = QPushButton("Add z Files API")
+        self.btn_add_from_files.setToolTip("Otevře výběr souborů z Files API a přidá je do store.")
         self.btn_list_files = QPushButton("List files")
+        self.btn_list_files.setToolTip("Načte soubory ve vybrané vector store.")
         self.btn_remove_file = QPushButton("Remove selected")
+        self.btn_remove_file.setToolTip("Odebere vybrané soubory z store.")
         file_row.addWidget(self.ed_file_id, 1)
         file_row.addWidget(self.btn_add_file)
         file_row.addWidget(self.btn_add_from_files)
@@ -250,7 +261,9 @@ class VectorStoresPanel(QWidget):
 
         btn_detail = QHBoxLayout()
         self.btn_save_attrs = QPushButton("Uložit atributy")
+        self.btn_save_attrs.setToolTip("Uloží JSON atributy k vybranému souboru ve store.")
         self.btn_refresh_detail = QPushButton("Obnovit detail")
+        self.btn_refresh_detail.setToolTip("Znovu načte detail vybraného souboru (store + Files API).")
         btn_detail.addWidget(self.btn_save_attrs)
         btn_detail.addWidget(self.btn_refresh_detail)
         dv.addLayout(btn_detail)
@@ -276,11 +289,39 @@ class VectorStoresPanel(QWidget):
         self.btn_detach.clicked.connect(self.detach_selected)
 
         self.lst_vs.itemSelectionChanged.connect(self.list_files)
+        self.lst_vs.itemSelectionChanged.connect(self._update_controls)
         self.lst_files.itemSelectionChanged.connect(self.show_selected_file_details)
+        self.lst_files.itemSelectionChanged.connect(self._update_controls)
+        self.ed_file_id.textChanged.connect(self._update_controls)
+        self._update_controls()
 
         self.refresh()
 
         self._cur_files: Dict[str, Dict[str, Any]] = {}
+
+
+    def _update_controls(self) -> None:
+        has_key = bool(self.api_key)
+        has_vs = bool(self._selected_vs_id())
+        has_vs_sel_any = bool(self.lst_vs.selectedItems())
+        has_file_sel = bool(self.lst_files.selectedItems())
+        file_id_ok = bool((self.ed_file_id.text() or "").strip())
+
+        self.btn_refresh.setEnabled(has_key)
+        self.btn_create.setEnabled(has_key)
+        self.btn_delete.setEnabled(has_key and has_vs_sel_any)
+        self.btn_delete_all.setEnabled(has_key and self.lst_vs.count() > 0)
+
+        self.btn_list_files.setEnabled(has_key and has_vs)
+        self.btn_add_file.setEnabled(has_key and has_vs and file_id_ok)
+        self.btn_add_from_files.setEnabled(has_key and has_vs)
+        self.btn_remove_file.setEnabled(has_key and has_vs and has_file_sel)
+
+        self.btn_save_attrs.setEnabled(has_key and has_vs and has_file_sel)
+        self.btn_refresh_detail.setEnabled(has_key and has_vs and has_file_sel)
+
+        self.btn_attach.setEnabled(has_key and has_vs_sel_any)
+        self.btn_detach.setEnabled(has_key and bool(self.lst_attached.selectedItems()))
 
     def set_api_key(self, api_key: str):
         self.api_key = api_key
@@ -324,6 +365,8 @@ class VectorStoresPanel(QWidget):
                 self._prune_attached()
             except Exception as e:
                 msg_critical(self, "Vector stores", str(e))
+
+        self._update_controls()
 
     def _apply_vector_store_list(self, data: List[dict]) -> None:
         self.lst_vs.clear()
@@ -493,6 +536,8 @@ class VectorStoresPanel(QWidget):
             except Exception as e:
                 msg_critical(self, "List files", str(e))
 
+        self._update_controls()
+
     def add_file(self):
         if not self._need_client():
             return
@@ -573,12 +618,14 @@ class VectorStoresPanel(QWidget):
                 ni.setData(32, vs_id)
                 self.lst_attached.addItem(ni)
         self._emit_attached()
+        self._update_controls()
 
     def detach_selected(self):
         for it in self.lst_attached.selectedItems():
             row = self.lst_attached.row(it)
             self.lst_attached.takeItem(row)
         self._emit_attached()
+        self._update_controls()
 
     def attached_ids(self) -> List[str]:
         return [self.lst_attached.item(i).data(32) for i in range(self.lst_attached.count()) if self.lst_attached.item(i).data(32)]

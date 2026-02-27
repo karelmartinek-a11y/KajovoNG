@@ -18,10 +18,11 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QFileDialog,
     QInputDialog,
+    QToolTip,
+    QApplication,
 )
-from PySide6.QtCore import Qt, QPoint, Signal, QUrl
-from PySide6.QtGui import QCloseEvent, QDesktopServices
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt, QPoint, Signal, QUrl, QObject, QEvent, QTimer
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QCursor
 from .theme import DARK_STYLESHEET
 
 
@@ -322,3 +323,116 @@ class BusyPopup:
                 self.dialog.close()
             except Exception:
                 pass
+
+
+class DelayedHoverTooltipFilter(QObject):
+    """Shows widget.toolTip() near the mouse cursor after 1s of hover without movement."""
+
+    def __init__(self, parent=None, *, delay_ms: int = 1000):
+        super().__init__(parent)
+        self._delay_ms = int(delay_ms)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._show)
+        self._target: QWidget | None = None
+        self._last_pos = None
+
+    def eventFilter(self, obj: QObject, ev: QEvent) -> bool:
+        w = obj if isinstance(obj, QWidget) else None
+
+        if ev.type() == QEvent.Enter and w is not None:
+            self._arm(w)
+        elif ev.type() == QEvent.MouseMove and w is not None and self._target is w:
+            pos = getattr(ev, "globalPosition", None)
+            gp = pos().toPoint() if pos else QCursor.pos()
+            if self._last_pos != gp:
+                self._last_pos = gp
+                self._timer.start(self._delay_ms)
+        elif ev.type() in (QEvent.Leave, QEvent.FocusOut, QEvent.Hide):
+            if self._target is w:
+                self._disarm()
+        elif ev.type() in (QEvent.KeyPress, QEvent.Wheel) and self._target is w:
+            self._timer.start(self._delay_ms)
+
+        return super().eventFilter(obj, ev)
+
+    def _arm(self, w: QWidget) -> None:
+        self._target = w
+        try:
+            w.setMouseTracking(True)
+        except Exception:
+            pass
+        self._last_pos = QCursor.pos()
+        self._timer.start(self._delay_ms)
+
+    def _disarm(self) -> None:
+        self._timer.stop()
+        self._target = None
+        self._last_pos = None
+        try:
+            QToolTip.hideText()
+        except Exception:
+            pass
+
+    def _show(self) -> None:
+        w = self._target
+        if not w:
+            return
+        tip = (w.toolTip() or "").strip()
+        if not tip:
+            return
+        pos = QCursor.pos() + QPoint(12, 18)
+        QToolTip.showText(pos, tip, w)
+
+
+def apply_default_tooltips(root: QWidget) -> None:
+    """Populate missing tooltips from placeholders / generic text."""
+    from PySide6.QtWidgets import (
+        QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QPushButton, QCheckBox, QSpinBox, QDoubleSpinBox
+    )
+
+    for w in root.findChildren(QWidget):
+        try:
+            if w.toolTip():
+                continue
+        except Exception:
+            continue
+
+        tip = ""
+        if isinstance(w, QLineEdit):
+            tip = (w.placeholderText() or "").strip()
+        elif isinstance(w, (QPlainTextEdit, QTextEdit)):
+            tip = (w.placeholderText() or "").strip()
+        elif isinstance(w, QComboBox):
+            tip = "Vyber hodnotu ze seznamu."
+        elif isinstance(w, (QSpinBox, QDoubleSpinBox)):
+            tip = "Nastav číselnou hodnotu."
+        elif isinstance(w, QCheckBox):
+            tip = "Zapnout / vypnout volbu."
+        elif isinstance(w, QPushButton):
+            tip = (w.text() or "").strip()
+
+        if tip:
+            try:
+                w.setToolTip(tip)
+            except Exception:
+                pass
+
+
+def install_delayed_hover_tooltips(root: QWidget, *, delay_ms: int = 1000) -> DelayedHoverTooltipFilter:
+    """Install delayed hover tooltips on common interactive widgets."""
+    from PySide6.QtWidgets import (
+        QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QPushButton, QCheckBox, QListWidget,
+        QSpinBox, QDoubleSpinBox, QTableWidget
+    )
+
+    filt = DelayedHoverTooltipFilter(root, delay_ms=delay_ms)
+
+    targets = (QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QPushButton, QCheckBox, QListWidget, QSpinBox, QDoubleSpinBox, QTableWidget)
+    for w in root.findChildren(QWidget):
+        if isinstance(w, targets):
+            try:
+                w.installEventFilter(filt)
+            except Exception:
+                pass
+    return filt

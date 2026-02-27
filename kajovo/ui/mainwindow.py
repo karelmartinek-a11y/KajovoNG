@@ -71,7 +71,7 @@ from .cascade_panel import CascadePanel
 from .response_request_panel import ResponseRequestPanel
 from .progress_dialog import ProgressDialog
 from .theme import DARK_STYLESHEET
-from .widgets import BusyPopup, style_progress_bar
+from .widgets import BusyPopup, style_progress_bar, apply_default_tooltips, install_delayed_hover_tooltips
 
 EXPECTED_REPAIR_README = "readmerepair.txt"
 
@@ -152,9 +152,8 @@ class MainWindow(QMainWindow):
         v.addWidget(self.tabs, 1)
 
         self.tab_run = QWidget()
-        self.tab_files = QWidget()
+        self.tab_storage = QWidget()
         self.tab_cascade = QWidget()
-        self.tab_vector = QWidget()
         self.tab_settings = QWidget()
         self.tab_smtp = QWidget()
         self.tab_models = QWidget()
@@ -162,11 +161,9 @@ class MainWindow(QMainWindow):
         self.tab_git = QWidget()
         self.tab_pricing = QWidget()
         self.tab_reqresp = QWidget()
-        self.tab_help = QWidget()
         self.tabs.addTab(self.tab_run, "RUN")
-        self.tabs.addTab(self._scroll_tab(self.tab_files), "FILES API")
+        self.tabs.addTab(self._scroll_tab(self.tab_storage), "FILES + VECTOR")
         self.tabs.addTab(self.tab_cascade, "KASKÁDA")
-        self.tabs.addTab(self._scroll_tab(self.tab_vector), "VECTOR STORES")
         self.tabs.addTab(self._scroll_tab(self.tab_settings), "SETTINGS")
         self.tabs.addTab(self._scroll_tab(self.tab_smtp), "SMTP")
         self.tabs.addTab(self._scroll_tab(self.tab_models), "MODELS")
@@ -174,12 +171,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._scroll_tab(self.tab_git), "GITHUB")
         self.tabs.addTab(self._scroll_tab(self.tab_pricing), "PRICING")
         self.tabs.addTab(self._scroll_tab(self.tab_reqresp), "REQUEST/RESPONSE")
-        self.tabs.addTab(self._scroll_tab(self.tab_help), "HELP")
 
         self._build_run_tab()
-        self._build_files_tab()
+        self._build_storage_tab()
         self._build_cascade_tab()
-        self._build_vector_tab()
         self._build_settings_tab()
         self._build_smtp_tab()
         self._build_model_tab()
@@ -187,9 +182,11 @@ class MainWindow(QMainWindow):
         self._build_git_tab()
         self._build_pricing_tab()
         self._build_response_request_tab()
-        self._build_help_tab()
 
         self.setCentralWidget(root)
+        # Tooltips (hover 1s)
+        apply_default_tooltips(root)
+        self._tooltip_filter = install_delayed_hover_tooltips(root, delay_ms=1000)
         # propagate OUT dir to batch panel for downloads
         try:
             self.batch_panel.set_out_dir(self.ed_out.text())
@@ -375,6 +372,13 @@ class MainWindow(QMainWindow):
         left.addLayout(runrow)
 
         self.btn_go.clicked.connect(self.on_go)
+        # live validity gating (prevents invalid requests)
+        self.cb_mode.currentTextChanged.connect(lambda _=None: self._update_run_validity())
+        self.ed_in.textChanged.connect(lambda _=None: self._update_run_validity())
+        self.ed_out.textChanged.connect(lambda _=None: self._update_run_validity())
+        self.cb_model.currentTextChanged.connect(lambda _=None: self._update_run_validity())
+        self.chk_send_as_c.stateChanged.connect(lambda _=None: self._update_run_validity())
+        self._update_run_validity()
         self.btn_stop.clicked.connect(self.on_stop)
         self.btn_new.clicked.connect(self.on_new)
         self.btn_save_state.clicked.connect(self.on_save_state)
@@ -510,21 +514,49 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _build_files_tab(self):
-        v = QVBoxLayout(self.tab_files)
+    def _build_storage_tab(self):
+        v = QVBoxLayout(self.tab_storage)
         v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(10)
+
+        header = QHBoxLayout()
+        title = QLabel("FILES API + VECTOR STORES")
+        title.setStyleSheet("font-weight: 700; font-size: 14px;")
+        header.addWidget(title)
+        header.addStretch(1)
+        self.btn_storage_refresh_all = QPushButton("Refresh ALL")
+        self.btn_storage_refresh_all.setToolTip("Obnoví Files API i Vector Stores najednou.")
+        header.addWidget(self.btn_storage_refresh_all)
+        v.addLayout(header)
+
+        split = QSplitter()
+        split.setOrientation(Qt.Horizontal)
+        v.addWidget(split, 1)
+
         self.files_panel = FilesPanel(self.s, self.api_key)
         self.files_panel.attached_changed.connect(self.on_attached_changed)
         self.files_panel.logline.connect(self.log)
-        v.addWidget(self.files_panel, 1)
 
-    def _build_vector_tab(self):
-        v = QVBoxLayout(self.tab_vector)
-        v.setContentsMargins(10, 10, 10, 10)
         self.vector_panel = VectorStoresPanel(self.s, self.api_key)
         self.vector_panel.logline.connect(self.log)
         self.vector_panel.attached_changed.connect(self.on_vs_attached_changed)
-        v.addWidget(self.vector_panel, 1)
+
+        split.addWidget(self.files_panel)
+        split.addWidget(self.vector_panel)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 2)
+
+        def _refresh_all():
+            try:
+                self.files_panel.refresh()
+            except Exception:
+                pass
+            try:
+                self.vector_panel.refresh()
+            except Exception:
+                pass
+
+        self.btn_storage_refresh_all.clicked.connect(_refresh_all)
 
     def _build_cascade_tab(self):
         v = QVBoxLayout(self.tab_cascade)
@@ -883,22 +915,6 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(10, 10, 10, 10)
         self.response_request_panel = ResponseRequestPanel(self.s.log_dir)
         v.addWidget(self.response_request_panel, 1)
-
-    def _build_help_tab(self):
-        v = QVBoxLayout(self.tab_help)
-        v.setContentsMargins(10, 10, 10, 10)
-        txt = QPlainTextEdit()
-        txt.setReadOnly(True)
-        txt.setPlainText(
-            "v2 funkce:\n"
-            "- Načte dostupné modely (po API-KEY) a probuje kompatibility (previous_response_id, temperature, tools/file_search).\n"
-            "- Cache: cache/model_capabilities.json (TTL 7 dní; Probe models = force).\n"
-            "- Find model: vyhledá model podle požadovaných funkcí.\n"
-            "- Long prompt >150k: ingest A0 + navazující A1/A2/A3 přes previous_response_id.\n\n"
-            "Pozn.: Response ID dostává každý úspěšný request na Responses API.\n"
-            "Probe pro previous_response_id nyní značí 'unsupported' jen když server explicitně odmítne parametr.\n"
-        )
-        v.addWidget(txt, 1)
 
     # ---------- helpers ----------
     def _ts(self) -> str:
@@ -2044,6 +2060,41 @@ class MainWindow(QMainWindow):
                     msg_critical(self, "Paths", f"Nelze vytvořit OUT: {e}")
                     return False
         return True
+
+    def _can_run(self) -> bool:
+        if not self.api_key:
+            return False
+        mode = self.cb_mode.currentText()
+        send_as_c = bool(self.chk_send_as_c.isChecked())
+        if mode in ("QFILE", "KASKADA"):
+            send_as_c = False
+        in_dir = self.ed_in.text().strip()
+        out_dir = self.ed_out.text().strip()
+
+        if mode == "MODIFY" and not send_as_c:
+            if not in_dir or not os.path.isdir(in_dir):
+                return False
+        if mode in ("GENERATE", "MODIFY", "QFILE"):
+            if not out_dir:
+                return False
+        if mode == "KASKADA":
+            if self.cb_run_cascade.count() == 0:
+                return False
+            cpath = str(self.cb_run_cascade.currentData() or "").strip()
+            if not cpath or not os.path.isfile(cpath):
+                return False
+        if not (self.cb_model.currentText() or "").strip() and mode != "KASKADA":
+            return False
+        return True
+
+    def _update_run_validity(self) -> None:
+        ok = self._can_run()
+        try:
+            self.btn_go.setEnabled(ok)
+        except Exception:
+            pass
+
+
 
     def on_mode_changed(self, mode: str):
         is_qfile = mode == "QFILE"

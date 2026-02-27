@@ -75,6 +75,10 @@ class FilesPanel(QWidget):
         self.btn_upload = QPushButton("Upload")
         self.btn_delete = QPushButton("Delete")
         self.btn_delete_all = QPushButton("Del ALL")
+        self.btn_refresh.setToolTip("Načte seznam souborů z OpenAI Files API.")
+        self.btn_upload.setToolTip("Nahraje lokální soubor do OpenAI Files API (purpose=user_data).")
+        self.btn_delete.setToolTip("Smaže vybrané soubory z OpenAI Files API.")
+        self.btn_delete_all.setToolTip("Smaže všechny soubory z OpenAI Files API.")
         top.addWidget(self.btn_refresh)
         top.addWidget(self.btn_upload)
         top.addWidget(self.btn_delete)
@@ -83,8 +87,10 @@ class FilesPanel(QWidget):
 
         lists = QHBoxLayout()
         self.lst_files = QListWidget()
+        self.lst_files.setToolTip("Seznam souborů dostupných v OpenAI Files API.")
         self.lst_files.setSelectionMode(QListWidget.MultiSelection)
         self.lst_attached = QListWidget()
+        self.lst_attached.setToolTip("Souborové ID, které se přidají do příštího RUN requestu.")
         self.lst_attached.setSelectionMode(QListWidget.MultiSelection)
         lists.addWidget(self._wrap("Files", self.lst_files))
         lists.addWidget(self._wrap("Attached to request", self.lst_attached))
@@ -92,7 +98,9 @@ class FilesPanel(QWidget):
 
         btns = QHBoxLayout()
         self.btn_attach = QPushButton("Attach →")
+        self.btn_attach.setToolTip("Připojí vybrané file_id do RUN requestu.")
         self.btn_detach = QPushButton("← Detach")
+        self.btn_detach.setToolTip("Odebere vybrané file_id z RUN requestu.")
         btns.addStretch(1)
         btns.addWidget(self.btn_attach)
         btns.addWidget(self.btn_detach)
@@ -104,6 +112,10 @@ class FilesPanel(QWidget):
         self.btn_delete_all.clicked.connect(self.delete_all)
         self.btn_attach.clicked.connect(self.attach_selected)
         self.btn_detach.clicked.connect(self.detach_selected)
+
+        self.lst_files.itemSelectionChanged.connect(self._update_controls)
+        self.lst_attached.itemSelectionChanged.connect(self._update_controls)
+        self._update_controls()
 
         self.refresh()
 
@@ -144,6 +156,7 @@ class FilesPanel(QWidget):
                 item = QListWidgetItem(f"{fid}  |  {name}")
                 item.setData(32, fid)
                 self.lst_files.addItem(item)
+            self._update_controls()
 
     def upload(self):
         if not self._need_client():
@@ -241,43 +254,69 @@ class FilesPanel(QWidget):
         if ids:
             self._start_delete_worker(ids, "Mažu všechny soubory...")
 
+
+
+    def _update_controls(self) -> None:
+        has_key = bool(self.api_key)
+        has_files_sel = bool(self.lst_files.selectedItems())
+        has_attached_sel = bool(self.lst_attached.selectedItems())
+        has_any_files = self.lst_files.count() > 0
+
+        self.btn_refresh.setEnabled(has_key)
+        self.btn_upload.setEnabled(has_key)
+        self.btn_delete.setEnabled(has_key and has_files_sel)
+        self.btn_delete_all.setEnabled(has_key and has_any_files)
+        self.btn_attach.setEnabled(has_key and has_files_sel)
+        self.btn_detach.setEnabled(has_key and has_attached_sel)
+
     def attach_selected(self):
         sel = self.lst_files.selectedItems()
+        if not sel:
+            return
         for it in sel:
             fid = it.data(32)
             if not fid:
                 continue
-            if not any(self.lst_attached.item(i).data(32)==fid for i in range(self.lst_attached.count())):
+            if not any(self.lst_attached.item(i).data(32) == fid for i in range(self.lst_attached.count())):
                 ni = QListWidgetItem(f"{fid}")
                 ni.setData(32, fid)
                 self.lst_attached.addItem(ni)
         self._emit_attached()
+        self._update_controls()
 
     def detach_selected(self):
-        for it in self.lst_attached.selectedItems():
+        sel = self.lst_attached.selectedItems()
+        if not sel:
+            return
+        for it in sel:
             row = self.lst_attached.row(it)
             self.lst_attached.takeItem(row)
         self._emit_attached()
+        self._update_controls()
 
     def attached_ids(self) -> List[str]:
-        out = []
+        out: List[str] = []
         for i in range(self.lst_attached.count()):
-            out.append(self.lst_attached.item(i).data(32))
+            it = self.lst_attached.item(i)
+            if it and it.data(32):
+                out.append(it.data(32))
         return out
 
     def set_attached(self, ids: List[str]) -> None:
         self.lst_attached.clear()
-        for fid in ids:
+        for fid in ids or []:
             if not fid:
                 continue
             item = QListWidgetItem(f"{fid}")
             item.setData(32, fid)
             self.lst_attached.addItem(item)
         self._emit_attached()
+        self._update_controls()
 
     def clear_attached(self) -> None:
         self.lst_attached.clear()
         self._emit_attached()
+        self._update_controls()
 
     def _emit_attached(self):
         self.attached_changed.emit(self.attached_ids())
