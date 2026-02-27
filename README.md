@@ -93,3 +93,6 @@ Záložka **VECTOR STORES** umožní:
 
 ## Testing
 - `python -m unittest discover -s tests -v`
+
+## Baseline po Forenzním Reborne Auditu
+- 27. února 2026 se provedla konzolidace vzdálených větví do `main`; větve byly zpracovány kronologicky podle committer date a `main` nyní představuje novou forenzní baseline.
