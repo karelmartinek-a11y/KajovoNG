@@ -172,7 +172,6 @@ class MainWindow(QMainWindow):
 
         self._build_run_tab()
         self._build_files_tab()
-        self.cascade_panel = CascadePanel(self.s, self._current_model_list)
         self._build_vector_tab()
         self._build_settings_tab()
         self._build_smtp_tab()
@@ -257,6 +256,9 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_refresh_models_best_effort"):
             self._refresh_models_best_effort = lambda: None  # type: ignore
         self.btn_models.clicked.connect(self._refresh_models_best_effort)
+
+        # kaskádový panel potřebuje znát seznam modelů, proto jej zakládáme až po cb_model
+        self.cascade_panel = CascadePanel(self.s, self._current_model_list)
 
         row += 1
         top.addWidget(QLabel("Model filter"), row, 0)

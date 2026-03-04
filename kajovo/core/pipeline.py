@@ -52,9 +52,6 @@ class UiRunConfig:
     versing: bool
     temperature: float
     use_file_search: bool
-    run_instructions: str = ""
-    manifest_only: bool = False
-    prompt_list_only: bool = False
 
     diag_windows_in: bool
     diag_windows_out: bool
@@ -69,6 +66,12 @@ class UiRunConfig:
 
     # capabilities snapshot for chosen model (cached probe)
     model_caps: Dict[str, Any]
+
+    # volitelné přepínače a instrukce UI
+    run_instructions: str = ""
+    manifest_only: bool = False
+    prompt_list_only: bool = False
+
     # resume data for rerun (precomputed structure + prev_id)
     resume_files: List[Dict[str, Any]] = None  # type: ignore
     resume_prev_id: Optional[str] = None
