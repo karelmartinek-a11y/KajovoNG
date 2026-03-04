@@ -330,14 +330,26 @@ class MainWindow(QMainWindow):
         self.txt_response_view.setReadOnly(True)
         self.txt_response_view.setPlaceholderText("Textová odpověď (response) se zobrazí zde, pokud je dostupná.")
 
+        prompt_response_attached = QSplitter(Qt.Orientation.Horizontal)
+
         prompt_split = QSplitter(Qt.Orientation.Horizontal)
         prompt_split.addWidget(self.txt_prompt)
         prompt_split.addWidget(self.txt_response_view)
-        prompt_split.setStretchFactor(0, 2)
+        prompt_split.setStretchFactor(0, 1)
         prompt_split.setStretchFactor(1, 1)
-        prompt_split.setSizes([660, 340])
-        prompt_split.setMaximumHeight(340)
-        left.addWidget(prompt_split, 1)
+        prompt_split.setSizes([420, 420])
+
+        attached_box = QGroupBox("Připojeno (Files/VS)")
+        attached_v = QVBoxLayout(attached_box)
+        attached_v.addWidget(self.txt_attached_summary)
+
+        prompt_response_attached.addWidget(prompt_split)
+        prompt_response_attached.addWidget(attached_box)
+        prompt_response_attached.setStretchFactor(0, 3)
+        prompt_response_attached.setStretchFactor(1, 1)
+        prompt_response_attached.setSizes([840, 320])
+        prompt_response_attached.setMaximumHeight(340)
+        left.addWidget(prompt_response_attached, 1)
 
         g_dirs = QGroupBox("IN/OUT")
         gd = QGridLayout(g_dirs)
@@ -445,11 +457,6 @@ class MainWindow(QMainWindow):
             target.setFocus()
 
         self.btn_insert_var_run.clicked.connect(_handle_insert_var_run_clicked)
-
-        attached_box = QGroupBox("Připojeno (Files/VS)")
-        attached_v = QVBoxLayout(attached_box)
-        attached_v.addWidget(self.txt_attached_summary)
-        left.addWidget(attached_box)
 
         self.pb = QProgressBar()
         self.pb_sub = QProgressBar()
