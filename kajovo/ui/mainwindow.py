@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QDoubleSpinBox,
     QSpinBox,
+    QSizePolicy,
 )
 
 from ..core.config import AppSettings, SMTPSettings, save_settings, load_settings, DEFAULT_SETTINGS_FILE
@@ -66,7 +67,7 @@ from .github_panel import GitHubPanel
 from .pricing_panel import PricingPanel
 from .cascade_panel import CascadePanel
 from .response_request_panel import ResponseRequestPanel
-from .progress_dialog import ProgressDialog
+from .progress_dialog import MinimizedProgressWidget, ProgressDialog
 from .theme import DARK_STYLESHEET
 from .widgets import BusyPopup, style_progress_bar
 
@@ -135,6 +136,7 @@ class MainWindow(QMainWindow):
         self.worker: Optional[RunWorker] = None
         self.run_logger: Optional[RunLogger] = None
         self.progress_dialog: Optional[ProgressDialog] = None
+        self.progress_minimized: Optional[MinimizedProgressWidget] = None
         self._bzz_default = False
         self._last_run_send_as_c = False
 
@@ -143,6 +145,21 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(root)
         v.setContentsMargins(10, 10, 10, 10)
         v.setSpacing(8)
+
+        header = QHBoxLayout()
+        self.lbl_header_title = QLabel("Kájovo NG")
+        self.lbl_header_title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        header.addWidget(self.lbl_header_title)
+        self.progress_host = QHBoxLayout()
+        self.progress_host.setSpacing(6)
+        header.addLayout(self.progress_host, 1)
+        header.addStretch(1)
+        self.btn_exit = QPushButton("EXIT")
+        self.btn_exit.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.btn_exit.setStyleSheet("background-color: #ff2f2f; color: #000000; font-weight: 700; padding: 6px 14px;")
+        self.btn_exit.clicked.connect(self.close)
+        header.addWidget(self.btn_exit, alignment=Qt.AlignmentFlag.AlignRight)
+        v.addLayout(header)
 
         self.tabs = QTabWidget()
         v.addWidget(self.tabs, 1)
@@ -964,11 +981,81 @@ class MainWindow(QMainWindow):
         self._progress_last_ts = time.time()
 
     def _pulse_progress(self):
-        # If worker is running and no update recently, pulse subprogress to show liveness.
+        # Pokud worker běží a delší dobu neposlal update, rozpohybuj subprogress jako heartbeat.
         if self.worker and self.worker.isRunning():
             if time.time() - self._progress_last_ts > 1.0:
                 val = (self.pb_sub.value() + 5) % 100
                 self.pb_sub.setValue(val)
+
+    def _init_progress_dialog(self):
+        self._clear_minimized_progress()
+        self.progress_dialog = ProgressDialog(self)
+        self.progress_dialog.cancel_requested.connect(lambda: self.on_stop(force=True))
+        self.progress_dialog.minimize_requested.connect(self._minimize_progress)
+        try:
+            self.progress_dialog.chk_bzz.setChecked(bool(self._bzz_default))
+        except Exception as e:
+            self.log(f"Progress dialog init warning (chk_bzz): {e}")
+        self.progress_dialog.show()
+
+    def _minimize_progress(self):
+        if self.progress_minimized is None:
+            self.progress_minimized = MinimizedProgressWidget(self)
+            self.progress_minimized.restore_requested.connect(self._restore_progress)
+            self.progress_host.addWidget(self.progress_minimized)
+        if self.progress_dialog:
+            txt = self.progress_dialog.lbl.text()
+            progress = self.progress_dialog.pb.value()
+            determinate = self.progress_dialog.pb.maximum() != 0
+            self.progress_minimized.set_summary(txt, progress, determinate)
+        self.progress_minimized.show()
+
+    def _restore_progress(self):
+        if self.progress_dialog:
+            self.progress_dialog.show()
+            self.progress_dialog.raise_()
+            self.progress_dialog.activateWindow()
+
+    def _clear_minimized_progress(self):
+        if self.progress_minimized:
+            self.progress_minimized.hide()
+            self.progress_host.removeWidget(self.progress_minimized)
+            self.progress_minimized.deleteLater()
+            self.progress_minimized = None
+
+    def _sync_progress_mini(self):
+        if self.progress_minimized and self.progress_dialog:
+            self.progress_minimized.set_summary(
+                self.progress_dialog.lbl.text(),
+                self.progress_dialog.pb.value(),
+                self.progress_dialog.pb.maximum() != 0,
+            )
+
+    def _update_ai_indicator_from_log(self, line: str):
+        if not self.progress_dialog:
+            return
+        low = line.lower()
+        if "request_dispatch" in low:
+            self.progress_dialog.set_ai_busy(True)
+        elif "response_received" in low or "response_error" in low:
+            self.progress_dialog.set_ai_busy(False)
+
+    def _update_step_from_status(self, text: str, total_steps: int):
+        if not self.progress_dialog or total_steps <= 1:
+            return
+        low = (text or "").lower()
+        if "krok" not in low:
+            return
+        import re
+
+        m = re.search(r"(\d+)\s*/\s*(\d+)", low)
+        if not m:
+            return
+        cur = int(m.group(1))
+        total = int(m.group(2))
+        if total <= 0:
+            total = total_steps
+        self.progress_dialog.set_step_info(cur, max(total_steps, total))
 
     def _send_bzz_notification(self, rid: str):
         smtp = getattr(self.s, "smtp", None)
@@ -1672,6 +1759,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.log(f"STOP: failed to close progress dialog after force-stop: {e}")
             self.progress_dialog = None
+        self._clear_minimized_progress()
         try:
             self._progress_timer.stop()
         except Exception as e:
@@ -2237,28 +2325,26 @@ class MainWindow(QMainWindow):
         self._progress_last_ts = time.time()
         self._progress_timer.start()
 
-        self.progress_dialog = ProgressDialog(self)
-        self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
-        try:
-            self.progress_dialog.chk_bzz.setChecked(bool(self._bzz_default))
-        except Exception as e:
-            self.log(f"Progress dialog init warning (chk_bzz): {e}")
-        self.progress_dialog.show()
+        self._init_progress_dialog()
 
         self.worker.progress.connect(self.pb.setValue)
         self.worker.progress.connect(lambda v: self.progress_dialog.set_progress(v) if self.progress_dialog else None)
         self.worker.progress.connect(lambda _: self._mark_progress_activity())
+        self.worker.progress.connect(lambda _: self._sync_progress_mini())
 
         self.worker.subprogress.connect(self.pb_sub.setValue)
         self.worker.subprogress.connect(lambda v: self.progress_dialog.set_subprogress(v) if self.progress_dialog else None)
         self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
+        self.worker.subprogress.connect(lambda _: self._sync_progress_mini())
 
         # status už nemění titulkový řádek, zůstává jen statický název
         self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
         self.worker.status.connect(lambda _: self._mark_progress_activity())
+        self.worker.status.connect(lambda _: self._sync_progress_mini())
 
         self.worker.logline.connect(self.log)
         self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)
+        self.worker.logline.connect(self._update_ai_indicator_from_log)
 
         self.worker.finished_ok.connect(self.on_run_ok)
         self.worker.finished_err.connect(self.on_run_err)
@@ -2299,19 +2385,24 @@ class MainWindow(QMainWindow):
         self.worker = CascadeRunWorker(cfg_c, self.s, self.api_key, self.db, self.price_table)
         self._progress_last_ts = time.time()
         self._progress_timer.start()
-        self.progress_dialog = ProgressDialog(self)
-        self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
-        self.progress_dialog.show()
+        self._init_progress_dialog()
+        if self.progress_dialog:
+            self.progress_dialog.set_step_info(1, len(steps))
         self.worker.progress.connect(self.pb.setValue)
         self.worker.progress.connect(lambda v: self.progress_dialog.set_progress(v) if self.progress_dialog else None)
         self.worker.progress.connect(lambda _: self._mark_progress_activity())
+        self.worker.progress.connect(lambda _: self._sync_progress_mini())
         self.worker.subprogress.connect(self.pb_sub.setValue)
         self.worker.subprogress.connect(lambda v: self.progress_dialog.set_subprogress(v) if self.progress_dialog else None)
         self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
+        self.worker.subprogress.connect(lambda _: self._sync_progress_mini())
         self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
+        self.worker.status.connect(lambda s: self._update_step_from_status(s, len(steps)))
         self.worker.status.connect(lambda _: self._mark_progress_activity())
+        self.worker.status.connect(lambda _: self._sync_progress_mini())
         self.worker.logline.connect(self.log)
         self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)
+        self.worker.logline.connect(self._update_ai_indicator_from_log)
         self.worker.finished_ok.connect(self.on_run_ok)
         self.worker.finished_err.connect(self.on_run_err)
         self.worker.start()
@@ -2326,7 +2417,7 @@ class MainWindow(QMainWindow):
             self.worker.request_stop()
         except Exception as e:
             self.log(f"STOP: request_stop failed: {e}")
-        self.log("Stop requested (cooperative).")
+        self.log("Vyžádáno zastavení RUN (kooperativně).")
         QTimer.singleShot(1500, self._kill_worker_if_running)
 
     def on_run_ok(self, result: dict):
@@ -2343,6 +2434,7 @@ class MainWindow(QMainWindow):
         if self.progress_dialog:
             self.progress_dialog.close()
             self.progress_dialog = None
+        self._clear_minimized_progress()
         self.pb.setValue(100)
         self.pb_sub.setValue(100)
 
@@ -2388,6 +2480,7 @@ class MainWindow(QMainWindow):
         if self.progress_dialog:
             self.progress_dialog.close()
             self.progress_dialog = None
+        self._clear_minimized_progress()
         msg_critical(self, "RUN failed", err)
 
     def _dispose_worker(self, timeout_ms: int = 10000):
@@ -2465,6 +2558,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self.progress_dialog = None
+        self._clear_minimized_progress()
 
         super().closeEvent(event)
 
