@@ -404,8 +404,39 @@ class MainWindow(QMainWindow):
         insert_row.addWidget(self.cb_insert_var_run, 1)
         insert_row.addWidget(self.btn_insert_var_run)
         right.addLayout(insert_row)
-        self.btn_insert_var_run.clicked.connect(self.cascade_panel.insert_variable)
 
+        def _handle_insert_var_run_clicked() -> None:
+            token = self.cb_insert_var_run.currentText()
+            if not token:
+                return
+
+            target = None
+
+            # Prefer the currently focused plain text editor inside the main window.
+            cw = self.centralWidget()
+            if cw is not None:
+                focused = cw.focusWidget()
+                if isinstance(focused, QPlainTextEdit):
+                    target = focused
+
+            # If no suitable focused editor, fall back to known RUN editors.
+            if target is None:
+                if hasattr(self, "txt_run_instructions") and self.txt_run_instructions.isVisible():
+                    target = self.txt_run_instructions
+                elif hasattr(self, "txt_prompt") and self.txt_prompt.isVisible():
+                    target = self.txt_prompt
+                elif hasattr(self, "txt_prompt"):
+                    target = self.txt_prompt
+
+            if target is None:
+                return
+
+            cursor = target.textCursor()
+            cursor.insertText(token)
+            target.setTextCursor(cursor)
+            target.setFocus()
+
+        self.btn_insert_var_run.clicked.connect(_handle_insert_var_run_clicked)
         attached_box = QGroupBox("Připojeno (Files/VS)")
         attached_v = QVBoxLayout(attached_box)
         attached_v.addWidget(self.txt_attached_summary)
