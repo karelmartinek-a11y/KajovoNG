@@ -25,6 +25,10 @@ class FilesDeleteWorker(QThread):
         self.retry_cfg = retry_cfg
         self.breaker_failures = breaker_failures
         self.breaker_cooldown_s = breaker_cooldown_s
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
 
     def run(self):
         failures: List[str] = []
@@ -37,20 +41,23 @@ class FilesDeleteWorker(QThread):
         total = len(self.file_ids)
         self.progress.emit(0)
         for idx, fid in enumerate(self.file_ids):
+            if self._stop_requested:
+                failures.append("Mazání bylo uživatelem zrušeno.")
+                break
             step = idx + 1
             self.status.emit(f"Mažu soubor {step}/{total}: {fid}")
             try:
                 with_retry(lambda f=fid: client.delete_file(f), self.retry_cfg, breaker)
-                self.logline.emit(f"Deleted file {fid}")
+                self.logline.emit(f"Smazán soubor {fid}")
             except Exception as e:
                 msg = f"{fid}: {e}"
                 failures.append(msg)
-                self.logline.emit(f"Delete failed {fid}: {e}")
+                self.logline.emit(f"Mazání selhalo {fid}: {e}")
             self.progress.emit(int(step * 100 / max(1, total)))
         try:
             files = with_retry(lambda: client.list_files(), self.retry_cfg, breaker)
         except Exception as e:
-            self.logline.emit(f"Refresh failed: {e}")
+            self.logline.emit(f"Obnovení seznamu selhalo: {e}")
         self.finished.emit(files, failures)
 
 class FilesPanel(QWidget):
@@ -182,6 +189,7 @@ class FilesPanel(QWidget):
             return
         dialog = TaskProgressDialog(title, self, show_subprogress=False)
         dialog.set_status(f"Připravuji mazání {len(file_ids)} souborů...")
+        dialog.set_step_info(1, max(1, len(file_ids)))
         dialog.add_log(f"Počet souborů: {len(file_ids)}")
         worker = FilesDeleteWorker(
             self.api_key,
@@ -197,6 +205,9 @@ class FilesPanel(QWidget):
         worker.progress.connect(dialog.set_progress)
         worker.status.connect(dialog.set_status)
         worker.logline.connect(dialog.add_log)
+        worker.status.connect(lambda s: self._update_delete_dialog_step(dialog, s, len(file_ids)))
+        worker.logline.connect(lambda s: self._update_delete_dialog_ai(dialog, s))
+        dialog.set_cancel_handler(worker.request_stop)
 
         def on_done(files: List[dict] | None, failures: List[str]):
             dialog.mark_done("Mazání dokončeno.")
@@ -212,6 +223,23 @@ class FilesPanel(QWidget):
         worker.finished.connect(on_done)
         dialog.show()
         worker.start()
+
+    def _update_delete_dialog_step(self, dialog: TaskProgressDialog, status: str, total_steps: int) -> None:
+        import re
+
+        if not status:
+            return
+        match = re.search(r"(\d+)\s*/\s*(\d+)", status)
+        if not match:
+            return
+        dialog.set_step_info(int(match.group(1)), max(total_steps, int(match.group(2))))
+
+    def _update_delete_dialog_ai(self, dialog: TaskProgressDialog, line: str) -> None:
+        low = (line or "").lower()
+        if any(token in low for token in ["mažu", "smazán"]):
+            dialog.set_ai_busy(True)
+        if any(token in low for token in ["selhalo", "dokončeno", "zrušeno"]):
+            dialog.set_ai_busy(False)
 
     def delete_selected(self):
         if not self._need_client():

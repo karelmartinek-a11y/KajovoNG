@@ -30,6 +30,10 @@ class VectorStoresDeleteWorker(QThread):
         self.retry_cfg = retry_cfg
         self.breaker_failures = breaker_failures
         self.breaker_cooldown_s = breaker_cooldown_s
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
 
     def run(self):
         stores: List[dict] | None = None
@@ -44,6 +48,9 @@ class VectorStoresDeleteWorker(QThread):
         self.progress.emit(0)
         self.subprogress.emit(0)
         for idx, vs_id in enumerate(self.store_ids):
+            if self._stop_requested:
+                errors.append("Mazání bylo uživatelem zrušeno.")
+                break
             step = idx + 1
             self.status.emit(f"Store {step}/{total}: {vs_id}")
             self.logline.emit(f"Načítám soubory ve store {vs_id}...")
@@ -86,7 +93,7 @@ class VectorStoresDeleteWorker(QThread):
         try:
             stores = with_retry(lambda: client.list_vector_stores(), self.retry_cfg, breaker)
         except Exception as e:
-            self.logline.emit(f"Refresh failed: {e}")
+            self.logline.emit(f"Obnovení seznamu selhalo: {e}")
         self.finished.emit(stores, errors, deleted, total)
 
 
@@ -367,8 +374,9 @@ class VectorStoresPanel(QWidget):
             msg_info(self, "Delete", "Mazání už běží.")
             return
         dialog = TaskProgressDialog(title, self, show_subprogress=True)
-        dialog.set_status(f"Připravuji mazání {len(store_ids)} store...")
-        dialog.add_log(f"Počet store: {len(store_ids)}")
+        dialog.set_status(f"Připravuji mazání {len(store_ids)} úložišť...")
+        dialog.set_step_info(1, max(1, len(store_ids)))
+        dialog.add_log(f"Počet úložišť: {len(store_ids)}")
         worker = VectorStoresDeleteWorker(
             self.api_key,
             store_ids,
@@ -384,6 +392,9 @@ class VectorStoresPanel(QWidget):
         worker.subprogress.connect(dialog.set_subprogress)
         worker.status.connect(dialog.set_status)
         worker.logline.connect(dialog.add_log)
+        worker.status.connect(lambda s: self._update_delete_dialog_step(dialog, s, len(store_ids)))
+        worker.logline.connect(lambda s: self._update_delete_dialog_ai(dialog, s))
+        dialog.set_cancel_handler(worker.request_stop)
 
         def on_done(stores: List[dict] | None, errors: List[str], deleted: int, total: int):
             dialog.mark_done(f"Mazání dokončeno ({deleted}/{total}).")
@@ -401,6 +412,23 @@ class VectorStoresPanel(QWidget):
         worker.finished.connect(on_done)
         dialog.show()
         worker.start()
+
+    def _update_delete_dialog_step(self, dialog: TaskProgressDialog, status: str, total_steps: int) -> None:
+        import re
+
+        if not status:
+            return
+        match = re.search(r"(\d+)\s*/\s*(\d+)", status)
+        if not match:
+            return
+        dialog.set_step_info(int(match.group(1)), max(total_steps, int(match.group(2))))
+
+    def _update_delete_dialog_ai(self, dialog: TaskProgressDialog, line: str) -> None:
+        low = (line or "").lower()
+        if any(token in low for token in ["načítám", "mažu", "smazán", "removed"]):
+            dialog.set_ai_busy(True)
+        if any(token in low for token in ["chyba", "selhalo", "dokončeno", "zrušeno"]):
+            dialog.set_ai_busy(False)
 
     def _selected_vs_id(self) -> Optional[str]:
         sel = self.lst_vs.selectedItems()
