@@ -52,6 +52,9 @@ class UiRunConfig:
     versing: bool
     temperature: float
     use_file_search: bool
+    run_instructions: str = ""
+    manifest_only: bool = False
+    prompt_list_only: bool = False
 
     diag_windows_in: bool
     diag_windows_out: bool
@@ -306,7 +309,9 @@ class RunWorker(QThread):
             if self.cfg.send_as_c:
                 result = self._run_c_batch(client, diag_file_ids, base_prev_id)
             else:
-                if self.cfg.mode == "GENERATE":
+                if self.cfg.mode == "GENERATE" and bool(getattr(self.cfg, "manifest_only", False)):
+                    result = self._run_manifest_only(client, diag_file_ids, base_prev_id)
+                elif self.cfg.mode == "GENERATE":
                     result = self._run_a_generate(client, diag_file_ids, base_prev_id)
                 elif self.cfg.mode == "MODIFY":
                     result = self._run_b_modify(client, diag_file_ids, base_prev_id)
@@ -1369,6 +1374,50 @@ class RunWorker(QThread):
         self._record_receipt(resp, mode="QA", flow_type="QA", response_id=str(resp.get("id") or ""))
         return {"mode": "QA", "response_id": str(resp.get("id") or ""), "text": extract_text_from_response(resp)}
 
+    def _merge_run_instructions(self, instructions: str) -> str:
+        extra = str(getattr(self.cfg, "run_instructions", "") or "").strip()
+        if not extra:
+            return instructions
+        return f"{instructions}\n\n{extra}"
+
+    def _run_manifest_only(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
+        self._set(10, 0, "GENERATE: požadavek na manifest souborů...")
+        prompt = (self.cfg.prompt or "").strip()
+        if not prompt:
+            raise RuntimeError("GENERATE: Zadání je prázdné.")
+        ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
+        input_file_ids = self._build_input_file_ids(self._input_file_ids())
+        schema = '{"contract":"A2_STRUCTURE","files":[{"path":"string","purpose":"string","source":"string"}]}'
+        instructions = self._merge_run_instructions(
+            "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
+            f"Kontrakt: {schema}. Vrať pouze manifest souborů bez obsahu souborů."
+        )
+        instructions = self._append_io_reference_instructions(instructions, ref_files)
+        payload = self._payload_base(
+            model=self.cfg.model,
+            instructions=instructions,
+            input_parts=self._input_parts(prompt, input_file_ids),
+            prev_id=base_prev_id,
+        )
+        if self.cfg.model_caps.get("supports_temperature", True):
+            payload["temperature"] = 0.0
+        if self._fs_tools:
+            payload["tools"] = self._fs_tools
+            self._used_file_search = True
+        self._log_request_attachments("GENERATE_MANIFEST", ref_files, input_file_ids, self._vector_store_ids, self._fs_tools)
+        resp = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
+        raw = extract_text_from_response(resp)
+        parsed = parse_json_strict(raw)
+        files = parsed.get("files") if isinstance(parsed, dict) else None
+        if not isinstance(files, list):
+            raise ContractError("Manifest souborů: očekáván seznam files.")
+        out_path = os.path.join(self.cfg.out_dir, f"manifest_{ts_code()}.json")
+        ensure_dir(self.cfg.out_dir)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(parsed, f, ensure_ascii=False, indent=2)
+        self._record_receipt(resp, mode="GENERATE", flow_type="GENERATE_MANIFEST", response_id=str(resp.get("id") or ""))
+        return {"mode": "GENERATE", "response_id": str(resp.get("id") or ""), "saved": {"manifest": out_path}, "contract": parsed, "text": raw}
+
     # ---------- QFile ----------
     def _run_qfile(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
         self._set(10, 0, "QFILE: request...")
@@ -1385,7 +1434,7 @@ class RunWorker(QThread):
         prompt = self._with_diag_text(prompt)
 
         schema = '{"contract":"A3_FILE","path":"string","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string"}'
-        instructions = (
+        instructions = self._merge_run_instructions(
             "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
             "KRITICKÉ: content je vždy kompletní výsledné znění souboru (ne diff/patch). "
             f"CHUNK: max 500 řádků. KONTRAKT: {schema}"
@@ -1394,12 +1443,18 @@ class RunWorker(QThread):
         gen_input_files = self._build_input_file_ids(self._input_file_ids())
         instructions = self._append_io_reference_instructions(instructions, gen_ref_files)
         instructions = self._append_io_reference_instructions(instructions, qfile_ref_files)
-        input_text = (
-            "Vrať kompletní obsah jednoho souboru dle zadání níže. "
-            "CHUNK_INDEX=0, chunk_count=1, chunking.has_more=false (QFILE je jednorázový request). "
-            "Použij cestu/path popsanou v zadání (žádný manifest). "
-            f"Zadání:\n{prompt}"
-        )
+        if bool(getattr(self.cfg, "prompt_list_only", False)):
+            instructions += (
+                '\n\nOUTPUT: VRAŤ POUZE validní JSON objekt {"prompts":["..."]}. Žádný další text.'
+            )
+            input_text = f"Z připraveného zadání vrať seznam promptů do pole prompts. Zadání:\n{prompt}"
+        else:
+            input_text = (
+                "Vrať kompletní obsah jednoho souboru dle zadání níže. "
+                "CHUNK_INDEX=0, chunk_count=1, chunking.has_more=false (QFILE je jednorázový request). "
+                "Použij cestu/path popsanou v zadání (žádný manifest). "
+                f"Zadání:\n{prompt}"
+            )
         payload = self._payload_base(
             model=self.cfg.model,
             instructions=instructions,
@@ -1438,6 +1493,16 @@ class RunWorker(QThread):
 
         raw_text = extract_text_from_response(resp)
         parsed = parse_json_strict(raw_text)
+        if bool(getattr(self.cfg, "prompt_list_only", False)):
+            prompts = parsed.get("prompts") if isinstance(parsed, dict) else None
+            if not isinstance(prompts, list):
+                raise ContractError("QFILE: očekáván JSON s polem prompts.")
+            out_path = os.path.join(self.cfg.out_dir, f"prompts_{ts_code()}.json")
+            ensure_dir(self.cfg.out_dir)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(parsed, f, ensure_ascii=False, indent=2)
+            self._record_receipt(resp, mode="QFILE", flow_type="QFILE_PROMPTS", response_id=str(resp.get("id") or ""))
+            return {"mode": "QFILE", "response_id": str(resp.get("id") or ""), "saved": {"prompts": out_path}, "contract": parsed, "text": raw_text}
         if parsed.get("contract") != "A3_FILE":
             raise ContractError("QFILE: očekáván kontrakt A3_FILE")
 
@@ -1549,7 +1614,7 @@ class RunWorker(QThread):
             schema = '{"contract":"A3_FILE","path":"string","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string"}'
         else:
             schema = '{"contract":"B3_FILE","path":"string","action":"modify|add","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string","notes":["string"]}'
-        instructions = (
+        instructions = self._merge_run_instructions(
             "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
             "KRITICKÉ: content je vždy kompletní výsledné znění souboru (ne diff/patch). "
             f"CHUNK: max 500 řádků. KONTRAKT: {schema}"
