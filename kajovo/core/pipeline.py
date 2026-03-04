@@ -1444,8 +1444,8 @@ class RunWorker(QThread):
         instructions = self._append_io_reference_instructions(instructions, gen_ref_files)
         instructions = self._append_io_reference_instructions(instructions, qfile_ref_files)
         if bool(getattr(self.cfg, "prompt_list_only", False)):
-            instructions = self._merge_run_instructions(
-                'OUTPUT: VRAŤ POUZE validní JSON objekt {"prompts":["..."]}. Žádný další text.'
+            instructions += (
+                '\n\nOUTPUT: VRAŤ POUZE validní JSON objekt {"prompts":["..."]}. Žádný další text.'
             )
             input_text = f"Z připraveného zadání vrať seznam promptů do pole prompts. Zadání:\n{prompt}"
         else:
