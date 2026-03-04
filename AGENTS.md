@@ -1,5 +1,8 @@
 # Repository Guidelines
 
+## Jazyk a dokumentace
+- Povinným jazykem je èeština. Všechny komentáøe, placeholdery a poznámky ve zdrojových kódech i dokumentaci musí být výhradnì èesky; narazí-li Codex na jiný jazyk, pøeloží jej do èeštiny.
+
 ## Project Structure & Module Organization
 - `kajovo/` holds the Python package: `app/` for CLI entry points, `core/` for business logic, and `ui/` for the PySide6 desktop components. Treat each folder as a cohesive module—keep GUI logic in `ui`, orchestration in `core`, and startup scripts in `app`.
 - `scripts/` bundles platform helpers: `install.{bat,ps1}` installs dependencies, `run.{bat,ps1}` launches the desktop app, and `fetch_fonts.ps1` grabs the `Montserrat` assets referenced in `resources/`.
@@ -27,3 +30,4 @@
 ## Security & Configuration Tips
 - API keys are written via the app’s **API-KEY** button, which exports to `OPENAI_API_KEY` in the user environment. Never hard-code secrets in source files or checked-in configs.
 - Logs live under `LOG/RUN_<timestamp>_/`; use them to trace dispatched prompts, API responses, and receipts stored in `kajovo.sqlite`.
+
