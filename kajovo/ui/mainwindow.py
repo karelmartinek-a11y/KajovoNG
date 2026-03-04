@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
     QGroupBox,
-    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -38,8 +37,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QTabWidget,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
     QDoubleSpinBox,
@@ -87,7 +84,6 @@ def _caps_prev_id_explicitly_unsupported(caps: Optional[ModelCapabilities]) -> b
 
 
 class MainWindow(QMainWindow):
-    LOG_TABLE_MAX_ROWS = 600
     def __init__(self, settings: AppSettings):
         super().__init__()
         self.app_title = "Kájovo NG v2.0"
@@ -153,7 +149,6 @@ class MainWindow(QMainWindow):
 
         self.tab_run = QWidget()
         self.tab_files = QWidget()
-        self.tab_cascade = QWidget()
         self.tab_vector = QWidget()
         self.tab_settings = QWidget()
         self.tab_smtp = QWidget()
@@ -165,7 +160,6 @@ class MainWindow(QMainWindow):
         self.tab_help = QWidget()
         self.tabs.addTab(self.tab_run, "RUN")
         self.tabs.addTab(self._scroll_tab(self.tab_files), "FILES API")
-        self.tabs.addTab(self.tab_cascade, "KASKÁDA")
         self.tabs.addTab(self._scroll_tab(self.tab_vector), "VECTOR STORES")
         self.tabs.addTab(self._scroll_tab(self.tab_settings), "SETTINGS")
         self.tabs.addTab(self._scroll_tab(self.tab_smtp), "SMTP")
@@ -178,7 +172,7 @@ class MainWindow(QMainWindow):
 
         self._build_run_tab()
         self._build_files_tab()
-        self._build_cascade_tab()
+        self.cascade_panel = CascadePanel(self.s, self._current_model_list)
         self._build_vector_tab()
         self._build_settings_tab()
         self._build_smtp_tab()
@@ -231,12 +225,11 @@ class MainWindow(QMainWindow):
         self.ed_project.setPlaceholderText("Název projektu (log + účtenky)")
         self.ed_project.setMaximumWidth(400)
         top.addWidget(self.ed_project, row, 1, 1, 2)
-        top.addWidget(QLabel("Připojeno (Files/VS)"), row, 5)
 
         row += 1
         top.addWidget(QLabel("Mode"), row, 0)
         self.cb_mode = QComboBox()
-        self.cb_mode.addItems(["GENERATE", "MODIFY", "QA", "QFILE", "KASKADA"])
+        self.cb_mode.addItems(["GENERATE", "MODIFY", "QA", "QFILE"])
         self.cb_mode.setMaximumWidth(160)
         self.cb_mode.currentTextChanged.connect(self.on_mode_changed)
         top.addWidget(self.cb_mode, row, 1)
@@ -250,23 +243,9 @@ class MainWindow(QMainWindow):
         self.ed_response_id.setMaximumWidth(260)
         top.addWidget(self.ed_response_id, row, 4)
 
-        self.row_cascade_selector = QWidget()
-        row_c_l = QHBoxLayout(self.row_cascade_selector)
-        row_c_l.setContentsMargins(0, 0, 0, 0)
-        row_c_l.addWidget(QLabel("Vybraná kaskáda"))
-        self.cb_run_cascade = QComboBox()
-        self.cb_run_cascade.setMinimumWidth(280)
-        self.btn_run_cascade_refresh = QPushButton("Refresh")
-        row_c_l.addWidget(self.cb_run_cascade)
-        row_c_l.addWidget(self.btn_run_cascade_refresh)
-        row_c_l.addStretch(1)
-        top.addWidget(self.row_cascade_selector, row, 0, 1, 3)
-        self.row_cascade_selector.setVisible(False)
-        self.btn_run_cascade_refresh.clicked.connect(self.refresh_run_cascades)
         self.txt_attached_summary = QPlainTextEdit()
         self.txt_attached_summary.setReadOnly(True)
         self.txt_attached_summary.setPlaceholderText("Files/VS připojené k RUN")
-        top.addWidget(self.txt_attached_summary, row, 5, 3, 1)
 
         row += 1
         top.addWidget(QLabel("Model"), row, 0)
@@ -324,7 +303,22 @@ class MainWindow(QMainWindow):
         prompt_split.addWidget(self.txt_response_view)
         prompt_split.setStretchFactor(0, 2)
         prompt_split.setStretchFactor(1, 1)
-        left.addWidget(prompt_split, 2)
+        prompt_split.setSizes([660, 340])
+        prompt_split.setMaximumHeight(260)
+        left.addWidget(prompt_split, 1)
+
+        instr_row = QHBoxLayout()
+        instr_row.addWidget(QLabel("Instructions"))
+        self.btn_enable_instructions = QPushButton("Instructions")
+        self.btn_enable_instructions.setCheckable(True)
+        instr_row.addWidget(self.btn_enable_instructions)
+        instr_row.addStretch(1)
+        left.addLayout(instr_row)
+        self.txt_run_instructions = QPlainTextEdit()
+        self.txt_run_instructions.setPlaceholderText("Doplňující instrukce pro běh z RUN.")
+        self.txt_run_instructions.setEnabled(False)
+        self.txt_run_instructions.setMaximumHeight(90)
+        left.addWidget(self.txt_run_instructions)
 
         g_dirs = QGroupBox("IN/OUT")
         gd = QGridLayout(g_dirs)
@@ -350,6 +344,11 @@ class MainWindow(QMainWindow):
         gd.addWidget(self.chk_in_eq_out, 2, 1)
         gd.addWidget(self.chk_versing, 2, 2)
 
+        self.chk_manifest_only = QCheckBox("Manifest souborů")
+        self.chk_prompt_list = QCheckBox("Seznam promptů (jen QFILE)")
+        gd.addWidget(self.chk_manifest_only, 0, 3)
+        gd.addWidget(self.chk_prompt_list, 1, 3)
+
         left.addWidget(g_dirs)
 
         runrow = QHBoxLayout()
@@ -363,6 +362,7 @@ class MainWindow(QMainWindow):
         self.ed_rerun.setPlaceholderText("RUN_ID pro ReRun")
         self.ed_rerun.setMinimumWidth(200)
         self.btn_rerun = QPushButton("KÁJO ReRun")
+        self.btn_kajo_cascade = QPushButton("KÁJO Kaskáda")
         runrow.addWidget(self.btn_go)
         runrow.addWidget(self.btn_stop)
         runrow.addWidget(self.btn_new)
@@ -371,6 +371,7 @@ class MainWindow(QMainWindow):
         runrow.addWidget(self.btn_exit)
         runrow.addWidget(self.ed_rerun)
         runrow.addWidget(self.btn_rerun)
+        runrow.addWidget(self.btn_kajo_cascade)
         runrow.addStretch(1)
         left.addLayout(runrow)
 
@@ -381,6 +382,9 @@ class MainWindow(QMainWindow):
         self.btn_load_state.clicked.connect(self.on_load_state)
         self.btn_exit.clicked.connect(self.on_exit)
         self.btn_rerun.clicked.connect(self.on_rerun)
+        self.btn_kajo_cascade.clicked.connect(self.on_kajo_cascade)
+        self.btn_enable_instructions.toggled.connect(self._toggle_run_instructions)
+        self.on_mode_changed(self.cb_mode.currentText())
         # pricing and batch tabs are available via their own tabs; toolbar buttons removed per request
 
         self.pb = QProgressBar()
@@ -394,6 +398,19 @@ class MainWindow(QMainWindow):
 
         right = QVBoxLayout()
 
+        self.btn_insert_var_run = QPushButton("Vložit proměnnou…")
+        self.cb_insert_var_run = self.cascade_panel.cb_insert_var
+        insert_row = QHBoxLayout()
+        insert_row.addWidget(self.cb_insert_var_run, 1)
+        insert_row.addWidget(self.btn_insert_var_run)
+        right.addLayout(insert_row)
+        self.btn_insert_var_run.clicked.connect(self.cascade_panel.insert_variable)
+
+        attached_box = QGroupBox("Připojeno (Files/VS)")
+        attached_v = QVBoxLayout(attached_box)
+        attached_v.addWidget(self.txt_attached_summary)
+        right.addWidget(attached_box)
+
         g_diag = QGroupBox("Diagnostics")
         dg = QGridLayout(g_diag)
 
@@ -403,59 +420,61 @@ class MainWindow(QMainWindow):
         self.chk_diag_ssh_out = QCheckBox("SSH OUT (execute repair script if present)")
         self.chk_ssh_pin_required = QCheckBox("SSH pin required (KAJOVO_SSH_HOSTKEY_SHA256)")
 
-        dg.addWidget(self.chk_diag_win_in, 0, 0, 1, 2)
-        dg.addWidget(self.chk_diag_win_out, 1, 0, 1, 2)
-        dg.addWidget(self.chk_diag_ssh_in, 2, 0, 1, 2)
-        dg.addWidget(self.chk_diag_ssh_out, 3, 0, 1, 2)
-        dg.addWidget(self.chk_ssh_pin_required, 4, 0, 1, 3)
+        dg.addWidget(self.chk_diag_win_in, 0, 0)
+        dg.addWidget(self.chk_diag_win_out, 1, 0)
+        dg.addWidget(self.chk_diag_ssh_in, 2, 0)
+        dg.addWidget(self.chk_diag_ssh_out, 3, 0)
+        dg.addWidget(self.chk_ssh_pin_required, 4, 0)
 
-        dg.addWidget(QLabel("SSH user"), 5, 0)
+        dg.addWidget(QLabel("SSH user"), 0, 1)
         self.ed_ssh_user = QLineEdit()
         self.ed_ssh_user.setPlaceholderText("root")
-        dg.addWidget(self.ed_ssh_user, 5, 1)
+        dg.addWidget(self.ed_ssh_user, 0, 2)
 
-        dg.addWidget(QLabel("SSH host"), 6, 0)
+        dg.addWidget(QLabel("SSH host"), 1, 1)
         self.ed_ssh_host = QLineEdit()
         self.ed_ssh_host.setPlaceholderText("10.0.0.1")
-        dg.addWidget(self.ed_ssh_host, 6, 1)
+        dg.addWidget(self.ed_ssh_host, 1, 2)
 
-        dg.addWidget(QLabel("SSH key"), 7, 0)
-        self.ed_ssh_key = QLineEdit()
-        dg.addWidget(self.ed_ssh_key, 7, 1)
-        self.btn_ssh_key = QPushButton("Browse")
-        dg.addWidget(self.btn_ssh_key, 7, 2)
-        self.btn_ssh_key.clicked.connect(lambda: self._browse_file(self.ed_ssh_key))
-
-        dg.addWidget(QLabel("SSH key password"), 8, 0)
+        dg.addWidget(QLabel("SSH key password"), 2, 1)
         self.ed_ssh_pwd = QLineEdit()
         self.ed_ssh_pwd.setEchoMode(QLineEdit.Password)
-        dg.addWidget(self.ed_ssh_pwd, 8, 1)
+        dg.addWidget(self.ed_ssh_pwd, 2, 2)
+
+        dg.addWidget(QLabel("SSH key"), 3, 1)
+        self.ed_ssh_key = QLineEdit()
+        dg.addWidget(self.ed_ssh_key, 3, 2)
+        self.btn_ssh_key = QPushButton("Browse")
+        dg.addWidget(self.btn_ssh_key, 3, 3)
+        self.btn_ssh_key.clicked.connect(lambda: self._browse_file(self.ed_ssh_key))
         self.btn_ssh_save = QPushButton("Save SSH")
-        dg.addWidget(self.btn_ssh_save, 8, 2)
+        dg.addWidget(self.btn_ssh_save, 4, 2)
         self.btn_ssh_save.clicked.connect(self._save_ssh_settings)
 
         right.addWidget(g_diag)
 
         right.addWidget(QLabel("Log"))
-        splitter_log = QSplitter(Qt.Orientation.Vertical)
         self.txt_log = QPlainTextEdit()
         self.txt_log.setReadOnly(True)
-        splitter_log.addWidget(self.txt_log)
-        self.tbl_log = QTableWidget(0, 4)
-        self.tbl_log.setHorizontalHeaderLabels(["Time", "Stage", "Action", "Details"])
-        self.tbl_log.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.tbl_log.setSelectionBehavior(QTableWidget.SelectRows)
-        self.tbl_log.setSelectionMode(QTableWidget.NoSelection)
-        header = self.tbl_log.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setStretchLastSection(True)
-        header.resizeSection(0, 110)
-        header.resizeSection(1, 120)
-        header.resizeSection(2, 140)
-        splitter_log.addWidget(self.tbl_log)
-        splitter_log.setStretchFactor(0, 2)
-        splitter_log.setStretchFactor(1, 1)
-        right.addWidget(splitter_log, 1)
+        right.addWidget(self.txt_log, 1)
+
+        cascade_box = QGroupBox("Kaskáda")
+        cv = QVBoxLayout(cascade_box)
+        cv.addWidget(QLabel("Seznam kroků"))
+        self.cascade_panel.lst_steps.setSelectionMode(QListWidget.ExtendedSelection)
+        cv.addWidget(self.cascade_panel.lst_steps, 1)
+        buttons_a = QHBoxLayout()
+        buttons_a.addWidget(self.cascade_panel.btn_add_step)
+        buttons_a.addWidget(self.cascade_panel.btn_delete_step)
+        buttons_a.addWidget(self.cascade_panel.btn_duplicate_step)
+        cv.addLayout(buttons_a)
+        buttons_b = QHBoxLayout()
+        buttons_b.addWidget(self.cascade_panel.btn_move_step_up)
+        buttons_b.addWidget(self.cascade_panel.btn_move_step_down)
+        buttons_b.addWidget(self.cascade_panel.btn_save)
+        buttons_b.addWidget(self.cascade_panel.btn_load)
+        cv.addLayout(buttons_b)
+        right.addWidget(cascade_box, 1)
 
         mid.addLayout(right, 1)
         outer.addLayout(mid, 1)
@@ -526,12 +545,6 @@ class MainWindow(QMainWindow):
         self.vector_panel.attached_changed.connect(self.on_vs_attached_changed)
         v.addWidget(self.vector_panel, 1)
 
-    def _build_cascade_tab(self):
-        v = QVBoxLayout(self.tab_cascade)
-        v.setContentsMargins(10, 10, 10, 10)
-        self.cascade_panel = CascadePanel(self.s, self._current_model_list)
-        v.addWidget(self.cascade_panel, 1)
-
     def _current_model_list(self) -> List[str]:
         if self.all_models:
             return list(self.all_models)
@@ -542,14 +555,7 @@ class MainWindow(QMainWindow):
             self.cascade_panel.refresh_saved_list()
         except Exception:
             pass
-        self.cb_run_cascade.clear()
-        paths = []
-        if hasattr(self, "cascade_panel"):
-            base = self.cascade_panel.cascade_dir
-            for n in self.cascade_panel.available_cascades():
-                paths.append((n, os.path.join(base, n)))
-        for label, full in paths:
-            self.cb_run_cascade.addItem(label, full)
+        return
 
     def _build_model_tab(self):
         v = QVBoxLayout(self.tab_models)
@@ -953,32 +959,8 @@ class MainWindow(QMainWindow):
             pass
 
     def _add_log_row(self, line: str):
-        if not hasattr(self, "tbl_log"):
-            return
-        if not line:
-            return
-        if self.tbl_log.rowCount() >= self.LOG_TABLE_MAX_ROWS:
-            self.tbl_log.removeRow(0)
-        parts = [part.strip() for part in line.split("|")]
-        ts = parts[0] if parts else ""
-        stage_action = parts[1] if len(parts) > 1 else ""
-        details = " | ".join(parts[2:]) if len(parts) > 2 else ""
-        stage = ""
-        action = ""
-        if stage_action:
-            if ":" in stage_action:
-                stage_part, action_part = stage_action.split(":", 1)
-                stage = stage_part.strip()
-                action = action_part.strip()
-            else:
-                stage = stage_action
-        row = self.tbl_log.rowCount()
-        self.tbl_log.insertRow(row)
-        self.tbl_log.setItem(row, 0, QTableWidgetItem(ts))
-        self.tbl_log.setItem(row, 1, QTableWidgetItem(stage))
-        self.tbl_log.setItem(row, 2, QTableWidgetItem(action))
-        self.tbl_log.setItem(row, 3, QTableWidgetItem(details))
-        self.tbl_log.scrollToBottom()
+        return
+
 
     def _gather_state(self) -> dict:
         return {
@@ -989,6 +971,10 @@ class MainWindow(QMainWindow):
             "model_filter": self.ed_model_filter.text(),
             "response_id": self.ed_response_id.text(),
             "prompt": self.txt_prompt.toPlainText(),
+            "run_instructions": self.txt_run_instructions.toPlainText(),
+            "run_instructions_enabled": bool(self.btn_enable_instructions.isChecked()),
+            "manifest_only": bool(self.chk_manifest_only.isChecked()),
+            "prompt_list_only": bool(self.chk_prompt_list.isChecked()),
             "in_dir": self.ed_in.text(),
             "out_dir": self.ed_out.text(),
             "in_equals_out": bool(self.chk_in_eq_out.isChecked()),
@@ -1059,6 +1045,10 @@ class MainWindow(QMainWindow):
                 self.cb_model.setCurrentIndex(idx)
         self.ed_response_id.setText(state.get("response_id", ""))
         self.txt_prompt.setPlainText(state.get("prompt", ""))
+        self.txt_run_instructions.setPlainText(state.get("run_instructions", ""))
+        self.btn_enable_instructions.setChecked(bool(state.get("run_instructions_enabled", False)))
+        self.chk_manifest_only.setChecked(bool(state.get("manifest_only", False)))
+        self.chk_prompt_list.setChecked(bool(state.get("prompt_list_only", False)))
         self.ed_in.setText(state.get("in_dir", ""))
         self.ed_out.setText(state.get("out_dir", ""))
         self.chk_in_eq_out.setChecked(bool(state.get("in_equals_out", False)))
@@ -1142,6 +1132,10 @@ class MainWindow(QMainWindow):
         self.ed_response_id.clear()
         self.txt_prompt.clear()
         self.txt_response_view.clear()
+        self.txt_run_instructions.clear()
+        self.btn_enable_instructions.setChecked(False)
+        self.chk_manifest_only.setChecked(False)
+        self.chk_prompt_list.setChecked(False)
         self.ed_in.clear()
         self.ed_out.clear()
         self.chk_in_eq_out.setChecked(False)
@@ -2047,16 +2041,17 @@ class MainWindow(QMainWindow):
 
     def on_mode_changed(self, mode: str):
         is_qfile = mode == "QFILE"
-        is_cascade = mode == "KASKADA"
-        self.chk_send_as_c.setEnabled((not is_qfile) and (not is_cascade))
+        is_generate = mode == "GENERATE"
+        self.chk_send_as_c.setEnabled(not is_qfile)
         if is_qfile:
             self.chk_send_as_c.setChecked(False)
-        if is_cascade:
-            self.chk_send_as_c.setChecked(False)
-        self.ed_response_id.setEnabled(not is_cascade)
-        self.row_cascade_selector.setVisible(is_cascade)
-        if is_cascade:
-            self.refresh_run_cascades()
+        self.ed_response_id.setEnabled(True)
+        self.chk_prompt_list.setEnabled(is_qfile)
+        if not is_qfile:
+            self.chk_prompt_list.setChecked(False)
+        self.chk_manifest_only.setEnabled(is_generate)
+        if not is_generate:
+            self.chk_manifest_only.setChecked(False)
 
     def on_go(self):
         if self.worker is not None:
@@ -2068,14 +2063,17 @@ class MainWindow(QMainWindow):
 
         mode = self.cb_mode.currentText()
         send_as_c = bool(self.chk_send_as_c.isChecked())
-        if mode == "KASKADA":
-            send_as_c = False
-            self.chk_send_as_c.setChecked(False)
         if not self._validate_paths(mode, send_as_c):
             return
 
         if mode == "QFILE" and send_as_c:
             msg_warning(self, "Mode", "QFILE nepodporuje SEND AS BATCH.")
+            return
+        if self.chk_prompt_list.isChecked() and mode != "QFILE":
+            msg_warning(self, "Mode", "Volba Seznam promptů je dostupná jen pro QFILE.")
+            return
+        if self.chk_manifest_only.isChecked() and mode != "GENERATE":
+            msg_warning(self, "Mode", "Volba Manifest souborů je dostupná jen pro GENERATE.")
             return
 
         if self.txt_response_view is not None:
@@ -2101,50 +2099,6 @@ class MainWindow(QMainWindow):
                     "Kaskádu nelze spustit s tímto modelem.",
                 )
                 return
-
-        if mode == "KASKADA":
-            if self.cb_run_cascade.count() == 0:
-                msg_warning(self, "Kaskáda", "Není vybraná uložená kaskáda.")
-                return
-            cpath = str(self.cb_run_cascade.currentData() or "").strip()
-            if not cpath or not os.path.isfile(cpath):
-                msg_warning(self, "Kaskáda", "Vybraná kaskáda neexistuje.")
-                return
-            try:
-                with open(cpath, "r", encoding="utf-8") as f:
-                    cdef = CascadeDefinition.from_dict(json.load(f))
-            except Exception as e:
-                msg_critical(self, "Kaskáda", f"Načtení kaskády selhalo: {e}")
-                return
-            cfg_c = CascadeRunConfig(
-                project=self.ed_project.text().strip(),
-                cascade=cdef,
-                in_dir=self.ed_in.text().strip(),
-                out_dir=self.ed_out.text().strip(),
-            )
-            self._last_run_send_as_c = False
-            self.run_logger = None
-            self.log(f"KASKÁDA started: {os.path.basename(cpath)}")
-            self.worker = CascadeRunWorker(cfg_c, self.s, self.api_key, self.db, self.price_table)
-            self._progress_last_ts = time.time()
-            self._progress_timer.start()
-            self.progress_dialog = ProgressDialog(self)
-            self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
-            self.progress_dialog.show()
-            self.worker.progress.connect(self.pb.setValue)
-            self.worker.progress.connect(lambda v: self.progress_dialog.set_progress(v) if self.progress_dialog else None)
-            self.worker.progress.connect(lambda _: self._mark_progress_activity())
-            self.worker.subprogress.connect(self.pb_sub.setValue)
-            self.worker.subprogress.connect(lambda v: self.progress_dialog.set_subprogress(v) if self.progress_dialog else None)
-            self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
-            self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
-            self.worker.status.connect(lambda _: self._mark_progress_activity())
-            self.worker.logline.connect(self.log)
-            self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)
-            self.worker.finished_ok.connect(self.on_run_ok)
-            self.worker.finished_err.connect(self.on_run_err)
-            self.worker.start()
-            return
 
         self._last_run_send_as_c = bool(send_as_c)
         run_id = new_run_id()
@@ -2209,6 +2163,9 @@ class MainWindow(QMainWindow):
             versing=bool(self.chk_versing.isChecked()),
             temperature=float(self.sp_temp.value()),
             use_file_search=True,
+            run_instructions=self.txt_run_instructions.toPlainText().strip() if self.btn_enable_instructions.isChecked() else "",
+            manifest_only=bool(self.chk_manifest_only.isChecked()),
+            prompt_list_only=bool(self.chk_prompt_list.isChecked()),
             diag_windows_in=bool(self.chk_diag_win_in.isChecked()),
             diag_windows_out=bool(self.chk_diag_win_out.isChecked()),
             diag_ssh_in=bool(self.chk_diag_ssh_in.isChecked()),
@@ -2259,6 +2216,55 @@ class MainWindow(QMainWindow):
         # clear resume hints after start
         self._resume_files = []
         self._resume_prev_id = None
+
+    def _toggle_run_instructions(self, enabled: bool):
+        self.txt_run_instructions.setEnabled(bool(enabled))
+
+    def on_kajo_cascade(self):
+        if self.worker is not None:
+            msg_info(self, "Kaskáda", "Běží jiný RUN.")
+            return
+        selected = self.cascade_panel.lst_steps.selectedIndexes()
+        idxs = sorted({i.row() for i in selected})
+        if not idxs:
+            self.log("KÁJO Kaskáda: nejsou vybrané kroky, nic se nespustilo.")
+            return
+        steps = []
+        for i in idxs:
+            if 0 <= i < len(self.cascade_panel.definition.steps):
+                steps.append(self.cascade_panel.definition.steps[i])
+        if not steps:
+            self.log("KÁJO Kaskáda: vybrané kroky nejsou validní.")
+            return
+        cdef = CascadeDefinition(name=f"run_{int(time.time())}", steps=steps, default_out_dir=self.ed_out.text().strip())
+        cfg_c = CascadeRunConfig(
+            project=self.ed_project.text().strip(),
+            cascade=cdef,
+            in_dir=self.ed_in.text().strip(),
+            out_dir=self.ed_out.text().strip(),
+        )
+        self._last_run_send_as_c = False
+        self.run_logger = None
+        self.log(f"KASKÁDA started: {len(steps)} kroků")
+        self.worker = CascadeRunWorker(cfg_c, self.s, self.api_key, self.db, self.price_table)
+        self._progress_last_ts = time.time()
+        self._progress_timer.start()
+        self.progress_dialog = ProgressDialog(self)
+        self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
+        self.progress_dialog.show()
+        self.worker.progress.connect(self.pb.setValue)
+        self.worker.progress.connect(lambda v: self.progress_dialog.set_progress(v) if self.progress_dialog else None)
+        self.worker.progress.connect(lambda _: self._mark_progress_activity())
+        self.worker.subprogress.connect(self.pb_sub.setValue)
+        self.worker.subprogress.connect(lambda v: self.progress_dialog.set_subprogress(v) if self.progress_dialog else None)
+        self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
+        self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
+        self.worker.status.connect(lambda _: self._mark_progress_activity())
+        self.worker.logline.connect(self.log)
+        self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)
+        self.worker.finished_ok.connect(self.on_run_ok)
+        self.worker.finished_err.connect(self.on_run_err)
+        self.worker.start()
 
     def on_stop(self, force: bool = False):
         if self.worker is None:
