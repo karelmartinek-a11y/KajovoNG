@@ -491,18 +491,35 @@ class MainWindow(QMainWindow):
 
         cascade_box = QGroupBox("Kaskáda")
         cv = QVBoxLayout(cascade_box)
+
+        # Uložené kaskády – výběr a název
+        row_saved = QHBoxLayout()
+        row_saved.addWidget(QLabel("Uložené kaskády:"))
+        row_saved.addWidget(self.cascade_panel.cb_saved, 1)
+        row_saved.addWidget(self.cascade_panel.btn_refresh_saved)
+        cv.addLayout(row_saved)
+
+        row_name = QHBoxLayout()
+        row_name.addWidget(QLabel("Název:"))
+        row_name.addWidget(self.cascade_panel.ed_name, 1)
+        row_name.addWidget(self.cascade_panel.btn_save)
+        row_name.addWidget(self.cascade_panel.btn_save_as)
+        cv.addLayout(row_name)
+
+        # Kroková konfigurace kaskády
         cv.addWidget(QLabel("Seznam kroků"))
         self.cascade_panel.lst_steps.setSelectionMode(QListWidget.ExtendedSelection)
         cv.addWidget(self.cascade_panel.lst_steps, 1)
+
         buttons_a = QHBoxLayout()
         buttons_a.addWidget(self.cascade_panel.btn_add_step)
         buttons_a.addWidget(self.cascade_panel.btn_delete_step)
         buttons_a.addWidget(self.cascade_panel.btn_duplicate_step)
         cv.addLayout(buttons_a)
+
         buttons_b = QHBoxLayout()
         buttons_b.addWidget(self.cascade_panel.btn_move_step_up)
         buttons_b.addWidget(self.cascade_panel.btn_move_step_down)
-        buttons_b.addWidget(self.cascade_panel.btn_save)
         buttons_b.addWidget(self.cascade_panel.btn_load)
         cv.addLayout(buttons_b)
         right.addWidget(cascade_box, 1)
