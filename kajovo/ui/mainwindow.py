@@ -308,6 +308,19 @@ class MainWindow(QMainWindow):
         mid = QHBoxLayout()
 
         left = QVBoxLayout()
+        instr_row = QHBoxLayout()
+        instr_row.addWidget(QLabel("Instructions"))
+        self.btn_enable_instructions = QPushButton("Instructions")
+        self.btn_enable_instructions.setCheckable(True)
+        instr_row.addWidget(self.btn_enable_instructions)
+        instr_row.addStretch(1)
+        left.addLayout(instr_row)
+        self.txt_run_instructions = QPlainTextEdit()
+        self.txt_run_instructions.setPlaceholderText("Doplňující instrukce pro běh z RUN.")
+        self.txt_run_instructions.setEnabled(False)
+        self.txt_run_instructions.setMaximumHeight(90)
+        left.addWidget(self.txt_run_instructions)
+
         lbl_prompt = QLabel("Zadání / Prompt (může být i >150 000 znaků; použije se ingest A0 + kaskáda přes previous_response_id)")
         lbl_prompt.setWordWrap(True)
         left.addWidget(lbl_prompt)
@@ -323,21 +336,8 @@ class MainWindow(QMainWindow):
         prompt_split.setStretchFactor(0, 2)
         prompt_split.setStretchFactor(1, 1)
         prompt_split.setSizes([660, 340])
-        prompt_split.setMaximumHeight(260)
+        prompt_split.setMaximumHeight(340)
         left.addWidget(prompt_split, 1)
-
-        instr_row = QHBoxLayout()
-        instr_row.addWidget(QLabel("Instructions"))
-        self.btn_enable_instructions = QPushButton("Instructions")
-        self.btn_enable_instructions.setCheckable(True)
-        instr_row.addWidget(self.btn_enable_instructions)
-        instr_row.addStretch(1)
-        left.addLayout(instr_row)
-        self.txt_run_instructions = QPlainTextEdit()
-        self.txt_run_instructions.setPlaceholderText("Doplňující instrukce pro běh z RUN.")
-        self.txt_run_instructions.setEnabled(False)
-        self.txt_run_instructions.setMaximumHeight(90)
-        left.addWidget(self.txt_run_instructions)
 
         g_dirs = QGroupBox("IN/OUT")
         gd = QGridLayout(g_dirs)
@@ -406,23 +406,12 @@ class MainWindow(QMainWindow):
         self.on_mode_changed(self.cb_mode.currentText())
         # pricing and batch tabs are available via their own tabs; toolbar buttons removed per request
 
-        self.pb = QProgressBar()
-        self.pb_sub = QProgressBar()
-        style_progress_bar(self.pb)
-        style_progress_bar(self.pb_sub)
-        left.addWidget(self.pb)
-        left.addWidget(self.pb_sub)
-
-        mid.addLayout(left, 2)
-
-        right = QVBoxLayout()
-
         self.btn_insert_var_run = QPushButton("Vložit proměnnou…")
         self.cb_insert_var_run = self.cascade_panel.cb_insert_var
         insert_row = QHBoxLayout()
         insert_row.addWidget(self.cb_insert_var_run, 1)
         insert_row.addWidget(self.btn_insert_var_run)
-        right.addLayout(insert_row)
+        left.addLayout(insert_row)
 
         def _handle_insert_var_run_clicked() -> None:
             token = self.cb_insert_var_run.currentText()
@@ -456,10 +445,22 @@ class MainWindow(QMainWindow):
             target.setFocus()
 
         self.btn_insert_var_run.clicked.connect(_handle_insert_var_run_clicked)
+
         attached_box = QGroupBox("Připojeno (Files/VS)")
         attached_v = QVBoxLayout(attached_box)
         attached_v.addWidget(self.txt_attached_summary)
-        right.addWidget(attached_box)
+        left.addWidget(attached_box)
+
+        self.pb = QProgressBar()
+        self.pb_sub = QProgressBar()
+        style_progress_bar(self.pb)
+        style_progress_bar(self.pb_sub)
+        left.addWidget(self.pb)
+        left.addWidget(self.pb_sub)
+
+        mid.addLayout(left, 2)
+
+        right = QVBoxLayout()
 
         g_diag = QGroupBox("Diagnostics")
         dg = QGridLayout(g_diag)
@@ -503,11 +504,6 @@ class MainWindow(QMainWindow):
 
         right.addWidget(g_diag)
 
-        right.addWidget(QLabel("Log"))
-        self.txt_log = QPlainTextEdit()
-        self.txt_log.setReadOnly(True)
-        right.addWidget(self.txt_log, 1)
-
         cascade_box = QGroupBox("Kaskáda")
         cv = QVBoxLayout(cascade_box)
 
@@ -542,6 +538,11 @@ class MainWindow(QMainWindow):
         buttons_b.addWidget(self.cascade_panel.btn_load)
         cv.addLayout(buttons_b)
         right.addWidget(cascade_box, 1)
+
+        right.addWidget(QLabel("Log"))
+        self.txt_log = QPlainTextEdit()
+        self.txt_log.setReadOnly(True)
+        right.addWidget(self.txt_log, 1)
 
         mid.addLayout(right, 1)
         outer.addLayout(mid, 1)
