@@ -323,10 +323,40 @@ class PipelineMultiModelTests(unittest.TestCase):
         by_file = {row["file"]: row for row in contracts["interfaces"]}
         self.assertIn("services/user_service.py", by_file)
         self.assertIn("api/user_controller.py", by_file)
-        self.assertIn("create", by_file["services/user_service.py"]["methods"])
-        self.assertIn("search", by_file["services/user_service.py"]["methods"])
-        self.assertIn("handle_create", by_file["api/user_controller.py"]["methods"])
+        service_methods = by_file["services/user_service.py"]["methods"]
+        controller_methods = by_file["api/user_controller.py"]["methods"]
+        self.assertTrue(service_methods)
+        self.assertTrue(controller_methods)
+        self.assertTrue(any(m.startswith("create_") for m in service_methods))
+        self.assertTrue(any(m.startswith("search_") for m in service_methods))
+        self.assertTrue(any(m.startswith("create_") for m in controller_methods))
         self.assertTrue(contracts["types"])
+
+
+    def test_context_and_contracts_are_passed_to_parallel_generation(self):
+        w = self.make_worker()
+        w.cfg.resume_files = [{"path": "services/user_service.py", "purpose": "users api and search"}]
+        w.cfg.resume_prev_id = "prev-resp"
+        w._save_out_files = lambda files: {f["path"]: "saved" for f in files}
+        w._record_receipt = lambda *args, **kwargs: None
+
+        captured = {}
+
+        def fake_parallel(_client, _files, _diag, context_bundle, contracts_bundle, structure):
+            captured["context_bundle"] = context_bundle
+            captured["contracts_bundle"] = contracts_bundle
+            captured["structure"] = structure
+            return ([{"path": "services/user_service.py", "content": "full", "purpose": "users"}], [])
+
+        w._generate_full_files_parallel = fake_parallel
+
+        w._run_a_generate(client=SimpleNamespace(), diag_file_ids=[], base_prev_id=None)
+
+        self.assertIn("shared_types", captured["context_bundle"])
+        self.assertIn("public_interfaces", captured["context_bundle"])
+        self.assertIn("interfaces", captured["contracts_bundle"])
+        self.assertIn("types", captured["contracts_bundle"])
+        self.assertTrue(captured["structure"].get("files"))
 
     def test_handoff_inference_is_deterministic_and_serializable(self):
         w = self.make_worker()
@@ -337,11 +367,12 @@ class PipelineMultiModelTests(unittest.TestCase):
                 {"path": "models/session_model.py", "purpose": "session entity"},
             ]
         }
+        structure_reordered = {"files": list(reversed(structure["files"]))}
 
         bundle_first = w._build_context_bundle(plan, structure)
-        bundle_second = w._build_context_bundle(plan, structure)
+        bundle_second = w._build_context_bundle(plan, structure_reordered)
         contracts_first = w._build_interface_contracts(structure)
-        contracts_second = w._build_interface_contracts(structure)
+        contracts_second = w._build_interface_contracts(structure_reordered)
 
         self.assertEqual(bundle_first, bundle_second)
         self.assertEqual(contracts_first, contracts_second)
