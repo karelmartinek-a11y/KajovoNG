@@ -4,6 +4,7 @@ import base64
 import concurrent.futures
 import json
 import os
+import re
 import shutil
 import time
 import zipfile
@@ -396,30 +397,150 @@ class RunWorker(QThread):
         validate_paths(merged)
         return {"files": merged}
 
+    @staticmethod
+    def _tokens_from_text(text: str) -> List[str]:
+        raw = str(text or "").lower()
+        return [token for token in re.split(r"[^a-z0-9]+", raw) if token]
+
+    def _infer_file_role(self, path: str, purpose: str) -> str:
+        path_tokens = self._tokens_from_text(path)
+        purpose_tokens = self._tokens_from_text(purpose)
+        tokens = set(path_tokens + purpose_tokens)
+        role_order = [
+            ("schema", {"schema", "schemas"}),
+            ("model", {"model", "models", "entity", "entities", "dto", "type", "types"}),
+            ("controller", {"controller", "controllers", "api", "endpoint", "endpoints", "route", "routes"}),
+            ("service", {"service", "services", "usecase", "usecases"}),
+            ("repository", {"repo", "repos", "repository", "repositories", "store"}),
+            ("handler", {"handler", "handlers"}),
+            ("utility", {"util", "utils", "helper", "helpers"}),
+            ("config", {"config", "settings"}),
+        ]
+        for role, markers in role_order:
+            if tokens.intersection(markers):
+                return role
+        if path.endswith(".py"):
+            return "module"
+        return "other"
+
+    @staticmethod
+    def _pascalize(value: str) -> str:
+        parts = [p for p in str(value or "").replace("-", "_").split("_") if p]
+        return "".join(part[:1].upper() + part[1:] for part in parts) or "Module"
+
+    def _infer_type_name(self, file_path: str) -> str:
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        tokens = self._tokens_from_text(stem)
+        suffixes = {"model", "schema", "dto", "entity", "type", "types", "request", "response", "payload"}
+        while len(tokens) > 1 and tokens[-1] in suffixes:
+            tokens.pop()
+        base = "_".join(tokens) if tokens else stem
+        return self._pascalize(base)
+
+    def _infer_interface_methods(self, role: str, path: str, purpose: str) -> List[str]:
+        tokens = set(self._tokens_from_text(path) + self._tokens_from_text(purpose))
+        methods: List[str] = []
+        if role in {"service", "repository"}:
+            methods.extend(["create", "get", "list", "update", "delete"])
+            if tokens.intersection({"search", "query", "filter"}):
+                methods.append("search")
+            if tokens.intersection({"auth", "login", "session", "token"}):
+                methods.extend(["login", "logout"])
+        elif role == "controller":
+            methods.extend(["handle_get", "handle_list", "handle_create", "handle_update", "handle_delete"])
+        elif role == "handler":
+            methods.extend(["handle"])
+            if tokens.intersection({"event", "message", "job"}):
+                methods.append("dispatch")
+        elif role == "module":
+            methods.extend(["run"])
+
+        deduped: List[str] = []
+        seen = set()
+        for method in methods:
+            if method not in seen:
+                seen.add(method)
+                deduped.append(method)
+        return deduped
+
     def _build_context_bundle(self, plan: Dict[str, Any], structure: Dict[str, Any]) -> Dict[str, Any]:
-        modules = plan.get("modules") or []
-        files = structure.get("files") or []
+        modules = list(plan.get("modules") or [])
+        files = [f for f in (structure.get("files") or []) if isinstance(f, dict)]
         summary = (self.cfg.project or "").strip() or "Software project"
+
+        shared_types: List[Dict[str, str]] = []
+        public_interfaces: List[Dict[str, Any]] = []
+        seen_types = set()
+
+        for item in sorted(files, key=lambda row: str(row.get("path") or "")):
+            path = str(item.get("path") or "").strip()
+            purpose = str(item.get("purpose") or "").strip()
+            if not path:
+                continue
+            role = self._infer_file_role(path, purpose)
+            type_name = self._infer_type_name(path)
+
+            if role in {"model", "schema"} and type_name not in seen_types:
+                seen_types.add(type_name)
+                shared_types.append({"name": type_name, "from": path, "kind": role})
+
+            if role in {"service", "repository", "controller", "handler"}:
+                suffix = "Controller" if role == "controller" else role.title()
+                iface_name = f"{type_name}{suffix}"
+                public_interfaces.append(
+                    {
+                        "name": iface_name,
+                        "file": path,
+                        "role": role,
+                    }
+                )
+
+        coding_rules = [
+            "Return complete files only (no diffs or patches).",
+            "Preserve consistent naming and imports across modules.",
+            "Reuse inferred shared types and public interfaces where relevant.",
+        ]
         return {
             "project_summary": summary,
             "modules": modules,
-            "shared_types": [],
-            "public_interfaces": [],
-            "coding_rules": ["Return complete files, no diffs.", "Keep code consistent across modules."],
-            "files": [f.get("path") for f in files if isinstance(f, dict) and f.get("path")],
+            "shared_types": shared_types,
+            "public_interfaces": public_interfaces,
+            "coding_rules": coding_rules,
         }
 
     def _build_interface_contracts(self, structure: Dict[str, Any]) -> Dict[str, Any]:
-        # Placeholder minimal contract list derived from structure paths.
-        contracts = []
-        for f in structure.get("files", []) or []:
-            path = f.get("path")
+        contracts: List[Dict[str, Any]] = []
+        inferred_types: List[Dict[str, str]] = []
+        seen_types = set()
+
+        for item in sorted(structure.get("files", []) or [], key=lambda row: str((row or {}).get("path") or "")):
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            purpose = str(item.get("purpose") or "")
             if not isinstance(path, str) or not path.endswith(".py"):
                 continue
-            basename = os.path.basename(path)
-            name, _ = os.path.splitext(basename)
-            contracts.append({"file": path, "class": name.title().replace("_", ""), "methods": []})
-        return {"interfaces": contracts, "types": []}
+
+            role = self._infer_file_role(path, purpose)
+            type_name = self._infer_type_name(path)
+
+            if role in {"model", "schema"} and type_name not in seen_types:
+                seen_types.add(type_name)
+                inferred_types.append({"name": type_name, "from": path, "kind": role})
+
+            class_suffix = {
+                "service": "Service",
+                "repository": "Repository",
+                "controller": "Controller",
+                "handler": "Handler",
+                "schema": "Schema",
+                "model": "Model",
+            }.get(role, "Module")
+            class_name = f"{type_name}{class_suffix}"
+            methods = self._infer_interface_methods(role, path, purpose)
+            contracts.append({"file": path, "class": class_name, "methods": methods})
+
+        return {"interfaces": contracts, "types": inferred_types}
 
     def _create_a3_handoff_artifacts(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
         modules_plan = parse_json_strict(json.dumps(self._generate_modules_plan(files), ensure_ascii=False))
