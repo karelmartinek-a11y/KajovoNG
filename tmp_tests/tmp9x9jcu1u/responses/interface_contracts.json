@@ -1,0 +1,15 @@
+{
+  "interfaces": [
+    {
+      "file": "models/user.py",
+      "class": "User",
+      "methods": []
+    },
+    {
+      "file": "services/user_service.py",
+      "class": "UserService",
+      "methods": []
+    }
+  ],
+  "types": []
+}

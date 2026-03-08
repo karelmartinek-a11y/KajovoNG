@@ -42,7 +42,6 @@ class Receipt:
     model: str
     mode: str
     flow_type: str
-    stage: str
     response_id: Optional[str]
     batch_id: Optional[str]
     input_tokens: int
@@ -50,11 +49,12 @@ class Receipt:
     tool_cost: float
     storage_cost: float
     total_cost: float
-    cost: float
     pricing_verified: bool
     notes: str
     log_paths: Dict[str, Any]
     usage: Dict[str, Any]
+    stage: Optional[str] = None
+    cost: Optional[float] = None
 
 class ReceiptDB:
     def __init__(self, db_path: str):

@@ -1,0 +1,12 @@
+{
+  "modules": [
+    {
+      "name": "models",
+      "purpose": "module scaffold"
+    },
+    {
+      "name": "services",
+      "purpose": "module scaffold"
+    }
+  ]
+}

@@ -72,19 +72,9 @@ from .response_request_panel import ResponseRequestPanel
 from .progress_dialog import ProgressDialog
 from .theme import DARK_STYLESHEET
 from .widgets import BusyPopup, style_progress_bar
+from .model_filter import filter_models_for_generate
 
 EXPECTED_REPAIR_README = "readmerepair.txt"
-
-
-def filter_models_for_generate(models, caps_cache) -> list:
-    """Return models allowed for overrides in GENERATE; filters explicit prev_id rejection."""
-    out = []
-    for mid in models:
-        caps = caps_cache.get(mid) if hasattr(caps_cache, "get") else None
-        if caps and hasattr(caps, "supports_previous_response_id") and caps.supports_previous_response_id is False:
-            continue
-        out.append(mid)
-    return out
 
 
 def _caps_prev_id_explicitly_unsupported(caps: Optional[ModelCapabilities]) -> bool:

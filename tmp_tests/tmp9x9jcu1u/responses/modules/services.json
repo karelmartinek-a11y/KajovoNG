@@ -1,0 +1,9 @@
+{
+  "module": "services",
+  "files": [
+    {
+      "path": "services/user_service.py",
+      "purpose": "users"
+    }
+  ]
+}

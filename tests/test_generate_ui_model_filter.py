@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from kajovo.ui.mainwindow import filter_models_for_generate
+from kajovo.ui.model_filter import filter_models_for_generate
 
 
 class FakeCaps:
