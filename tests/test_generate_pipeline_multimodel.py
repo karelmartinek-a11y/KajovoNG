@@ -1,9 +1,9 @@
-import unittest
 import os
 import tempfile
+import unittest
 from types import SimpleNamespace
 
-from kajovo.core.pipeline import UiRunConfig, RunWorker
+from kajovo.core.pipeline import RunWorker, UiRunConfig
 
 
 class DummyLog:
@@ -17,7 +17,6 @@ class DummyLog:
             manifests_dir=os.path.join(root, "manifests"),
             misc_dir=os.path.join(root, "misc"),
         )
-        # Best-effort create; ignore permission errors in sandboxed envs.
         for p in vars(self.paths).values():
             try:
                 os.makedirs(p, exist_ok=True)
@@ -51,15 +50,24 @@ class DummySettings:
 
 
 class PipelineMultiModelTests(unittest.TestCase):
-    def make_cfg(self):
-        caps = SimpleNamespace(
-            to_dict=lambda: {"supports_previous_response_id": True, "supports_temperature": True, "supports_file_search": False, "supports_vector_store": False, "supports_input_file": True},
+    def make_caps(self):
+        return SimpleNamespace(
+            to_dict=lambda: {
+                "supports_previous_response_id": True,
+                "supports_temperature": True,
+                "supports_file_search": False,
+                "supports_vector_store": False,
+                "supports_input_file": True,
+            },
             supports_previous_response_id=True,
             supports_temperature=True,
             supports_file_search=False,
             supports_vector_store=False,
             supports_input_file=True,
         )
+
+    def make_cfg(self):
+        caps = self.make_caps()
         return UiRunConfig(
             project="p",
             prompt="",
@@ -115,6 +123,12 @@ class PipelineMultiModelTests(unittest.TestCase):
         self.assertEqual(cfg.model, "gpt-main")
         self.assertIsInstance(cfg.model_caps, dict)
 
+    def test_caps_for_stage(self):
+        cfg = self.make_cfg()
+        self.assertTrue(cfg.caps_for_stage("A1").supports_previous_response_id)
+        self.assertTrue(cfg.caps_for_stage("A2").supports_previous_response_id)
+        self.assertTrue(cfg.caps_for_stage("A3").supports_previous_response_id)
+
     def test_log_api_action_includes_model(self):
         w = self.make_worker()
         captured = {}
@@ -138,6 +152,18 @@ class PipelineMultiModelTests(unittest.TestCase):
         self.assertTrue(snap["supports_file_search"])
         snap2 = w._attachments_snapshot("A2", ["f1"], ["f2"], [], [], None)
         self.assertFalse(snap2["supports_file_search"])
+
+    def test_attachments_snapshot_ignores_model_cap_object_reassignment_bug(self):
+        w = self.make_worker()
+        w._caps_for_step = lambda _step: {"supports_file_search": True, "supports_vector_store": True}
+
+        class NoGetCaps:
+            pass
+
+        w.cfg.caps_for_stage = lambda _step: NoGetCaps()
+        snap = w._attachments_snapshot("A2", ["f1"], ["f2"], [], ["vs1"], [{"type": "file_search"}])
+        self.assertTrue(snap["supports_file_search"])
+        self.assertTrue(snap["supports_vector_store"])
 
     def test_modules_plan_and_merge(self):
         w = self.make_worker()
