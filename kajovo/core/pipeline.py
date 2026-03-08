@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import json
 import os
 import shutil
@@ -231,10 +232,7 @@ class RunWorker(QThread):
         ts = self._ts()
         caps = self._caps_for_step(stage)
         if not isinstance(caps, dict):
-            if hasattr(caps, "to_dict"):
-                caps = caps.to_dict()
-            else:
-                caps = {}
+            caps = {}
         ref_ids = [fid for fid in (ref_file_ids or []) if fid]
         input_ids = [fid for fid in (input_file_ids or []) if fid]
         image_ids = [fid for fid in (input_image_ids or []) if fid]
@@ -331,7 +329,15 @@ class RunWorker(QThread):
 
     # ---------- artifact helpers ----------
     def _save_json_artifact(self, name: str, payload: Any) -> str:
-        path = self.log.save_json("responses", name, payload)
+        filename = f"{name}.json" if not str(name).endswith(".json") else str(name)
+        path = os.path.join(self.log.paths.responses_dir, filename)
+        ensure_dir(os.path.dirname(path) or self.log.paths.responses_dir)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        try:
+            self.log.event("file.saved.responses", {"path": path, "bytes": os.path.getsize(path)})
+        except Exception:
+            pass
         return path
 
     def _load_json_artifact(self, path: str) -> Optional[Dict[str, Any]]:
@@ -340,6 +346,63 @@ class RunWorker(QThread):
                 return json.load(f)
         except Exception:
             return None
+
+    def _normalize_structure_files(self, files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        seen = set()
+        for item in files or []:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            if not isinstance(path, str) or not path:
+                continue
+            path = path.replace("\\", "/").strip()
+            if not path or path.startswith("/") or path.startswith("\\"):
+                continue
+            if ".." in path.split("/"):
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            purpose = item.get("purpose")
+            normalized.append({"path": path, "purpose": str(purpose or "")})
+        normalized.sort(key=lambda x: x.get("path") or "")
+        validate_paths(normalized)
+        return normalized
+
+    def _build_generate_artifacts(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
+        validated_files = self._normalize_structure_files(files)
+        modules_plan = self._generate_modules_plan(validated_files)
+        self._save_json_artifact("modules", modules_plan)
+
+        module_structs: List[Dict[str, Any]] = []
+        for mod in modules_plan.get("modules", []) or []:
+            mod_name = mod.get("name")
+            if not isinstance(mod_name, str) or not mod_name:
+                continue
+            mod_struct = self._generate_module_structure(mod_name, validated_files)
+            module_structs.append(mod_struct)
+            self._save_json_artifact(f"modules/{mod_name}", mod_struct)
+
+        structure = self._merge_module_structures(module_structs)
+        structure["files"] = self._normalize_structure_files(structure.get("files", []))
+        self._save_json_artifact("structure", structure)
+
+        context_bundle = self._build_context_bundle(modules_plan, structure)
+        parse_json_strict(json.dumps(context_bundle, ensure_ascii=False))
+        self._save_json_artifact("context_bundle", context_bundle)
+
+        contracts_bundle = self._build_interface_contracts(structure)
+        parse_json_strict(json.dumps(contracts_bundle, ensure_ascii=False))
+        self._save_json_artifact("interface_contracts", contracts_bundle)
+
+        return {
+            "modules": modules_plan,
+            "module_structs": module_structs,
+            "structure": structure,
+            "context": context_bundle,
+            "contracts": contracts_bundle,
+        }
 
     def _generate_modules_plan(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
         modules: Dict[str, str] = {}
@@ -427,8 +490,24 @@ class RunWorker(QThread):
             return "handoff"
         return "prev_chain"
 
-    def _generate_full_file(self, client: OpenAIClient, path: str, prev_id: Optional[str], diag_file_ids: List[str]) -> Tuple[str, Optional[str], Optional[str]]:
+    def _generate_full_file(
+        self,
+        client: OpenAIClient,
+        path: str,
+        prev_id: Optional[str],
+        diag_file_ids: List[str],
+        structure_context: Dict[str, Any],
+        context_bundle: Dict[str, Any],
+        contracts_bundle: Dict[str, Any],
+    ) -> Tuple[str, Optional[str], Optional[str]]:
         try:
+            handoff_context = {
+                "file": path,
+                "structure": structure_context,
+                "context_bundle": context_bundle,
+                "interface_contracts": contracts_bundle,
+            }
+            prompt_prefix = "A3 structure handoff context (compact JSON):\n" + json.dumps(handoff_context, ensure_ascii=False)
             content, last_resp = self._gen_file_chunks(
                 client,
                 prev_id=prev_id or "",
@@ -437,18 +516,25 @@ class RunWorker(QThread):
                 action=None,
                 diag_file_ids=diag_file_ids,
                 tools=self._fs_tools,
+                prompt_prefix=prompt_prefix,
             )
             return content, last_resp, None
         except Exception as e:
             return "", None, str(e)
 
-    def _generate_full_files_parallel(self, client: OpenAIClient, files: List[Dict[str, Any]], diag_file_ids: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    def _generate_full_files_parallel(
+        self,
+        client: OpenAIClient,
+        files: List[Dict[str, Any]],
+        diag_file_ids: List[str],
+        structure: Dict[str, Any],
+        context_bundle: Dict[str, Any],
+        contracts_bundle: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
         results: List[Dict[str, Any]] = []
         errors: List[str] = []
         if not files:
             return results, errors
-        import concurrent.futures
-
         max_workers = min(6, len(files))
         self._log_debug(f"A3 parallel workers: {max_workers}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -458,7 +544,15 @@ class RunWorker(QThread):
                 if not isinstance(path, str) or not path:
                     continue
                 self._log_debug(f"A3_FILE_START {path}")
-                fut = ex.submit(self._generate_full_file, client, path, None, diag_file_ids)
+                module_name = (path.split("/", 1)[0] if "/" in path else "")
+                structure_context = {
+                    "entry": {"path": path, "purpose": f.get("purpose", "")},
+                    "module": module_name,
+                    "module_files": [
+                        item for item in (structure.get("files", []) or []) if isinstance(item, dict) and str(item.get("path", "")).startswith(f"{module_name}/")
+                    ],
+                }
+                fut = ex.submit(self._generate_full_file, client, path, None, diag_file_ids, structure_context, context_bundle, contracts_bundle)
                 fut_map[fut] = f
             for fut in concurrent.futures.as_completed(fut_map):
                 spec = fut_map[fut]
@@ -1346,7 +1440,6 @@ class RunWorker(QThread):
         files: List[Dict[str, Any]] = []
         missing_images: List[str] = []
         auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
-        module_structs: List[Dict[str, Any]] = []
         modules_plan: Dict[str, Any] = {}
         structure_artifact: Dict[str, Any] = {}
         context_bundle: Dict[str, Any] = {}
@@ -1366,7 +1459,8 @@ class RunWorker(QThread):
             except Exception:
                 pass
 
-            files_raw = struct.get("files", []) or []
+            files_raw = self._normalize_structure_files(struct.get("files", []) or [])
+            struct["files"] = files_raw
             for f in files_raw:
                 self._check_stop()
                 path = f.get("path")
@@ -1385,23 +1479,11 @@ class RunWorker(QThread):
                     continue
                 files.append(f)
 
-            # A2 hierarchical artifacts
-            modules_plan = self._generate_modules_plan(files)
-            modules_path = self._save_json_artifact("modules", modules_plan)
-            for mod in modules_plan.get("modules", []):
-                mod_name = mod.get("name")
-                if not mod_name:
-                    continue
-                mod_struct = self._generate_module_structure(mod_name, files)
-                module_structs.append(mod_struct)
-                self._save_json_artifact(f"modules/{mod_name}", mod_struct)
-            structure_artifact = self._merge_module_structures(module_structs)
-            self._save_json_artifact("structure", structure_artifact)
-            context_bundle = self._build_context_bundle(modules_plan, structure_artifact)
-            self._save_json_artifact("context_bundle", context_bundle)
-            contracts_bundle = self._build_interface_contracts(structure_artifact)
-            self._save_json_artifact("interface_contracts", contracts_bundle)
-            handoff_mode = "handoff"
+            artifacts = self._build_generate_artifacts(files)
+            modules_plan = artifacts["modules"]
+            structure_artifact = artifacts["structure"]
+            context_bundle = artifacts["context"]
+            contracts_bundle = artifacts["contracts"]
         else:
             self._set(10, 0, "A1: PLAN request...")
             a1_schema = (
@@ -1525,7 +1607,8 @@ class RunWorker(QThread):
             except Exception:
                 pass
 
-            files_raw = struct.get("files", []) or []
+            files_raw = self._normalize_structure_files(struct.get("files", []) or [])
+            struct["files"] = files_raw
             for f in files_raw:
                 self._check_stop()
                 path = f.get("path")
@@ -1544,12 +1627,33 @@ class RunWorker(QThread):
                     continue
                 files.append(f)
 
+            artifacts = self._build_generate_artifacts(files)
+            modules_plan = artifacts["modules"]
+            structure_artifact = artifacts["structure"]
+            context_bundle = artifacts["context"]
+            contracts_bundle = artifacts["contracts"]
+
+        artifacts_loaded = self._load_a3_handoff_artifacts()
+        handoff_mode = self._choose_a3_generation_mode(artifacts_loaded)
+        if handoff_mode == "handoff":
+            structure_artifact = artifacts_loaded.get("structure", structure_artifact)
+            context_bundle = artifacts_loaded.get("context", context_bundle)
+            contracts_bundle = artifacts_loaded.get("contracts", contracts_bundle)
+
         total_files = len(files)
         chain_prev_id = str(resp2_id or "")
         out_files: List[Dict[str, Any]] = []
         if handoff_mode == "handoff":
+            chain_prev_id = ""
             self._log_debug("A3 using structure handoff")
-            out_files, errors = self._generate_full_files_parallel(client, files, diag_file_ids)
+            out_files, errors = self._generate_full_files_parallel(
+                client,
+                files,
+                diag_file_ids,
+                structure_artifact,
+                context_bundle,
+                contracts_bundle,
+            )
             for err in errors:
                 self._log_debug(f"A3 error: {err}")
         else:
@@ -2060,6 +2164,7 @@ class RunWorker(QThread):
         action: Optional[str],
         diag_file_ids: List[str],
         tools: Optional[List[Dict[str, Any]]] = None,
+        prompt_prefix: str = "",
     ) -> Tuple[str, str]:
         if contract == "A3_FILE":
             schema = '{"contract":"A3_FILE","path":"string","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string"}'
@@ -2085,6 +2190,8 @@ class RunWorker(QThread):
                 prompt = f"Vrať obsah souboru PATH={path}. Pokud je dlouhý, vrať chunk CHUNK_INDEX={chunk_index}."
             else:
                 prompt = f"Vrať výsledný obsah souboru PATH={path} ACTION={action}. Pokud je dlouhý, vrať chunk CHUNK_INDEX={chunk_index}."
+            if prompt_prefix:
+                prompt = f"{prompt_prefix}\n\n{prompt}"
             prompt = self._append_io_reference(prompt, gen_ref_files)
             prompt = self._with_diag_text(prompt)
 
