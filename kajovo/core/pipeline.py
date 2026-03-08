@@ -431,26 +431,95 @@ class RunWorker(QThread):
     def _infer_type_name(self, file_path: str) -> str:
         stem = os.path.splitext(os.path.basename(file_path))[0]
         tokens = self._tokens_from_text(stem)
-        suffixes = {"model", "schema", "dto", "entity", "type", "types", "request", "response", "payload"}
+        suffixes = {
+            "model",
+            "schema",
+            "dto",
+            "entity",
+            "type",
+            "types",
+            "request",
+            "response",
+            "payload",
+            "service",
+            "controller",
+            "handler",
+            "repository",
+            "repo",
+            "api",
+        }
         while len(tokens) > 1 and tokens[-1] in suffixes:
             tokens.pop()
         base = "_".join(tokens) if tokens else stem
         return self._pascalize(base)
 
+    @staticmethod
+    def _singularize(token: str) -> str:
+        value = str(token or "").strip().lower()
+        if len(value) > 3 and value.endswith("ies"):
+            return value[:-3] + "y"
+        if len(value) > 2 and value.endswith("s") and not value.endswith("ss"):
+            return value[:-1]
+        return value
+
+    def _infer_primary_domain(self, path: str, purpose: str, fallback: str) -> str:
+        stop = {
+            "api", "services", "service", "controller", "controllers", "model", "models", "schema", "schemas",
+            "handler", "handlers", "repo", "repository", "repositories", "core", "app", "ui", "tests", "src",
+            "crud", "http", "rest", "endpoint", "endpoints", "module", "utils", "util", "helper", "helpers",
+            "request", "response", "payload", "entity", "entities", "type", "types", "domain", "operations",
+        }
+        candidates = self._tokens_from_text(path) + self._tokens_from_text(purpose)
+        for token in candidates:
+            singular = self._singularize(token)
+            if singular and singular not in stop and len(singular) >= 3:
+                return self._pascalize(singular)
+        return fallback or "Domain"
+
+    def _infer_type_candidates(self, path: str, purpose: str, role: str, type_name: str) -> List[Dict[str, str]]:
+        tokens = set(self._tokens_from_text(path) + self._tokens_from_text(purpose))
+        candidates: List[Dict[str, str]] = []
+        if role in {"model", "schema"}:
+            candidates.append({"name": type_name, "from": path, "kind": role})
+        if role in {"service", "repository", "controller", "handler"}:
+            if tokens.intersection({"request", "input", "command", "create", "update"}):
+                candidates.append({"name": f"{type_name}Request", "from": path, "kind": "request"})
+            if tokens.intersection({"response", "output", "view", "present", "api", "controller"}):
+                candidates.append({"name": f"{type_name}Response", "from": path, "kind": "response"})
+            if tokens.intersection({"search", "query", "filter", "list"}):
+                candidates.append({"name": f"{type_name}Query", "from": path, "kind": "query"})
+            if tokens.intersection({"auth", "login", "session", "token"}):
+                candidates.append({"name": "AuthContext", "from": path, "kind": "auth"})
+        return candidates
+
     def _infer_interface_methods(self, role: str, path: str, purpose: str) -> List[str]:
         tokens = set(self._tokens_from_text(path) + self._tokens_from_text(purpose))
+        domain = self._infer_primary_domain(path, purpose, self._infer_type_name(path)).lower()
+        plural_domain = f"{domain}s" if domain and not domain.endswith("s") else domain
         methods: List[str] = []
         if role in {"service", "repository"}:
-            methods.extend(["create", "get", "list", "update", "delete"])
+            methods.extend([
+                f"create_{domain}",
+                f"get_{domain}",
+                f"list_{plural_domain}",
+                f"update_{domain}",
+                f"delete_{domain}",
+            ])
             if tokens.intersection({"search", "query", "filter"}):
-                methods.append("search")
+                methods.append(f"search_{plural_domain}")
             if tokens.intersection({"auth", "login", "session", "token"}):
-                methods.extend(["login", "logout"])
+                methods.extend(["authenticate", "issue_token", "revoke_token"])
         elif role == "controller":
-            methods.extend(["handle_get", "handle_list", "handle_create", "handle_update", "handle_delete"])
+            methods.extend([
+                f"get_{domain}",
+                f"list_{plural_domain}",
+                f"create_{domain}",
+                f"update_{domain}",
+                f"delete_{domain}",
+            ])
         elif role == "handler":
-            methods.extend(["handle"])
-            if tokens.intersection({"event", "message", "job"}):
+            methods.extend(["handle", "validate_input", "map_result"])
+            if tokens.intersection({"event", "message", "job", "queue"}):
                 methods.append("dispatch")
         elif role == "module":
             methods.extend(["run"])
@@ -458,7 +527,7 @@ class RunWorker(QThread):
         deduped: List[str] = []
         seen = set()
         for method in methods:
-            if method not in seen:
+            if method and method not in seen:
                 seen.add(method)
                 deduped.append(method)
         return deduped
@@ -471,6 +540,7 @@ class RunWorker(QThread):
         shared_types: List[Dict[str, str]] = []
         public_interfaces: List[Dict[str, Any]] = []
         seen_types = set()
+        seen_interfaces = set()
 
         for item in sorted(files, key=lambda row: str(row.get("path") or "")):
             path = str(item.get("path") or "").strip()
@@ -478,27 +548,41 @@ class RunWorker(QThread):
             if not path:
                 continue
             role = self._infer_file_role(path, purpose)
-            type_name = self._infer_type_name(path)
+            type_name = self._infer_primary_domain(path, purpose, self._infer_type_name(path))
 
-            if role in {"model", "schema"} and type_name not in seen_types:
-                seen_types.add(type_name)
-                shared_types.append({"name": type_name, "from": path, "kind": role})
+            for inferred_type in self._infer_type_candidates(path, purpose, role, type_name):
+                type_key = (inferred_type.get("name"), inferred_type.get("kind"))
+                if type_key in seen_types:
+                    continue
+                seen_types.add(type_key)
+                shared_types.append(inferred_type)
 
             if role in {"service", "repository", "controller", "handler"}:
-                suffix = "Controller" if role == "controller" else role.title()
+                suffix = {
+                    "service": "Service",
+                    "repository": "Repository",
+                    "controller": "Controller",
+                    "handler": "Handler",
+                }.get(role, "Interface")
                 iface_name = f"{type_name}{suffix}"
+                interface_key = (iface_name, path)
+                if interface_key in seen_interfaces:
+                    continue
+                seen_interfaces.add(interface_key)
                 public_interfaces.append(
                     {
                         "name": iface_name,
                         "file": path,
                         "role": role,
+                        "methods": self._infer_interface_methods(role, path, purpose),
                     }
                 )
 
         coding_rules = [
             "Return complete files only (no diffs or patches).",
-            "Preserve consistent naming and imports across modules.",
-            "Reuse inferred shared types and public interfaces where relevant.",
+            "Preserve stable imports, module boundaries, and naming conventions.",
+            "Use shared/domain types from context_bundle and keep interfaces consistent.",
+            "Implement concise docstrings and validations for public entry points.",
         ]
         return {
             "project_summary": summary,
@@ -522,19 +606,26 @@ class RunWorker(QThread):
                 continue
 
             role = self._infer_file_role(path, purpose)
-            type_name = self._infer_type_name(path)
+            type_name = self._infer_primary_domain(path, purpose, self._infer_type_name(path))
 
-            if role in {"model", "schema"} and type_name not in seen_types:
-                seen_types.add(type_name)
-                inferred_types.append({"name": type_name, "from": path, "kind": role})
+            for inferred_type in self._infer_type_candidates(path, purpose, role, type_name):
+                type_key = (inferred_type.get("name"), inferred_type.get("kind"))
+                if type_key in seen_types:
+                    continue
+                seen_types.add(type_key)
+                inferred_types.append(inferred_type)
+
+            if role in {"model", "schema", "other"}:
+                continue
 
             class_suffix = {
                 "service": "Service",
                 "repository": "Repository",
                 "controller": "Controller",
                 "handler": "Handler",
-                "schema": "Schema",
-                "model": "Model",
+                "module": "Module",
+                "utility": "Utility",
+                "config": "Config",
             }.get(role, "Module")
             class_name = f"{type_name}{class_suffix}"
             methods = self._infer_interface_methods(role, path, purpose)
