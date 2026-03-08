@@ -61,6 +61,7 @@ from ..core.secret_store import get_secret
 
 from ..core.model_capabilities import ModelCapabilitiesCache, ModelProbeWorker, ModelCapabilities
 from ..core.contracts import parse_json_strict, extract_text_from_response
+from ..core.model_filter import filter_models_for_generate
 
 from .filepanel import FilesPanel
 from .vectorstores_panel import VectorStoresPanel
@@ -74,17 +75,6 @@ from .theme import DARK_STYLESHEET
 from .widgets import BusyPopup, style_progress_bar
 
 EXPECTED_REPAIR_README = "readmerepair.txt"
-
-
-def filter_models_for_generate(models, caps_cache) -> list:
-    """Return models allowed for overrides in GENERATE; filters explicit prev_id rejection."""
-    out = []
-    for mid in models:
-        caps = caps_cache.get(mid) if hasattr(caps_cache, "get") else None
-        if caps and hasattr(caps, "supports_previous_response_id") and caps.supports_previous_response_id is False:
-            continue
-        out.append(mid)
-    return out
 
 
 def _caps_prev_id_explicitly_unsupported(caps: Optional[ModelCapabilities]) -> bool:
