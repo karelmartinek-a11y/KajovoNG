@@ -88,6 +88,7 @@ def _caps_prev_id_explicitly_unsupported(caps: Optional[ModelCapabilities]) -> b
 
 class MainWindow(QMainWindow):
     LOG_TABLE_MAX_ROWS = 600
+    GENERATE_MODEL_MAIN_OPTION = "Main model (RUN)"
     def __init__(self, settings: AppSettings):
         super().__init__()
         self.app_title = "Kájovo NG v2.0"
@@ -280,9 +281,30 @@ class MainWindow(QMainWindow):
         self.btn_models.clicked.connect(self._refresh_models_best_effort)
 
         row += 1
+        top.addWidget(QLabel("Generate steps"), row, 0)
+        self.row_generate_models = QWidget()
+        gen_row = QHBoxLayout(self.row_generate_models)
+        gen_row.setContentsMargins(0, 0, 0, 0)
+        gen_row.setSpacing(8)
+        gen_row.addWidget(QLabel("A1"))
+        self.cb_model_a1 = QComboBox()
+        self.cb_model_a1.setMinimumWidth(180)
+        gen_row.addWidget(self.cb_model_a1)
+        gen_row.addWidget(QLabel("A2"))
+        self.cb_model_a2 = QComboBox()
+        self.cb_model_a2.setMinimumWidth(180)
+        gen_row.addWidget(self.cb_model_a2)
+        gen_row.addWidget(QLabel("A3"))
+        self.cb_model_a3 = QComboBox()
+        self.cb_model_a3.setMinimumWidth(180)
+        gen_row.addWidget(self.cb_model_a3)
+        gen_row.addStretch(1)
+        top.addWidget(self.row_generate_models, row, 1, 1, 4)
+
+        row += 1
         top.addWidget(QLabel("Model filter"), row, 0)
         self.ed_model_filter = QLineEdit()
-        self.ed_model_filter.setPlaceholderText("Fulltext filter modelů")
+        self.ed_model_filter.setPlaceholderText("Fulltext filter modelu")
         self.ed_model_filter.textChanged.connect(self._apply_model_filter)
         top.addWidget(self.ed_model_filter, row, 1, 1, 4)
 
@@ -462,6 +484,7 @@ class MainWindow(QMainWindow):
 
         # reactions
         self.cb_model.currentTextChanged.connect(self.on_model_changed)
+        self._refresh_generate_model_overrides()
         self._apply_saved_ssh()
 
     def _relocate_legacy_logs_and_milestones(self):
@@ -536,6 +559,49 @@ class MainWindow(QMainWindow):
         if self.all_models:
             return list(self.all_models)
         return [self.cb_model.itemText(i) for i in range(self.cb_model.count())]
+
+    def _generate_override_models(self) -> List[str]:
+        models = list(self.all_models) if self.all_models else self._current_model_list()
+        seen = set()
+        out: List[str] = []
+        for model in models:
+            model_id = str(model or "").strip()
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            out.append(model_id)
+        return out
+
+    def _get_generate_model_override(self, combo: QComboBox) -> str:
+        selected = str(combo.currentText() or "").strip()
+        if selected == self.GENERATE_MODEL_MAIN_OPTION:
+            return ""
+        return selected
+
+    def _set_generate_model_override(self, combo: QComboBox, model_id: str) -> None:
+        target = str(model_id or "").strip()
+        if not target:
+            combo.setCurrentText(self.GENERATE_MODEL_MAIN_OPTION)
+            return
+        idx = combo.findText(target)
+        if idx < 0:
+            combo.addItem(target)
+            idx = combo.findText(target)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _refresh_generate_model_overrides(self) -> None:
+        if not hasattr(self, "cb_model_a1"):
+            return
+        options = [self.GENERATE_MODEL_MAIN_OPTION] + self._generate_override_models()
+        combos = [self.cb_model_a1, self.cb_model_a2, self.cb_model_a3]
+        selected = [self._get_generate_model_override(cb) for cb in combos]
+        for combo, keep in zip(combos, selected):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(options)
+            self._set_generate_model_override(combo, keep)
+            combo.blockSignals(False)
 
     def refresh_run_cascades(self):
         try:
@@ -986,6 +1052,9 @@ class MainWindow(QMainWindow):
             "mode": self.cb_mode.currentText(),
             "send_as_c": bool(self.chk_send_as_c.isChecked()),
             "model": self.cb_model.currentText(),
+            "model_a1": self._get_generate_model_override(self.cb_model_a1),
+            "model_a2": self._get_generate_model_override(self.cb_model_a2),
+            "model_a3": self._get_generate_model_override(self.cb_model_a3),
             "model_filter": self.ed_model_filter.text(),
             "response_id": self.ed_response_id.text(),
             "prompt": self.txt_prompt.toPlainText(),
@@ -1057,6 +1126,9 @@ class MainWindow(QMainWindow):
             idx = self.cb_model.findText(model)
             if idx >= 0:
                 self.cb_model.setCurrentIndex(idx)
+        self._set_generate_model_override(self.cb_model_a1, str(state.get("model_a1", "") or ""))
+        self._set_generate_model_override(self.cb_model_a2, str(state.get("model_a2", "") or ""))
+        self._set_generate_model_override(self.cb_model_a3, str(state.get("model_a3", "") or ""))
         self.ed_response_id.setText(state.get("response_id", ""))
         self.txt_prompt.setPlainText(state.get("prompt", ""))
         self.ed_in.setText(state.get("in_dir", ""))
@@ -1138,6 +1210,9 @@ class MainWindow(QMainWindow):
                 self.cb_model.setCurrentIndex(idx)
             else:
                 self.cb_model.setCurrentIndex(0)
+        self._set_generate_model_override(self.cb_model_a1, "")
+        self._set_generate_model_override(self.cb_model_a2, "")
+        self._set_generate_model_override(self.cb_model_a3, "")
         self.ed_model_filter.clear()
         self.ed_response_id.clear()
         self.txt_prompt.clear()
@@ -1330,10 +1405,11 @@ class MainWindow(QMainWindow):
                 state = json.load(f)
         except Exception:
             return None
-        resp = state.get("last_structure_response_id")
+        # ReRun should continue from the latest successful step, not always from A2/B2.
+        resp = state.get("last_response_id")
         if resp:
             return str(resp)
-        resp = state.get("last_response_id")
+        resp = state.get("last_structure_response_id")
         if resp:
             return str(resp)
         return None
@@ -1823,6 +1899,7 @@ class MainWindow(QMainWindow):
         self.cb_model.blockSignals(False)
         if self.cb_model.count() > 0:
             self.on_model_changed(self.cb_model.currentText())
+        self._refresh_generate_model_overrides()
         try:
             if hasattr(self, "cascade_panel"):
                 self.cascade_panel.refresh_models()
@@ -1949,6 +2026,7 @@ class MainWindow(QMainWindow):
             idx = self.cb_model.findText(model_id)
         if idx >= 0:
             self.cb_model.setCurrentIndex(idx)
+        self._refresh_generate_model_overrides()
 
     # ---------- model caps UX ----------
     def on_model_changed(self, model_id: str):
@@ -2048,13 +2126,18 @@ class MainWindow(QMainWindow):
     def on_mode_changed(self, mode: str):
         is_qfile = mode == "QFILE"
         is_cascade = mode == "KASKADA"
+        is_generate = mode == "GENERATE"
         self.chk_send_as_c.setEnabled((not is_qfile) and (not is_cascade))
         if is_qfile:
             self.chk_send_as_c.setChecked(False)
         if is_cascade:
             self.chk_send_as_c.setChecked(False)
         self.ed_response_id.setEnabled(not is_cascade)
-        self.row_cascade_selector.setVisible(is_cascade)
+        if hasattr(self, "row_cascade_selector"):
+            self.row_cascade_selector.setVisible(is_cascade)
+        if hasattr(self, "row_generate_models"):
+            self.row_generate_models.setVisible(is_generate)
+            self.row_generate_models.setEnabled(is_generate)
         if is_cascade:
             self.refresh_run_cascades()
 
@@ -2199,6 +2282,9 @@ class MainWindow(QMainWindow):
             mode=mode,
             send_as_c=send_as_c,
             model=model_id,
+            model_a1=self._get_generate_model_override(self.cb_model_a1),
+            model_a2=self._get_generate_model_override(self.cb_model_a2),
+            model_a3=self._get_generate_model_override(self.cb_model_a3),
             response_id=self.ed_response_id.text().strip(),
             attached_file_ids=attached_file_ids,
             input_file_ids=input_file_ids,

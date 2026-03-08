@@ -20,6 +20,16 @@ from .receipt import Receipt, ReceiptDB
 from .retry import CircuitBreaker, with_retry
 from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code
 
+SUPPORTED_INPUT_FILE_EXTS = {
+    ".art", ".bat", ".brf", ".c", ".cls", ".css", ".csv", ".diff", ".doc", ".docx", ".dot", ".eml", ".es",
+    ".h", ".hs", ".htm", ".html", ".hwp", ".hwpx", ".ics", ".ifb", ".java", ".js", ".json", ".keynote",
+    ".ksh", ".ltx", ".mail", ".markdown", ".md", ".mht", ".mhtml", ".mjs", ".nws", ".odt", ".pages", ".patch",
+    ".pdf", ".pl", ".pm", ".pot", ".ppa", ".pps", ".ppt", ".pptx", ".pwz", ".py", ".rst", ".rtf", ".scala",
+    ".sh", ".shtml", ".srt", ".sty", ".tex", ".text", ".txt", ".vcf", ".vtt", ".wiz",
+    ".xla", ".xlb", ".xlc", ".xlm", ".xls", ".xlsx", ".xlt", ".xlw", ".xml", ".yaml", ".yml",
+}
+SUPPORTED_INPUT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
 
 def split_text(text: str, max_chars: int) -> List[str]:
     if not text:
@@ -42,6 +52,9 @@ class UiRunConfig:
     mode: str  # GENERATE|MODIFY|QA|QFILE
     send_as_c: bool
     model: str
+    model_a1: str
+    model_a2: str
+    model_a3: str
     response_id: str
     attached_file_ids: List[str]
     input_file_ids: List[str]
@@ -110,6 +123,8 @@ class RunWorker(QThread):
         self._diag_vector_store_ids: List[str] = []
         self._diag_text: str = ""
         self._diag_zip_path: str = ""
+        self._input_kind_cache: Dict[str, str] = {}
+        self._file_name_cache: Dict[str, str] = {}
 
     def _ts(self) -> str:
         return time.strftime("%Y%m%d %H%M%S")
@@ -160,12 +175,14 @@ class RunWorker(QThread):
         stage: str,
         ref_file_ids: List[str],
         input_file_ids: List[str],
+        input_image_ids: List[str],
         vector_store_ids: List[str],
         tools: Optional[List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
         ts = self._ts()
         ref_ids = [fid for fid in (ref_file_ids or []) if fid]
         input_ids = [fid for fid in (input_file_ids or []) if fid]
+        image_ids = [fid for fid in (input_image_ids or []) if fid]
         vs_ids = [vid for vid in (vector_store_ids or []) if vid]
         tool_types = [t.get("type") for t in (tools or []) if isinstance(t, dict)]
         return {
@@ -173,6 +190,7 @@ class RunWorker(QThread):
             "stage": stage,
             "file_ids": ref_ids,
             "input_file_ids": input_ids,
+            "input_image_ids": image_ids,
             "vector_store_ids": vs_ids,
             "tool_types": tool_types,
             "use_file_search": bool(self.cfg.use_file_search),
@@ -188,23 +206,78 @@ class RunWorker(QThread):
             pass
         return list(self.cfg.attached_file_ids or [])
 
+    def _generate_model(self, step: str) -> str:
+        default_model = str(self.cfg.model or "").strip()
+        key = str(step or "").strip().upper()
+        if key == "A1":
+            chosen = str(getattr(self.cfg, "model_a1", "") or "").strip()
+        elif key == "A2":
+            chosen = str(getattr(self.cfg, "model_a2", "") or "").strip()
+        elif key == "A3":
+            chosen = str(getattr(self.cfg, "model_a3", "") or "").strip()
+        else:
+            chosen = ""
+        return chosen or default_model
+
+    def _remember_file_name(self, file_id: str, name: str) -> None:
+        fid = str(file_id or "").strip()
+        if not fid:
+            return
+        filename = str(name or "").strip()
+        if filename:
+            self._file_name_cache[fid] = filename
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in SUPPORTED_INPUT_IMAGE_EXTS:
+            self._input_kind_cache[fid] = "input_image"
+        elif ext in SUPPORTED_INPUT_FILE_EXTS:
+            self._input_kind_cache[fid] = "input_file"
+        else:
+            self._input_kind_cache[fid] = "unsupported"
+
+    def _classify_input_kind(self, client: OpenAIClient, file_id: str) -> str:
+        fid = str(file_id or "").strip()
+        if not fid:
+            return "unsupported"
+        cached = self._input_kind_cache.get(fid)
+        if cached:
+            return cached
+        filename = self._file_name_cache.get(fid, "")
+        if filename:
+            self._remember_file_name(fid, filename)
+            return self._input_kind_cache.get(fid, "unsupported")
+        try:
+            meta = with_retry(lambda f=fid: client.retrieve_file(f), self.settings.retry, self.breaker)
+            filename = str(meta.get("filename") or "").strip()
+            self._remember_file_name(fid, filename)
+        except Exception as e:
+            self._input_kind_cache[fid] = "unsupported"
+            self._log_debug(f"input-kind lookup failed for {fid}; skipping from input ({e})")
+            return "unsupported"
+        kind = self._input_kind_cache.get(fid, "unsupported")
+        if kind == "unsupported":
+            shown = filename or "(unknown filename)"
+            self._log_debug(f"Unsupported input attachment type for {fid} ({shown}); keeping only reference.")
+        return kind
+
     def _log_request_attachments(
         self,
         stage: str,
         ref_file_ids: List[str],
         input_file_ids: List[str],
+        input_image_ids: List[str],
         vector_store_ids: List[str],
         tools: Optional[List[Dict[str, Any]]],
     ) -> None:
-        snapshot = self._attachments_snapshot(stage, ref_file_ids, input_file_ids, vector_store_ids, tools)
+        snapshot = self._attachments_snapshot(stage, ref_file_ids, input_file_ids, input_image_ids, vector_store_ids, tools)
         try:
             self.log.event("request.attachments", snapshot)
         except Exception:
             pass
-        if snapshot.get("file_ids") or snapshot.get("input_file_ids") or snapshot.get("vector_store_ids") or snapshot.get("tool_types"):
+        if snapshot.get("file_ids") or snapshot.get("input_file_ids") or snapshot.get("input_image_ids") or snapshot.get("vector_store_ids") or snapshot.get("tool_types"):
             self._log_debug(
                 f"{stage}: attachments files={len(snapshot.get('file_ids') or [])} input_files={len(snapshot.get('input_file_ids') or [])} "
-                f"vector_stores={len(snapshot.get('vector_store_ids') or [])} tools={','.join(snapshot.get('tool_types') or []) or 'none'}"
+                f"input_images={len(snapshot.get('input_image_ids') or [])} vector_stores={len(snapshot.get('vector_store_ids') or [])} "
+                f"tools={','.join(snapshot.get('tool_types') or []) or 'none'}"
             )
 
     def request_stop(self):
@@ -268,7 +341,7 @@ class RunWorker(QThread):
                     self._fs_tools = [{"type": "file_search", "vector_store_ids": uniq}]
             try:
                 all_file_ids = list(self.cfg.attached_file_ids or [])
-                input_file_ids = self._input_file_ids()
+                input_file_ids, input_image_ids = self._build_input_attachments(client, self._input_file_ids())
                 zip_supported = bool(self._diag_zip_path and self._is_supported_input_file(self._diag_zip_path))
                 supports_input_file = bool(self.cfg.model_caps.get("supports_input_file", True))
                 supports_vector_store = bool(self.cfg.model_caps.get("supports_vector_store", False))
@@ -277,6 +350,7 @@ class RunWorker(QThread):
                     {
                         "file_ids": all_file_ids,
                         "input_file_ids": list(input_file_ids),
+                        "input_image_ids": list(input_image_ids),
                         "vector_store_ids": list(self._vector_store_ids or []),
                         "use_file_search": bool(self.cfg.use_file_search),
                         "supports_file_search": bool(self.cfg.model_caps.get("supports_file_search", False)),
@@ -346,27 +420,39 @@ class RunWorker(QThread):
                 self.finished_err.emit(msg)
 
     # ---------- payload helpers ----------
-    def _input_parts(self, text: str, file_ids: List[str]) -> List[Dict[str, Any]]:
-        """Build Responses API input using message/content with input_text + optional input_file parts."""
+    def _input_parts(self, text: str, file_ids: List[str], image_file_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Build Responses API input using message/content with input_text + optional input_file/input_image parts."""
         chunks = split_text(text, max_chars=20_000)
         if not chunks:
             chunks = [""]
         parts: List[Dict[str, Any]] = []
+        image_ids = [fid for fid in (image_file_ids or []) if fid]
         for i, ch in enumerate(chunks):
             content: List[Dict[str, Any]] = [{"type": "input_text", "text": ch}]
             if i == 0 and file_ids:
                 for fid in file_ids:
                     content.append({"type": "input_file", "file_id": fid})
+            if i == 0 and image_ids:
+                for fid in image_ids:
+                    content.append({"type": "input_image", "file_id": fid})
             parts.append({"type": "message", "role": "user", "content": content})
         return parts
 
-    def _payload_base(self, model: str, instructions: str, input_parts: List[Dict[str, Any]], prev_id: Optional[str]) -> Dict[str, Any]:
+    def _payload_base(
+        self,
+        model: str,
+        instructions: str,
+        input_parts: List[Dict[str, Any]],
+        prev_id: Optional[str],
+        supports_temperature: Optional[bool] = None,
+    ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": model,
             "instructions": instructions,
             "input": input_parts,
         }
-        if self.cfg.model_caps.get("supports_temperature", True):
+        can_send_temperature = self.cfg.model_caps.get("supports_temperature", True) if supports_temperature is None else bool(supports_temperature)
+        if can_send_temperature:
             payload["temperature"] = float(self.cfg.temperature)
         if prev_id:
             payload["previous_response_id"] = prev_id
@@ -518,6 +604,7 @@ class RunWorker(QThread):
                 self._log_debug("Diagnostics IN: upload JSON to Files API...")
                 up = with_retry(lambda p=json_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
                 diag_file_ids.append(up["id"])
+                self._remember_file_name(up["id"], os.path.basename(json_path))
                 self.log.event("upload.diagnostics", {"local": json_path, "file_id": up["id"], "purpose": "user_data", "bytes": os.path.getsize(json_path)})
             except Exception as e:
                 try:
@@ -553,6 +640,7 @@ class RunWorker(QThread):
         zip_path = self._zip_in_dir(in_dir)
         up = with_retry(lambda: client.upload_file(zip_path, purpose="user_data"), self.settings.retry, self.breaker)
         file_id = up["id"]
+        self._remember_file_name(file_id, os.path.basename(zip_path))
         info: Dict[str, Any] = {"zip_path": zip_path, "file_id": file_id, "vector_store_id": None}
         try:
             self.log.event("upload.in_dir", {"zip": zip_path, "file_id": file_id, "bytes": os.path.getsize(zip_path)})
@@ -593,15 +681,8 @@ class RunWorker(QThread):
         return ids
 
     def _is_supported_input_file(self, path: str) -> bool:
-        allowed = {
-            ".art", ".bat", ".brf", ".c", ".cls", ".css", ".diff", ".eml", ".es", ".h", ".hs",
-            ".htm", ".html", ".ics", ".ifb", ".java", ".js", ".json", ".ksh", ".ltx", ".mail",
-            ".markdown", ".md", ".mht", ".mhtml", ".mjs", ".nws", ".patch", ".pdf", ".pl", ".pm",
-            ".pot", ".py", ".rst", ".scala", ".sh", ".shtml", ".srt", ".sty", ".tex", ".text",
-            ".txt", ".vcf", ".vtt", ".xml", ".yaml", ".yml"
-        }
         ext = os.path.splitext(path or "")[1].lower()
-        return bool(ext and ext in allowed)
+        return bool(ext and ext in SUPPORTED_INPUT_FILE_EXTS)
 
     def _input_files_with_in_dir(self, file_ids: List[str]) -> List[str]:
         ids = list(file_ids or [])
@@ -620,8 +701,22 @@ class RunWorker(QThread):
                 self._log_debug("IN: ZIP není podporovaný input_file; přeskočeno v input.")
         return ids
 
-    def _build_input_file_ids(self, base_ids: List[str]) -> List[str]:
-        return self._input_files_with_in_dir(base_ids)
+    def _build_input_attachments(self, client: OpenAIClient, base_ids: List[str]) -> Tuple[List[str], List[str]]:
+        candidate_ids = self._input_files_with_in_dir(base_ids)
+        file_ids: List[str] = []
+        image_ids: List[str] = []
+        seen: set = set()
+        for fid in candidate_ids:
+            fid_s = str(fid or "").strip()
+            if not fid_s or fid_s in seen:
+                continue
+            seen.add(fid_s)
+            kind = self._classify_input_kind(client, fid_s)
+            if kind == "input_image":
+                image_ids.append(fid_s)
+            elif kind == "input_file":
+                file_ids.append(fid_s)
+        return file_ids, image_ids
 
     def _io_reference_note(self, file_ids: List[str]) -> str:
         ids = [fid for fid in (file_ids or []) if fid]
@@ -631,7 +726,7 @@ class RunWorker(QThread):
         parts: List[str] = ["DATA REFERENCE:"]
         if ids:
             parts.append(f"Files API file_id: {', '.join(ids)}")
-            parts.append("Pokud model podporuje input_file, pouzij tyto file_id jako input_file.")
+            parts.append("Pouzij soubory v inputu automaticky podle typu a podporovaneho formatu: dokumenty jako input_file, obrazky (napr. PNG/JPG/WEBP/GIF) jako input_image.")
         if vs_ids:
             parts.append(f"Vector store id: {', '.join(vs_ids)}")
             parts.append("Pokud model podporuje file_search, pouzij file_search nad uvedenymi vector store.")
@@ -913,6 +1008,11 @@ class RunWorker(QThread):
         # Resume path: skip A1/A2 if structure is already known (ReRun)
         plan = {}
         resp2 = None
+        a1_model = self._generate_model("A1")
+        a2_model = self._generate_model("A2")
+        a3_model = self._generate_model("A3")
+        files: List[Dict[str, Any]] = []
+        auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
         if self.cfg.resume_files:
             self._set(10, 0, "ReRun: using existing A2 structure, skipping A1/A2")
             struct = {"contract": "A2_STRUCTURE", "files": self.cfg.resume_files}
@@ -926,6 +1026,24 @@ class RunWorker(QThread):
                 )
             except Exception:
                 pass
+
+            files_raw = struct.get("files", []) or []
+            for f in files_raw:
+                self._check_stop()
+                path = f.get("path")
+                if not isinstance(path, str) or not path:
+                    continue
+                ext = os.path.splitext(path)[1].lower()
+                if ext in auto_skip_image_exts:
+                    self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
+                    continue
+                if ext in (self.cfg.skip_exts or []):
+                    self._log_debug(f"A3: skipping due to extension {ext} ({path})")
+                    continue
+                if path in (self.cfg.skip_paths or []):
+                    self._log_debug(f"A3: skipping already completed {path}")
+                    continue
+                files.append(f)
         else:
             self._set(10, 0, "A1: PLAN request...")
             a1_schema = (
@@ -946,20 +1064,21 @@ class RunWorker(QThread):
             if note:
                 a1_text = f"{a1_text}\n\n{note}"
             a1_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-            a1_input_files = self._build_input_file_ids(self._input_file_ids())
+            a1_input_files, a1_input_images = self._build_input_attachments(client, self._input_file_ids())
             a1_text = self._append_io_reference(a1_text, a1_ref_files)
             a1_text = self._with_diag_text(a1_text)
             instructions = self._append_io_reference_instructions(instructions, a1_ref_files)
             payload = self._payload_base(
-                model=self.cfg.model,
+                model=a1_model,
                 instructions=instructions,
-                input_parts=self._input_parts(a1_text, a1_input_files),
+                input_parts=self._input_parts(a1_text, a1_input_files, a1_input_images),
                 prev_id=base_prev_id,
+                supports_temperature=(a1_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
             )
             if self._fs_tools:
                 payload["tools"] = self._fs_tools
                 self._used_file_search = True
-            self._log_request_attachments("A1", a1_ref_files, a1_input_files, self._vector_store_ids, self._fs_tools)
+            self._log_request_attachments("A1", a1_ref_files, a1_input_files, a1_input_images, self._vector_store_ids, self._fs_tools)
             self._log_api_action(
                 "A1",
                 "prepare",
@@ -974,10 +1093,10 @@ class RunWorker(QThread):
                 {
                     "payload": payload,
                     "ui_state": self.cfg.__dict__,
-                    "attachments": self._attachments_snapshot("A1", a1_ref_files, a1_input_files, self._vector_store_ids, self._fs_tools),
+                    "attachments": self._attachments_snapshot("A1", a1_ref_files, a1_input_files, a1_input_images, self._vector_store_ids, self._fs_tools),
                 },
             )
-            self._log_api_action("A1", "send", {"contract": "A1_PLAN", "stage": "PLAN", "model": self.cfg.model})
+            self._log_api_action("A1", "send", {"contract": "A1_PLAN", "stage": "PLAN", "model": a1_model})
             resp1 = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
             self.log.save_json("responses", f"A1_response_{resp1.get('id','NOID')}_{ts_code()}", resp1)
             self._log_api_action("A1", "receive", {"response_id": resp1.get("id"), "status": resp1.get("status"), "contract": "A1_PLAN"})
@@ -994,23 +1113,25 @@ class RunWorker(QThread):
                 f"KONTRAKT A2_STRUCTURE: {a2_schema}"
             )
             a2_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-            a2_input_files = self._build_input_file_ids(self._input_file_ids())
+            a2_input_files, a2_input_images = self._build_input_attachments(client, self._input_file_ids())
             instructions2 = self._append_io_reference_instructions(instructions2, a2_ref_files)
             a2_text = self._append_io_reference("Vygeneruj strukturu souborů podle A1 plánu.", a2_ref_files)
             a2_text = self._with_diag_text(a2_text)
             payload2 = self._payload_base(
-                model=self.cfg.model,
+                model=a2_model,
                 instructions=instructions2,
                 input_parts=self._input_parts(
                     a2_text,
                     a2_input_files,
+                    a2_input_images,
                 ),
                 prev_id=resp1_id,
+                supports_temperature=(a2_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
             )
             if self._fs_tools:
                 payload2["tools"] = self._fs_tools
                 self._used_file_search = True
-            self._log_request_attachments("A2", a2_ref_files, a2_input_files, self._vector_store_ids, self._fs_tools)
+            self._log_request_attachments("A2", a2_ref_files, a2_input_files, a2_input_images, self._vector_store_ids, self._fs_tools)
             self._log_api_action(
                 "A2",
                 "prepare",
@@ -1024,10 +1145,10 @@ class RunWorker(QThread):
                 {
                     "payload": payload2,
                     "ui_state": self.cfg.__dict__,
-                    "attachments": self._attachments_snapshot("A2", a2_ref_files, a2_input_files, self._vector_store_ids, self._fs_tools),
+                    "attachments": self._attachments_snapshot("A2", a2_ref_files, a2_input_files, a2_input_images, self._vector_store_ids, self._fs_tools),
                 },
             )
-            self._log_api_action("A2", "send", {"contract": "A2_STRUCTURE", "stage": "STRUCTURE", "model": self.cfg.model})
+            self._log_api_action("A2", "send", {"contract": "A2_STRUCTURE", "stage": "STRUCTURE", "model": a2_model})
             resp2 = with_retry(lambda: client.create_response(payload2), self.settings.retry, self.breaker)
             self.log.save_json("responses", f"A2_response_{resp2.get('id','NOID')}_{ts_code()}", resp2)
             self._log_api_action("A2", "receive", {"response_id": resp2.get("id"), "status": resp2.get("status"), "contract": "A2_STRUCTURE"})
@@ -1047,13 +1168,15 @@ class RunWorker(QThread):
                 pass
 
             files_raw = struct.get("files", []) or []
-            files = []
             for f in files_raw:
                 self._check_stop()
                 path = f.get("path")
                 if not isinstance(path, str) or not path:
                     continue
                 ext = os.path.splitext(path)[1].lower()
+                if ext in auto_skip_image_exts:
+                    self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
+                    continue
                 if ext in (self.cfg.skip_exts or []):
                     self._log_debug(f"A3: skipping due to extension {ext} ({path})")
                     continue
@@ -1063,6 +1186,7 @@ class RunWorker(QThread):
                 files.append(f)
 
         total_files = len(files)
+        chain_prev_id = str(resp2_id or "")
         out_files: List[Dict[str, Any]] = []
         for idx, f in enumerate(files, start=1):
             self._check_stop()
@@ -1070,15 +1194,18 @@ class RunWorker(QThread):
             # file-level progress (N of total)
             self.subprogress.emit(int(idx * 100 / max(1, total_files)))
             self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: FILE {path} ({idx}/{total_files})")
-            content = self._gen_file_chunks(
+            content, last_resp_id = self._gen_file_chunks(
                 client,
-                prev_id=resp2_id,
+                prev_id=chain_prev_id,
                 contract="A3_FILE",
                 path=path,
                 action=None,
                 diag_file_ids=diag_file_ids,
                 tools=self._fs_tools,
+                model_override=a3_model,
             )
+            if last_resp_id:
+                chain_prev_id = last_resp_id
             out_files.append({"path": path, "content": content, "purpose": f.get("purpose", "")})
 
         saved_map = self._save_out_files(out_files)
@@ -1108,6 +1235,7 @@ class RunWorker(QThread):
 
         mf_up = with_retry(lambda: client.upload_file(manifest_path, purpose="user_data"), self.settings.retry, self.breaker)
         manifest_file_id = mf_up["id"]
+        self._remember_file_name(manifest_file_id, os.path.basename(manifest_path))
         self._log_debug(f"Mirror manifest uploaded: {manifest_file_id}")
 
         uploaded: List[Tuple[str, str]] = []
@@ -1118,6 +1246,7 @@ class RunWorker(QThread):
             self._log_debug(f"Upload mirror file: {it.rel_path}")
             up = with_retry(lambda p=it.abs_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
             uploaded.append((it.rel_path, up["id"]))
+            self._remember_file_name(up["id"], os.path.basename(it.abs_path))
             try:
                 self.log.event("upload.mirror", {"path": it.rel_path, "abs": it.abs_path, "file_id": up["id"], "bytes": it.size})
             except Exception:
@@ -1200,7 +1329,9 @@ class RunWorker(QThread):
         if note:
             b1_text = f"{b1_text}\n\n{note}"
         b1_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids + [manifest_file_id] + [fid for _, fid in uploaded])
-        b1_input_files = self._build_input_file_ids(self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded])
+        b1_input_files, b1_input_images = self._build_input_attachments(
+            client, self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded]
+        )
         b1_text = self._append_io_reference(b1_text, b1_ref_files)
         b1_text = self._with_diag_text(b1_text)
         instructions1 = self._append_io_reference_instructions(instructions1, b1_ref_files)
@@ -1210,13 +1341,14 @@ class RunWorker(QThread):
             input_parts=self._input_parts(
                 b1_text,
                 b1_input_files,
+                b1_input_images,
             ),
             prev_id=base_prev_id,
         )
         if supports_fs and tools:
             payload1["tools"] = tools
             self._used_file_search = True
-        self._log_request_attachments("B1", b1_ref_files, b1_input_files, vs_ids, tools)
+        self._log_request_attachments("B1", b1_ref_files, b1_input_files, b1_input_images, vs_ids, tools)
 
         self.log.save_json(
             "requests",
@@ -1226,7 +1358,7 @@ class RunWorker(QThread):
                 "ui_state": self.cfg.__dict__,
                 "supports_file_search": supports_fs,
                 "vector_store_ids": vs_ids,
-                "attachments": self._attachments_snapshot("B1", b1_ref_files, b1_input_files, vs_ids, tools),
+                "attachments": self._attachments_snapshot("B1", b1_ref_files, b1_input_files, b1_input_images, vs_ids, tools),
             },
         )
         self._log_api_action("B1", "send", {"contract": "B1_PLAN", "model": self.cfg.model})
@@ -1246,7 +1378,9 @@ class RunWorker(QThread):
             f"KONTRAKT B2_STRUCTURE: {b2_schema}"
         )
         b2_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids + [manifest_file_id] + [fid for _, fid in uploaded])
-        b2_input_files = self._build_input_file_ids(self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded])
+        b2_input_files, b2_input_images = self._build_input_attachments(
+            client, self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded]
+        )
         instructions2 = self._append_io_reference_instructions(instructions2, b2_ref_files)
         b2_text = self._append_io_reference("Vrať seznam touched_files pro implementaci B3.", b2_ref_files)
         b2_text = self._with_diag_text(b2_text)
@@ -1256,13 +1390,14 @@ class RunWorker(QThread):
             input_parts=self._input_parts(
                 b2_text,
                 b2_input_files,
+                b2_input_images,
             ),
             prev_id=resp1_id,
         )
         if supports_fs and tools:
             payload2["tools"] = tools
             self._used_file_search = True
-        self._log_request_attachments("B2", b2_ref_files, b2_input_files, vs_ids, tools)
+        self._log_request_attachments("B2", b2_ref_files, b2_input_files, b2_input_images, vs_ids, tools)
 
         self.log.save_json(
             "requests",
@@ -1270,7 +1405,7 @@ class RunWorker(QThread):
             {
                 "payload": payload2,
                 "ui_state": self.cfg.__dict__,
-                "attachments": self._attachments_snapshot("B2", b2_ref_files, b2_input_files, vs_ids, tools),
+                "attachments": self._attachments_snapshot("B2", b2_ref_files, b2_input_files, b2_input_images, vs_ids, tools),
             },
         )
         self._log_api_action("B2", "send", {"contract": "B2_STRUCTURE", "model": self.cfg.model})
@@ -1299,6 +1434,7 @@ class RunWorker(QThread):
             touched.append(tf)
 
         total_files = len(touched)
+        chain_prev_id = str(resp2_id or "")
         out_files: List[Dict[str, Any]] = []
         for i, tf in enumerate(touched, start=1):
             self._check_stop()
@@ -1307,9 +1443,17 @@ class RunWorker(QThread):
             # file-level progress (N of total)
             self.subprogress.emit(int(i * 100 / max(1, total_files)))
             self._set(50 + int(35 * (i - 1) / max(1, len(touched))), 0, f"B3: {action} {path} ({i}/{total_files})")
-            content = self._gen_file_chunks(
-                client, prev_id=resp2_id, contract="B3_FILE", path=path, action=action, diag_file_ids=diag_file_ids, tools=tools if supports_fs else None
+            content, last_resp_id = self._gen_file_chunks(
+                client,
+                prev_id=chain_prev_id,
+                contract="B3_FILE",
+                path=path,
+                action=action,
+                diag_file_ids=diag_file_ids,
+                tools=tools if supports_fs else None,
             )
+            if last_resp_id:
+                chain_prev_id = last_resp_id
             out_files.append({"path": path, "content": content})
 
         saved_map = self._save_out_files(out_files)
@@ -1328,10 +1472,10 @@ class RunWorker(QThread):
         if qa_note not in input_text:
             input_text = f"{input_text}\n\n{qa_note}"
         ref_file_ids = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-        input_file_ids = self._build_input_file_ids(self._input_file_ids())
+        input_file_ids, input_image_ids = self._build_input_attachments(client, self._input_file_ids())
         input_text = self._append_io_reference(input_text, ref_file_ids)
         input_text = self._with_diag_text(input_text)
-        input_parts = self._input_parts(input_text, input_file_ids)
+        input_parts = self._input_parts(input_text, input_file_ids, input_image_ids)
         payload = self._payload_base(
             model=self.cfg.model,
             instructions=self._append_io_reference_instructions(
@@ -1344,7 +1488,7 @@ class RunWorker(QThread):
         if self._fs_tools:
             payload["tools"] = self._fs_tools
             self._used_file_search = True
-        self._log_request_attachments("QA", ref_file_ids, input_file_ids, self._vector_store_ids, self._fs_tools)
+        self._log_request_attachments("QA", ref_file_ids, input_file_ids, input_image_ids, self._vector_store_ids, self._fs_tools)
         self._log_api_action(
             "QA",
             "prepare",
@@ -1359,7 +1503,7 @@ class RunWorker(QThread):
             {
                 "payload": payload,
                 "ui_state": self.cfg.__dict__,
-                "attachments": self._attachments_snapshot("QA", ref_file_ids, input_file_ids, self._vector_store_ids, self._fs_tools),
+                "attachments": self._attachments_snapshot("QA", ref_file_ids, input_file_ids, input_image_ids, self._vector_store_ids, self._fs_tools),
             },
         )
         self._log_api_action("QA", "send", {"description": "QA request", "model": self.cfg.model})
@@ -1380,7 +1524,7 @@ class RunWorker(QThread):
         if note:
             prompt = f"{prompt}\n\n{note}"
         qfile_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-        qfile_input_files = self._build_input_file_ids(self._input_file_ids())
+        qfile_input_files, qfile_input_images = self._build_input_attachments(client, self._input_file_ids())
         prompt = self._append_io_reference(prompt, qfile_ref_files)
         prompt = self._with_diag_text(prompt)
 
@@ -1391,7 +1535,6 @@ class RunWorker(QThread):
             f"CHUNK: max 500 řádků. KONTRAKT: {schema}"
         )
         gen_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-        gen_input_files = self._build_input_file_ids(self._input_file_ids())
         instructions = self._append_io_reference_instructions(instructions, gen_ref_files)
         instructions = self._append_io_reference_instructions(instructions, qfile_ref_files)
         input_text = (
@@ -1403,7 +1546,7 @@ class RunWorker(QThread):
         payload = self._payload_base(
             model=self.cfg.model,
             instructions=instructions,
-            input_parts=self._input_parts(input_text, qfile_input_files),
+            input_parts=self._input_parts(input_text, qfile_input_files, qfile_input_images),
             prev_id=base_prev_id,
         )
 
@@ -1412,7 +1555,7 @@ class RunWorker(QThread):
         if self._fs_tools:
             payload["tools"] = self._fs_tools
             self._used_file_search = True
-        self._log_request_attachments("QFILE", qfile_ref_files, qfile_input_files, self._vector_store_ids, self._fs_tools)
+        self._log_request_attachments("QFILE", qfile_ref_files, qfile_input_files, qfile_input_images, self._vector_store_ids, self._fs_tools)
 
         self.log.save_json(
             "requests",
@@ -1420,7 +1563,7 @@ class RunWorker(QThread):
             {
                 "payload": payload,
                 "ui_state": self.cfg.__dict__,
-                "attachments": self._attachments_snapshot("QFILE", qfile_ref_files, qfile_input_files, self._vector_store_ids, self._fs_tools),
+                "attachments": self._attachments_snapshot("QFILE", qfile_ref_files, qfile_input_files, qfile_input_images, self._vector_store_ids, self._fs_tools),
             },
         )
         self._log_api_action(
@@ -1476,7 +1619,7 @@ class RunWorker(QThread):
         if note:
             prompt_text = f"{prompt_text}\n\n{note}"
         c_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-        c_input_files = self._build_input_file_ids(self._input_file_ids())
+        c_input_files, c_input_images = self._build_input_attachments(client, self._input_file_ids())
         prompt_text = self._append_io_reference(prompt_text, c_ref_files)
         prompt_text = self._with_diag_text(prompt_text)
         instructions = self._append_io_reference_instructions(instructions, c_ref_files)
@@ -1484,11 +1627,11 @@ class RunWorker(QThread):
         body: Dict[str, Any] = {
             "model": self.cfg.model,
             "instructions": instructions,
-            "input": self._input_parts(prompt_text, c_input_files),
+            "input": self._input_parts(prompt_text, c_input_files, c_input_images),
         }
         if self.cfg.model_caps.get("supports_temperature", True):
             body["temperature"] = float(self.cfg.temperature)
-        self._log_request_attachments("C", c_ref_files, c_input_files, self._vector_store_ids, None)
+        self._log_request_attachments("C", c_ref_files, c_input_files, c_input_images, self._vector_store_ids, None)
         self._log_api_action(
             "C",
             "prepare",
@@ -1503,7 +1646,7 @@ class RunWorker(QThread):
             "method": "POST",
             "url": "/v1/responses",
             "body": body,
-            "attachments": self._attachments_snapshot("C", c_ref_files, c_input_files, self._vector_store_ids, None),
+            "attachments": self._attachments_snapshot("C", c_ref_files, c_input_files, c_input_images, self._vector_store_ids, None),
         }
 
         jsonl_path = os.path.join(self.log.paths.requests_dir, f"C_batch_{ts_code()}.jsonl")
@@ -1544,7 +1687,8 @@ class RunWorker(QThread):
         action: Optional[str],
         diag_file_ids: List[str],
         tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> str:
+        model_override: Optional[str] = None,
+    ) -> Tuple[str, str]:
         if contract == "A3_FILE":
             schema = '{"contract":"A3_FILE","path":"string","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string"}'
         else:
@@ -1555,11 +1699,13 @@ class RunWorker(QThread):
             f"CHUNK: max 500 řádků. KONTRAKT: {schema}"
         )
         gen_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-        gen_input_files = self._build_input_file_ids(self._input_file_ids())
+        gen_input_files, gen_input_images = self._build_input_attachments(client, self._input_file_ids())
         instructions = self._append_io_reference_instructions(instructions, gen_ref_files)
 
         chunk_index = 0
         parts: List[str] = []
+        latest_response_id = str(prev_id or "")
+        step_model = str(model_override or self.cfg.model or "").strip()
         while True:
             self._check_stop()
             if contract == "A3_FILE":
@@ -1570,14 +1716,15 @@ class RunWorker(QThread):
             prompt = self._with_diag_text(prompt)
 
             payload = self._payload_base(
-                model=self.cfg.model,
+                model=step_model,
                 instructions=instructions,
-                input_parts=self._input_parts(prompt, gen_input_files),
+                input_parts=self._input_parts(prompt, gen_input_files, gen_input_images),
                 prev_id=prev_id,
+                supports_temperature=(step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
             )
 
             # deterministic file output
-            if self.cfg.model_caps.get("supports_temperature", True):
+            if step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True):
                 payload["temperature"] = 0.0
 
             if tools:
@@ -1588,7 +1735,7 @@ class RunWorker(QThread):
                     if isinstance(t, dict) and t.get("type") == "file_search":
                         vs_ids = list(t.get("vector_store_ids") or [])
                         break
-            self._log_request_attachments(contract, gen_ref_files, gen_input_files, vs_ids, tools)
+            self._log_request_attachments(contract, gen_ref_files, gen_input_files, gen_input_images, vs_ids, tools)
 
             self.log.save_json(
                 "requests",
@@ -1596,7 +1743,7 @@ class RunWorker(QThread):
                 {
                     "payload": payload,
                     "ui_state": self.cfg.__dict__,
-                    "attachments": self._attachments_snapshot(contract, gen_ref_files, gen_input_files, vs_ids, tools),
+                    "attachments": self._attachments_snapshot(contract, gen_ref_files, gen_input_files, gen_input_images, vs_ids, tools),
                 },
             )
             self._log_api_action(
@@ -1653,6 +1800,9 @@ class RunWorker(QThread):
             parts.append(parsed.get("content", ""))
             ch = parsed.get("chunking", {}) or {}
             resp_id = str(resp.get("id") or "")
+            if resp_id:
+                latest_response_id = resp_id
+                prev_id = resp_id
             self._log_api_action(
                 f"{contract}:{path}",
                 "complete",
@@ -1669,4 +1819,4 @@ class RunWorker(QThread):
             if chunk_index > 5000:
                 raise ContractError("Chunk loop guard")
 
-        return "".join(parts)
+        return "".join(parts), latest_response_id
