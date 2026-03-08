@@ -1,0 +1,23 @@
+{
+  "project_summary": "artifact-project",
+  "modules": [
+    {
+      "name": "models",
+      "purpose": "module scaffold"
+    },
+    {
+      "name": "services",
+      "purpose": "module scaffold"
+    }
+  ],
+  "shared_types": [],
+  "public_interfaces": [],
+  "coding_rules": [
+    "Return complete files, no diffs.",
+    "Keep code consistent across modules."
+  ],
+  "files": [
+    "models/user.py",
+    "services/user_service.py"
+  ]
+}
