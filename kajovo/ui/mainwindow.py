@@ -76,6 +76,17 @@ from .widgets import BusyPopup, style_progress_bar
 EXPECTED_REPAIR_README = "readmerepair.txt"
 
 
+def filter_models_for_generate(models, caps_cache) -> list:
+    """Return models allowed for overrides in GENERATE; filters explicit prev_id rejection."""
+    out = []
+    for mid in models:
+        caps = caps_cache.get(mid) if hasattr(caps_cache, "get") else None
+        if caps and hasattr(caps, "supports_previous_response_id") and caps.supports_previous_response_id is False:
+            continue
+        out.append(mid)
+    return out
+
+
 def _caps_prev_id_explicitly_unsupported(caps: Optional[ModelCapabilities]) -> bool:
     if not caps:
         return False
@@ -596,13 +607,7 @@ class MainWindow(QMainWindow):
             return
         models = self._generate_override_models()
         if self.cb_mode.currentText() == "GENERATE":
-            filtered = []
-            for mid in models:
-                caps = self.caps_cache.get(mid) if hasattr(self, "caps_cache") else None
-                if caps and hasattr(caps, "supports_previous_response_id") and caps.supports_previous_response_id is False:
-                    continue
-                filtered.append(mid)
-            models = filtered
+            models = filter_models_for_generate(models, self.caps_cache)
         options = [self.GENERATE_MODEL_MAIN_OPTION] + models
         combos = [self.cb_model_a1, self.cb_model_a2, self.cb_model_a3]
         selected = [self._get_generate_model_override(cb) for cb in combos]

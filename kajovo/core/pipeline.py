@@ -230,12 +230,16 @@ class RunWorker(QThread):
     ) -> Dict[str, Any]:
         ts = self._ts()
         caps = self._caps_for_step(stage)
+        if not isinstance(caps, dict):
+            if hasattr(caps, "to_dict"):
+                caps = caps.to_dict()
+            else:
+                caps = {}
         ref_ids = [fid for fid in (ref_file_ids or []) if fid]
         input_ids = [fid for fid in (input_file_ids or []) if fid]
         image_ids = [fid for fid in (input_image_ids or []) if fid]
         vs_ids = [vid for vid in (vector_store_ids or []) if vid]
         tool_types = [t.get("type") for t in (tools or []) if isinstance(t, dict)]
-        caps = self.cfg.caps_for_stage(stage)
         return {
             "ts": ts,
             "stage": stage,
@@ -293,6 +297,19 @@ class RunWorker(QThread):
             pass
         return {}
 
+    def _dedupe_files(self, files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out = []
+        seen = set()
+        for f in files:
+            path = f.get("path")
+            if not isinstance(path, str) or not path:
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            out.append(f)
+        return out
+
     def _request_model_fields(self) -> Dict[str, Any]:
         return {
             "model_default": self.cfg.model_default,
@@ -311,6 +328,153 @@ class RunWorker(QThread):
         state["model"] = self.cfg.model_default
         state["model_caps"] = self.cfg.model_caps_default.to_dict()
         return state
+
+    # ---------- artifact helpers ----------
+    def _save_json_artifact(self, name: str, payload: Any) -> str:
+        path = self.log.save_json("responses", name, payload)
+        return path
+
+    def _load_json_artifact(self, path: str) -> Optional[Dict[str, Any]]:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def _generate_modules_plan(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
+        modules: Dict[str, str] = {}
+        for f in files:
+            p = f.get("path") or ""
+            if not isinstance(p, str) or not p:
+                continue
+            parts = p.split("/")
+            if not parts:
+                continue
+            mod = parts[0]
+            if mod and mod not in modules:
+                modules[mod] = "module scaffold"
+        return {"modules": [{"name": k, "purpose": v} for k, v in sorted(modules.items())]}
+
+    def _generate_module_structure(self, module: str, files: List[Dict[str, Any]]) -> Dict[str, Any]:
+        mod_files = []
+        for f in files:
+            p = f.get("path") or ""
+            if not isinstance(p, str):
+                continue
+            if not p.startswith(f"{module}/"):
+                continue
+            mod_files.append({"path": p, "purpose": f.get("purpose", "")})
+        mod_files = self._dedupe_files(mod_files)
+        return {"module": module, "files": mod_files}
+
+    def _merge_module_structures(self, module_structs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        merged = []
+        seen = set()
+        for ms in module_structs:
+            for f in ms.get("files", []) or []:
+                path = f.get("path")
+                if not isinstance(path, str) or not path:
+                    continue
+                if path in seen:
+                    continue
+                seen.add(path)
+                merged.append({"path": path, "purpose": f.get("purpose", "")})
+        merged.sort(key=lambda x: x.get("path") or "")
+        return {"files": merged}
+
+    def _build_context_bundle(self, plan: Dict[str, Any], structure: Dict[str, Any]) -> Dict[str, Any]:
+        modules = plan.get("modules") or []
+        files = structure.get("files") or []
+        summary = (self.cfg.project or "").strip() or "Software project"
+        return {
+            "project_summary": summary,
+            "modules": modules,
+            "shared_types": [],
+            "public_interfaces": [],
+            "coding_rules": ["Return complete files, no diffs.", "Keep code consistent across modules."],
+            "files": [f.get("path") for f in files if isinstance(f, dict) and f.get("path")],
+        }
+
+    def _build_interface_contracts(self, structure: Dict[str, Any]) -> Dict[str, Any]:
+        # Placeholder minimal contract list derived from structure paths.
+        contracts = []
+        for f in structure.get("files", []) or []:
+            path = f.get("path")
+            if not isinstance(path, str) or not path.endswith(".py"):
+                continue
+            basename = os.path.basename(path)
+            name, _ = os.path.splitext(basename)
+            contracts.append({"file": path, "class": name.title().replace("_", ""), "methods": []})
+        return {"interfaces": contracts, "types": []}
+
+    def _load_a3_handoff_artifacts(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        paths = {
+            "modules": os.path.join(self.log.paths.responses_dir, "modules.json"),
+            "structure": os.path.join(self.log.paths.responses_dir, "structure.json"),
+            "context": os.path.join(self.log.paths.responses_dir, "context_bundle.json"),
+            "contracts": os.path.join(self.log.paths.responses_dir, "interface_contracts.json"),
+        }
+        for key, p in paths.items():
+            if os.path.isfile(p):
+                obj = self._load_json_artifact(p)
+                if obj is not None:
+                    out[key] = obj
+        return out
+
+    def _choose_a3_generation_mode(self, artifacts: Dict[str, Any]) -> str:
+        if all(k in artifacts for k in ("structure", "context", "contracts")):
+            return "handoff"
+        return "prev_chain"
+
+    def _generate_full_file(self, client: OpenAIClient, path: str, prev_id: Optional[str], diag_file_ids: List[str]) -> Tuple[str, Optional[str], Optional[str]]:
+        try:
+            content, last_resp = self._gen_file_chunks(
+                client,
+                prev_id=prev_id or "",
+                contract="A3_FILE",
+                path=path,
+                action=None,
+                diag_file_ids=diag_file_ids,
+                tools=self._fs_tools,
+            )
+            return content, last_resp, None
+        except Exception as e:
+            return "", None, str(e)
+
+    def _generate_full_files_parallel(self, client: OpenAIClient, files: List[Dict[str, Any]], diag_file_ids: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
+        results: List[Dict[str, Any]] = []
+        errors: List[str] = []
+        if not files:
+            return results, errors
+        import concurrent.futures
+
+        max_workers = min(6, len(files))
+        self._log_debug(f"A3 parallel workers: {max_workers}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+            fut_map = {}
+            for f in files:
+                path = f.get("path")
+                if not isinstance(path, str) or not path:
+                    continue
+                self._log_debug(f"A3_FILE_START {path}")
+                fut = ex.submit(self._generate_full_file, client, path, None, diag_file_ids)
+                fut_map[fut] = f
+            for fut in concurrent.futures.as_completed(fut_map):
+                spec = fut_map[fut]
+                path = spec.get("path")
+                try:
+                    content, last_resp, err = fut.result()
+                    if err:
+                        errors.append(f"{path}: {err}")
+                        self._log_debug(f"A3_FILE_ERROR {path} {err}")
+                    else:
+                        results.append({"path": path, "content": content, "purpose": spec.get("purpose", "")})
+                        self._log_debug(f"A3_FILE_DONE {path}")
+                except Exception as e:
+                    errors.append(f"{path}: {e}")
+                    self._log_debug(f"A3_FILE_ERROR {path} {e}")
+        return results, errors
 
     def _remember_file_name(self, file_id: str, name: str) -> None:
         fid = str(file_id or "").strip()
@@ -1182,6 +1346,12 @@ class RunWorker(QThread):
         files: List[Dict[str, Any]] = []
         missing_images: List[str] = []
         auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
+        module_structs: List[Dict[str, Any]] = []
+        modules_plan: Dict[str, Any] = {}
+        structure_artifact: Dict[str, Any] = {}
+        context_bundle: Dict[str, Any] = {}
+        contracts_bundle: Dict[str, Any] = {}
+        handoff_mode = "prev_chain"
         if self.cfg.resume_files:
             self._set(10, 0, "ReRun: using existing A2 structure, skipping A1/A2")
             struct = {"contract": "A2_STRUCTURE", "files": self.cfg.resume_files}
@@ -1214,6 +1384,24 @@ class RunWorker(QThread):
                     self._log_debug(f"A3: skipping already completed {path}")
                     continue
                 files.append(f)
+
+            # A2 hierarchical artifacts
+            modules_plan = self._generate_modules_plan(files)
+            modules_path = self._save_json_artifact("modules", modules_plan)
+            for mod in modules_plan.get("modules", []):
+                mod_name = mod.get("name")
+                if not mod_name:
+                    continue
+                mod_struct = self._generate_module_structure(mod_name, files)
+                module_structs.append(mod_struct)
+                self._save_json_artifact(f"modules/{mod_name}", mod_struct)
+            structure_artifact = self._merge_module_structures(module_structs)
+            self._save_json_artifact("structure", structure_artifact)
+            context_bundle = self._build_context_bundle(modules_plan, structure_artifact)
+            self._save_json_artifact("context_bundle", context_bundle)
+            contracts_bundle = self._build_interface_contracts(structure_artifact)
+            self._save_json_artifact("interface_contracts", contracts_bundle)
+            handoff_mode = "handoff"
         else:
             self._set(10, 0, "A1: PLAN request...")
             a1_schema = (
@@ -1359,24 +1547,31 @@ class RunWorker(QThread):
         total_files = len(files)
         chain_prev_id = str(resp2_id or "")
         out_files: List[Dict[str, Any]] = []
-        for idx, f in enumerate(files, start=1):
-            self._check_stop()
-            path = f.get("path")
-            # file-level progress (N of total)
-            self.subprogress.emit(int(idx * 100 / max(1, total_files)))
-            self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: FILE {path} ({idx}/{total_files})")
-            content, last_resp_id = self._gen_file_chunks(
-                client,
-                prev_id=chain_prev_id,
-                contract="A3_FILE",
-                path=path,
-                action=None,
-                diag_file_ids=diag_file_ids,
-                tools=self._fs_tools,
-            )
-            if last_resp_id:
-                chain_prev_id = last_resp_id
-            out_files.append({"path": path, "content": content, "purpose": f.get("purpose", "")})
+        if handoff_mode == "handoff":
+            self._log_debug("A3 using structure handoff")
+            out_files, errors = self._generate_full_files_parallel(client, files, diag_file_ids)
+            for err in errors:
+                self._log_debug(f"A3 error: {err}")
+        else:
+            self._log_debug("A3 using previous_response chain")
+            for idx, f in enumerate(files, start=1):
+                self._check_stop()
+                path = f.get("path")
+                # file-level progress (N of total)
+                self.subprogress.emit(int(idx * 100 / max(1, total_files)))
+                self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: FILE {path} ({idx}/{total_files})")
+                content, last_resp_id = self._gen_file_chunks(
+                    client,
+                    prev_id=chain_prev_id,
+                    contract="A3_FILE",
+                    path=path,
+                    action=None,
+                    diag_file_ids=diag_file_ids,
+                    tools=self._fs_tools,
+                )
+                if last_resp_id:
+                    chain_prev_id = last_resp_id
+                out_files.append({"path": path, "content": content, "purpose": f.get("purpose", "")})
 
         saved_map = self._save_out_files(out_files)
         if missing_images:
