@@ -331,9 +331,7 @@ class RunWorker(QThread):
     def _save_json_artifact(self, name: str, payload: Any) -> str:
         filename = f"{name}.json" if not str(name).endswith(".json") else str(name)
         path = os.path.join(self.log.paths.responses_dir, filename)
-        ensure_dir(os.path.dirname(path) or self.log.paths.responses_dir)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        self.log.write_artifact(path, payload)
         try:
             self.log.event("file.saved.responses", {"path": path, "bytes": os.path.getsize(path)})
         except Exception:

@@ -113,6 +113,16 @@ class RunLogger:
         with open(self.events_path, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
 
+    def write_artifact(self, path: str, payload: Any) -> None:
+        """Atomically write *payload* to *path* after redacting sensitive fields.
+
+        The caller is responsible for supplying a valid, writable *path*.
+        Unlike :meth:`save_json`, the filename is not sanitised or prefixed;
+        this method simply ensures the write is atomic and that any sensitive
+        fields are redacted before the data is persisted.
+        """
+        self._atomic_write_json(path, self._redact(payload))
+
     def save_json(self, kind: str, name: str, obj: Any) -> str:
         folder = {
             "requests": self.paths.requests_dir,
