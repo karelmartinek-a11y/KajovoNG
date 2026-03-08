@@ -19,6 +19,7 @@ from .pricing_fetcher import PricingFetcher
 from .receipt import Receipt, ReceiptDB
 from .retry import CircuitBreaker, with_retry
 from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code
+from .model_capabilities import ModelCapabilities
 
 SUPPORTED_INPUT_FILE_EXTS = {
     ".art", ".bat", ".brf", ".c", ".cls", ".css", ".csv", ".diff", ".doc", ".docx", ".dot", ".eml", ".es",
@@ -51,10 +52,10 @@ class UiRunConfig:
     prompt: str
     mode: str  # GENERATE|MODIFY|QA|QFILE
     send_as_c: bool
-    model: str
-    model_a1: str
-    model_a2: str
-    model_a3: str
+    model_default: str
+    model_a1: Optional[str]
+    model_a2: Optional[str]
+    model_a3: Optional[str]
     response_id: str
     attached_file_ids: List[str]
     input_file_ids: List[str]
@@ -77,11 +78,53 @@ class UiRunConfig:
     skip_paths: List[str]
     skip_exts: List[str]
 
-    # capabilities snapshot for chosen model (cached probe)
-    model_caps: Dict[str, Any]
+    # capabilities snapshots (cached probe)
+    model_caps_default: ModelCapabilities
+    model_caps_a1: Optional[ModelCapabilities] = None
+    model_caps_a2: Optional[ModelCapabilities] = None
+    model_caps_a3: Optional[ModelCapabilities] = None
     # resume data for rerun (precomputed structure + prev_id)
     resume_files: List[Dict[str, Any]] = None  # type: ignore
     resume_prev_id: Optional[str] = None
+
+    @staticmethod
+    def _stage_key(stage: str) -> str:
+        key = str(stage or "").strip().upper()
+        if ":" in key:
+            key = key.split(":", 1)[0]
+        if "_" in key:
+            key = key.split("_", 1)[0]
+        return key
+
+    def model_for_stage(self, stage: str) -> str:
+        key = self._stage_key(stage)
+        if key.startswith("A1") and self.model_a1:
+            return self.model_a1
+        if key.startswith("A2") and self.model_a2:
+            return self.model_a2
+        if key.startswith("A3") and self.model_a3:
+            return self.model_a3
+        return self.model_default
+
+    def caps_for_stage(self, stage: str) -> ModelCapabilities:
+        key = self._stage_key(stage)
+        if key.startswith("A1") and self.model_caps_a1:
+            return self.model_caps_a1
+        if key.startswith("A2") and self.model_caps_a2:
+            return self.model_caps_a2
+        if key.startswith("A3") and self.model_caps_a3:
+            return self.model_caps_a3
+        return self.model_caps_default
+
+    # Backward-compatible aliases for legacy code paths.
+    @property
+    def model(self) -> str:
+        return self.model_default
+
+    @property
+    def model_caps(self) -> Dict[str, Any]:
+        caps = self.model_caps_default
+        return caps.to_dict() if caps else {}
 
 
 class RunWorker(QThread):
@@ -139,18 +182,24 @@ class RunWorker(QThread):
 
     def _log_api_action(self, stage: str, action: str, details: Optional[Dict[str, Any]] = None) -> None:
         ts = self._ts()
-        parts = [f"{stage}: {action}"]
+        model = self.cfg.model_for_stage(stage)
+        merged: Dict[str, Any] = {}
         if details:
-            for key, value in details.items():
+            merged.update(details)
+        if model and merged.get("model") is None:
+            merged["model"] = model
+        parts = [f"{stage}: {action}"]
+        if merged:
+            for key, value in merged.items():
                 if value is None:
                     continue
                 parts.append(f"{key}={value}")
         line = f"{ts} | " + " | ".join(parts)
         try:
             self.logline.emit(line)
-            event = {"ts": ts, "stage": stage, "action": action}
-            if details:
-                event.update({k: v for k, v in details.items() if v is not None})
+            event = {"ts": ts, "stage": stage, "action": action, "model": model}
+            if merged:
+                event.update({k: v for k, v in merged.items() if v is not None})
             self.log.event("api.trace", event)
             if event.get("response_id"):
                 try:
@@ -158,7 +207,7 @@ class RunWorker(QThread):
                 except Exception:
                     pass
                 patch = {"last_response_id": str(event.get("response_id")), "last_response_stage": stage}
-                contract = event.get("contract") or details.get("contract") if details else None
+                contract = event.get("contract") or merged.get("contract") if merged else None
                 if contract in ("A2_STRUCTURE", "B2_STRUCTURE"):
                     patch["last_structure_response_id"] = str(event.get("response_id"))
                 if contract in ("A1_PLAN", "A2_STRUCTURE", "B1_PLAN", "B2_STRUCTURE"):
@@ -185,6 +234,7 @@ class RunWorker(QThread):
         image_ids = [fid for fid in (input_image_ids or []) if fid]
         vs_ids = [vid for vid in (vector_store_ids or []) if vid]
         tool_types = [t.get("type") for t in (tools or []) if isinstance(t, dict)]
+        caps = self.cfg.caps_for_stage(stage)
         return {
             "ts": ts,
             "stage": stage,
@@ -194,8 +244,8 @@ class RunWorker(QThread):
             "vector_store_ids": vs_ids,
             "tool_types": tool_types,
             "use_file_search": bool(self.cfg.use_file_search),
-            "supports_file_search": bool(self.cfg.model_caps.get("supports_file_search", False)),
-            "supports_vector_store": bool(self.cfg.model_caps.get("supports_vector_store", False)),
+            "supports_file_search": bool(getattr(caps, "supports_file_search", False)),
+            "supports_vector_store": bool(getattr(caps, "supports_vector_store", False)),
         }
 
     def _input_file_ids(self) -> List[str]:
@@ -206,18 +256,24 @@ class RunWorker(QThread):
             pass
         return list(self.cfg.attached_file_ids or [])
 
-    def _generate_model(self, step: str) -> str:
-        default_model = str(self.cfg.model or "").strip()
-        key = str(step or "").strip().upper()
-        if key == "A1":
-            chosen = str(getattr(self.cfg, "model_a1", "") or "").strip()
-        elif key == "A2":
-            chosen = str(getattr(self.cfg, "model_a2", "") or "").strip()
-        elif key == "A3":
-            chosen = str(getattr(self.cfg, "model_a3", "") or "").strip()
-        else:
-            chosen = ""
-        return chosen or default_model
+    def _request_model_fields(self) -> Dict[str, Any]:
+        return {
+            "model_default": self.cfg.model_default,
+            "model_a1": self.cfg.model_a1,
+            "model_a2": self.cfg.model_a2,
+            "model_a3": self.cfg.model_a3,
+        }
+
+    def _ui_state_for_log(self) -> Dict[str, Any]:
+        state = dict(self.cfg.__dict__)
+        for key in ("model_caps_default", "model_caps_a1", "model_caps_a2", "model_caps_a3"):
+            caps = state.get(key)
+            if isinstance(caps, ModelCapabilities):
+                state[key] = caps.to_dict()
+        # backward-compatible aliases for older loaders
+        state["model"] = self.cfg.model_default
+        state["model_caps"] = self.cfg.model_caps_default.to_dict()
+        return state
 
     def _remember_file_name(self, file_id: str, name: str) -> None:
         fid = str(file_id or "").strip()
@@ -305,7 +361,11 @@ class RunWorker(QThread):
                     "started_at": time.time(),
                     "mode": self.cfg.mode,
                     "send_as_c": self.cfg.send_as_c,
-                    "model": self.cfg.model,
+                    "model": self.cfg.model_default,
+                    "model_default": self.cfg.model_default,
+                    "model_a1": self.cfg.model_a1,
+                    "model_a2": self.cfg.model_a2,
+                    "model_a3": self.cfg.model_a3,
                     "out_dir": self.cfg.out_dir,
                 }
             )
@@ -314,9 +374,17 @@ class RunWorker(QThread):
             if self.cfg.mode == "QFILE" and self.cfg.send_as_c:
                 raise RuntimeError("QFILE nepodporuje SEND AS BATCH.")
 
-            # Cascades require previous_response_id; if cache explicitly says it's unsupported, block.
-            if (not self.cfg.send_as_c) and self.cfg.mode in ("GENERATE", "MODIFY") and self.cfg.model_caps.get("supports_previous_response_id") is False:
-                raise RuntimeError("Selected model explicitly rejects previous_response_id (required for cascades).")
+            # Generate cascade requires previous_response_id in A1/A2/A3 chaining.
+            if (not self.cfg.send_as_c) and self.cfg.mode == "GENERATE":
+                for stage in ("A1", "A2", "A3"):
+                    caps = self.cfg.caps_for_stage(stage)
+                    if caps and caps.supports_previous_response_id is False:
+                        raise RuntimeError(f"Model for {stage} does not support previous_response_id")
+            # Modify cascade requires chaining as well (single model path).
+            if (not self.cfg.send_as_c) and self.cfg.mode == "MODIFY":
+                caps = self.cfg.caps_for_stage("B1")
+                if caps and caps.supports_previous_response_id is False:
+                    raise RuntimeError("Model for MODIFY does not support previous_response_id")
 
             diag_file_ids, diag_text = self._maybe_collect_diagnostics(client)
             self._diag_text = diag_text or ""
@@ -440,21 +508,21 @@ class RunWorker(QThread):
 
     def _payload_base(
         self,
-        model: str,
+        stage: str,
         instructions: str,
         input_parts: List[Dict[str, Any]],
         prev_id: Optional[str],
-        supports_temperature: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        model = self.cfg.model_for_stage(stage)
+        caps = self.cfg.caps_for_stage(stage)
         payload: Dict[str, Any] = {
             "model": model,
             "instructions": instructions,
             "input": input_parts,
         }
-        can_send_temperature = self.cfg.model_caps.get("supports_temperature", True) if supports_temperature is None else bool(supports_temperature)
-        if can_send_temperature:
+        if bool(getattr(caps, "supports_temperature", True)):
             payload["temperature"] = float(self.cfg.temperature)
-        if prev_id:
+        if prev_id and bool(getattr(caps, "supports_previous_response_id", True)):
             payload["previous_response_id"] = prev_id
         return payload
 
@@ -851,7 +919,7 @@ class RunWorker(QThread):
             return prev_id
 
         # Must have chaining for ingest
-        if self.cfg.model_caps.get("supports_previous_response_id") is False:
+        if self.cfg.caps_for_stage("A0").supports_previous_response_id is False:
             raise RuntimeError("Long prompt ingest requires previous_response_id (model flagged as unsupported).")
 
         self._set(4, 0, f"A0: ingest long prompt ({len(prompt)} chars) ...")
@@ -870,12 +938,20 @@ class RunWorker(QThread):
                 f"CONTRACT: {schema}"
             )
             payload = self._payload_base(
-                model=self.cfg.model,
+                stage="A0",
                 instructions=instructions,
                 input_parts=self._input_parts(f"PART {i+1}/{part_count}:\n{ch}", []),
                 prev_id=last_id,
             )
-            self.log.save_json("requests", f"A0_ingest_{i}_{ts_code()}", {"payload": payload, "ui_state": self.cfg.__dict__})
+            self.log.save_json(
+                "requests",
+                f"A0_ingest_{i}_{ts_code()}",
+                {
+                    "payload": payload,
+                    "ui_state": self._ui_state_for_log(),
+                    **self._request_model_fields(),
+                },
+            )
             resp = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
             self.log.save_json("responses", f"A0_ingest_resp_{resp.get('id','NOID')}_{i}_{ts_code()}", resp)
 
@@ -946,18 +1022,29 @@ class RunWorker(QThread):
         out = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
         return inp, out, usage
 
-    def _record_receipt(self, resp: Dict[str, Any], mode: str, flow_type: str, response_id: Optional[str] = None, batch_id: Optional[str] = None, is_batch: bool = False):
+    def _record_receipt(
+        self,
+        resp: Dict[str, Any],
+        mode: str,
+        flow_type: str,
+        response_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        is_batch: bool = False,
+        stage: str = "",
+    ):
         inp, out, usage = self._usage_from_resp(resp or {})
-        row = self.price_table.get(self.cfg.model) or PriceTable.builtin_fallback().get(self.cfg.model) or PriceTable.builtin_fallback().get("gpt-4o-mini")
+        model_for_cost = self.cfg.model_for_stage(stage) if stage else self.cfg.model_default
+        row = self.price_table.get(model_for_cost) or PriceTable.builtin_fallback().get(model_for_cost) or PriceTable.builtin_fallback().get("gpt-4o-mini")
         verified = bool(self.price_table.verified and row is not None)
         total, tool_cost, storage_cost = compute_cost(row, inp, out, is_batch=is_batch, use_file_search=self._used_file_search)
         r = Receipt(
             run_id=self.log.run_id,
             created_at=time.time(),
             project=self.cfg.project,
-            model=self.cfg.model,
+            model=model_for_cost,
             mode=mode,
             flow_type=flow_type,
+            stage=stage,
             response_id=response_id,
             batch_id=batch_id,
             input_tokens=inp,
@@ -965,6 +1052,7 @@ class RunWorker(QThread):
             tool_cost=float(tool_cost),
             storage_cost=float(storage_cost),
             total_cost=float(total),
+            cost=float(total),
             pricing_verified=verified,
             notes=(self.cfg.prompt or "")[:4000],
             log_paths={"run_dir": self.log.paths.run_dir},
@@ -978,16 +1066,17 @@ class RunWorker(QThread):
     def _ensure_receipt_on_failure(self, reason: str, flow_type: str):
         if self._has_receipt:
             return
-        row = self.price_table.get(self.cfg.model) or PriceTable.builtin_fallback().get(self.cfg.model) or PriceTable.builtin_fallback().get("gpt-4o-mini")
+        row = self.price_table.get(self.cfg.model_default) or PriceTable.builtin_fallback().get(self.cfg.model_default) or PriceTable.builtin_fallback().get("gpt-4o-mini")
         verified = bool(self.price_table.verified and row is not None)
         total, tool_cost, storage_cost = compute_cost(row, self._total_input_tokens, self._total_output_tokens, is_batch=self.cfg.send_as_c, use_file_search=self._used_file_search)
         r = Receipt(
             run_id=self.log.run_id,
             created_at=time.time(),
             project=self.cfg.project,
-            model=self.cfg.model,
+            model=self.cfg.model_default,
             mode=self.cfg.mode,
             flow_type=flow_type,
+            stage="FAILED",
             response_id=None,
             batch_id=None,
             input_tokens=self._total_input_tokens,
@@ -995,6 +1084,7 @@ class RunWorker(QThread):
             tool_cost=float(tool_cost),
             storage_cost=float(storage_cost),
             total_cost=float(total),
+            cost=float(total),
             pricing_verified=verified,
             notes=f"Fallback receipt ({reason})",
             log_paths={"run_dir": self.log.paths.run_dir},
@@ -1008,9 +1098,8 @@ class RunWorker(QThread):
         # Resume path: skip A1/A2 if structure is already known (ReRun)
         plan = {}
         resp2 = None
-        a1_model = self._generate_model("A1")
-        a2_model = self._generate_model("A2")
-        a3_model = self._generate_model("A3")
+        a1_model = self.cfg.model_for_stage("A1")
+        a2_model = self.cfg.model_for_stage("A2")
         files: List[Dict[str, Any]] = []
         auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
         if self.cfg.resume_files:
@@ -1069,11 +1158,10 @@ class RunWorker(QThread):
             a1_text = self._with_diag_text(a1_text)
             instructions = self._append_io_reference_instructions(instructions, a1_ref_files)
             payload = self._payload_base(
-                model=a1_model,
+                stage="A1",
                 instructions=instructions,
                 input_parts=self._input_parts(a1_text, a1_input_files, a1_input_images),
                 prev_id=base_prev_id,
-                supports_temperature=(a1_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
             )
             if self._fs_tools:
                 payload["tools"] = self._fs_tools
@@ -1092,7 +1180,8 @@ class RunWorker(QThread):
                 f"A1_request_{ts_code()}",
                 {
                     "payload": payload,
-                    "ui_state": self.cfg.__dict__,
+                    "ui_state": self._ui_state_for_log(),
+                    **self._request_model_fields(),
                     "attachments": self._attachments_snapshot("A1", a1_ref_files, a1_input_files, a1_input_images, self._vector_store_ids, self._fs_tools),
                 },
             )
@@ -1118,7 +1207,7 @@ class RunWorker(QThread):
             a2_text = self._append_io_reference("Vygeneruj strukturu souborů podle A1 plánu.", a2_ref_files)
             a2_text = self._with_diag_text(a2_text)
             payload2 = self._payload_base(
-                model=a2_model,
+                stage="A2",
                 instructions=instructions2,
                 input_parts=self._input_parts(
                     a2_text,
@@ -1126,7 +1215,6 @@ class RunWorker(QThread):
                     a2_input_images,
                 ),
                 prev_id=resp1_id,
-                supports_temperature=(a2_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
             )
             if self._fs_tools:
                 payload2["tools"] = self._fs_tools
@@ -1144,7 +1232,8 @@ class RunWorker(QThread):
                 f"A2_request_{ts_code()}",
                 {
                     "payload": payload2,
-                    "ui_state": self.cfg.__dict__,
+                    "ui_state": self._ui_state_for_log(),
+                    **self._request_model_fields(),
                     "attachments": self._attachments_snapshot("A2", a2_ref_files, a2_input_files, a2_input_images, self._vector_store_ids, self._fs_tools),
                 },
             )
@@ -1202,7 +1291,6 @@ class RunWorker(QThread):
                 action=None,
                 diag_file_ids=diag_file_ids,
                 tools=self._fs_tools,
-                model_override=a3_model,
             )
             if last_resp_id:
                 chain_prev_id = last_resp_id
@@ -1210,7 +1298,7 @@ class RunWorker(QThread):
 
         saved_map = self._save_out_files(out_files)
         if resp2 is not None:
-            self._record_receipt(resp2, mode="GENERATE", flow_type="A", response_id=resp2_id)
+            self._record_receipt(resp2, mode="GENERATE", flow_type="A", response_id=resp2_id, stage="A2")
         return {"mode": "GENERATE", "plan": plan, "structure": struct, "saved": saved_map, "response_id": resp2_id}
 
     # ---------- B: MODIFY ----------
@@ -1336,7 +1424,7 @@ class RunWorker(QThread):
         b1_text = self._with_diag_text(b1_text)
         instructions1 = self._append_io_reference_instructions(instructions1, b1_ref_files)
         payload1 = self._payload_base(
-            model=self.cfg.model,
+            stage="B1",
             instructions=instructions1,
             input_parts=self._input_parts(
                 b1_text,
@@ -1355,13 +1443,14 @@ class RunWorker(QThread):
             f"B1_request_{ts_code()}",
             {
                 "payload": payload1,
-                "ui_state": self.cfg.__dict__,
+                "ui_state": self._ui_state_for_log(),
+                **self._request_model_fields(),
                 "supports_file_search": supports_fs,
                 "vector_store_ids": vs_ids,
                 "attachments": self._attachments_snapshot("B1", b1_ref_files, b1_input_files, b1_input_images, vs_ids, tools),
             },
         )
-        self._log_api_action("B1", "send", {"contract": "B1_PLAN", "model": self.cfg.model})
+        self._log_api_action("B1", "send", {"contract": "B1_PLAN"})
         resp1 = with_retry(lambda: client.create_response(payload1), self.settings.retry, self.breaker)
         self.log.save_json("responses", f"B1_response_{resp1.get('id','NOID')}_{ts_code()}", resp1)
         self._log_api_action("B1", "receive", {"response_id": resp1.get("id"), "status": resp1.get("status"), "contract": "B1_PLAN"})
@@ -1385,7 +1474,7 @@ class RunWorker(QThread):
         b2_text = self._append_io_reference("Vrať seznam touched_files pro implementaci B3.", b2_ref_files)
         b2_text = self._with_diag_text(b2_text)
         payload2 = self._payload_base(
-            model=self.cfg.model,
+            stage="B2",
             instructions=instructions2,
             input_parts=self._input_parts(
                 b2_text,
@@ -1404,11 +1493,12 @@ class RunWorker(QThread):
             f"B2_request_{ts_code()}",
             {
                 "payload": payload2,
-                "ui_state": self.cfg.__dict__,
+                "ui_state": self._ui_state_for_log(),
+                **self._request_model_fields(),
                 "attachments": self._attachments_snapshot("B2", b2_ref_files, b2_input_files, b2_input_images, vs_ids, tools),
             },
         )
-        self._log_api_action("B2", "send", {"contract": "B2_STRUCTURE", "model": self.cfg.model})
+        self._log_api_action("B2", "send", {"contract": "B2_STRUCTURE"})
         resp2 = with_retry(lambda: client.create_response(payload2), self.settings.retry, self.breaker)
         self.log.save_json("responses", f"B2_response_{resp2.get('id','NOID')}_{ts_code()}", resp2)
         self._log_api_action("B2", "receive", {"response_id": resp2.get("id"), "status": resp2.get("status"), "contract": "B2_STRUCTURE"})
@@ -1457,7 +1547,7 @@ class RunWorker(QThread):
             out_files.append({"path": path, "content": content})
 
         saved_map = self._save_out_files(out_files)
-        self._record_receipt(resp2, mode="MODIFY", flow_type="B", response_id=resp2_id)
+        self._record_receipt(resp2, mode="MODIFY", flow_type="B", response_id=resp2_id, stage="B2")
         return {"mode": "MODIFY", "plan": plan, "structure": struct, "saved": saved_map, "response_id": resp2_id, "vector_store_id": vs_id, "supports_file_search": supports_fs}
 
     # ---------- QA ----------
@@ -1477,7 +1567,7 @@ class RunWorker(QThread):
         input_text = self._with_diag_text(input_text)
         input_parts = self._input_parts(input_text, input_file_ids, input_image_ids)
         payload = self._payload_base(
-            model=self.cfg.model,
+            stage="QA",
             instructions=self._append_io_reference_instructions(
                 "Jsi QA asistent. Vrat pouze cisty text bez markdownu, bez souboru.",
                 ref_file_ids,
@@ -1502,15 +1592,16 @@ class RunWorker(QThread):
             f"QA_request_{ts_code()}",
             {
                 "payload": payload,
-                "ui_state": self.cfg.__dict__,
+                "ui_state": self._ui_state_for_log(),
+                **self._request_model_fields(),
                 "attachments": self._attachments_snapshot("QA", ref_file_ids, input_file_ids, input_image_ids, self._vector_store_ids, self._fs_tools),
             },
         )
-        self._log_api_action("QA", "send", {"description": "QA request", "model": self.cfg.model})
+        self._log_api_action("QA", "send", {"description": "QA request"})
         resp = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
         self.log.save_json("responses", f"QA_response_{resp.get('id','NOID')}_{ts_code()}", resp)
         self._log_api_action("QA", "receive", {"response_id": resp.get("id"), "status": resp.get("status")})
-        self._record_receipt(resp, mode="QA", flow_type="QA", response_id=str(resp.get("id") or ""))
+        self._record_receipt(resp, mode="QA", flow_type="QA", response_id=str(resp.get("id") or ""), stage="QA")
         return {"mode": "QA", "response_id": str(resp.get("id") or ""), "text": extract_text_from_response(resp)}
 
     # ---------- QFile ----------
@@ -1544,13 +1635,13 @@ class RunWorker(QThread):
             f"Zadání:\n{prompt}"
         )
         payload = self._payload_base(
-            model=self.cfg.model,
+            stage="QFILE",
             instructions=instructions,
             input_parts=self._input_parts(input_text, qfile_input_files, qfile_input_images),
             prev_id=base_prev_id,
         )
 
-        if self.cfg.model_caps.get("supports_temperature", True):
+        if self.cfg.caps_for_stage("QFILE").supports_temperature:
             payload["temperature"] = 0.0
         if self._fs_tools:
             payload["tools"] = self._fs_tools
@@ -1562,7 +1653,8 @@ class RunWorker(QThread):
             f"QFILE_request_{ts_code()}",
             {
                 "payload": payload,
-                "ui_state": self.cfg.__dict__,
+                "ui_state": self._ui_state_for_log(),
+                **self._request_model_fields(),
                 "attachments": self._attachments_snapshot("QFILE", qfile_ref_files, qfile_input_files, qfile_input_images, self._vector_store_ids, self._fs_tools),
             },
         )
@@ -1570,7 +1662,6 @@ class RunWorker(QThread):
             "QFILE",
             "send",
             {
-                "model": self.cfg.model,
                 "prev_id": base_prev_id,
                 "files": len(self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)),
             },
@@ -1595,7 +1686,7 @@ class RunWorker(QThread):
         out_files = [{"path": path, "content": parsed.get("content", ""), "purpose": "QFILE"}]
         self._set(70, 0, f"QFILE: ukládám {path}...")
         saved_map = self._save_out_files(out_files)
-        self._record_receipt(resp, mode="QFILE", flow_type="QFILE", response_id=str(resp.get("id") or ""))
+        self._record_receipt(resp, mode="QFILE", flow_type="QFILE", response_id=str(resp.get("id") or ""), stage="QFILE")
         return {"mode": "QFILE", "response_id": str(resp.get("id") or ""), "saved": saved_map, "contract": parsed, "text": raw_text}
 
     # ---------- C: Batch ----------
@@ -1625,11 +1716,11 @@ class RunWorker(QThread):
         instructions = self._append_io_reference_instructions(instructions, c_ref_files)
 
         body: Dict[str, Any] = {
-            "model": self.cfg.model,
+            "model": self.cfg.model_for_stage("C"),
             "instructions": instructions,
             "input": self._input_parts(prompt_text, c_input_files, c_input_images),
         }
-        if self.cfg.model_caps.get("supports_temperature", True):
+        if self.cfg.caps_for_stage("C").supports_temperature:
             body["temperature"] = float(self.cfg.temperature)
         self._log_request_attachments("C", c_ref_files, c_input_files, c_input_images, self._vector_store_ids, None)
         self._log_api_action(
@@ -1687,7 +1778,6 @@ class RunWorker(QThread):
         action: Optional[str],
         diag_file_ids: List[str],
         tools: Optional[List[Dict[str, Any]]] = None,
-        model_override: Optional[str] = None,
     ) -> Tuple[str, str]:
         if contract == "A3_FILE":
             schema = '{"contract":"A3_FILE","path":"string","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string"}'
@@ -1705,7 +1795,8 @@ class RunWorker(QThread):
         chunk_index = 0
         parts: List[str] = []
         latest_response_id = str(prev_id or "")
-        step_model = str(model_override or self.cfg.model or "").strip()
+        stage = "A3" if contract == "A3_FILE" else "B3"
+        step_caps = self.cfg.caps_for_stage(stage)
         while True:
             self._check_stop()
             if contract == "A3_FILE":
@@ -1716,15 +1807,14 @@ class RunWorker(QThread):
             prompt = self._with_diag_text(prompt)
 
             payload = self._payload_base(
-                model=step_model,
+                stage=stage,
                 instructions=instructions,
                 input_parts=self._input_parts(prompt, gen_input_files, gen_input_images),
                 prev_id=prev_id,
-                supports_temperature=(step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
             )
 
             # deterministic file output
-            if step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True):
+            if step_caps.supports_temperature:
                 payload["temperature"] = 0.0
 
             if tools:
@@ -1742,7 +1832,8 @@ class RunWorker(QThread):
                 f"{contract}_{path.replace('/','_')}_{chunk_index}_{ts_code()}",
                 {
                     "payload": payload,
-                    "ui_state": self.cfg.__dict__,
+                    "ui_state": self._ui_state_for_log(),
+                    **self._request_model_fields(),
                     "attachments": self._attachments_snapshot(contract, gen_ref_files, gen_input_files, gen_input_images, vs_ids, tools),
                 },
             )

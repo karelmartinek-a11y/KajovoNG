@@ -270,9 +270,10 @@ class MainWindow(QMainWindow):
         top.addWidget(self.txt_attached_summary, row, 5, 3, 1)
 
         row += 1
-        top.addWidget(QLabel("Model"), row, 0)
-        self.cb_model = QComboBox()
-        top.addWidget(self.cb_model, row, 1)
+        top.addWidget(QLabel("Model (default)"), row, 0)
+        self.cb_model_default = QComboBox()
+        self.cb_model = self.cb_model_default  # backward-compatible alias
+        top.addWidget(self.cb_model_default, row, 1)
 
         self.btn_models = QPushButton("Refresh models")
         top.addWidget(self.btn_models, row, 2)
@@ -281,20 +282,20 @@ class MainWindow(QMainWindow):
         self.btn_models.clicked.connect(self._refresh_models_best_effort)
 
         row += 1
-        top.addWidget(QLabel("Generate steps"), row, 0)
+        top.addWidget(QLabel("Model overrides"), row, 0)
         self.row_generate_models = QWidget()
         gen_row = QHBoxLayout(self.row_generate_models)
         gen_row.setContentsMargins(0, 0, 0, 0)
         gen_row.setSpacing(8)
-        gen_row.addWidget(QLabel("A1"))
+        gen_row.addWidget(QLabel("Model A1 override"))
         self.cb_model_a1 = QComboBox()
         self.cb_model_a1.setMinimumWidth(180)
         gen_row.addWidget(self.cb_model_a1)
-        gen_row.addWidget(QLabel("A2"))
+        gen_row.addWidget(QLabel("Model A2 override"))
         self.cb_model_a2 = QComboBox()
         self.cb_model_a2.setMinimumWidth(180)
         gen_row.addWidget(self.cb_model_a2)
-        gen_row.addWidget(QLabel("A3"))
+        gen_row.addWidget(QLabel("Model A3 override"))
         self.cb_model_a3 = QComboBox()
         self.cb_model_a3.setMinimumWidth(180)
         gen_row.addWidget(self.cb_model_a3)
@@ -1051,7 +1052,8 @@ class MainWindow(QMainWindow):
             "project": self.ed_project.text(),
             "mode": self.cb_mode.currentText(),
             "send_as_c": bool(self.chk_send_as_c.isChecked()),
-            "model": self.cb_model.currentText(),
+            "model_default": self.cb_model_default.currentText(),
+            "model": self.cb_model_default.currentText(),  # backward-compatible key
             "model_a1": self._get_generate_model_override(self.cb_model_a1),
             "model_a2": self._get_generate_model_override(self.cb_model_a2),
             "model_a3": self._get_generate_model_override(self.cb_model_a3),
@@ -1120,8 +1122,9 @@ class MainWindow(QMainWindow):
         self.ed_model_filter.setText(mf)
         self.ed_model_filter.blockSignals(False)
         # reapply filter with preserved model selection
-        self._apply_model_filter(preserve=state.get("model", None))
-        model = state.get("model", "")
+        preserve_model = state.get("model_default", state.get("model", None))
+        self._apply_model_filter(preserve=preserve_model)
+        model = state.get("model_default", state.get("model", ""))
         if model:
             idx = self.cb_model.findText(model)
             if idx >= 0:
@@ -1349,8 +1352,21 @@ class MainWindow(QMainWindow):
                 try:
                     with open(fp, "r", encoding="utf-8", errors="ignore") as f:
                         raw = json.load(f)
-                    if isinstance(raw, dict) and raw.get("ui_state"):
-                        return raw["ui_state"]
+                    if not isinstance(raw, dict):
+                        continue
+                    if raw.get("ui_state"):
+                        state = raw["ui_state"] if isinstance(raw["ui_state"], dict) else {}
+                        for key in ("model_default", "model_a1", "model_a2", "model_a3"):
+                            if key not in state and key in raw:
+                                state[key] = raw.get(key)
+                        return state
+                    if any(k in raw for k in ("model_default", "model_a1", "model_a2", "model_a3")):
+                        return {
+                            "model_default": raw.get("model_default", raw.get("model", "")),
+                            "model_a1": raw.get("model_a1"),
+                            "model_a2": raw.get("model_a2"),
+                            "model_a3": raw.get("model_a3"),
+                        }
                 except Exception:
                     continue
         except Exception:
@@ -2164,19 +2180,44 @@ class MainWindow(QMainWindow):
         if self.txt_response_view is not None:
             self.txt_response_view.clear()
 
-        model_id = self.cb_model.currentText().strip()
-        caps = self.caps_cache.get(model_id)
-        caps_dict = caps.to_dict() if caps else {
-            "model": model_id,
-            "supports_previous_response_id": True,
-            "supports_temperature": True,
-            "supports_file_search": False,
-            "errors": {},
-        }
+        model_default = self.cb_model_default.currentText().strip()
+        model_a1 = (self._get_generate_model_override(self.cb_model_a1) or "").strip() or None
+        model_a2 = (self._get_generate_model_override(self.cb_model_a2) or "").strip() or None
+        model_a3 = (self._get_generate_model_override(self.cb_model_a3) or "").strip() or None
+
+        def _fallback_caps(model_name: str) -> ModelCapabilities:
+            return ModelCapabilities(
+                model=model_name,
+                tested_at=time.time(),
+                ok_basic=True,
+                supports_previous_response_id=True,
+                supports_temperature=True,
+                supports_tools=True,
+                supports_file_search=False,
+                supports_vector_store=False,
+                notes="ui_fallback_default",
+                errors={},
+            )
+
+        caps_default = self.caps_cache.get(model_default) or _fallback_caps(model_default)
+        caps_a1 = (self.caps_cache.get(model_a1) or _fallback_caps(model_a1)) if model_a1 else None
+        caps_a2 = (self.caps_cache.get(model_a2) or _fallback_caps(model_a2)) if model_a2 else None
+        caps_a3 = (self.caps_cache.get(model_a3) or _fallback_caps(model_a3)) if model_a3 else None
 
         # Hard gate only if explicit param rejection was detected.
-        if (not send_as_c) and mode in ("GENERATE", "MODIFY"):
-            if caps and _caps_prev_id_explicitly_unsupported(caps):
+        if (not send_as_c) and mode == "GENERATE":
+            staged_caps = [("A1", caps_a1 or caps_default), ("A2", caps_a2 or caps_default), ("A3", caps_a3 or caps_default)]
+            for stage_name, stage_caps in staged_caps:
+                if stage_caps and _caps_prev_id_explicitly_unsupported(stage_caps):
+                    msg_critical(
+                        self,
+                        "Model",
+                        f"Probe zjistil, že model pro {stage_name} explicitně odmítá previous_response_id. "
+                        "Kaskádu nelze spustit.",
+                    )
+                    return
+        elif (not send_as_c) and mode == "MODIFY":
+            if caps_default and _caps_prev_id_explicitly_unsupported(caps_default):
                 msg_critical(
                     self,
                     "Model",
@@ -2281,10 +2322,10 @@ class MainWindow(QMainWindow):
             prompt=self.txt_prompt.toPlainText(),
             mode=mode,
             send_as_c=send_as_c,
-            model=model_id,
-            model_a1=self._get_generate_model_override(self.cb_model_a1),
-            model_a2=self._get_generate_model_override(self.cb_model_a2),
-            model_a3=self._get_generate_model_override(self.cb_model_a3),
+            model_default=model_default,
+            model_a1=model_a1,
+            model_a2=model_a2,
+            model_a3=model_a3,
             response_id=self.ed_response_id.text().strip(),
             attached_file_ids=attached_file_ids,
             input_file_ids=input_file_ids,
@@ -2305,7 +2346,10 @@ class MainWindow(QMainWindow):
             ssh_password=self.ed_ssh_pwd.text(),
             skip_paths=list(self.skip_paths_current),
             skip_exts=list(self.skip_exts_default),
-            model_caps=caps_dict,
+            model_caps_default=caps_default,
+            model_caps_a1=caps_a1,
+            model_caps_a2=caps_a2,
+            model_caps_a3=caps_a3,
             resume_files=getattr(self, "_resume_files", []),
             resume_prev_id=getattr(self, "_resume_prev_id", None),
         )

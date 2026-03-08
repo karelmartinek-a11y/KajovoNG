@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS receipts (
   model TEXT,
   mode TEXT,
   flow_type TEXT,
+  stage TEXT,
   response_id TEXT,
   batch_id TEXT,
   input_tokens INTEGER,
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS receipts (
   tool_cost REAL,
   storage_cost REAL,
   total_cost REAL,
+  cost REAL,
   pricing_verified INTEGER,
   notes TEXT,
   log_paths_json TEXT,
@@ -40,6 +42,7 @@ class Receipt:
     model: str
     mode: str
     flow_type: str
+    stage: str
     response_id: Optional[str]
     batch_id: Optional[str]
     input_tokens: int
@@ -47,6 +50,7 @@ class Receipt:
     tool_cost: float
     storage_cost: float
     total_cost: float
+    cost: float
     pricing_verified: bool
     notes: str
     log_paths: Dict[str, Any]
@@ -69,6 +73,11 @@ class ReceiptDB:
         con = self._connect()
         try:
             con.executescript(SCHEMA_SQL)
+            cols = {str(r["name"]) for r in con.execute("PRAGMA table_info(receipts)").fetchall()}
+            if "stage" not in cols:
+                con.execute("ALTER TABLE receipts ADD COLUMN stage TEXT")
+            if "cost" not in cols:
+                con.execute("ALTER TABLE receipts ADD COLUMN cost REAL")
             con.commit()
         finally:
             con.close()
@@ -78,12 +87,13 @@ class ReceiptDB:
         try:
             cur = con.execute(
                 '''INSERT INTO receipts
-                   (run_id, created_at, project, model, mode, flow_type, response_id, batch_id,
-                    input_tokens, output_tokens, tool_cost, storage_cost, total_cost,
+                   (run_id, created_at, project, model, mode, flow_type, stage, response_id, batch_id,
+                    input_tokens, output_tokens, tool_cost, storage_cost, total_cost, cost,
                     pricing_verified, notes, log_paths_json, usage_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                (r.run_id, r.created_at, r.project, r.model, r.mode, r.flow_type, r.response_id, r.batch_id,
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (r.run_id, r.created_at, r.project, r.model, r.mode, r.flow_type, r.stage, r.response_id, r.batch_id,
                  int(r.input_tokens), int(r.output_tokens), float(r.tool_cost), float(r.storage_cost), float(r.total_cost),
+                 float(r.cost if r.cost else r.total_cost),
                  1 if r.pricing_verified else 0, r.notes, json.dumps(r.log_paths, ensure_ascii=False), json.dumps(r.usage, ensure_ascii=False))
             )
             con.commit()
@@ -122,8 +132,8 @@ class ReceiptDB:
         try:
             con.execute(
                 """UPDATE receipts
-                   SET run_id=?, created_at=?, project=?, model=?, mode=?, flow_type=?, response_id=?, batch_id=?,
-                       input_tokens=?, output_tokens=?, tool_cost=?, storage_cost=?, total_cost=?,
+                   SET run_id=?, created_at=?, project=?, model=?, mode=?, flow_type=?, stage=?, response_id=?, batch_id=?,
+                       input_tokens=?, output_tokens=?, tool_cost=?, storage_cost=?, total_cost=?, cost=?,
                        pricing_verified=?, notes=?, log_paths_json=?, usage_json=?
                    WHERE id=?""",
                 (
@@ -133,6 +143,7 @@ class ReceiptDB:
                     r.model,
                     r.mode,
                     r.flow_type,
+                    r.stage,
                     r.response_id,
                     r.batch_id,
                     int(r.input_tokens),
@@ -140,6 +151,7 @@ class ReceiptDB:
                     float(r.tool_cost),
                     float(r.storage_cost),
                     float(r.total_cost),
+                    float(r.cost if r.cost else r.total_cost),
                     1 if r.pricing_verified else 0,
                     r.notes,
                     json.dumps(r.log_paths, ensure_ascii=False),
