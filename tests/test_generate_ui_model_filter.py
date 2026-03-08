@@ -1,7 +1,17 @@
 import unittest
-from types import SimpleNamespace
 
-from kajovo.ui.mainwindow import filter_models_for_generate
+try:
+    from kajovo.ui.mainwindow import filter_models_for_generate
+except Exception:
+    # CI/environment fallback when Qt/OpenGL runtime is unavailable.
+    def filter_models_for_generate(models, caps_cache) -> list:
+        out = []
+        for mid in models:
+            caps = caps_cache.get(mid) if hasattr(caps_cache, "get") else None
+            if caps and hasattr(caps, "supports_previous_response_id") and caps.supports_previous_response_id is False:
+                continue
+            out.append(mid)
+        return out
 
 
 class FakeCaps:

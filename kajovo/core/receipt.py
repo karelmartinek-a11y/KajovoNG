@@ -34,6 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_receipts_response_id ON receipts(response_id);
 CREATE INDEX IF NOT EXISTS idx_receipts_batch_id ON receipts(batch_id);
 '''
 
+
 @dataclass
 class Receipt:
     run_id: str
@@ -42,7 +43,6 @@ class Receipt:
     model: str
     mode: str
     flow_type: str
-    stage: str
     response_id: Optional[str]
     batch_id: Optional[str]
     input_tokens: int
@@ -50,11 +50,14 @@ class Receipt:
     tool_cost: float
     storage_cost: float
     total_cost: float
-    cost: float
     pricing_verified: bool
     notes: str
     log_paths: Dict[str, Any]
     usage: Dict[str, Any]
+    # backward-compatible optional fields (older callers/tests may omit)
+    stage: str = ""
+    cost: float = 0.0
+
 
 class ReceiptDB:
     def __init__(self, db_path: str):
@@ -91,10 +94,27 @@ class ReceiptDB:
                     input_tokens, output_tokens, tool_cost, storage_cost, total_cost, cost,
                     pricing_verified, notes, log_paths_json, usage_json)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                (r.run_id, r.created_at, r.project, r.model, r.mode, r.flow_type, r.stage, r.response_id, r.batch_id,
-                 int(r.input_tokens), int(r.output_tokens), float(r.tool_cost), float(r.storage_cost), float(r.total_cost),
-                 float(r.cost if r.cost else r.total_cost),
-                 1 if r.pricing_verified else 0, r.notes, json.dumps(r.log_paths, ensure_ascii=False), json.dumps(r.usage, ensure_ascii=False))
+                (
+                    r.run_id,
+                    r.created_at,
+                    r.project,
+                    r.model,
+                    r.mode,
+                    r.flow_type,
+                    r.stage,
+                    r.response_id,
+                    r.batch_id,
+                    int(r.input_tokens),
+                    int(r.output_tokens),
+                    float(r.tool_cost),
+                    float(r.storage_cost),
+                    float(r.total_cost),
+                    float(r.cost if r.cost else r.total_cost),
+                    1 if r.pricing_verified else 0,
+                    r.notes,
+                    json.dumps(r.log_paths, ensure_ascii=False),
+                    json.dumps(r.usage, ensure_ascii=False),
+                ),
             )
             con.commit()
             return int(cur.lastrowid)
@@ -178,7 +198,7 @@ class ReceiptDB:
         out: List[Dict[str, Any]] = []
         for r in rows:
             d = dict(r)
-            for k in ("log_paths_json","usage_json"):
+            for k in ("log_paths_json", "usage_json"):
                 try:
                     d[k] = json.loads(d[k]) if d.get(k) else None
                 except Exception:
