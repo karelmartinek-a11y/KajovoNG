@@ -182,7 +182,7 @@ class RunWorker(QThread):
 
     def _log_api_action(self, stage: str, action: str, details: Optional[Dict[str, Any]] = None) -> None:
         ts = self._ts()
-        model = self.cfg.model_for_stage(stage)
+        model = self._generate_model(stage)
         merged: Dict[str, Any] = {}
         if details:
             merged.update(details)
@@ -229,6 +229,7 @@ class RunWorker(QThread):
         tools: Optional[List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
         ts = self._ts()
+        caps = self._caps_for_step(stage)
         ref_ids = [fid for fid in (ref_file_ids or []) if fid]
         input_ids = [fid for fid in (input_file_ids or []) if fid]
         image_ids = [fid for fid in (input_image_ids or []) if fid]
@@ -244,8 +245,8 @@ class RunWorker(QThread):
             "vector_store_ids": vs_ids,
             "tool_types": tool_types,
             "use_file_search": bool(self.cfg.use_file_search),
-            "supports_file_search": bool(getattr(caps, "supports_file_search", False)),
-            "supports_vector_store": bool(getattr(caps, "supports_vector_store", False)),
+            "supports_file_search": bool(caps.get("supports_file_search", False)),
+            "supports_vector_store": bool(caps.get("supports_vector_store", False)),
         }
 
     def _input_file_ids(self) -> List[str]:
@@ -255,6 +256,42 @@ class RunWorker(QThread):
         except Exception:
             pass
         return list(self.cfg.attached_file_ids or [])
+
+    def _generate_model(self, step: str) -> str:
+        chosen = ""
+        try:
+            chosen = self.cfg.model_for_stage(step)
+        except Exception:
+            chosen = getattr(self.cfg, "model_default", "") or ""
+        default_model = str(getattr(self.cfg, "model_default", "") or "").strip()
+        return (str(chosen or default_model) or "").strip()
+
+    def _caps_for_step(self, step: str) -> Dict[str, Any]:
+        model = self._generate_model(step)
+        cache = getattr(self.settings, "model_cap_cache", None)
+        if cache:
+            try:
+                caps = cache.get(model)
+                if caps:
+                    if hasattr(caps, "to_dict"):
+                        return caps.to_dict()
+                    if isinstance(caps, dict):
+                        return caps
+            except Exception:
+                pass
+        try:
+            caps_obj = self.cfg.caps_for_stage(step)
+            if caps_obj and hasattr(caps_obj, "to_dict"):
+                return caps_obj.to_dict()
+        except Exception:
+            pass
+        try:
+            caps_dict = getattr(self.cfg, "model_caps", None)
+            if isinstance(caps_dict, dict):
+                return caps_dict
+        except Exception:
+            pass
+        return {}
 
     def _request_model_fields(self) -> Dict[str, Any]:
         return {
@@ -370,6 +407,7 @@ class RunWorker(QThread):
                 }
             )
             client = OpenAIClient(self.api_key)
+            stage_caps = "A1" if self.cfg.mode == "GENERATE" else ("B1" if self.cfg.mode == "MODIFY" else self.cfg.mode)
 
             if self.cfg.mode == "QFILE" and self.cfg.send_as_c:
                 raise RuntimeError("QFILE nepodporuje SEND AS BATCH.")
@@ -377,13 +415,13 @@ class RunWorker(QThread):
             # Generate cascade requires previous_response_id in A1/A2/A3 chaining.
             if (not self.cfg.send_as_c) and self.cfg.mode == "GENERATE":
                 for stage in ("A1", "A2", "A3"):
-                    caps = self.cfg.caps_for_stage(stage)
-                    if caps and caps.supports_previous_response_id is False:
+                    caps = self._caps_for_step(stage)
+                    if caps.get("supports_previous_response_id") is False:
                         raise RuntimeError(f"Model for {stage} does not support previous_response_id")
             # Modify cascade requires chaining as well (single model path).
             if (not self.cfg.send_as_c) and self.cfg.mode == "MODIFY":
-                caps = self.cfg.caps_for_stage("B1")
-                if caps and caps.supports_previous_response_id is False:
+                caps = self._caps_for_step("B1")
+                if caps.get("supports_previous_response_id") is False:
                     raise RuntimeError("Model for MODIFY does not support previous_response_id")
 
             diag_file_ids, diag_text = self._maybe_collect_diagnostics(client)
@@ -394,11 +432,8 @@ class RunWorker(QThread):
                 self._vector_store_ids.append(str(self._in_dir_info["vector_store_id"]))
             if diag_file_ids:
                 self._attach_diagnostics_vector_store(client, diag_file_ids)
-            if (
-                bool(self.cfg.model_caps.get("supports_file_search", False))
-                and (bool(self.cfg.use_file_search) or bool(diag_file_ids))
-                and self._vector_store_ids
-            ):
+            caps_main = self._caps_for_step(stage_caps)
+            if bool(caps_main.get("supports_file_search", False)) and (bool(self.cfg.use_file_search) or bool(diag_file_ids)) and self._vector_store_ids:
                 uniq: List[str] = []
                 seen: set = set()
                 for vid in self._vector_store_ids:
@@ -411,8 +446,8 @@ class RunWorker(QThread):
                 all_file_ids = list(self.cfg.attached_file_ids or [])
                 input_file_ids, input_image_ids = self._build_input_attachments(client, self._input_file_ids())
                 zip_supported = bool(self._diag_zip_path and self._is_supported_input_file(self._diag_zip_path))
-                supports_input_file = bool(self.cfg.model_caps.get("supports_input_file", True))
-                supports_vector_store = bool(self.cfg.model_caps.get("supports_vector_store", False))
+                supports_input_file = bool(caps_main.get("supports_input_file", True))
+                supports_vector_store = bool(caps_main.get("supports_vector_store", False))
                 self.log.event(
                     "io.reference",
                     {
@@ -421,8 +456,8 @@ class RunWorker(QThread):
                         "input_image_ids": list(input_image_ids),
                         "vector_store_ids": list(self._vector_store_ids or []),
                         "use_file_search": bool(self.cfg.use_file_search),
-                        "supports_file_search": bool(self.cfg.model_caps.get("supports_file_search", False)),
-                        "supports_vector_store": bool(self.cfg.model_caps.get("supports_vector_store", False)),
+                        "supports_file_search": bool(caps_main.get("supports_file_search", False)),
+                        "supports_vector_store": bool(caps_main.get("supports_vector_store", False)),
                         "supports_input_file": supports_input_file,
                         "diagnostics_zip": self._diag_zip_path or None,
                         "diagnostics_zip_supported_input": zip_supported,
@@ -513,16 +548,16 @@ class RunWorker(QThread):
         input_parts: List[Dict[str, Any]],
         prev_id: Optional[str],
     ) -> Dict[str, Any]:
-        model = self.cfg.model_for_stage(stage)
-        caps = self.cfg.caps_for_stage(stage)
+        model = self._generate_model(stage)
+        caps = self._caps_for_step(stage)
         payload: Dict[str, Any] = {
             "model": model,
             "instructions": instructions,
             "input": input_parts,
         }
-        if bool(getattr(caps, "supports_temperature", True)):
+        if bool(caps.get("supports_temperature", True)):
             payload["temperature"] = float(self.cfg.temperature)
-        if prev_id and bool(getattr(caps, "supports_previous_response_id", True)):
+        if prev_id and bool(caps.get("supports_previous_response_id", True)):
             payload["previous_response_id"] = prev_id
         return payload
 
@@ -704,6 +739,8 @@ class RunWorker(QThread):
         in_dir = (self.cfg.in_dir or "").strip()
         if not in_dir or not os.path.isdir(in_dir):
             return None
+        stage_caps = "A1" if self.cfg.mode == "GENERATE" else ("B1" if self.cfg.mode == "MODIFY" else self.cfg.mode)
+        caps = self._caps_for_step(stage_caps)
         self._set(4, 0, "IN: zipping + upload...")
         zip_path = self._zip_in_dir(in_dir)
         up = with_retry(lambda: client.upload_file(zip_path, purpose="user_data"), self.settings.retry, self.breaker)
@@ -715,7 +752,7 @@ class RunWorker(QThread):
         except Exception:
             pass
 
-        if bool(self.cfg.model_caps.get("supports_vector_store", False)):
+        if bool(caps.get("supports_vector_store", False)):
             try:
                 self._set(6, 0, "IN: vytvářím vector store z archivu...")
                 vs = with_retry(lambda: client.create_vector_store(f"IN_{ts_code()}"), self.settings.retry, self.breaker)
@@ -822,8 +859,10 @@ class RunWorker(QThread):
     def _attach_diagnostics_vector_store(self, client: OpenAIClient, diag_file_ids: List[str]) -> None:
         if not diag_file_ids:
             return
-        supports_vs = bool(self.cfg.model_caps.get("supports_vector_store", False))
-        supports_fs = bool(self.cfg.model_caps.get("supports_file_search", False))
+        stage_caps = "A1" if self.cfg.mode == "GENERATE" else ("B1" if self.cfg.mode == "MODIFY" else self.cfg.mode)
+        caps = self._caps_for_step(stage_caps)
+        supports_vs = bool(caps.get("supports_vector_store", False))
+        supports_fs = bool(caps.get("supports_file_search", False))
         if not (supports_vs and supports_fs):
             raise RuntimeError("Diagnostics IN vyžaduje model s podporou vector store + file_search.")
         self._log_debug("Diagnostics IN: create vector store...")
@@ -885,8 +924,10 @@ class RunWorker(QThread):
     def _in_dir_fallback_note(self) -> str:
         if not self._in_dir_info or not self._in_dir_info.get("file_id"):
             return ""
-        supports_fs = bool(self.cfg.model_caps.get("supports_file_search", False))
-        supports_vs = bool(self.cfg.model_caps.get("supports_vector_store", False))
+        stage_caps = "A1" if self.cfg.mode == "GENERATE" else ("B1" if self.cfg.mode == "MODIFY" else self.cfg.mode)
+        caps = self._caps_for_step(stage_caps)
+        supports_fs = bool(caps.get("supports_file_search", False))
+        supports_vs = bool(caps.get("supports_vector_store", False))
         if supports_fs or supports_vs:
             return ""
         return f"IN adresář je nahrán jako ZIP na Files API (file_id={self._in_dir_info['file_id']}). Model nemá file_search ani vector store; použij tento soubor jako zdroj dat."
@@ -919,7 +960,7 @@ class RunWorker(QThread):
             return prev_id
 
         # Must have chaining for ingest
-        if self.cfg.caps_for_stage("A0").supports_previous_response_id is False:
+        if self._caps_for_step("A0").get("supports_previous_response_id") is False:
             raise RuntimeError("Long prompt ingest requires previous_response_id (model flagged as unsupported).")
 
         self._set(4, 0, f"A0: ingest long prompt ({len(prompt)} chars) ...")
@@ -1013,6 +1054,44 @@ class RunWorker(QThread):
         self.log.save_json("manifests", "out_saved_map", {"saved": saved, "out_dir": out_dir})
         return {"saved": saved}
 
+    def _write_missing_files_md(self, out_dir: str, missing_paths: List[str]) -> None:
+        if not missing_paths:
+            return
+        ensure_dir(out_dir)
+        md_path = os.path.join(out_dir, "MISSINGFILES.md")
+        try:
+            lines = [
+                "# Missing image files",
+                "",
+                "Tyto soubory (PNG/JPG) nebyly vygenerovány automaticky. Doplň je ručně nebo dodáš parametry a znovu spusť GENERATE.",
+                "",
+                "Seznam chybějících souborů:",
+            ]
+            for p in missing_paths:
+                lines.append(f"- `{p}`")
+            lines += [
+                "",
+                "Jak doplnit:",
+                "1) Vytvoř soubory ručně na uvedených relativních cestách v OUT.",
+                "2) Nebo přilož vstupní obrázky do Files API a uveď je v zadání.",
+                "3) Pokud chceš, aby je model vygeneroval později, doplň pro každý soubor:",
+                "   - `path`: relativní cesta (viz výše)",
+                "   - `format`: png|jpg",
+                "   - `width` x `height` (px) nebo aspoň poměr stran",
+                "   - `description`: co má obrázek obsahovat",
+                "   - `style` (volitelné): např. flat, photo, line-art",
+                "",
+                "Ulož tyto parametry do zadání nebo přímo do tohoto souboru a spusť ReRun.",
+            ]
+            with open(md_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write("\n".join(lines) + "\n")
+            try:
+                self.log.event("missing.images", {"count": len(missing_paths), "paths": missing_paths, "note": md_path})
+            except Exception:
+                pass
+        except Exception as e:
+            self._log_debug(f"MISSINGFILES.md write failed: {e}")
+
     # ---------- receipts ----------
     def _usage_from_resp(self, resp: Dict[str, Any]) -> Tuple[int, int, Dict[str, Any]]:
         usage = resp.get("usage") or {}
@@ -1033,7 +1112,7 @@ class RunWorker(QThread):
         stage: str = "",
     ):
         inp, out, usage = self._usage_from_resp(resp or {})
-        model_for_cost = self.cfg.model_for_stage(stage) if stage else self.cfg.model_default
+        model_for_cost = self._generate_model(stage) if stage else self.cfg.model_default
         row = self.price_table.get(model_for_cost) or PriceTable.builtin_fallback().get(model_for_cost) or PriceTable.builtin_fallback().get("gpt-4o-mini")
         verified = bool(self.price_table.verified and row is not None)
         total, tool_cost, storage_cost = compute_cost(row, inp, out, is_batch=is_batch, use_file_search=self._used_file_search)
@@ -1098,9 +1177,10 @@ class RunWorker(QThread):
         # Resume path: skip A1/A2 if structure is already known (ReRun)
         plan = {}
         resp2 = None
-        a1_model = self.cfg.model_for_stage("A1")
-        a2_model = self.cfg.model_for_stage("A2")
+        a1_model = self._generate_model("A1")
+        a2_model = self._generate_model("A2")
         files: List[Dict[str, Any]] = []
+        missing_images: List[str] = []
         auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
         if self.cfg.resume_files:
             self._set(10, 0, "ReRun: using existing A2 structure, skipping A1/A2")
@@ -1125,6 +1205,7 @@ class RunWorker(QThread):
                 ext = os.path.splitext(path)[1].lower()
                 if ext in auto_skip_image_exts:
                     self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
+                    missing_images.append(path)
                     continue
                 if ext in (self.cfg.skip_exts or []):
                     self._log_debug(f"A3: skipping due to extension {ext} ({path})")
@@ -1265,6 +1346,7 @@ class RunWorker(QThread):
                 ext = os.path.splitext(path)[1].lower()
                 if ext in auto_skip_image_exts:
                     self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
+                    missing_images.append(path)
                     continue
                 if ext in (self.cfg.skip_exts or []):
                     self._log_debug(f"A3: skipping due to extension {ext} ({path})")
@@ -1297,6 +1379,8 @@ class RunWorker(QThread):
             out_files.append({"path": path, "content": content, "purpose": f.get("purpose", "")})
 
         saved_map = self._save_out_files(out_files)
+        if missing_images:
+            self._write_missing_files_md(self.cfg.out_dir, missing_images)
         if resp2 is not None:
             self._record_receipt(resp2, mode="GENERATE", flow_type="A", response_id=resp2_id, stage="A2")
         return {"mode": "GENERATE", "plan": plan, "structure": struct, "saved": saved_map, "response_id": resp2_id}
@@ -1345,7 +1429,8 @@ class RunWorker(QThread):
         tools: Optional[List[Dict[str, Any]]] = None
         vs_id: Optional[str] = None
         vs_ids: List[str] = list(self._vector_store_ids or [])
-        supports_fs = bool(self.cfg.model_caps.get("supports_file_search", False)) and bool(self.cfg.use_file_search)
+        caps_b = self._caps_for_step("B1")
+        supports_fs = bool(caps_b.get("supports_file_search", False)) and bool(self.cfg.use_file_search)
 
         if supports_fs:
             try:
@@ -1641,7 +1726,8 @@ class RunWorker(QThread):
             prev_id=base_prev_id,
         )
 
-        if self.cfg.caps_for_stage("QFILE").supports_temperature:
+        caps_q = self._caps_for_step("QFILE")
+        if caps_q.get("supports_temperature", True):
             payload["temperature"] = 0.0
         if self._fs_tools:
             payload["tools"] = self._fs_tools
@@ -1716,11 +1802,12 @@ class RunWorker(QThread):
         instructions = self._append_io_reference_instructions(instructions, c_ref_files)
 
         body: Dict[str, Any] = {
-            "model": self.cfg.model_for_stage("C"),
+            "model": self._generate_model("C"),
             "instructions": instructions,
             "input": self._input_parts(prompt_text, c_input_files, c_input_images),
         }
-        if self.cfg.caps_for_stage("C").supports_temperature:
+        caps_c = self._caps_for_step("C")
+        if caps_c.get("supports_temperature", True):
             body["temperature"] = float(self.cfg.temperature)
         self._log_request_attachments("C", c_ref_files, c_input_files, c_input_images, self._vector_store_ids, None)
         self._log_api_action(
@@ -1796,7 +1883,7 @@ class RunWorker(QThread):
         parts: List[str] = []
         latest_response_id = str(prev_id or "")
         stage = "A3" if contract == "A3_FILE" else "B3"
-        step_caps = self.cfg.caps_for_stage(stage)
+        step_caps = self._caps_for_step(stage)
         while True:
             self._check_stop()
             if contract == "A3_FILE":
@@ -1814,7 +1901,7 @@ class RunWorker(QThread):
             )
 
             # deterministic file output
-            if step_caps.supports_temperature:
+            if step_caps.get("supports_temperature", True):
                 payload["temperature"] = 0.0
 
             if tools:

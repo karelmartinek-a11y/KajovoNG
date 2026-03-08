@@ -594,7 +594,16 @@ class MainWindow(QMainWindow):
     def _refresh_generate_model_overrides(self) -> None:
         if not hasattr(self, "cb_model_a1"):
             return
-        options = [self.GENERATE_MODEL_MAIN_OPTION] + self._generate_override_models()
+        models = self._generate_override_models()
+        if self.cb_mode.currentText() == "GENERATE":
+            filtered = []
+            for mid in models:
+                caps = self.caps_cache.get(mid) if hasattr(self, "caps_cache") else None
+                if caps and hasattr(caps, "supports_previous_response_id") and caps.supports_previous_response_id is False:
+                    continue
+                filtered.append(mid)
+            models = filtered
+        options = [self.GENERATE_MODEL_MAIN_OPTION] + models
         combos = [self.cb_model_a1, self.cb_model_a2, self.cb_model_a3]
         selected = [self._get_generate_model_override(cb) for cb in combos]
         for combo, keep in zip(combos, selected):
