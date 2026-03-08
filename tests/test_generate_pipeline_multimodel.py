@@ -285,6 +285,72 @@ class PipelineMultiModelTests(unittest.TestCase):
         self.assertIn("full file", content)
         self.assertIn("kompletní výsledné znění souboru", client.payloads[0].get("instructions", ""))
 
+    def test_context_bundle_infers_shared_types_and_public_interfaces(self):
+        w = self.make_worker()
+        plan = {"modules": [{"name": "services", "purpose": "services"}, {"name": "models", "purpose": "entities"}]}
+        structure = {
+            "files": [
+                {"path": "models/user_model.py", "purpose": "User domain entity"},
+                {"path": "schemas/user_schema.py", "purpose": "validation schema"},
+                {"path": "services/user_service.py", "purpose": "CRUD service for users"},
+                {"path": "api/user_controller.py", "purpose": "HTTP handlers"},
+            ]
+        }
+
+        bundle = w._build_context_bundle(plan, structure)
+        self.assertIn("project_summary", bundle)
+        self.assertEqual(bundle["modules"], plan["modules"])
+        self.assertTrue(bundle["shared_types"])
+        self.assertTrue(bundle["public_interfaces"])
+        type_names = {entry["name"] for entry in bundle["shared_types"]}
+        interface_roles = {entry["role"] for entry in bundle["public_interfaces"]}
+        self.assertIn("User", type_names)
+        self.assertIn("service", interface_roles)
+        self.assertIn("controller", interface_roles)
+        self.assertIn("complete files", " ".join(bundle["coding_rules"]).lower())
+
+    def test_interface_contracts_infer_methods_for_service_and_controller(self):
+        w = self.make_worker()
+        structure = {
+            "files": [
+                {"path": "services/user_service.py", "purpose": "CRUD user operations and search"},
+                {"path": "api/user_controller.py", "purpose": "REST endpoint handlers"},
+                {"path": "models/user_model.py", "purpose": "domain model"},
+            ]
+        }
+
+        contracts = w._build_interface_contracts(structure)
+        by_file = {row["file"]: row for row in contracts["interfaces"]}
+        self.assertIn("services/user_service.py", by_file)
+        self.assertIn("api/user_controller.py", by_file)
+        self.assertIn("create", by_file["services/user_service.py"]["methods"])
+        self.assertIn("search", by_file["services/user_service.py"]["methods"])
+        self.assertIn("handle_create", by_file["api/user_controller.py"]["methods"])
+        self.assertTrue(contracts["types"])
+
+    def test_handoff_inference_is_deterministic_and_serializable(self):
+        w = self.make_worker()
+        plan = {"modules": [{"name": "services", "purpose": "svc"}]}
+        structure = {
+            "files": [
+                {"path": "services/auth_service.py", "purpose": "auth session and token service"},
+                {"path": "models/session_model.py", "purpose": "session entity"},
+            ]
+        }
+
+        bundle_first = w._build_context_bundle(plan, structure)
+        bundle_second = w._build_context_bundle(plan, structure)
+        contracts_first = w._build_interface_contracts(structure)
+        contracts_second = w._build_interface_contracts(structure)
+
+        self.assertEqual(bundle_first, bundle_second)
+        self.assertEqual(contracts_first, contracts_second)
+
+        bundle_json = json.dumps(bundle_first)
+        contracts_json = json.dumps(contracts_first)
+        self.assertLess(len(bundle_json), 12000)
+        self.assertLess(len(contracts_json), 12000)
+
 
 if __name__ == "__main__":
     unittest.main()
