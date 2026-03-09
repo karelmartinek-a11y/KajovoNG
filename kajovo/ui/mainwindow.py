@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         self._progress_timer.setInterval(800)
         self._progress_timer.timeout.connect(self._pulse_progress)
         self._progress_last_ts = time.time()
+        self._last_worker_status = ""
         self.pricing_audit_timer: Optional[QTimer] = None
 
         self.txt_response_view: Optional[QPlainTextEdit] = None
@@ -409,6 +410,8 @@ class MainWindow(QMainWindow):
 
         self.pb = QProgressBar()
         self.pb_sub = QProgressBar()
+        self.pb.setFormat("Celkový průběh: %p%")
+        self.pb_sub.setFormat("Krok: čekám na data (%p%)")
         style_progress_bar(self.pb)
         style_progress_bar(self.pb_sub)
         left.addWidget(self.pb)
@@ -979,14 +982,23 @@ class MainWindow(QMainWindow):
         self._progress_last_ts = time.time()
 
     def _pulse_progress(self):
-        # If worker is running and no update recently, pulse subprogress to show liveness.
         if self.worker and self.worker.isRunning():
             stale = (time.time() - self._progress_last_ts) > 1.0
             if stale:
-                val = (self.pb_sub.value() + 5) % 100
-                self.pb_sub.setValue(val)
+                status = self._last_worker_status or "čekám na odpověď"
+                self.pb_sub.setFormat(f"Krok: {status} (čekání)")
             if self.progress_dialog:
                 self.progress_dialog.set_stalled(stale)
+
+    def _on_worker_status(self, status: str):
+        self._last_worker_status = str(status or "").strip()
+        short = self._last_worker_status or "čekám na data"
+        if len(short) > 70:
+            short = short[:67] + "..."
+        self.pb_sub.setFormat(f"Krok: {short} (%p%)")
+        if self.progress_dialog:
+            self.progress_dialog.set_status(status)
+        self._mark_progress_activity()
 
     def _send_bzz_notification(self, rid: str):
         smtp = getattr(self.s, "smtp", None)
@@ -2269,8 +2281,7 @@ class MainWindow(QMainWindow):
             self.worker.subprogress.connect(self.pb_sub.setValue)
             self.worker.subprogress.connect(lambda v: self.progress_dialog.set_subprogress(v) if self.progress_dialog else None)
             self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
-            self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
-            self.worker.status.connect(lambda _: self._mark_progress_activity())
+            self.worker.status.connect(self._on_worker_status)
             self.worker.logline.connect(self.log)
             self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)
             self.worker.finished_ok.connect(self.on_run_ok)
@@ -2386,8 +2397,7 @@ class MainWindow(QMainWindow):
         self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
 
         # status už nemění titulkový řádek, zůstává jen statický název
-        self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
-        self.worker.status.connect(lambda _: self._mark_progress_activity())
+        self.worker.status.connect(self._on_worker_status)
 
         self.worker.logline.connect(self.log)
         self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)

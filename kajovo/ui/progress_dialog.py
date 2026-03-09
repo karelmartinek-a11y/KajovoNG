@@ -14,6 +14,9 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QGridLayout,
     QListWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QTextCursor
@@ -25,12 +28,14 @@ class ProgressDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("RUN")
         self.setModal(False)
-        self.resize(720, 520)
+        self.resize(760, 620)
         self.setStyleSheet(DARK_STYLESHEET)
         self._start = time.time()
         self._last_activity_ts = self._start
         self._mode = "RUN"
         self._a3_seen_paths = set()
+        self._a3_file_slots = {}
+        self._a3_active_paths = []
         self._a3_stats = {
             "planned": 0,
             "done": 0,
@@ -54,6 +59,8 @@ class ProgressDialog(QDialog):
 
         self.pb = QProgressBar()
         self.pb_sub = QProgressBar()
+        self.pb.setFormat("Celkem: %p%")
+        self.pb_sub.setFormat("Aktuální krok: %p%")
         style_progress_bar(self.pb)
         style_progress_bar(self.pb_sub)
         v.addWidget(self.pb)
@@ -86,11 +93,41 @@ class ProgressDialog(QDialog):
         v.addWidget(a3_group)
 
         self.timeline = QListWidget()
-        self.timeline.setMaximumHeight(110)
+        self.timeline.setMaximumHeight(80)
         v.addWidget(self.timeline)
+
+        files_group = QGroupBox("A3 soubory (max 6 paralelně)")
+        fg = QGridLayout(files_group)
+        self._file_rows = []
+        for i in range(6):
+            lbl = QLabel(f"{i + 1}. čeká")
+            bar = QProgressBar()
+            style_progress_bar(bar)
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            bar.setFormat("%p%")
+            bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            fg.addWidget(lbl, i, 0)
+            fg.addWidget(bar, i, 1)
+            self._file_rows.append((lbl, bar))
+        v.addWidget(files_group)
+
+        self.struct_log = QTableWidget(0, 3)
+        self.struct_log.setHorizontalHeaderLabels(["Čas", "Typ", "Zpráva"])
+        self.struct_log.verticalHeader().setVisible(False)
+        self.struct_log.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.struct_log.setSelectionMode(QTableWidget.NoSelection)
+        self.struct_log.setFocusPolicy(Qt.NoFocus)
+        self.struct_log.setMaximumHeight(170)
+        self.struct_log.horizontalHeader().setStretchLastSection(True)
+        self.struct_log.horizontalHeader().setSectionResizeMode(0, self.struct_log.horizontalHeader().ResizeToContents)
+        self.struct_log.horizontalHeader().setSectionResizeMode(1, self.struct_log.horizontalHeader().ResizeToContents)
+        self.struct_log.horizontalHeader().setSectionResizeMode(2, self.struct_log.horizontalHeader().Stretch)
+        v.addWidget(self.struct_log)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(500)
         v.addWidget(self.log, 1)
 
         row = QHBoxLayout()
@@ -114,12 +151,12 @@ class ProgressDialog(QDialog):
         self.lbl_mode.setText(f"Mode: {self._mode}")
 
     def set_progress(self, p: int):
-        self.pb.setValue(p)
+        self.pb.setValue(max(0, min(100, p)))
         self.mark_activity()
         self._update_eta()
 
     def set_subprogress(self, p: int):
-        self.pb_sub.setValue(p)
+        self.pb_sub.setValue(max(0, min(100, p)))
         self.mark_activity()
 
     def set_status(self, s: str):
@@ -132,6 +169,7 @@ class ProgressDialog(QDialog):
         self.log.appendPlainText(line)
         self._parse_log_line(line)
         self._push_timeline(line)
+        self._push_structured_log(line)
         self.mark_activity()
         self._pulse_log_line(reset=True)
 
@@ -194,6 +232,56 @@ class ProgressDialog(QDialog):
             self._a3_stats["done"] = max(self._a3_stats["done"], max(0, idx - 1))
             self._refresh_a3_labels()
 
+    def _push_structured_log(self, line: str):
+        txt = str(line or "").strip()
+        if not txt:
+            return
+        normalized = re.sub(r"^\d{8}\s\d{6}\s\|\s*", "", txt)
+        kind = "INFO"
+        if "ERROR" in normalized or "failed" in normalized.lower() or "chyba" in normalized.lower():
+            kind = "ERR"
+        elif "A3_FILE_" in normalized or "A3_PROGRESS" in normalized:
+            kind = "A3"
+        elif re.match(r"^[A-Z]\d?:", normalized):
+            kind = "STEP"
+
+        if self.struct_log.rowCount() > 0:
+            prev = self.struct_log.item(self.struct_log.rowCount() - 1, 2)
+            prev_kind = self.struct_log.item(self.struct_log.rowCount() - 1, 1)
+            if prev and prev_kind and prev.text() == normalized and prev_kind.text() == kind:
+                return
+
+        tsm = re.match(r"^(\d{8}\s\d{6})", txt)
+        ts = tsm.group(1) if tsm else time.strftime("%Y%m%d %H%M%S")
+        row = self.struct_log.rowCount()
+        self.struct_log.insertRow(row)
+        self.struct_log.setItem(row, 0, QTableWidgetItem(ts))
+        self.struct_log.setItem(row, 1, QTableWidgetItem(kind))
+        self.struct_log.setItem(row, 2, QTableWidgetItem(normalized))
+        while self.struct_log.rowCount() > 40:
+            self.struct_log.removeRow(0)
+        self.struct_log.scrollToBottom()
+
+    def _slot_for_path(self, path: str) -> int:
+        if path in self._a3_file_slots:
+            return self._a3_file_slots[path]
+        used = set(self._a3_file_slots.values())
+        for i in range(6):
+            if i not in used:
+                self._a3_file_slots[path] = i
+                return i
+        recycled = self._a3_active_paths.pop(0) if self._a3_active_paths else next(iter(self._a3_file_slots.keys()))
+        idx = self._a3_file_slots.pop(recycled, 0)
+        self._a3_file_slots[path] = idx
+        return idx
+
+    def _update_file_row(self, path: str, value: int, state: str):
+        idx = self._slot_for_path(path)
+        lbl, bar = self._file_rows[idx]
+        short = path if len(path) <= 55 else f"…{path[-54:]}"
+        lbl.setText(f"{idx + 1}. {short} ({state})")
+        bar.setValue(max(0, min(100, value)))
+
     def _parse_log_line(self, line: str):
         txt = str(line or "")
         if "A3 parallel workers:" in txt:
@@ -206,13 +294,37 @@ class ProgressDialog(QDialog):
                 self._a3_seen_paths.add(path)
             self._a3_stats["planned"] = max(self._a3_stats["planned"], len(self._a3_seen_paths))
             self._a3_stats["parallel_active"] += 1
+            if path:
+                self._a3_active_paths.append(path)
+                self._update_file_row(path, 5, "start")
             self.lbl_file.setText(f"Soubor: {path}")
         elif "A3_FILE_DONE" in txt:
+            path = txt.split("A3_FILE_DONE", 1)[1].strip()
             self._a3_stats["done"] += 1
             self._a3_stats["parallel_active"] = max(0, self._a3_stats["parallel_active"] - 1)
+            if path:
+                self._update_file_row(path, 100, "hotovo")
         elif "A3_FILE_ERROR" in txt:
+            rest = txt.split("A3_FILE_ERROR", 1)[1].strip()
+            path = rest.split(" ", 1)[0] if rest else ""
             self._a3_stats["errors"] += 1
             self._a3_stats["parallel_active"] = max(0, self._a3_stats["parallel_active"] - 1)
+            if path:
+                self._update_file_row(path, 100, "chyba")
+        elif "A3_PROGRESS" in txt:
+            m = re.search(r"A3_PROGRESS\s+(\d+)/(\d+)\s+active=(\d+)\s+last=(.+?)\s+status=(\w+)", txt)
+            if m:
+                done = int(m.group(1))
+                total = int(m.group(2))
+                active = int(m.group(3))
+                path = m.group(4).strip()
+                status = m.group(5).strip()
+                pct = int(done * 100 / max(1, total))
+                self._a3_stats["planned"] = max(self._a3_stats["planned"], total)
+                self._a3_stats["done"] = max(self._a3_stats["done"], done)
+                self._a3_stats["parallel_active"] = active
+                if path:
+                    self._update_file_row(path, 100 if status in {"done", "error"} else max(10, pct), status)
         elif "A3: skipping generated image extension" in txt:
             self._a3_stats["skip_images"] += 1
         elif "A3: skipping due to extension" in txt:

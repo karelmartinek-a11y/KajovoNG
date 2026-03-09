@@ -803,6 +803,7 @@ class RunWorker(QThread):
         context_bundle: Dict[str, Any],
         contracts_bundle: Dict[str, Any],
         structure: Dict[str, Any],
+        progress_cb=None,
     ) -> Tuple[List[Dict[str, Any]], List[str]]:
         results: List[Dict[str, Any]] = []
         errors: List[str] = []
@@ -821,6 +822,7 @@ class RunWorker(QThread):
         self._log_debug(f"A3 parallel workers: {max_workers}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
             fut_map = {}
+            completed = 0
             for spec in files:
                 path = spec.get("path")
                 if not isinstance(path, str) or not path:
@@ -844,12 +846,22 @@ class RunWorker(QThread):
                     if err:
                         errors.append(f"{used_path}: {err}")
                         self._log_debug(f"A3_FILE_ERROR {used_path} {err}")
+                        status = "error"
                     else:
                         results.append({"path": used_path, "content": content, "purpose": purpose})
                         self._log_debug(f"A3_FILE_DONE {used_path}")
+                        status = "done"
                 except Exception as e:
                     errors.append(f"{path}: {e}")
                     self._log_debug(f"A3_FILE_ERROR {path} {e}")
+                    used_path = path
+                    status = "error"
+                completed += 1
+                if callable(progress_cb):
+                    try:
+                        progress_cb(used_path, status, completed, len(fut_map), max(0, len(fut_map) - completed))
+                    except Exception:
+                        pass
         results.sort(key=lambda item: item.get("path") or "")
         return results, errors
 
@@ -1926,6 +1938,15 @@ class RunWorker(QThread):
                     artifacts.get("context") or {},
                     artifacts.get("contracts") or {},
                     artifacts.get("structure") or {},
+                    progress_cb=lambda path, status, done, total, pending: (
+                        self.subprogress.emit(int(done * 100 / max(1, total))),
+                        self._set(
+                            30 + int(45 * done / max(1, total)),
+                            int(done * 100 / max(1, total)),
+                            f"A3: FILE {path} ({done}/{total}) [{status}]",
+                        ),
+                        self._log_debug(f"A3_PROGRESS {done}/{total} active={pending} last={path} status={status}"),
+                    ),
                 )
                 for err in errors:
                     self._log_debug(f"A3 error: {err}")
