@@ -1929,6 +1929,7 @@ class RunWorker(QThread):
                 )
                 for err in errors:
                     self._log_debug(f"A3 error: {err}")
+                self.subprogress.emit(100)
             else:
                 handoff_mode = "prev_chain"
 
@@ -1938,8 +1939,9 @@ class RunWorker(QThread):
                 self._check_stop()
                 path = f.get("path")
                 # file-level progress (N of total)
-                self.subprogress.emit(int(idx * 100 / max(1, total_files)))
-                self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: FILE {path} ({idx}/{total_files})")
+                file_progress = int(idx * 100 / max(1, total_files))
+                self.subprogress.emit(file_progress)
+                self._set(30 + int(45 * (idx - 1) / max(1, len(files))), file_progress, f"A3: FILE {path} ({idx}/{total_files})")
                 content, last_resp_id = self._gen_file_chunks(
                     client,
                     prev_id=chain_prev_id,
@@ -1958,6 +1960,7 @@ class RunWorker(QThread):
             self._write_missing_files_md(self.cfg.out_dir, missing_images)
         if resp2 is not None:
             self._record_receipt(resp2, mode="GENERATE", flow_type="A", response_id=resp2_id, stage="A2")
+        self._set(100, 100, "GENERATE: dokončeno")
         return {"mode": "GENERATE", "plan": plan, "structure": struct, "saved": saved_map, "response_id": resp2_id}
 
     # ---------- B: MODIFY ----------
@@ -2191,8 +2194,9 @@ class RunWorker(QThread):
             path = tf.get("path", "")
             action = tf.get("action", "modify")
             # file-level progress (N of total)
-            self.subprogress.emit(int(i * 100 / max(1, total_files)))
-            self._set(50 + int(35 * (i - 1) / max(1, len(touched))), 0, f"B3: {action} {path} ({i}/{total_files})")
+            file_progress = int(i * 100 / max(1, total_files))
+            self.subprogress.emit(file_progress)
+            self._set(50 + int(35 * (i - 1) / max(1, len(touched))), file_progress, f"B3: {action} {path} ({i}/{total_files})")
             content, last_resp_id = self._gen_file_chunks(
                 client,
                 prev_id=chain_prev_id,
@@ -2208,6 +2212,7 @@ class RunWorker(QThread):
 
         saved_map = self._save_out_files(out_files)
         self._record_receipt(resp2, mode="MODIFY", flow_type="B", response_id=resp2_id, stage="B2")
+        self._set(100, 100, "MODIFY: dokončeno")
         return {"mode": "MODIFY", "plan": plan, "structure": struct, "saved": saved_map, "response_id": resp2_id, "vector_store_id": vs_id, "supports_file_search": supports_fs}
 
     # ---------- QA ----------

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QGridLayout,
     QListWidget,
+    QSplitter,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QTextCursor
@@ -25,12 +26,14 @@ class ProgressDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("RUN")
         self.setModal(False)
-        self.resize(720, 520)
+        self.resize(860, 620)
         self.setStyleSheet(DARK_STYLESHEET)
         self._start = time.time()
         self._last_activity_ts = self._start
         self._mode = "RUN"
         self._a3_seen_paths = set()
+        self._a3_active_slots = {}
+        self._event_counts = {}
         self._a3_stats = {
             "planned": 0,
             "done": 0,
@@ -56,6 +59,8 @@ class ProgressDialog(QDialog):
         self.pb_sub = QProgressBar()
         style_progress_bar(self.pb)
         style_progress_bar(self.pb_sub)
+        self.pb.setFormat("RUN celkem: %p%")
+        self.pb_sub.setFormat("Aktuální fáze: %p%")
         v.addWidget(self.pb)
         v.addWidget(self.pb_sub)
 
@@ -85,13 +90,39 @@ class ProgressDialog(QDialog):
         ag.addWidget(self.lbl_a3_errors, 2, 1)
         v.addWidget(a3_group)
 
+        workers_group = QGroupBox("A3 paralelní soubory")
+        wg = QGridLayout(workers_group)
+        self._a3_worker_rows = []
+        for i in range(6):
+            lbl = QLabel(f"Worker {i + 1}: čeká")
+            bar = QProgressBar()
+            style_progress_bar(bar)
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            bar.setFormat("čeká")
+            wg.addWidget(lbl, i, 0)
+            wg.addWidget(bar, i, 1)
+            self._a3_worker_rows.append({"label": lbl, "bar": bar, "path": None})
+        v.addWidget(workers_group)
+
         self.timeline = QListWidget()
-        self.timeline.setMaximumHeight(110)
+        self.timeline.setMaximumHeight(90)
         v.addWidget(self.timeline)
+
+        split = QSplitter(Qt.Vertical)
+        self.events = QPlainTextEdit()
+        self.events.setReadOnly(True)
+        self.events.setPlaceholderText("Strukturované události...")
+        self.events.setLineWrapMode(QPlainTextEdit.WidgetWidth)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        v.addWidget(self.log, 1)
+        self.log.setPlaceholderText("Surový log...")
+        self.log.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        split.addWidget(self.events)
+        split.addWidget(self.log)
+        split.setSizes([140, 170])
+        v.addWidget(split, 1)
 
         row = QHBoxLayout()
         self.btn_stop = QPushButton("STOP")
@@ -131,6 +162,7 @@ class ProgressDialog(QDialog):
     def add_log(self, line: str):
         self.log.appendPlainText(line)
         self._parse_log_line(line)
+        self._append_structured_event(line)
         self._push_timeline(line)
         self.mark_activity()
         self._pulse_log_line(reset=True)
@@ -207,12 +239,17 @@ class ProgressDialog(QDialog):
             self._a3_stats["planned"] = max(self._a3_stats["planned"], len(self._a3_seen_paths))
             self._a3_stats["parallel_active"] += 1
             self.lbl_file.setText(f"Soubor: {path}")
+            self._set_worker_state(path, "running")
         elif "A3_FILE_DONE" in txt:
+            path = txt.split("A3_FILE_DONE", 1)[1].strip()
             self._a3_stats["done"] += 1
             self._a3_stats["parallel_active"] = max(0, self._a3_stats["parallel_active"] - 1)
+            self._set_worker_state(path, "done")
         elif "A3_FILE_ERROR" in txt:
+            path = txt.split("A3_FILE_ERROR", 1)[1].strip().split(" ", 1)[0]
             self._a3_stats["errors"] += 1
             self._a3_stats["parallel_active"] = max(0, self._a3_stats["parallel_active"] - 1)
+            self._set_worker_state(path, "error")
         elif "A3: skipping generated image extension" in txt:
             self._a3_stats["skip_images"] += 1
         elif "A3: skipping due to extension" in txt:
@@ -235,6 +272,63 @@ class ProgressDialog(QDialog):
         self.lbl_a3_errors.setText(f"Chyby: {self._a3_stats['errors']}")
         pending = max(0, planned - done)
         self.lbl_a3.setText(f"A3: {done}/{planned} hotovo, čeká {pending}")
+
+    def _set_worker_state(self, path: str, state: str):
+        item_path = str(path or "").strip()
+        slot = self._a3_active_slots.get(item_path)
+        if state == "running":
+            if slot is None:
+                for idx, row in enumerate(self._a3_worker_rows):
+                    if row.get("path") is None:
+                        slot = idx
+                        break
+            if slot is None:
+                return
+            self._a3_active_slots[item_path] = slot
+            row = self._a3_worker_rows[slot]
+            row["path"] = item_path
+            row["label"].setText(f"Worker {slot + 1}: {item_path}")
+            row["bar"].setRange(0, 0)
+            row["bar"].setFormat("generuji")
+            return
+        if slot is None:
+            return
+        row = self._a3_worker_rows[slot]
+        row["bar"].setRange(0, 100)
+        row["bar"].setValue(100)
+        row["bar"].setFormat("hotovo" if state == "done" else "chyba")
+        row["label"].setText(f"Worker {slot + 1}: {item_path}")
+        row["path"] = None
+        self._a3_active_slots.pop(item_path, None)
+
+    def _append_structured_event(self, line: str):
+        txt = str(line or "").strip()
+        if not txt:
+            return
+        if "A3_FILE_START" in txt:
+            key = "a3:start:" + txt.split("A3_FILE_START", 1)[1].strip()
+            message = f"▶ START {txt.split('A3_FILE_START', 1)[1].strip()}"
+        elif "A3_FILE_DONE" in txt:
+            key = "a3:done:" + txt.split("A3_FILE_DONE", 1)[1].strip()
+            message = f"✅ DONE {txt.split('A3_FILE_DONE', 1)[1].strip()}"
+        elif "A3_FILE_ERROR" in txt:
+            tail = txt.split("A3_FILE_ERROR", 1)[1].strip()
+            key = "a3:error:" + tail
+            message = f"❌ ERROR {tail}"
+        elif "A3: skipping" in txt:
+            key = txt
+            message = f"⏭ {txt}"
+        elif "API" in txt or "request" in txt:
+            key = txt
+            message = f"🌐 {txt}"
+        else:
+            key = txt
+            message = f"• {txt}"
+        self._event_counts[key] = self._event_counts.get(key, 0) + 1
+        suffix = ""
+        if self._event_counts[key] > 1:
+            suffix = f" (x{self._event_counts[key]})"
+        self.events.appendPlainText(message + suffix)
 
     def _push_timeline(self, line: str):
         if not line:

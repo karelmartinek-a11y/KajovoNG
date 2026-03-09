@@ -411,6 +411,8 @@ class MainWindow(QMainWindow):
         self.pb_sub = QProgressBar()
         style_progress_bar(self.pb)
         style_progress_bar(self.pb_sub)
+        self.pb.setFormat("RUN celkem: %p%")
+        self.pb_sub.setFormat("Aktuální fáze: %p%")
         left.addWidget(self.pb)
         left.addWidget(self.pb_sub)
 
@@ -979,12 +981,9 @@ class MainWindow(QMainWindow):
         self._progress_last_ts = time.time()
 
     def _pulse_progress(self):
-        # If worker is running and no update recently, pulse subprogress to show liveness.
+        # If worker is running and no update recently, mark stalled state in dialog.
         if self.worker and self.worker.isRunning():
             stale = (time.time() - self._progress_last_ts) > 1.0
-            if stale:
-                val = (self.pb_sub.value() + 5) % 100
-                self.pb_sub.setValue(val)
             if self.progress_dialog:
                 self.progress_dialog.set_stalled(stale)
 
