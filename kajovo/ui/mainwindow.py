@@ -981,9 +981,12 @@ class MainWindow(QMainWindow):
     def _pulse_progress(self):
         # If worker is running and no update recently, pulse subprogress to show liveness.
         if self.worker and self.worker.isRunning():
-            if time.time() - self._progress_last_ts > 1.0:
+            stale = (time.time() - self._progress_last_ts) > 1.0
+            if stale:
                 val = (self.pb_sub.value() + 5) % 100
                 self.pb_sub.setValue(val)
+            if self.progress_dialog:
+                self.progress_dialog.set_stalled(stale)
 
     def _send_bzz_notification(self, rid: str):
         smtp = getattr(self.s, "smtp", None)
@@ -2257,6 +2260,7 @@ class MainWindow(QMainWindow):
             self._progress_last_ts = time.time()
             self._progress_timer.start()
             self.progress_dialog = ProgressDialog(self)
+            self.progress_dialog.set_mode("KASKADA")
             self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
             self.progress_dialog.show()
             self.worker.progress.connect(self.pb.setValue)
@@ -2365,6 +2369,7 @@ class MainWindow(QMainWindow):
         self._progress_timer.start()
 
         self.progress_dialog = ProgressDialog(self)
+        self.progress_dialog.set_mode(mode)
         self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
         try:
             self.progress_dialog.chk_bzz.setChecked(bool(self._bzz_default))
