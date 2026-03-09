@@ -937,6 +937,30 @@ class RunWorker(QThread):
         self.log.save_json("manifests", "out_saved_map", {"saved": saved, "out_dir": out_dir})
         return {"saved": saved}
 
+    def _write_missing_files_report(self, skipped_files: List[Dict[str, Any]]) -> Optional[str]:
+        if not skipped_files:
+            return None
+        out_dir = self.cfg.out_dir
+        ensure_dir(out_dir)
+        report_path = os.path.join(out_dir, "MISSINGFILES.md")
+        lines: List[str] = [
+            "# MISSINGFILES",
+            "",
+            "Tyto soubory byly součástí A2 manifestu, ale v A3 se negenerují automaticky (image extensions: png/jpg/jpeg).",
+            "",
+        ]
+        for item in skipped_files:
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            purpose = str(item.get("purpose") or "").strip() or "N/A"
+            lines.append(f"- path: `{path}`")
+            lines.append(f"  - expected_content: {purpose}")
+        with open(report_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines).rstrip() + "\n")
+        self._log_debug(f"A3: wrote missing files report -> {report_path} ({len(skipped_files)} entries)")
+        return report_path
+
     # ---------- receipts ----------
     def _usage_from_resp(self, resp: Dict[str, Any]) -> Tuple[int, int, Dict[str, Any]]:
         usage = resp.get("usage") or {}
@@ -1012,6 +1036,7 @@ class RunWorker(QThread):
         a2_model = self._generate_model("A2")
         a3_model = self._generate_model("A3")
         files: List[Dict[str, Any]] = []
+        skipped_a3_images: List[Dict[str, Any]] = []
         auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
         if self.cfg.resume_files:
             self._set(10, 0, "ReRun: using existing A2 structure, skipping A1/A2")
@@ -1035,6 +1060,13 @@ class RunWorker(QThread):
                     continue
                 ext = os.path.splitext(path)[1].lower()
                 if ext in auto_skip_image_exts:
+                    skipped_a3_images.append(
+                        {
+                            "path": path,
+                            "purpose": f.get("purpose", ""),
+                            "language": f.get("language", ""),
+                        }
+                    )
                     self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
                     continue
                 if ext in (self.cfg.skip_exts or []):
@@ -1175,6 +1207,13 @@ class RunWorker(QThread):
                     continue
                 ext = os.path.splitext(path)[1].lower()
                 if ext in auto_skip_image_exts:
+                    skipped_a3_images.append(
+                        {
+                            "path": path,
+                            "purpose": f.get("purpose", ""),
+                            "language": f.get("language", ""),
+                        }
+                    )
                     self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
                     continue
                 if ext in (self.cfg.skip_exts or []):
@@ -1209,9 +1248,17 @@ class RunWorker(QThread):
             out_files.append({"path": path, "content": content, "purpose": f.get("purpose", "")})
 
         saved_map = self._save_out_files(out_files)
+        missing_report = self._write_missing_files_report(skipped_a3_images)
         if resp2 is not None:
             self._record_receipt(resp2, mode="GENERATE", flow_type="A", response_id=resp2_id)
-        return {"mode": "GENERATE", "plan": plan, "structure": struct, "saved": saved_map, "response_id": resp2_id}
+        return {
+            "mode": "GENERATE",
+            "plan": plan,
+            "structure": struct,
+            "saved": saved_map,
+            "response_id": resp2_id,
+            "missing_files_report": missing_report,
+        }
 
     # ---------- B: MODIFY ----------
     def _run_b_modify(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
@@ -1719,7 +1766,7 @@ class RunWorker(QThread):
                 model=step_model,
                 instructions=instructions,
                 input_parts=self._input_parts(prompt, gen_input_files, gen_input_images),
-                prev_id=prev_id,
+                prev_id=latest_response_id,
                 supports_temperature=(step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
             )
 
@@ -1757,6 +1804,10 @@ class RunWorker(QThread):
             last_err: Optional[Exception] = None
             while attempt < max_attempts and parsed is None:
                 resp = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
+                resp_id = str(resp.get("id") or "")
+                if resp_id:
+                    # Keep chain continuity on every response, even when JSON/contract parse fails.
+                    latest_response_id = resp_id
                 self.log.save_json("responses", f"{contract}_{resp.get('id','NOID')}_{path.replace('/','_')}_{chunk_index}_{ts_code()}", resp)
                 self._log_api_action(
                     f"{contract}:{path}",
@@ -1800,9 +1851,6 @@ class RunWorker(QThread):
             parts.append(parsed.get("content", ""))
             ch = parsed.get("chunking", {}) or {}
             resp_id = str(resp.get("id") or "")
-            if resp_id:
-                latest_response_id = resp_id
-                prev_id = resp_id
             self._log_api_action(
                 f"{contract}:{path}",
                 "complete",

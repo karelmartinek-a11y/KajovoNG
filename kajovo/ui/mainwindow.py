@@ -974,11 +974,8 @@ class MainWindow(QMainWindow):
         self._progress_last_ts = time.time()
 
     def _pulse_progress(self):
-        # If worker is running and no update recently, pulse subprogress to show liveness.
-        if self.worker and self.worker.isRunning():
-            if time.time() - self._progress_last_ts > 1.0:
-                val = (self.pb_sub.value() + 5) % 100
-                self.pb_sub.setValue(val)
+        # Progress bars should reflect real worker-reported values only.
+        return
 
     def _send_bzz_notification(self, rid: str):
         smtp = getattr(self.s, "smtp", None)

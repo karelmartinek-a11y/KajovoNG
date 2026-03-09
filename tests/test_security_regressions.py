@@ -1,4 +1,5 @@
 import unittest
+import os
 from unittest.mock import Mock
 
 from kajovo.core.utils import safe_join_under_root
@@ -12,8 +13,10 @@ class SafeJoinUnderRootTests(unittest.TestCase):
 
     def test_allows_regular_relative_path(self):
         out = safe_join_under_root('/tmp/root', 'nested/file.txt')
-        self.assertTrue(out.startswith('/tmp/root'))
-        self.assertTrue(out.endswith('nested/file.txt'))
+        expected_root = os.path.abspath('/tmp/root')
+        expected_file = os.path.abspath(os.path.join('/tmp/root', 'nested/file.txt'))
+        self.assertTrue(os.path.commonpath([expected_root, out]) == expected_root)
+        self.assertEqual(out, expected_file)
 
 
 class OpenAIClientRequestTests(unittest.TestCase):
