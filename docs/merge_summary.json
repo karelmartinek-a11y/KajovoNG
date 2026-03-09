@@ -1,0 +1,20 @@
+{
+  "merged": [],
+  "skipped": [
+    "origin/codex/fix-build-for-mac-and-windows-exe",
+    "origin/codex/conduct-forensic-audit-on-cascade-features",
+    "origin/codex/update-build-process-for-cross-platform-support",
+    "origin/codex/analyze-program-for-cross-platform-compatibility",
+    "origin/codex/fix-window-behavior-and-layout",
+    "origin/codex/add-expected-output-file-support-in-cascade",
+    "origin/codex/update-json-presets-for-cascade",
+    "origin/codex/stabilize-request-builder-for-cascade",
+    "origin/codex/implement-cascade-feature-in-kajovong",
+    "origin/codex/harden-ui-worker-lifecycle-termination",
+    "origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel-hacni5",
+    "origin/codex/conduct-forensic-audit-for-kajovong/kajovohotel",
+    "origin/codex/conduct-comprehensive-python-security-audit",
+    "origin/codex/remove-secrets-from-repository-and-rotate"
+  ],
+  "failed_conflict": []
+}

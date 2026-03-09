@@ -1,0 +1,36 @@
+$apiKey = $env:OPENAI_API_KEY; if (-not $apiKey) { Write-Error "OPENAI_API_KEY není nastaven."; return }
+$base = "https://api.openai.com/v1/responses"
+$outRoot = "C:\DAGMAR"
+
+function Fetch-File([string]$Path, [string]$PrevId) {
+  $bodyObj = [ordered]@{
+    model = "gpt-5.1"
+    instructions = "Vrať platný JSON dle kontraktu A3_FILE. ŽÁDNÝ markdown ani další text."
+    input = @(
+      [ordered]@{
+        type = "message"; role = "user"
+        content = @(
+          @{ type = "input_text"; text = (
+            "{""contract"":""A3_FILE"",""path"":""{0}"",""chunking"":{""max_lines"":500,""chunk_index"":0,""chunk_count"":1,""has_more"":false,""next_chunk_index"":null}}`nObsah předchozí odpovědi byl nevalidní JSON – pošli celý soubor znovu, kompletní a validní." -f $Path
+          )}
+        )
+      }
+    )
+    previous_response_id = $PrevId
+  }
+
+  $json = $bodyObj | ConvertTo-Json -Depth 8 -Compress
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+
+  $resp = Invoke-RestMethod -Method Post -Uri $base -Headers @{ Authorization = "Bearer $apiKey" } -ContentType "application/json; charset=utf-8" -Body $bytes
+  if (-not $resp.output) { Write-Error "Prázdná odpověď pro $Path"; return }
+  $txt = $resp.output[0].content[0].text
+  $data = $txt | ConvertFrom-Json
+  $outPath = Join-Path $outRoot $data.path
+  New-Item -ItemType Directory -Force -Path (Split-Path $outPath) | Out-Null
+  [IO.File]::WriteAllText($outPath, $data.content, [Text.Encoding]::UTF8)
+  Write-Host "Saved $outPath (bytes: $([Text.Encoding]::UTF8.GetByteCount($data.content)))"
+}
+
+Fetch-File "app/ai/dagmar_personality_engine.py" "resp_0a572ade9fcd52ab006963163220388191974feff206776933"
+Fetch-File "app/utils/email_utils.py"        "resp_0a572ade9fcd52ab00696314dda39c81918bca3005a9466dc1"

@@ -10,8 +10,30 @@ import time
 import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+import collections
 
-from PySide6.QtCore import QObject, Signal, QThread
+
+try:
+    from PySide6.QtCore import QObject, Signal, QThread
+except ModuleNotFoundError:
+    # Dummy fallback classes for non-GUI environments (e.g., CI)
+    class _DummySignal:
+        def __init__(self, *args, **kwargs):
+            pass
+        def connect(self, *args, **kwargs):
+            pass
+        def emit(self, *args, **kwargs):
+            pass
+
+    class QObject:
+        pass
+
+    # We emulate Signal by returning _DummySignal
+    def Signal(*args, **kwargs):
+        return _DummySignal()
+
+    class QThread:
+        pass
 
 from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths
 from .filescan import build_manifest, scan_tree
@@ -356,19 +378,48 @@ class RunWorker(QThread):
             return None
 
     def _generate_modules_plan(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
-        modules: Dict[str, str] = {}
+        """Return a list of project‑level modules with a heuristically inferred purpose.
+
+        The heuristic is deterministic and **does not** inspect file contents –
+        only file paths and any provided *purpose* metadata. For every top‑level
+        directory *X/* we count how many files map to the high‑level roles
+        (service, controller, repository, model, schema, etc.) and describe the
+        module by its dominant role, producing compact human‑readable text
+        useful for A3 reasoning.
+
+        Example::
+            {'modules': [{'name': 'services', 'purpose': 'Service‑oriented code'},
+                         {'name': 'models',   'purpose': 'Domain models'}]}
+        """
+        role_labels = {
+            "service": "Service‑oriented code",
+            "controller": "Request/response orchestration",
+            "repository": "Persistence layer",
+            "model": "Domain models",
+            "schema": "Serialization / validation schemas",
+            "handler": "Event / job handlers",
+            "utility": "Shared utilities",
+            "config": "Configuration helpers",
+        }
+        module_roles: Dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
         for f in files:
-            p = f.get("path") or ""
-            if not isinstance(p, str) or not p:
+            path = f.get("path") or ""
+            purpose = str(f.get("purpose") or "")
+            if not isinstance(path, str) or not path:
                 continue
-            parts = p.split("/")
+            parts = path.split("/")
             if not parts:
                 continue
             mod = parts[0]
-            if mod and mod not in modules:
-                modules[mod] = "module scaffold"
-        return {"modules": [{"name": k, "purpose": v} for k, v in sorted(modules.items())]}
+            role = self._infer_file_role(path, purpose)
+            module_roles[mod][role] += 1
 
+        modules: List[Dict[str, str]] = []
+        for mod, roles in sorted(module_roles.items()):
+            dominant_role, _ = roles.most_common(1)[0]
+            purpose_text = role_labels.get(dominant_role, "Module scaffold")
+            modules.append({"name": mod, "purpose": purpose_text})
+        return {"modules": modules}
     def _generate_module_structure(self, module: str, files: List[Dict[str, Any]]) -> Dict[str, Any]:
         mod_files = []
         for f in files:
@@ -533,12 +584,14 @@ class RunWorker(QThread):
         return deduped
 
     def _build_context_bundle(self, plan: Dict[str, Any], structure: Dict[str, Any]) -> Dict[str, Any]:
-        modules = list(plan.get("modules") or [])
+        modules: List[Dict[str, Any]] = list(plan.get("modules") or [])
         files = [f for f in (structure.get("files") or []) if isinstance(f, dict)]
-        summary = (self.cfg.project or "").strip() or "Software project"
-
+        # ------------------------------------------------------------------ #
+        # Infer shared types and public interfaces
+        # ------------------------------------------------------------------ #
         shared_types: List[Dict[str, str]] = []
         public_interfaces: List[Dict[str, Any]] = []
+        type_modules_map: Dict[Tuple[str, str], set] = collections.defaultdict(set)
         seen_types = set()
         seen_interfaces = set()
 
@@ -549,12 +602,14 @@ class RunWorker(QThread):
                 continue
             role = self._infer_file_role(path, purpose)
             type_name = self._infer_primary_domain(path, purpose, self._infer_type_name(path))
+            module_name = path.split("/")[0] if "/" in path else ""
 
             for inferred_type in self._infer_type_candidates(path, purpose, role, type_name):
-                type_key = (inferred_type.get("name"), inferred_type.get("kind"))
-                if type_key in seen_types:
+                key = (inferred_type.get("name"), inferred_type.get("kind"))
+                type_modules_map[key].add(module_name)
+                if key in seen_types:
                     continue
-                seen_types.add(type_key)
+                seen_types.add(key)
                 shared_types.append(inferred_type)
 
             if role in {"service", "repository", "controller", "handler"}:
@@ -578,20 +633,41 @@ class RunWorker(QThread):
                     }
                 )
 
+        # Keep only types that appear in 2+ distinct modules
+        filtered_shared_types = [
+            t for t in shared_types if len(type_modules_map[(t.get("name"), t.get("kind"))]) >= 2
+        ] or shared_types  # fallback to all if nothing qualifies
+
+        # ------------------------------------------------------------------ #
+        # Project summary – short and deterministic
+        # ------------------------------------------------------------------ #
+        module_names = [m["name"] for m in modules if isinstance(m, dict) and "name" in m]
+        summary_parts = [
+            f"{len(module_names)} module{'s' if len(module_names)!=1 else ''}: {', '.join(module_names[:5])}{'…' if len(module_names)>5 else ''}",
+            f"{len(files)} Python file{'s' if len(files)!=1 else ''}",
+        ]
+        if filtered_shared_types:
+            top_types = [t["name"] for t in filtered_shared_types[:3]]
+            summary_parts.append(f"key domain types – {', '.join(top_types)}")
+        summary = "; ".join(summary_parts)
+
         coding_rules = [
+            # existing
             "Return complete files only (no diffs or patches).",
             "Preserve stable imports, module boundaries, and naming conventions.",
             "Use shared/domain types from context_bundle and keep interfaces consistent.",
             "Implement concise docstrings and validations for public entry points.",
+            # new
+            "Maintain full‑file generation contract and interface_contracts.json alignment.",
+            "Do not introduce new external APIs unless strictly required.",
         ]
         return {
             "project_summary": summary,
             "modules": modules,
-            "shared_types": shared_types,
+            "shared_types": filtered_shared_types,
             "public_interfaces": public_interfaces,
             "coding_rules": coding_rules,
         }
-
     def _build_interface_contracts(self, structure: Dict[str, Any]) -> Dict[str, Any]:
         contracts: List[Dict[str, Any]] = []
         inferred_types: List[Dict[str, str]] = []

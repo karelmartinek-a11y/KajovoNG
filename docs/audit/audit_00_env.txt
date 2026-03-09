@@ -1,0 +1,7 @@
+pwd: C:\github\kajovong
+git --version: git version 2.52.0.windows.1
+git remote -v:
+origin	https://github.com/karelmartinek-a11y/KajovoNG.git (fetch)
+origin	https://github.com/karelmartinek-a11y/KajovoNG.git (push)
+user.name: Karel Martínek
+user.email: karel.martinek@post.cz
