@@ -1,0 +1,8 @@
+{
+  "modules": [
+    {
+      "name": "services",
+      "purpose": "Request/response orchestration"
+    }
+  ]
+}

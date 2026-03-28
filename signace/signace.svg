@@ -1,0 +1,29 @@
+<svg width="59" height="202" viewBox="0 0 59 202" xmlns="http://www.w3.org/2000/svg">
+  <rect width="59" height="202" fill="#FF0000"/>
+  <!-- K -->
+  <rect x="4" y="14" width="6" height="34" fill="#FFFFFF"/>
+  <polygon points="10,31 18,14 24,14 16,32 24,48 18,48" fill="#FFFFFF"/>
+  <!-- Á (stylised A with accent) -->
+  <rect x="26" y="14" width="6" height="34" fill="#FFFFFF"/>
+  <rect x="36" y="14" width="6" height="34" fill="#FFFFFF"/>
+  <rect x="26" y="30" width="16" height="4" fill="#FFFFFF"/>
+  <rect x="32" y="10" width="6" height="3" fill="#FFFFFF"/>
+  <!-- J -->
+  <rect x="44" y="14" width="6" height="26" fill="#FFFFFF"/>
+  <rect x="38" y="40" width="12" height="8" fill="#FFFFFF"/>
+  <!-- O -->
+  <rect x="4" y="60" width="20" height="24" rx="2" ry="2" fill="#FFFFFF"/>
+  <rect x="8" y="64" width="12" height="16" fill="#FF0000"/>
+  <!-- V -->
+  <polygon points="28,60 34,60 41,78 48,60 54,60 44,84 37,84" fill="#FFFFFF"/>
+  <!-- O -->
+  <rect x="4" y="100" width="20" height="24" rx="2" ry="2" fill="#FFFFFF"/>
+  <rect x="8" y="104" width="12" height="16" fill="#FF0000"/>
+  <!-- KÁJOVO repeats for height fill -->
+  <rect x="26" y="100" width="6" height="34" fill="#FFFFFF"/>
+  <rect x="36" y="100" width="6" height="34" fill="#FFFFFF"/>
+  <rect x="26" y="116" width="16" height="4" fill="#FFFFFF"/>
+  <rect x="32" y="96" width="6" height="3" fill="#FFFFFF"/>
+  <rect x="44" y="100" width="6" height="26" fill="#FFFFFF"/>
+  <rect x="38" y="126" width="12" height="8" fill="#FFFFFF"/>
+</svg>

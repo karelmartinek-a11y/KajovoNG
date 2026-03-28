@@ -1,10 +1,10 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `kajovo/` holds the Python package: `app/` for CLI entry points, `core/` for business logic, and `ui/` for the PySide6 desktop components. Treat each folder as a cohesive module—keep GUI logic in `ui`, orchestration in `core`, and startup scripts in `app`.
+- `kajovo/` holds the Python package: `app/` for CLI entry points, `core/` for business logic, and `ui/` for the PySide6 desktop components. Treat each folder as a cohesive moduleâ€”keep GUI logic in `ui`, orchestration in `core`, and startup scripts in `app`.
 - `scripts/` bundles platform helpers: `install.{bat,ps1}` installs dependencies, `run.{bat,ps1}` launches the desktop app, and `fetch_fonts.ps1` grabs the `Montserrat` assets referenced in `resources/`.
 - `doc/` stores the project brief (`Zadani_Kajovo_Master.md`) and is the go-to for domain requirements; copy or link excerpts when documenting new features.
-- `.venv/`, `requirements.txt`, `kajovo_program.zip`, and `resources/` (font binaries and usage notes) sit at the root—keep tooling there so install scripts can assume consistent paths.
+- `.venv/`, `requirements.txt`, `kajovo_program.zip`, and `resources/` (font binaries and usage notes) sit at the rootâ€”keep tooling there so install scripts can assume consistent paths.
 
 ## Build, Test, and Development Commands
 - `scripts\install.bat` / `scripts\install.ps1`: create the `.venv`, install `requirements.txt`, and set up any runtime hooks. Run this once after cloning.
@@ -25,5 +25,13 @@
 - Pull requests should include a short summary, testing steps run (e.g., `Ran scripts\run.ps1 in GENERATE mode`), and links to relevant doc issues or bugs; attach screenshots when UI changes are involved.
 
 ## Security & Configuration Tips
-- API keys are written via the app’s **API-KEY** button, which exports to `OPENAI_API_KEY` in the user environment. Never hard-code secrets in source files or checked-in configs.
+- API keys are written via the appâ€™s **API-KEY** button, which exports to `OPENAI_API_KEY` in the user environment. Never hard-code secrets in source files or checked-in configs.
 - Logs live under `LOG/RUN_<timestamp>_/`; use them to trace dispatched prompts, API responses, and receipts stored in `kajovo.sqlite`.
+
+
+## Kodovani A Cestina
+
+- Vsechny textove soubory, zdrojove kody, konfigurace, prompty, dokumentace a poznamky se musi vytvaret a upravovat v `UTF-8 bez BOM`.
+- Pokud uzivatel vyslovne neurci jinak, komunikace s uzivatelem musi byt v cestine.
+- Dokumentace se musi psat v cestine.
+- Poznamky a komentare v kodu se musi psat v cestine.

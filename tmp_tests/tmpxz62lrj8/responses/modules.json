@@ -1,0 +1,12 @@
+{
+  "modules": [
+    {
+      "name": "models",
+      "purpose": "Domain models"
+    },
+    {
+      "name": "services",
+      "purpose": "Service‑oriented code"
+    }
+  ]
+}

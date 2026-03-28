@@ -1,0 +1,22 @@
+{
+  "interfaces": [
+    {
+      "file": "services/user_service.py",
+      "class": "UserService",
+      "methods": [
+        "create_user",
+        "get_user",
+        "list_users",
+        "update_user",
+        "delete_user"
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "User",
+      "from": "models/user.py",
+      "kind": "model"
+    }
+  ]
+}

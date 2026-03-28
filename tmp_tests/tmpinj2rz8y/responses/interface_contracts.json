@@ -1,0 +1,27 @@
+{
+  "interfaces": [
+    {
+      "file": "services/user_service.py",
+      "class": "UserController",
+      "methods": [
+        "get_user",
+        "list_users",
+        "create_user",
+        "update_user",
+        "delete_user"
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "UserResponse",
+      "from": "services/user_service.py",
+      "kind": "response"
+    },
+    {
+      "name": "UserQuery",
+      "from": "services/user_service.py",
+      "kind": "query"
+    }
+  ]
+}

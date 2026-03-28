@@ -1,0 +1,51 @@
+[
+  {
+    "id": "py:/tmp/ksp4/kajovospend/ui/dialogs/forms.py:BaseDialog",
+    "name": "BaseDialog",
+    "kind": "python/QDialog",
+    "file": "/tmp/ksp4/kajovospend/ui/dialogs/forms.py",
+    "evidence": "class BaseDialog(QDialog):"
+  },
+  {
+    "id": "py:/tmp/ksp4/kajovospend/ui/widgets/primitives.py:Card",
+    "name": "Card",
+    "kind": "python/QFrame",
+    "file": "/tmp/ksp4/kajovospend/ui/widgets/primitives.py",
+    "evidence": "class Card(QFrame):"
+  },
+  {
+    "id": "py:/tmp/ksp4/kajovospend/ui/main_window.py:MainWindow",
+    "name": "MainWindow",
+    "kind": "python/QMainWindow",
+    "file": "/tmp/ksp4/kajovospend/ui/main_window.py",
+    "evidence": "class MainWindow(QMainWindow):"
+  },
+  {
+    "id": "py:/tmp/ksp4/kajovospend/ui/widgets/primitives.py:BrandLockup",
+    "name": "BrandLockup",
+    "kind": "python/QWidget",
+    "file": "/tmp/ksp4/kajovospend/ui/widgets/primitives.py",
+    "evidence": "class BrandLockup(QWidget):"
+  },
+  {
+    "id": "py:/tmp/ksp4/kajovospend/ui/widgets/primitives.py:Pager",
+    "name": "Pager",
+    "kind": "python/QWidget",
+    "file": "/tmp/ksp4/kajovospend/ui/widgets/primitives.py",
+    "evidence": "class Pager(QWidget):"
+  },
+  {
+    "id": "py:/tmp/ksp4/kajovospend/ui/widgets/primitives.py:StateHost",
+    "name": "StateHost",
+    "kind": "python/QWidget",
+    "file": "/tmp/ksp4/kajovospend/ui/widgets/primitives.py",
+    "evidence": "class StateHost(QWidget):"
+  },
+  {
+    "id": "py:/tmp/ksp4/kajovospend/ui/widgets/primitives.py:SummaryGrid",
+    "name": "SummaryGrid",
+    "kind": "python/QWidget",
+    "file": "/tmp/ksp4/kajovospend/ui/widgets/primitives.py",
+    "evidence": "class SummaryGrid(QWidget):"
+  }
+]

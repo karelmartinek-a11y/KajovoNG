@@ -1,0 +1,1 @@
+{"id": "resp-file-1", "status": "completed", "output_text": "{\"contract\": \"A3_FILE\", \"path\": \"services/user_service.py\", \"chunking\": {\"max_lines\": 500, \"chunk_index\": 0, \"chunk_count\": 1, \"has_more\": false, \"next_chunk_index\": null}, \"content\": \"# full file\\nclass UserService:\\n    pass\\n\"}"}

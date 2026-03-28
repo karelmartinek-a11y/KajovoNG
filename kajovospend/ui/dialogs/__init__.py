@@ -1,0 +1,31 @@
+from kajovospend.ui.dialogs.forms import (
+    CatalogEntryDialog,
+    ConfirmDialog,
+    DocumentEditorDialog,
+    ErrorDialog,
+    GroupEditorDialog,
+    InfoDialog,
+    ManualCompletionDialog,
+    OcrInspectorDialog,
+    PatternEditorDialog,
+    ProjectSetupDialog,
+    SupplierEditorDialog,
+    TaskProgressDialog,
+    WarningDialog,
+)
+
+__all__ = [
+    'CatalogEntryDialog',
+    'ConfirmDialog',
+    'DocumentEditorDialog',
+    'ErrorDialog',
+    'GroupEditorDialog',
+    'InfoDialog',
+    'ManualCompletionDialog',
+    'OcrInspectorDialog',
+    'PatternEditorDialog',
+    'ProjectSetupDialog',
+    'SupplierEditorDialog',
+    'TaskProgressDialog',
+    'WarningDialog',
+]

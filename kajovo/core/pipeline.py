@@ -1145,9 +1145,9 @@ class RunWorker(QThread):
                 f"KONTRAKT A2_STRUCTURE: {a2_schema}"
             )
             a2_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-            a2_input_files, a2_input_images = self._build_input_attachments(client, self._input_file_ids())
-            instructions2 = self._append_io_reference_instructions(instructions2, a2_ref_files)
-            a2_text = self._append_io_reference("Vygeneruj strukturu souborů podle A1 plánu.", a2_ref_files)
+            # GENERATE policy: send user attachments only in A1 to avoid context bloat.
+            a2_input_files, a2_input_images = [], []
+            a2_text = "Vygeneruj strukturu souborů podle A1 plánu."
             a2_text = self._with_diag_text(a2_text)
             payload2 = self._payload_base(
                 model=a2_model,
@@ -1225,7 +1225,7 @@ class RunWorker(QThread):
                 files.append(f)
 
         total_files = len(files)
-        chain_prev_id = str(resp2_id or "")
+        base_a3_prev_id = str(resp2_id or "")
         out_files: List[Dict[str, Any]] = []
         for idx, f in enumerate(files, start=1):
             self._check_stop()
@@ -1233,9 +1233,9 @@ class RunWorker(QThread):
             # file-level progress (N of total)
             self.subprogress.emit(int(idx * 100 / max(1, total_files)))
             self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: FILE {path} ({idx}/{total_files})")
-            content, last_resp_id = self._gen_file_chunks(
+            content, _last_resp_id = self._gen_file_chunks(
                 client,
-                prev_id=chain_prev_id,
+                prev_id=base_a3_prev_id,
                 contract="A3_FILE",
                 path=path,
                 action=None,
@@ -1243,8 +1243,6 @@ class RunWorker(QThread):
                 tools=self._fs_tools,
                 model_override=a3_model,
             )
-            if last_resp_id:
-                chain_prev_id = last_resp_id
             out_files.append({"path": path, "content": content, "purpose": f.get("purpose", "")})
 
         saved_map = self._save_out_files(out_files)
@@ -1746,8 +1744,12 @@ class RunWorker(QThread):
             f"CHUNK: max 500 řádků. KONTRAKT: {schema}"
         )
         gen_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-        gen_input_files, gen_input_images = self._build_input_attachments(client, self._input_file_ids())
-        instructions = self._append_io_reference_instructions(instructions, gen_ref_files)
+        if contract == "A3_FILE":
+            # GENERATE policy: send user attachments only in A1.
+            gen_input_files, gen_input_images = [], []
+        else:
+            gen_input_files, gen_input_images = self._build_input_attachments(client, self._input_file_ids())
+            instructions = self._append_io_reference_instructions(instructions, gen_ref_files)
 
         chunk_index = 0
         parts: List[str] = []
@@ -1759,7 +1761,8 @@ class RunWorker(QThread):
                 prompt = f"Vrať obsah souboru PATH={path}. Pokud je dlouhý, vrať chunk CHUNK_INDEX={chunk_index}."
             else:
                 prompt = f"Vrať výsledný obsah souboru PATH={path} ACTION={action}. Pokud je dlouhý, vrať chunk CHUNK_INDEX={chunk_index}."
-            prompt = self._append_io_reference(prompt, gen_ref_files)
+            if contract != "A3_FILE":
+                prompt = self._append_io_reference(prompt, gen_ref_files)
             prompt = self._with_diag_text(prompt)
 
             payload = self._payload_base(

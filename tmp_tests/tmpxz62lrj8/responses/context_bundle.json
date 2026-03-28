@@ -1,0 +1,42 @@
+{
+  "project_summary": "2 modules: models, services; 2 Python files; key domain types – User",
+  "modules": [
+    {
+      "name": "models",
+      "purpose": "Domain models"
+    },
+    {
+      "name": "services",
+      "purpose": "Service‑oriented code"
+    }
+  ],
+  "shared_types": [
+    {
+      "name": "User",
+      "from": "models/user.py",
+      "kind": "model"
+    }
+  ],
+  "public_interfaces": [
+    {
+      "name": "UserService",
+      "file": "services/user_service.py",
+      "role": "service",
+      "methods": [
+        "create_user",
+        "get_user",
+        "list_users",
+        "update_user",
+        "delete_user"
+      ]
+    }
+  ],
+  "coding_rules": [
+    "Return complete files only (no diffs or patches).",
+    "Preserve stable imports, module boundaries, and naming conventions.",
+    "Use shared/domain types from context_bundle and keep interfaces consistent.",
+    "Implement concise docstrings and validations for public entry points.",
+    "Maintain full‑file generation contract and interface_contracts.json alignment.",
+    "Do not introduce new external APIs unless strictly required."
+  ]
+}

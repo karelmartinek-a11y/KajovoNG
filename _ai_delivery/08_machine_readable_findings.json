@@ -1,0 +1,143 @@
+{
+  "repo": "KajovoSpendNG-main",
+  "audit_scope": "forensic_prompt_1",
+  "baseline": {
+    "full_pytest": {
+      "status": "failed",
+      "reason": "ModuleNotFoundError: No module named 'PySide6'"
+    },
+    "subset_pytest": [
+      {
+        "command": "python -m pytest -q tests/test_kdgs_gate.py tests/test_smoke.py",
+        "status": "passed"
+      },
+      {
+        "command": "python -m pytest -q tests/test_ui_contract.py",
+        "status": "passed"
+      }
+    ],
+    "compileall": {
+      "status": "passed"
+    }
+  },
+  "findings": [
+    {
+      "id": "P0-001",
+      "severity": "P0",
+      "title": "Missing end-to-end proof tests for file->OCR/OpenAI->DB pipeline",
+      "status": "open",
+      "evidence": [
+        "tests/ contains only UI/asset/settings tests",
+        "No tests for kajovospend/integrations/openai_client.py",
+        "No tests for kajovospend/ocr/document_loader.py",
+        "No tests for promotion/finalize_result"
+      ],
+      "files": [
+        "tests/",
+        "kajovospend/integrations/openai_client.py",
+        "kajovospend/ocr/document_loader.py",
+        "kajovospend/processing/service.py",
+        "kajovospend/persistence/repository.py"
+      ]
+    },
+    {
+      "id": "P0-002",
+      "severity": "P0",
+      "title": "Forensic telemetry is insufficient to prove real AI/OCR execution per case",
+      "status": "open",
+      "evidence": [
+        "Generic attempt logging exists but lacks endpoint/model/timing/provenance fields",
+        "No full case reconstruction schema documented"
+      ],
+      "files": [
+        "kajovospend/diagnostics/logging_setup.py",
+        "kajovospend/processing/service.py",
+        "kajovospend/persistence/repository.py"
+      ]
+    },
+    {
+      "id": "P1-001",
+      "severity": "P1",
+      "title": "Progress dialog lacks ETA, phase semantics and detailed explanation",
+      "status": "open",
+      "files": [
+        "kajovospend/ui/dialogs/forms.py",
+        "kajovospend/application/controller.py",
+        "kajovospend/processing/service.py"
+      ]
+    },
+    {
+      "id": "P1-002",
+      "severity": "P1",
+      "title": "OpenAI model loading is synchronous from UI action",
+      "status": "open",
+      "files": [
+        "kajovospend/ui/main_window.py"
+      ]
+    },
+    {
+      "id": "P1-003",
+      "severity": "P1",
+      "title": "OCR runtime uses fixed configuration without evidence-backed optimization",
+      "status": "open",
+      "files": [
+        "kajovospend/ocr/document_loader.py",
+        "scripts/ocr_benchmark.py",
+        "scripts/ocr_evaluate.py"
+      ]
+    },
+    {
+      "id": "P2-001",
+      "severity": "P2",
+      "title": "Documentation does not cover AI/OCR/logging/progress pipeline in sufficient detail",
+      "status": "open",
+      "files": [
+        "README.md",
+        "docs/"
+      ]
+    },
+    {
+      "id": "P2-002",
+      "severity": "P2",
+      "title": "Text quality is inconsistent: mixed UTF-8 Czech with ASCII transliteration",
+      "status": "open",
+      "files": [
+        "README.md",
+        "startspend.bat",
+        "kajovospend/integrations/openai_client.py",
+        "kajovospend/processing/service.py"
+      ]
+    },
+    {
+      "id": "P3-001",
+      "severity": "P3",
+      "title": "Monolithic repository files raise maintenance and regression risk",
+      "status": "open",
+      "files": [
+        "kajovospend/persistence/repository.py",
+        "kajovospend/processing/service.py"
+      ]
+    }
+  ],
+  "verified_reality_paths": {
+    "openai_http": [
+      "kajovospend/integrations/openai_client.py:30-31",
+      "kajovospend/integrations/openai_client.py:38-42",
+      "kajovospend/integrations/openai_client.py:88-93"
+    ],
+    "file_reading": [
+      "kajovospend/ocr/document_loader.py:101-102",
+      "kajovospend/ocr/document_loader.py:118",
+      "kajovospend/ocr/document_loader.py:198"
+    ],
+    "ocr_execution": [
+      "kajovospend/ocr/document_loader.py:205-241",
+      "kajovospend/ocr/document_loader.py:288-301"
+    ],
+    "db_persistence": [
+      "kajovospend/processing/service.py:751-784",
+      "kajovospend/persistence/repository.py:823-904",
+      "kajovospend/persistence/repository.py:3112-3218"
+    ]
+  }
+}

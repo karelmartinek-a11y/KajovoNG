@@ -1,0 +1,8 @@
+{
+  "files": [
+    {
+      "path": "services/user_service.py",
+      "purpose": "users api and search"
+    }
+  ]
+}

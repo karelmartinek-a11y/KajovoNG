@@ -1,0 +1,43 @@
+{
+  "project_summary": "1 module: services; 1 Python file; key domain types – UserResponse, UserQuery",
+  "modules": [
+    {
+      "name": "services",
+      "purpose": "Request/response orchestration"
+    }
+  ],
+  "shared_types": [
+    {
+      "name": "UserResponse",
+      "from": "services/user_service.py",
+      "kind": "response"
+    },
+    {
+      "name": "UserQuery",
+      "from": "services/user_service.py",
+      "kind": "query"
+    }
+  ],
+  "public_interfaces": [
+    {
+      "name": "UserController",
+      "file": "services/user_service.py",
+      "role": "controller",
+      "methods": [
+        "get_user",
+        "list_users",
+        "create_user",
+        "update_user",
+        "delete_user"
+      ]
+    }
+  ],
+  "coding_rules": [
+    "Return complete files only (no diffs or patches).",
+    "Preserve stable imports, module boundaries, and naming conventions.",
+    "Use shared/domain types from context_bundle and keep interfaces consistent.",
+    "Implement concise docstrings and validations for public entry points.",
+    "Maintain full‑file generation contract and interface_contracts.json alignment.",
+    "Do not introduce new external APIs unless strictly required."
+  ]
+}

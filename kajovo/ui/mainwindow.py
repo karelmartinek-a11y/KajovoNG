@@ -16,9 +16,9 @@ import json
 import time
 import shutil
 import glob
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -140,6 +140,10 @@ class MainWindow(QMainWindow):
         self.worker: Optional[RunWorker] = None
         self.run_logger: Optional[RunLogger] = None
         self.progress_dialog: Optional[ProgressDialog] = None
+        self._run_contexts: Dict[str, Dict[str, Any]] = {}
+        self._run_order: List[str] = []
+        self._active_run_key: Optional[str] = None
+        self._max_parallel_runs = 4
         self._bzz_default = False
         self._last_run_send_as_c = False
 
@@ -148,6 +152,18 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(root)
         v.setContentsMargins(10, 10, 10, 10)
         v.setSpacing(8)
+
+        self.run_header_bar = QWidget()
+        run_header_layout = QHBoxLayout(self.run_header_bar)
+        run_header_layout.setContentsMargins(0, 0, 0, 0)
+        run_header_layout.setSpacing(6)
+        run_header_layout.addWidget(QLabel("Runs"))
+        self.run_header_minimized = QWidget()
+        self.run_header_minimized_layout = QHBoxLayout(self.run_header_minimized)
+        self.run_header_minimized_layout.setContentsMargins(0, 0, 0, 0)
+        self.run_header_minimized_layout.setSpacing(6)
+        run_header_layout.addWidget(self.run_header_minimized, 1)
+        v.addWidget(self.run_header_bar)
 
         self.tabs = QTabWidget()
         v.addWidget(self.tabs, 1)
@@ -216,6 +232,162 @@ class MainWindow(QMainWindow):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(widget)
         return scroll
+
+    def _active_run_count(self) -> int:
+        return len(self._run_contexts)
+
+    def _can_start_new_run(self) -> bool:
+        return self._active_run_count() < self._max_parallel_runs
+
+    def _sync_legacy_active_refs(self) -> None:
+        ctx = self._run_contexts.get(str(self._active_run_key or ""))
+        if not ctx:
+            self.worker = None
+            self.progress_dialog = None
+            self.run_logger = None
+            return
+        self.worker = ctx.get("worker")
+        self.progress_dialog = ctx.get("dialog")
+        self.run_logger = ctx.get("run_logger")
+
+    def _set_active_run(self, run_key: Optional[str]) -> None:
+        if run_key and run_key in self._run_contexts:
+            self._active_run_key = run_key
+            if run_key in self._run_order:
+                self._run_order = [k for k in self._run_order if k != run_key] + [run_key]
+        else:
+            self._active_run_key = self._run_order[-1] if self._run_order else None
+        self._sync_legacy_active_refs()
+
+    def _update_progress_timer_state(self) -> None:
+        if self._run_contexts:
+            self._progress_timer.start()
+        else:
+            self._progress_timer.stop()
+
+    def _minimized_chip_text(self, run_key: str) -> str:
+        ctx = self._run_contexts.get(run_key) or {}
+        rid = str(ctx.get("run_id") or run_key)
+        mode = str(ctx.get("mode") or "RUN")
+        return f"{mode} {rid}"
+
+    def _add_minimized_chip(self, run_key: str) -> None:
+        ctx = self._run_contexts.get(run_key)
+        if not ctx:
+            return
+        chip = ctx.get("min_chip")
+        if chip is None:
+            chip = QPushButton(self._minimized_chip_text(run_key))
+            chip.setProperty("run_key", run_key)
+            chip.installEventFilter(self)
+            chip.clicked.connect(lambda _=False, rk=run_key: self._set_active_run(rk))
+            self.run_header_minimized_layout.addWidget(chip)
+            ctx["min_chip"] = chip
+        chip.setVisible(True)
+
+    def _remove_minimized_chip(self, run_key: str) -> None:
+        ctx = self._run_contexts.get(run_key)
+        if not ctx:
+            return
+        chip = ctx.get("min_chip")
+        if chip is None:
+            return
+        try:
+            self.run_header_minimized_layout.removeWidget(chip)
+            chip.deleteLater()
+        except Exception:
+            pass
+        ctx["min_chip"] = None
+
+    def _restore_run_dialog(self, run_key: str) -> None:
+        ctx = self._run_contexts.get(run_key)
+        if not ctx:
+            return
+        dlg = ctx.get("dialog")
+        if dlg is None:
+            return
+        dlg.showNormal()
+        dlg.raise_()
+        dlg.activateWindow()
+        ctx["minimized"] = False
+        chip = ctx.get("min_chip")
+        if chip is not None:
+            chip.hide()
+        self._set_active_run(run_key)
+
+    def _minimize_run_dialog(self, run_key: str) -> None:
+        ctx = self._run_contexts.get(run_key)
+        if not ctx:
+            return
+        dlg = ctx.get("dialog")
+        if dlg is None:
+            return
+        dlg.hide()
+        ctx["minimized"] = True
+        self._add_minimized_chip(run_key)
+
+    def eventFilter(self, obj, event):
+        try:
+            if event.type() == QEvent.Type.MouseButtonDblClick:
+                rk = str(obj.property("run_key") or "")
+                if rk and rk in self._run_contexts:
+                    self._restore_run_dialog(rk)
+                    return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def _register_run_context(
+        self,
+        run_key: str,
+        run_id: str,
+        mode: str,
+        worker: Any,
+        dialog: ProgressDialog,
+        run_logger: Optional[RunLogger],
+        send_as_c: bool,
+    ) -> None:
+        self._run_contexts[run_key] = {
+            "run_id": run_id,
+            "mode": mode,
+            "worker": worker,
+            "dialog": dialog,
+            "run_logger": run_logger,
+            "send_as_c": bool(send_as_c),
+            "minimized": False,
+            "min_chip": None,
+            "bzz": bool(getattr(dialog, "chk_bzz", None) and dialog.chk_bzz.isChecked()),
+        }
+        self._run_order.append(run_key)
+        self._set_active_run(run_key)
+        self._update_progress_timer_state()
+
+    def _dispose_run_context(self, run_key: str, timeout_ms: int = 10000) -> None:
+        ctx = self._run_contexts.get(run_key)
+        if not ctx:
+            return
+        worker = ctx.get("worker")
+        if worker is not None:
+            try:
+                if worker.isRunning():
+                    worker.wait(timeout_ms)
+            except Exception:
+                pass
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+        dlg = ctx.get("dialog")
+        if dlg is not None:
+            try:
+                dlg.close()
+            except Exception:
+                pass
+        self._remove_minimized_chip(run_key)
+        self._run_contexts.pop(run_key, None)
+        self._run_order = [k for k in self._run_order if k != run_key]
+        self._set_active_run(self._active_run_key)
+        self._update_progress_timer_state()
 
     # ---------- build tabs ----------
     def _build_run_tab(self):
@@ -1289,7 +1461,7 @@ class MainWindow(QMainWindow):
             msg_warning(self, "SSH", f"Uložení selhalo: {e}")
 
     def on_new(self):
-        if self.worker and self.worker.isRunning():
+        if self._active_run_count() > 0:
             if msg_question(self, "RUN", "Běží RUN. Zastavit a vyčistit stav?") != QMessageBox.Yes:
                 return
             self.on_stop(force=True)
@@ -1309,7 +1481,7 @@ class MainWindow(QMainWindow):
             msg_critical(self, "Save", str(e))
 
     def on_load_state(self):
-        if self.worker and self.worker.isRunning():
+        if self._active_run_count() > 0:
             if msg_question(self, "RUN", "Běží RUN. Načtení stavu zastaví aktuální postup. Pokračovat?") != QMessageBox.Yes:
                 return
             self.on_stop(force=True)
@@ -1635,7 +1807,7 @@ class MainWindow(QMainWindow):
         if not rid:
             msg_info(self, "ReRun", "Zadej RUN_ID.")
             return
-        if self.worker is not None:
+        if not self._can_start_new_run():
             msg_warning(self, "ReRun", "Probíhá jiný RUN. Nejprve ho ukonči.")
             return
         state = self._load_run_ui_state(rid)
@@ -1662,13 +1834,19 @@ class MainWindow(QMainWindow):
             self._resume_prev_id = last_resp or ""
         self.on_go()
 
-    def _kill_worker_if_running(self):
-        if not (self.worker and self.worker.isRunning()):
+
+    def _kill_worker_if_running(self, run_key: Optional[str] = None):
+        rk = run_key or self._active_run_key
+        ctx = self._run_contexts.get(str(rk or ""))
+        if not ctx:
+            return
+        worker = ctx.get("worker")
+        if not worker or not worker.isRunning():
             return
 
         self.log("STOP: worker still running after cooperative request, waiting extra grace period...")
         try:
-            if self.worker.wait(2000):
+            if worker.wait(2000):
                 self.log("STOP: worker finished cooperatively during grace period.")
                 return
         except Exception as e:
@@ -1676,35 +1854,26 @@ class MainWindow(QMainWindow):
 
         self.log("Force stopping RUN thread (terminate fallback).")
         try:
-            self.worker.terminate()
-            self.worker.wait(2000)
+            worker.terminate()
+            worker.wait(2000)
         except Exception as e:
             self.log(f"STOP: terminate fallback failed: {e}")
 
-        if self.run_logger:
+        run_logger = ctx.get("run_logger")
+        if run_logger:
             try:
-                self.run_logger.update_state(
+                run_logger.update_state(
                     {
                         "status": "force_killed",
                         "force_killed_at": time.time(),
                         "reason": "ui.terminate_fallback",
                     }
                 )
-                self.run_logger.event("ui.worker.force_kill", {"reason": "terminate_fallback"})
+                run_logger.event("ui.worker.force_kill", {"reason": "terminate_fallback"})
             except Exception as e:
                 self.log(f"STOP: failed to write force-kill marker: {e}")
 
-        self._dispose_worker()
-        if self.progress_dialog:
-            try:
-                self.progress_dialog.close()
-            except Exception as e:
-                self.log(f"STOP: failed to close progress dialog after force-stop: {e}")
-            self.progress_dialog = None
-        try:
-            self._progress_timer.stop()
-        except Exception as e:
-            self.log(f"STOP: failed to stop progress timer after force-stop: {e}")
+        self._dispose_run_context(str(rk))
 
     def _browse_dir(self, target: QLineEdit):
         d = dialog_select_dir(self, "Select directory", target.text() or os.getcwd())
@@ -2138,12 +2307,13 @@ class MainWindow(QMainWindow):
         if is_cascade:
             self.refresh_run_cascades()
 
+
     def on_go(self):
-        if self.worker is not None:
-            msg_info(self, "Run", "Běží jiný RUN.")
+        if not self._can_start_new_run():
+            msg_info(self, "Run", f"B??? maximum paraleln?ch RUN? ({self._max_parallel_runs}).")
             return
         if not self.api_key:
-            msg_warning(self, "API-KEY", "Nejdřív nastav OPENAI_API_KEY.")
+            msg_warning(self, "API-KEY", "Nejd??v nastav OPENAI_API_KEY.")
             return
 
         mode = self.cb_mode.currentText()
@@ -2177,24 +2347,24 @@ class MainWindow(QMainWindow):
                 msg_critical(
                     self,
                     "Model",
-                    "Probe zjistil, že server explicitně odmítá previous_response_id pro tento model. "
-                    "Kaskádu nelze spustit s tímto modelem.",
+                    "Probe zjistil, ?e server explicitn? odm?t? previous_response_id pro tento model. "
+                    "Kask?du nelze spustit s t?mto modelem.",
                 )
                 return
 
         if mode == "KASKADA":
             if self.cb_run_cascade.count() == 0:
-                msg_warning(self, "Kaskáda", "Není vybraná uložená kaskáda.")
+                msg_warning(self, "Kask?da", "Nen? vybran? ulo?en? kask?da.")
                 return
             cpath = str(self.cb_run_cascade.currentData() or "").strip()
             if not cpath or not os.path.isfile(cpath):
-                msg_warning(self, "Kaskáda", "Vybraná kaskáda neexistuje.")
+                msg_warning(self, "Kask?da", "Vybran? kask?da neexistuje.")
                 return
             try:
                 with open(cpath, "r", encoding="utf-8") as f:
                     cdef = CascadeDefinition.from_dict(json.load(f))
             except Exception as e:
-                msg_critical(self, "Kaskáda", f"Načtení kaskády selhalo: {e}")
+                msg_critical(self, "Kask?da", f"Na?ten? kask?dy selhalo: {e}")
                 return
             cfg_c = CascadeRunConfig(
                 project=self.ed_project.text().strip(),
@@ -2202,33 +2372,33 @@ class MainWindow(QMainWindow):
                 in_dir=self.ed_in.text().strip(),
                 out_dir=self.ed_out.text().strip(),
             )
-            self._last_run_send_as_c = False
-            self.run_logger = None
-            self.log(f"KASKÁDA started: {os.path.basename(cpath)}")
-            self.worker = CascadeRunWorker(cfg_c, self.s, self.api_key, self.db, self.price_table)
+            self.log(f"KASK?DA started: {os.path.basename(cpath)}")
+            run_id = new_run_id()
+            run_key = f"KASKADA:{run_id}"
+            worker = CascadeRunWorker(cfg_c, self.s, self.api_key, self.db, self.price_table)
+            dialog = ProgressDialog(self)
+            dialog.btn_stop.clicked.connect(lambda _=False, rk=run_key: self.on_stop(run_key=rk))
+            dialog.btn_close.clicked.connect(lambda _=False, rk=run_key: self._minimize_run_dialog(rk))
+            dialog.show()
+            self._register_run_context(run_key, run_id, "KASKADA", worker, dialog, None, False)
             self._progress_last_ts = time.time()
-            self._progress_timer.start()
-            self.progress_dialog = ProgressDialog(self)
-            self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
-            self.progress_dialog.show()
-            self.worker.progress.connect(self.pb.setValue)
-            self.worker.progress.connect(lambda v: self.progress_dialog.set_progress(v) if self.progress_dialog else None)
-            self.worker.progress.connect(lambda _: self._mark_progress_activity())
-            self.worker.subprogress.connect(self.pb_sub.setValue)
-            self.worker.subprogress.connect(lambda v: self.progress_dialog.set_subprogress(v) if self.progress_dialog else None)
-            self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
-            self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
-            self.worker.status.connect(lambda _: self._mark_progress_activity())
-            self.worker.logline.connect(self.log)
-            self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)
-            self.worker.finished_ok.connect(self.on_run_ok)
-            self.worker.finished_err.connect(self.on_run_err)
-            self.worker.start()
+            worker.progress.connect(self.pb.setValue)
+            worker.progress.connect(lambda v, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_progress(v) if self._run_contexts.get(rk, {}).get("dialog") else None)
+            worker.progress.connect(lambda _: self._mark_progress_activity())
+            worker.subprogress.connect(self.pb_sub.setValue)
+            worker.subprogress.connect(lambda v, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_subprogress(v) if self._run_contexts.get(rk, {}).get("dialog") else None)
+            worker.subprogress.connect(lambda _: self._mark_progress_activity())
+            worker.status.connect(lambda s, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_status(s) if self._run_contexts.get(rk, {}).get("dialog") else None)
+            worker.status.connect(lambda _: self._mark_progress_activity())
+            worker.logline.connect(self.log)
+            worker.logline.connect(lambda s, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").add_log(s) if self._run_contexts.get(rk, {}).get("dialog") else None)
+            worker.finished_ok.connect(lambda result, rk=run_key: self.on_run_ok(rk, result))
+            worker.finished_err.connect(lambda err, rk=run_key: self.on_run_err(rk, err))
+            worker.start()
             return
 
-        self._last_run_send_as_c = bool(send_as_c)
         run_id = new_run_id()
-        self.run_logger = RunLogger(self.s.log_dir, run_id, project_name=self.ed_project.text().strip())
+        run_logger = RunLogger(self.s.log_dir, run_id, project_name=self.ed_project.text().strip())
         self.log(f"RUN started: {run_id}")
 
         attached_file_ids = self.files_panel.attached_ids()
@@ -2236,7 +2406,7 @@ class MainWindow(QMainWindow):
         input_file_ids = list(attached_file_ids)
         oversize_ids = []
         if attached_file_ids:
-            with BusyPopup(self, "Kontroluji velikost souborů..."):
+            with BusyPopup(self, "Kontroluji velikost soubor?..."):
                 try:
                     client = OpenAIClient(self.api_key)
                     for fid in attached_file_ids:
@@ -2307,69 +2477,76 @@ class MainWindow(QMainWindow):
             resume_prev_id=getattr(self, "_resume_prev_id", None),
         )
 
-        self.worker = RunWorker(cfg, self.s, self.api_key, self.run_logger, self.db, self.price_table)
-
-        # start heartbeat before thread launch
-        self._progress_last_ts = time.time()
-        self._progress_timer.start()
-
-        self.progress_dialog = ProgressDialog(self)
-        self.progress_dialog.btn_stop.clicked.connect(self.on_stop)
+        run_key = f"RUN:{run_id}"
+        worker = RunWorker(cfg, self.s, self.api_key, run_logger, self.db, self.price_table)
+        dialog = ProgressDialog(self)
+        dialog.btn_stop.clicked.connect(lambda _=False, rk=run_key: self.on_stop(run_key=rk))
+        dialog.btn_close.clicked.connect(lambda _=False, rk=run_key: self._minimize_run_dialog(rk))
         try:
-            self.progress_dialog.chk_bzz.setChecked(bool(self._bzz_default))
+            dialog.chk_bzz.setChecked(bool(self._bzz_default))
         except Exception as e:
             self.log(f"Progress dialog init warning (chk_bzz): {e}")
-        self.progress_dialog.show()
+        dialog.show()
+        self._register_run_context(run_key, run_id, mode, worker, dialog, run_logger, bool(send_as_c))
+        self._progress_last_ts = time.time()
 
-        self.worker.progress.connect(self.pb.setValue)
-        self.worker.progress.connect(lambda v: self.progress_dialog.set_progress(v) if self.progress_dialog else None)
-        self.worker.progress.connect(lambda _: self._mark_progress_activity())
+        worker.progress.connect(self.pb.setValue)
+        worker.progress.connect(lambda v, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_progress(v) if self._run_contexts.get(rk, {}).get("dialog") else None)
+        worker.progress.connect(lambda _: self._mark_progress_activity())
 
-        self.worker.subprogress.connect(self.pb_sub.setValue)
-        self.worker.subprogress.connect(lambda v: self.progress_dialog.set_subprogress(v) if self.progress_dialog else None)
-        self.worker.subprogress.connect(lambda _: self._mark_progress_activity())
+        worker.subprogress.connect(self.pb_sub.setValue)
+        worker.subprogress.connect(lambda v, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_subprogress(v) if self._run_contexts.get(rk, {}).get("dialog") else None)
+        worker.subprogress.connect(lambda _: self._mark_progress_activity())
 
-        # status už nemění titulkový řádek, zůstává jen statický název
-        self.worker.status.connect(lambda s: self.progress_dialog.set_status(s) if self.progress_dialog else None)
-        self.worker.status.connect(lambda _: self._mark_progress_activity())
+        worker.status.connect(lambda s, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_status(s) if self._run_contexts.get(rk, {}).get("dialog") else None)
+        worker.status.connect(lambda _: self._mark_progress_activity())
 
-        self.worker.logline.connect(self.log)
-        self.worker.logline.connect(lambda s: self.progress_dialog.add_log(s) if self.progress_dialog else None)
+        worker.logline.connect(self.log)
+        worker.logline.connect(lambda s, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").add_log(s) if self._run_contexts.get(rk, {}).get("dialog") else None)
 
-        self.worker.finished_ok.connect(self.on_run_ok)
-        self.worker.finished_err.connect(self.on_run_err)
-        self.worker.start()
+        worker.finished_ok.connect(lambda result, rk=run_key: self.on_run_ok(rk, result))
+        worker.finished_err.connect(lambda err, rk=run_key: self.on_run_err(rk, err))
+        worker.start()
         # clear resume hints after start
         self._resume_files = []
         self._resume_prev_id = None
 
-    def on_stop(self, force: bool = False):
-        if self.worker is None:
+    def on_stop(self, force: bool = False, run_key: Optional[str] = None):
+        if force and run_key is None and self._run_contexts:
+            for rk in list(self._run_contexts.keys()):
+                self.on_stop(force=True, run_key=rk)
+            return
+        rk = run_key or self._active_run_key
+        ctx = self._run_contexts.get(str(rk or ""))
+        if not ctx:
             return
         if not force:
-            if msg_question(self, "STOP", "Zastavit aktuální RUN? Rozdělaná práce se ztratí.") != QMessageBox.Yes:
+            if msg_question(self, "STOP", "Zastavit aktu?ln? RUN? Rozd?lan? pr?ce se ztrat?.") != QMessageBox.Yes:
                 return
         try:
-            self.worker.request_stop()
+            worker = ctx.get("worker")
+            if worker is not None:
+                worker.request_stop()
         except Exception as e:
             self.log(f"STOP: request_stop failed: {e}")
         self.log("Stop requested (cooperative).")
-        QTimer.singleShot(1500, self._kill_worker_if_running)
+        QTimer.singleShot(1500, lambda rk=rk: self._kill_worker_if_running(rk))
 
-    def on_run_ok(self, result: dict):
-        rid = self.run_logger.run_id if self.run_logger else str((result or {}).get("run_id") or "")
-        is_batch = bool(self._last_run_send_as_c or (result.get("mode") == "C"))
+
+    def on_run_ok(self, run_key: str, result: dict):
+        ctx = self._run_contexts.get(run_key) or {}
+        run_logger = ctx.get("run_logger")
+        rid = str(ctx.get("run_id") or (run_logger.run_id if run_logger else "") or str((result or {}).get("run_id") or ""))
+        is_batch = bool(ctx.get("send_as_c") or (result.get("mode") == "C"))
         batch_id = str(result.get("batch_id") or "") if isinstance(result, dict) else ""
         notify_on_end = False
-        if self.progress_dialog and hasattr(self.progress_dialog, "chk_bzz"):
-            notify_on_end = bool(self.progress_dialog.chk_bzz.isChecked())
+        dlg = ctx.get("dialog")
+        if dlg and hasattr(dlg, "chk_bzz"):
+            notify_on_end = bool(dlg.chk_bzz.isChecked())
             self._bzz_default = notify_on_end
+
         self.log(f"RUN completed: {rid}")
-        self._dispose_worker()
-        self._progress_timer.stop()
-        if self.progress_dialog:
-            self.progress_dialog.close()
-            self.progress_dialog = None
+        self._dispose_run_context(run_key)
         self.pb.setValue(100)
         self.pb_sub.setValue(100)
 
@@ -2394,7 +2571,7 @@ class MainWindow(QMainWindow):
 
         out_dir = self.ed_out.text().strip()
         if (not is_batch) and out_dir and os.path.isdir(out_dir):
-            if msg_question(self, "Open OUT", "Otevřít OUT složku?") == QMessageBox.Yes:
+            if msg_question(self, "Open OUT", "Otev??t OUT slo?ku?") == QMessageBox.Yes:
                 try:
                     if os.name == "nt":
                         os.startfile(out_dir)  # type: ignore
@@ -2403,39 +2580,23 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
         if is_batch:
-            msg = f"BATCH request odeslán (batch_id={batch_id or 'neznámý'}). Sleduj záložku BATCH a stáhni výstup do OUT."
+            msg = f"BATCH request odesl?n (batch_id={batch_id or 'nezn?m?'}). Sleduj z?lo?ku BATCH a st?hni v?stup do OUT."
             self.log(msg)
 
         if notify_on_end:
             self._send_bzz_notification(rid)
 
-    def on_run_err(self, err: str):
-        rid = self.run_logger.run_id if self.run_logger else ""
+    def on_run_err(self, run_key: str, err: str):
+        ctx = self._run_contexts.get(run_key) or {}
+        run_logger = ctx.get("run_logger")
+        rid = str(ctx.get("run_id") or (run_logger.run_id if run_logger else ""))
         self.log(f"RUN failed: {rid} -> {err}")
-        self._dispose_worker()
-        self._progress_timer.stop()
-        if self.progress_dialog:
-            self.progress_dialog.close()
-            self.progress_dialog = None
+        self._dispose_run_context(run_key)
         msg_critical(self, "RUN failed", err)
 
     def _dispose_worker(self, timeout_ms: int = 10000):
-        if not self.worker:
-            return
-        try:
-            if self.worker.isRunning():
-                self.worker.wait(timeout_ms)
-        except Exception:
-            pass
-        try:
-            self.worker.deleteLater()
-        except Exception:
-            pass
-        self.worker = None
-        try:
-            self._progress_timer.stop()
-        except Exception:
-            pass
+        for rk in list(self._run_contexts.keys()):
+            self._dispose_run_context(rk, timeout_ms=timeout_ms)
 
     def _dispose_probe_worker(self, timeout_ms: int = 3000):
         if not self.probe_worker:
@@ -2451,22 +2612,51 @@ class MainWindow(QMainWindow):
             pass
         self.probe_worker = None
 
+
     def closeEvent(self, event):
         # Ensure background threads stop cleanly to avoid QThread destruction errors.
-        if self.worker and self.worker.isRunning():
-            self.log("Stopping active RUN before exit...")
-            try:
-                self.worker.request_stop()
-            except Exception:
-                pass
-            if not self.worker.wait(5000):
-                msg_warning(self, "Exit", "Probíhá RUN, počkej na dokončení nebo stiskni STOP.")
+        if self._active_run_count() > 0:
+            if msg_question(self, "Exit", "Prob?h? RUN. Zastavit v?echny b?hy a ukon?it?") != QMessageBox.Yes:
                 event.ignore()
                 return
+            self.log("Stopping active RUNs before exit...")
+            for rk, ctx in list(self._run_contexts.items()):
+                worker = ctx.get("worker")
+                try:
+                    if worker is not None:
+                        worker.request_stop()
+                except Exception:
+                    pass
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                running = False
+                for ctx in self._run_contexts.values():
+                    worker = ctx.get("worker")
+                    try:
+                        if worker is not None and worker.isRunning():
+                            running = True
+                            break
+                    except Exception:
+                        pass
+                if not running:
+                    break
+                try:
+                    from PySide6.QtWidgets import QApplication
+                    QApplication.processEvents()
+                except Exception:
+                    pass
+            for rk, ctx in list(self._run_contexts.items()):
+                worker = ctx.get("worker")
+                try:
+                    if worker is not None and worker.isRunning():
+                        worker.terminate()
+                        worker.wait(1000)
+                except Exception:
+                    pass
         self._dispose_worker()
 
         if self.probe_worker and self.probe_worker.isRunning():
-            if msg_question(self, "Exit", "Model probe ještě běží. Zastavit a ukončit?") != QMessageBox.Yes:
+            if msg_question(self, "Exit", "Model probe je?t? b???. Zastavit a ukon?it?") != QMessageBox.Yes:
                 event.ignore()
                 return
             self.log("Stopping model probe before exit...")
@@ -2488,13 +2678,7 @@ class MainWindow(QMainWindow):
                 self.log(f"Failed to close probe busy popup: {e}")
         self._dispose_probe_worker()
 
-        if self.progress_dialog:
-            try:
-                self.progress_dialog.close()
-            except Exception:
-                pass
-            self.progress_dialog = None
-
+        self.progress_dialog = None
         super().closeEvent(event)
 
     def _maybe_execute_repair(self, out_dir: str):
