@@ -1,2 +1,5 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
 _diag_test/** filter=lfs diff=lfs merge=lfs -text
 resources/*.ttf filter=lfs diff=lfs merge=lfs -text
