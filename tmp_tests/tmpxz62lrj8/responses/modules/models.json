@@ -1,9 +1,0 @@
-{
-  "module": "models",
-  "files": [
-    {
-      "path": "models/user.py",
-      "purpose": "entity"
-    }
-  ]
-}
