@@ -3,24 +3,20 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kajovospend"
+name = "kajovong"
 version = "0.1.0"
-description = "KájovoSpend desktop application"
+description = "KájovoNG – desktopová automatizace OpenAI"
 readme = "README.md"
 requires-python = ">=3.12"
-authors = [{name = "OpenAI"}]
 dependencies = [
-  "PySide6>=6.8,<6.9",
-  "SQLAlchemy>=2.0,<2.1",
-  "pydantic>=2.8,<3",
-  "platformdirs>=4.2,<5",
-  "requests>=2.32,<3",
-  "keyring>=25.6,<26",
-  "openpyxl>=3.1,<4",
-  "Pillow>=11,<12",
-  "pypdf>=5,<6",
-  "pypdfium2>=4.30,<6",
+  "PySide6>=6.8,<7",
+  "openai>=1.0.0",
+  "requests>=2.31.0",
+  "paramiko>=3.4.0",
+  "keyring>=24.0.0",
+  "beautifulsoup4>=4.12.0",
 ]
+
 
 [project.optional-dependencies]
 dev = [
@@ -32,13 +28,13 @@ dev = [
 ]
 
 [project.scripts]
-kajovospend = "kajovospend.app.main:main"
+kajovong = "kajovo.app.main:main"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["kajovospend*"]
+include = ["kajovo", "kajovo.*", "kajovong"]
 exclude = ["tests*"]
 namespaces = false
 
