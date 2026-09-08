@@ -21,7 +21,7 @@ from .widgets import style_progress_bar
 
 
 class ProgressDialog(QDialog):
-    _A3_FILE_RE = re.compile(r"A3:\\s*FILE\\s+(.+?)\\s+\\((\\d+)\\s*/\\s*(\\d+)\\)", re.IGNORECASE)
+    _A3_FILE_RE = re.compile(r"A3:\s*FILE\s+(.+?)\s+\((\d+)\s*/\s*(\d+)\)", re.IGNORECASE)
 
     def __init__(self, parent=None):
         super().__init__(parent)

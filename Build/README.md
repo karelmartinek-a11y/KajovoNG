@@ -1,74 +1,27 @@
-# Build návod (Windows + macOS)
+# Sestavení
 
-Tento adresář obsahuje kompletní build workflow pro aplikaci **Kája/Kajovo** tak, aby byl výstup konzistentní na Windows i macOS.
+Požadavky a provozní kontrakty popisuje [SSOT](../docs/SSOT.md). Python musí být alespoň 3.12.
 
-## Co je zajištěno
+## Windows
 
-Build skripty vždy před kompilací:
-1. doinstalují build závislosti (`pyinstaller`),
-2. vygenerují jednotné ikonky aplikace,
-3. nastaví stejnou značku/ikonu pro:
-   - spustitelný soubor (`.exe` / `.app`),
-   - ikonu okna aplikace (runtime `resources/app_icon.png`),
-   - favicon (`Build/assets/favicon.ico`) pro případné web/README použití.
-
-Ikony se generují skriptem `Build/generate_icons.py` do `Build/assets/` a zároveň se aktualizuje runtime soubor `resources/app_icon.png`.
-
-> Poznámka: binární icon soubory se necommitují do gitu; generují se vždy při buildu.
-
----
-
-## Windows build
-
-### Požadavky
-- Windows 10/11
-- Python 3.10+
-- PowerShell
-
-### Spuštění
 ```powershell
-cd <repo>
-./Build/build_windows.ps1
+.\Build\build_windows.ps1 -Python ".venv\Scripts\python.exe"
 ```
 
-Volitelné parametry:
-```powershell
-./Build/build_windows.ps1 -Python py -AppName Kajovo
-```
+Výstup je `dist/Kajovo/Kajovo.exe`. Skript instaluje závislosti, vytváří ikony a spouští PyInstaller; chyba kteréhokoli kroku ukončí sestavení.
 
-### Výstup
-- `dist/Kajovo/Kajovo.exe`
+## macOS
 
----
+Vyžaduje nástroje `sips` a `iconutil`.
 
-## macOS build
-
-### Požadavky
-- macOS
-- Python 3.10+
-- Xcode Command Line Tools (`iconutil`, `sips`)
-
-### Spuštění
 ```bash
-cd <repo>
-./Build/build_macos.sh
+PYTHON_BIN=python3 APP_NAME=Kajovo ./Build/build_macos.sh
 ```
 
-Volitelné env proměnné:
-```bash
-PYTHON_BIN=python3.11 APP_NAME=Kajovo ./Build/build_macos.sh
-```
+Výstup je `dist/Kajovo.app`. Sestavení musí proběhnout na cílovém operačním systému.
 
-### Výstup
-- `dist/Kajovo.app`
+## Prostředky
 
----
+Zdrojové logo je `resources/Kajovo_new.png`. Ikony v `Build/assets` a `resources/app_icon.png` jsou generované a necommitují se. Fonty jsou verzované prostřednictvím Git LFS. Před sestavením proveďte `git lfs pull`.
 
-## Poznámky k ikonám a brandingu
-
-- `Build/assets/app_icon.ico` → ikona Windows `.exe`
-- `Build/assets/app_icon.icns` → ikona macOS `.app`
-- `resources/app_icon.png` → runtime ikona hlavního okna (nastavuje aplikace při startu)
-- `Build/assets/favicon.ico` → favicon pro dokumentaci/web integrace
-
-Pokud chceš změnit vizuál loga, uprav kreslení v `Build/generate_icons.py` a rebuildni aplikaci.
+Distribuce obsahuje lokální diagnostický PowerShell skript, logo a oba fonty. Přenosný wheel se sestaví příkazem `python -m pip wheel --no-deps --wheel-dir dist .`.

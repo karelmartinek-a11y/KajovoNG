@@ -10,21 +10,23 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "PySide6>=6.8,<7",
-  "openai>=1.0.0",
+  "openai>=3.9,<4",
   "requests>=2.31.0",
   "paramiko>=3.4.0",
   "keyring>=24.0.0",
   "beautifulsoup4>=4.12.0",
+  "jsonschema>=4.23,<5",
 ]
 
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.3,<9",
+  "pytest>=9.0.3,<10",
   "pytest-qt>=4.4,<5",
   "ruff>=0.6,<1",
   "mypy>=1.11,<2",
   "pyinstaller>=6.10,<7",
+  "pillow>=11,<13",
 ]
 
 [project.scripts]
@@ -34,12 +36,19 @@ kajovong = "kajovo.app.main:main"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["kajovo", "kajovo.*", "kajovong"]
+include = ["kajovo", "kajovo.*", "kajovong", "utf8nobom"]
 exclude = ["tests*"]
 namespaces = false
 
+[tool.setuptools.package-data]
+"kajovo.core.diagnostics" = ["*.ps1"]
+
+[tool.setuptools.data-files]
+"resources" = ["resources/Kajovo_new.png", "resources/montserrat_regular.ttf", "resources/montserrat_bold.ttf"]
+
 [tool.ruff]
 line-length = 100
+extend-exclude = ["Build/lib", "Build/Kajovo", "Build/bdist.*", "build/lib", "build/Kajovo"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

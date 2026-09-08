@@ -1,11 +1,11 @@
 from __future__ import annotations
+import copy
 
 import base64
 import json
 import os
 import shutil
 import time
-import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,10 +15,9 @@ from .contracts import ContractError, extract_text_from_response, parse_json_str
 from .filescan import build_manifest, scan_tree
 from .openai_client import OpenAIClient
 from .pricing import PriceTable, compute_cost
-from .pricing_fetcher import PricingFetcher
 from .receipt import Receipt, ReceiptDB
 from .retry import CircuitBreaker, with_retry
-from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root
+from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root, atomic_write_text
 
 SUPPORTED_INPUT_FILE_EXTS = {
     ".art", ".bat", ".brf", ".c", ".cls", ".css", ".csv", ".diff", ".doc", ".docx", ".dot", ".eml", ".es",
@@ -82,6 +81,8 @@ class UiRunConfig:
     # resume data for rerun (precomputed structure + prev_id)
     resume_files: List[Dict[str, Any]] = None  # type: ignore
     resume_prev_id: Optional[str] = None
+    ssh_pin: str = ""
+    ssh_pin_required: bool = False
 
 
 class RunWorker(QThread):
@@ -104,7 +105,7 @@ class RunWorker(QThread):
     ):
         super().__init__(parent)
         self.cfg = cfg
-        self.settings = settings
+        self.settings = copy.deepcopy(settings)
         self.api_key = api_key
         self.log = run_logger
         self.db = receipt_db
@@ -299,6 +300,10 @@ class RunWorker(QThread):
 
     def run(self):
         try:
+            if not self.api_key or not self.cfg.model or not self.cfg.prompt.strip():
+                raise ValueError("Běh vyžaduje API klíč, model a neprázdné zadání.")
+            if self.cfg.resume_files is not None:
+                validate_paths(self.cfg.resume_files)
             self.log.update_state(
                 {
                     "status": "running",
@@ -344,7 +349,6 @@ class RunWorker(QThread):
                 input_file_ids, input_image_ids = self._build_input_attachments(client, self._input_file_ids())
                 zip_supported = bool(self._diag_zip_path and self._is_supported_input_file(self._diag_zip_path))
                 supports_input_file = bool(self.cfg.model_caps.get("supports_input_file", True))
-                supports_vector_store = bool(self.cfg.model_caps.get("supports_vector_store", False))
                 self.log.event(
                     "io.reference",
                     {
@@ -364,7 +368,7 @@ class RunWorker(QThread):
             except Exception:
                 pass
 
-            pricing_updated = self._refresh_pricing_via_model(client)
+            pricing_updated = False
 
             # LONG PROMPT handling:
 # - GENERATE/MODIFY: explicit ingest cascade A0 (keeps continuity via previous_response_id)
@@ -565,7 +569,7 @@ class RunWorker(QThread):
                     self.log.exception("diagnostics.windows.failed", e)
                 except Exception:
                     pass
-                raise RuntimeError(f"Diagnostics Windows failed: {e}")
+                raise RuntimeError(f"Diagnostics Windows failed: {e}") from e
 
         if self.cfg.diag_ssh_in:
             from .diagnostics.ssh import collect_ssh_diagnostics
@@ -581,6 +585,8 @@ class RunWorker(QThread):
                     self.cfg.ssh_password,
                     on_line=self._log_debug,
                     timeout_s=900,
+                    pin=self.cfg.ssh_pin,
+                    pin_required=self.cfg.ssh_pin_required,
                 )
                 diag_files.extend(files)
                 try:
@@ -592,7 +598,7 @@ class RunWorker(QThread):
                     self.log.exception("diagnostics.ssh.failed", e)
                 except Exception:
                     pass
-                raise RuntimeError(f"Diagnostics SSH failed: {e}")
+                raise RuntimeError(f"Diagnostics SSH failed: {e}") from e
 
         diag_text = self._build_diag_text(diag_files)
 
@@ -616,27 +622,31 @@ class RunWorker(QThread):
     def _zip_in_dir(self, root: str) -> str:
         root = os.path.abspath(root)
         ensure_dir(self.log.paths.files_dir)
-        zip_path = os.path.join(self.log.paths.files_dir, f"in_dir_{ts_code()}.zip")
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for dirpath, dirnames, filenames in os.walk(root):
-                dirnames[:] = [d for d in dirnames if d not in ("venv", ".venv", "LOG")]
-                for fname in filenames:
-                    abs_path = os.path.join(dirpath, fname)
-                    rel = os.path.relpath(abs_path, root)
-                    try:
-                        zf.write(abs_path, rel)
-                    except Exception:
-                        try:
-                            self.log.event("zip.skip", {"path": abs_path})
-                        except Exception:
-                            pass
+        zip_path = os.path.join(self.log.paths.files_dir, f"in_dir_{ts_code()}.txt")
+        policy = self.settings.security
+        items = scan_tree(root, os.path.basename(root), [".git", "venv", ".venv", "LOG", "cache", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache"],
+                          policy.deny_extensions_in, policy.allow_extensions_in,
+                          policy.deny_globs_in, policy.allow_globs_in)
+        with open(zip_path, "w", encoding="utf-8", newline="\n") as bundle:
+            for item in items:
+                self._check_stop()
+                if not item.uploadable:
+                    continue
+                import hashlib
+                with open(item.abs_path, "rb") as source:
+                    content = source.read(10 * 1024 * 1024 + 1)
+                if hashlib.sha256(content).hexdigest() != item.sha256:
+                    raise RuntimeError(f"Vstupní soubor se změnil během přípravy: {item.rel_path}")
+                bundle.write(json.dumps({"path": item.rel_path, "content": content.decode("utf-8")}, ensure_ascii=False) + "\n")
+                if bundle.tell() > 40 * 1024 * 1024:
+                    raise ValueError("Textový balíček IN překračuje limit 40 MiB.")
         return zip_path
 
     def _prepare_in_dir_upload(self, client: OpenAIClient) -> Optional[Dict[str, Any]]:
         in_dir = (self.cfg.in_dir or "").strip()
         if not in_dir or not os.path.isdir(in_dir):
             return None
-        self._set(4, 0, "IN: zipping + upload...")
+        self._set(4, 0, "IN: kontrola souborů a upload textového balíčku...")
         zip_path = self._zip_in_dir(in_dir)
         up = with_retry(lambda: client.upload_file(zip_path, purpose="user_data"), self.settings.retry, self.breaker)
         file_id = up["id"]
@@ -649,7 +659,7 @@ class RunWorker(QThread):
 
         if bool(self.cfg.model_caps.get("supports_vector_store", False)):
             try:
-                self._set(6, 0, "IN: vytvářím vector store z archivu...")
+                self._set(6, 0, "IN: vytvářím vector store z textového balíčku...")
                 vs = with_retry(lambda: client.create_vector_store(f"IN_{ts_code()}"), self.settings.retry, self.breaker)
                 vs_id = vs.get("id")
                 if vs_id:
@@ -821,28 +831,7 @@ class RunWorker(QThread):
         supports_vs = bool(self.cfg.model_caps.get("supports_vector_store", False))
         if supports_fs or supports_vs:
             return ""
-        return f"IN adresář je nahrán jako ZIP na Files API (file_id={self._in_dir_info['file_id']}). Model nemá file_search ani vector store; použij tento soubor jako zdroj dat."
-
-    def _refresh_pricing_via_model(self, client: OpenAIClient) -> bool:
-        if not self.api_key:
-            return False
-        try:
-            resp = with_retry(lambda: client.create_response(PricingFetcher.payload()), self.settings.retry, self.breaker)
-            rows = PricingFetcher.parse_response(resp)
-            if rows:
-                self.price_table.update_from_rows(rows, verified=False)
-                try:
-                    self.price_table.save_cache()
-                except Exception:
-                    pass
-                self.log.event("pricing.model_refresh", {"model": PricingFetcher.DEFAULT_MODEL, "count": len(rows)})
-                return True
-        except Exception as exc:
-            try:
-                self.log.event("pricing.model_refresh_failed", {"error": str(exc)})
-            except Exception:
-                pass
-        return False
+        return f"IN adresář je přiložen jako textový balíček (file_id={self._in_dir_info['file_id']}). Každý řádek JSON obsahuje cestu a obsah souboru."
 
     # ---------- long prompt ingest ----------
     def _ingest_prompt_if_needed(self, client: OpenAIClient, prev_id: Optional[str]) -> Optional[str]:
@@ -876,7 +865,7 @@ class RunWorker(QThread):
                 prev_id=last_id,
             )
             self.log.save_json("requests", f"A0_ingest_{i}_{ts_code()}", {"payload": payload, "ui_state": self.cfg.__dict__})
-            resp = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
+            resp = self._create_response(client, payload)
             self.log.save_json("responses", f"A0_ingest_resp_{resp.get('id','NOID')}_{i}_{ts_code()}", resp)
 
             last_id = str(resp.get("id") or "")
@@ -890,7 +879,7 @@ class RunWorker(QThread):
     def _create_snapshot(self, root: str) -> str:
         root = os.path.abspath(root)
         root_name = os.path.basename(root)
-        snap_name = f"{root_name}{ts_code()}"
+        snap_name = f"{root_name}{time.strftime('%d%m%Y%H%M%S')}"
         snap_dir = os.path.join(root, snap_name)
         deny = {"venv", ".venv", "LOG", snap_name}
 
@@ -903,7 +892,7 @@ class RunWorker(QThread):
                     ignored.add(n)
             return ignored
 
-        shutil.copytree(root, snap_dir, ignore=ignore, dirs_exist_ok=True)
+        shutil.copytree(root, snap_dir, ignore=ignore, symlinks=True)
         try:
             self.log.event("versing.snapshot.created", {"snap_dir": snap_dir})
         except Exception:
@@ -932,8 +921,7 @@ class RunWorker(QThread):
             ensure_dir(os.path.dirname(dst))
             before_size = os.path.getsize(dst) if os.path.exists(dst) else None
             before = sha256_file(dst) if os.path.exists(dst) else None
-            with open(dst, "w", encoding="utf-8", newline="\n") as fp:
-                fp.write(content)
+            atomic_write_text(dst, content)
             after_size = os.path.getsize(dst)
             after = sha256_file(dst)
             self.log.record_fs_change("write", src=rel, dst=dst, before=before, after=after, before_size=before_size, after_size=after_size)
@@ -947,7 +935,7 @@ class RunWorker(QThread):
             return None
         out_dir = self.cfg.out_dir
         ensure_dir(out_dir)
-        report_path = os.path.join(out_dir, "MISSINGFILES.md")
+        report_path = safe_join_under_root(out_dir, "MISSINGFILES.md")
         lines: List[str] = [
             "# MISSINGFILES",
             "",
@@ -977,14 +965,16 @@ class RunWorker(QThread):
 
     def _record_receipt(self, resp: Dict[str, Any], mode: str, flow_type: str, response_id: Optional[str] = None, batch_id: Optional[str] = None, is_batch: bool = False):
         inp, out, usage = self._usage_from_resp(resp or {})
-        row = self.price_table.get(self.cfg.model) or PriceTable.builtin_fallback().get(self.cfg.model) or PriceTable.builtin_fallback().get("gpt-4o-mini")
+        model = resp.get("model") or self.cfg.model
+        row = self.price_table.get(model) or PriceTable.builtin_fallback().get(model)
         verified = bool(self.price_table.verified and row is not None)
-        total, tool_cost, storage_cost = compute_cost(row, inp, out, is_batch=is_batch, use_file_search=self._used_file_search)
+        search_calls = sum(1 for item in resp.get("output", []) if isinstance(item, dict) and item.get("type") == "file_search_call")
+        total, tool_cost, storage_cost = compute_cost(row, inp, out, is_batch=is_batch, use_file_search=self._used_file_search, file_search_calls=search_calls)
         r = Receipt(
             run_id=self.log.run_id,
             created_at=time.time(),
             project=self.cfg.project,
-            model=self.cfg.model,
+            model=model,
             mode=mode,
             flow_type=flow_type,
             response_id=response_id,
@@ -1004,10 +994,16 @@ class RunWorker(QThread):
         self._total_input_tokens += inp
         self._total_output_tokens += out
 
+    def _create_response(self, client, payload):
+        response = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
+        self._record_receipt({**response, "model": response.get("model") or payload.get("model")},
+                             self.cfg.mode, "RESPONSE", response_id=response.get("id"))
+        return response
+
     def _ensure_receipt_on_failure(self, reason: str, flow_type: str):
         if self._has_receipt:
             return
-        row = self.price_table.get(self.cfg.model) or PriceTable.builtin_fallback().get(self.cfg.model) or PriceTable.builtin_fallback().get("gpt-4o-mini")
+        row = self.price_table.get(self.cfg.model) or PriceTable.builtin_fallback().get(self.cfg.model)
         verified = bool(self.price_table.verified and row is not None)
         total, tool_cost, storage_cost = compute_cost(row, self._total_input_tokens, self._total_output_tokens, is_batch=self.cfg.send_as_c, use_file_search=self._used_file_search)
         r = Receipt(
@@ -1058,6 +1054,7 @@ class RunWorker(QThread):
                 pass
 
             files_raw = struct.get("files", []) or []
+            validate_paths(files_raw)
             for f in files_raw:
                 self._check_stop()
                 path = f.get("path")
@@ -1130,11 +1127,10 @@ class RunWorker(QThread):
                 {
                     "payload": payload,
                     "ui_state": self.cfg.__dict__,
-                    "attachments": self._attachments_snapshot("A1", a1_ref_files, a1_input_files, a1_input_images, self._vector_store_ids, self._fs_tools),
                 },
             )
             self._log_api_action("A1", "send", {"contract": "A1_PLAN", "stage": "PLAN", "model": a1_model})
-            resp1 = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
+            resp1 = self._create_response(client, payload)
             self.log.save_json("responses", f"A1_response_{resp1.get('id','NOID')}_{ts_code()}", resp1)
             self._log_api_action("A1", "receive", {"response_id": resp1.get("id"), "status": resp1.get("status"), "contract": "A1_PLAN"})
 
@@ -1182,11 +1178,10 @@ class RunWorker(QThread):
                 {
                     "payload": payload2,
                     "ui_state": self.cfg.__dict__,
-                    "attachments": self._attachments_snapshot("A2", a2_ref_files, a2_input_files, a2_input_images, self._vector_store_ids, self._fs_tools),
                 },
             )
             self._log_api_action("A2", "send", {"contract": "A2_STRUCTURE", "stage": "STRUCTURE", "model": a2_model})
-            resp2 = with_retry(lambda: client.create_response(payload2), self.settings.retry, self.breaker)
+            resp2 = self._create_response(client, payload2)
             self.log.save_json("responses", f"A2_response_{resp2.get('id','NOID')}_{ts_code()}", resp2)
             self._log_api_action("A2", "receive", {"response_id": resp2.get("id"), "status": resp2.get("status"), "contract": "A2_STRUCTURE"})
 
@@ -1252,8 +1247,6 @@ class RunWorker(QThread):
 
         saved_map = self._save_out_files(out_files)
         missing_report = self._write_missing_files_report(skipped_a3_images)
-        if resp2 is not None:
-            self._record_receipt(resp2, mode="GENERATE", flow_type="A", response_id=resp2_id)
         return {
             "mode": "GENERATE",
             "plan": plan,
@@ -1272,7 +1265,7 @@ class RunWorker(QThread):
         items = scan_tree(
             root,
             root_name,
-            deny_dirs=["venv", ".venv", "LOG"],
+            deny_dirs=[".git", "venv", ".venv", "LOG", "cache", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache"],
             deny_exts=self.settings.security.deny_extensions_in,
             allow_exts=self.settings.security.allow_extensions_in,
             deny_globs=self.settings.security.deny_globs_in,
@@ -1319,7 +1312,7 @@ class RunWorker(QThread):
                     for rel, fid in uploaded[:2000]:
                         self._check_stop()
                         vs_file = with_retry(
-                            lambda v=vs_id, f=fid, r=rel: client.add_file_to_vector_store(v, f, attributes={"source_path": os.path.join(root, rel)}),
+                        lambda v=vs_id, f=fid, r=rel: client.add_file_to_vector_store(v, f, attributes={"source_path": os.path.join(root, r)}),
                             self.settings.retry,
                             self.breaker,
                         )
@@ -1408,11 +1401,10 @@ class RunWorker(QThread):
                 "ui_state": self.cfg.__dict__,
                 "supports_file_search": supports_fs,
                 "vector_store_ids": vs_ids,
-                "attachments": self._attachments_snapshot("B1", b1_ref_files, b1_input_files, b1_input_images, vs_ids, tools),
             },
         )
         self._log_api_action("B1", "send", {"contract": "B1_PLAN", "model": self.cfg.model})
-        resp1 = with_retry(lambda: client.create_response(payload1), self.settings.retry, self.breaker)
+        resp1 = self._create_response(client, payload1)
         self.log.save_json("responses", f"B1_response_{resp1.get('id','NOID')}_{ts_code()}", resp1)
         self._log_api_action("B1", "receive", {"response_id": resp1.get("id"), "status": resp1.get("status"), "contract": "B1_PLAN"})
 
@@ -1455,11 +1447,10 @@ class RunWorker(QThread):
             {
                 "payload": payload2,
                 "ui_state": self.cfg.__dict__,
-                "attachments": self._attachments_snapshot("B2", b2_ref_files, b2_input_files, b2_input_images, vs_ids, tools),
             },
         )
         self._log_api_action("B2", "send", {"contract": "B2_STRUCTURE", "model": self.cfg.model})
-        resp2 = with_retry(lambda: client.create_response(payload2), self.settings.retry, self.breaker)
+        resp2 = self._create_response(client, payload2)
         self.log.save_json("responses", f"B2_response_{resp2.get('id','NOID')}_{ts_code()}", resp2)
         self._log_api_action("B2", "receive", {"response_id": resp2.get("id"), "status": resp2.get("status"), "contract": "B2_STRUCTURE"})
 
@@ -1469,6 +1460,9 @@ class RunWorker(QThread):
             raise ContractError("B2_STRUCTURE contract mismatch")
 
         touched_raw = struct.get("touched_files", []) or []
+        validate_paths(touched_raw)
+        if any(item.get("action") not in ("add", "modify") for item in touched_raw):
+            raise ContractError("B2: action musí být add nebo modify.")
         touched = []
         for tf in touched_raw:
             path = tf.get("path", "")
@@ -1507,7 +1501,6 @@ class RunWorker(QThread):
             out_files.append({"path": path, "content": content})
 
         saved_map = self._save_out_files(out_files)
-        self._record_receipt(resp2, mode="MODIFY", flow_type="B", response_id=resp2_id)
         return {"mode": "MODIFY", "plan": plan, "structure": struct, "saved": saved_map, "response_id": resp2_id, "vector_store_id": vs_id, "supports_file_search": supports_fs}
 
     # ---------- QA ----------
@@ -1553,14 +1546,12 @@ class RunWorker(QThread):
             {
                 "payload": payload,
                 "ui_state": self.cfg.__dict__,
-                "attachments": self._attachments_snapshot("QA", ref_file_ids, input_file_ids, input_image_ids, self._vector_store_ids, self._fs_tools),
             },
         )
         self._log_api_action("QA", "send", {"description": "QA request", "model": self.cfg.model})
-        resp = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
+        resp = self._create_response(client, payload)
         self.log.save_json("responses", f"QA_response_{resp.get('id','NOID')}_{ts_code()}", resp)
         self._log_api_action("QA", "receive", {"response_id": resp.get("id"), "status": resp.get("status")})
-        self._record_receipt(resp, mode="QA", flow_type="QA", response_id=str(resp.get("id") or ""))
         return {"mode": "QA", "response_id": str(resp.get("id") or ""), "text": extract_text_from_response(resp)}
 
     # ---------- QFile ----------
@@ -1613,7 +1604,6 @@ class RunWorker(QThread):
             {
                 "payload": payload,
                 "ui_state": self.cfg.__dict__,
-                "attachments": self._attachments_snapshot("QFILE", qfile_ref_files, qfile_input_files, qfile_input_images, self._vector_store_ids, self._fs_tools),
             },
         )
         self._log_api_action(
@@ -1625,7 +1615,7 @@ class RunWorker(QThread):
                 "files": len(self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)),
             },
         )
-        resp = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
+        resp = self._create_response(client, payload)
         self.log.save_json("responses", f"QFILE_response_{resp.get('id','NOID')}_{ts_code()}", resp)
         self._log_api_action("QFILE", "receive", {"response_id": resp.get("id"), "status": resp.get("status")})
 
@@ -1634,18 +1624,19 @@ class RunWorker(QThread):
         if parsed.get("contract") != "A3_FILE":
             raise ContractError("QFILE: očekáván kontrakt A3_FILE")
 
-        chunk = parsed.get("chunking") or {}
-        if chunk.get("has_more"):
+        chunk = parsed.get("chunking")
+        if not isinstance(chunk, dict) or chunk.get("has_more") is not False or chunk.get("chunk_index") != 0:
             raise ContractError("QFILE: chunking.has_more musí být false (jediný chunk).")
 
         path = parsed.get("path")
         if not isinstance(path, str) or not path:
             raise ContractError("QFILE: chybí path v odpovědi.")
 
-        out_files = [{"path": path, "content": parsed.get("content", ""), "purpose": "QFILE"}]
+        if not isinstance(parsed.get("content"), str):
+            raise ContractError("QFILE: content musí být text.")
+        out_files = [{"path": path, "content": parsed["content"], "purpose": "QFILE"}]
         self._set(70, 0, f"QFILE: ukládám {path}...")
         saved_map = self._save_out_files(out_files)
-        self._record_receipt(resp, mode="QFILE", flow_type="QFILE", response_id=str(resp.get("id") or ""))
         return {"mode": "QFILE", "response_id": str(resp.get("id") or ""), "saved": saved_map, "contract": parsed, "text": raw_text}
 
     # ---------- C: Batch ----------
@@ -1696,7 +1687,6 @@ class RunWorker(QThread):
             "method": "POST",
             "url": "/v1/responses",
             "body": body,
-            "attachments": self._attachments_snapshot("C", c_ref_files, c_input_files, c_input_images, self._vector_store_ids, None),
         }
 
         jsonl_path = os.path.join(self.log.paths.requests_dir, f"C_batch_{ts_code()}.jsonl")
@@ -1798,7 +1788,6 @@ class RunWorker(QThread):
                 {
                     "payload": payload,
                     "ui_state": self.cfg.__dict__,
-                    "attachments": self._attachments_snapshot(contract, gen_ref_files, gen_input_files, gen_input_images, vs_ids, tools),
                 },
             )
             self._log_api_action(
@@ -1811,7 +1800,7 @@ class RunWorker(QThread):
             parsed = None
             last_err: Optional[Exception] = None
             while attempt < max_attempts and parsed is None:
-                resp = with_retry(lambda: client.create_response(payload), self.settings.retry, self.breaker)
+                resp = self._create_response(client, payload)
                 resp_id = str(resp.get("id") or "")
                 if resp_id:
                     # Keep chain continuity on every response, even when JSON/contract parse fails.
@@ -1852,12 +1841,18 @@ class RunWorker(QThread):
                     continue
 
             if parsed is None:
-                # give up gracefully
-                parts.append("")
-                break
+                raise ContractError(f"{contract}: neplatný výstup pro {path} po {max_attempts} pokusech.") from last_err
 
-            parts.append(parsed.get("content", ""))
+            if parsed.get("path") != path:
+                raise ContractError(f"{contract}: odpověď obsahuje jinou cestu než {path}.")
+            if not isinstance(parsed.get("content"), str):
+                raise ContractError(f"{contract}: obsah souboru musí být text.")
+            parts.append(parsed["content"])
             ch = parsed.get("chunking", {}) or {}
+            if not isinstance(ch, dict) or ch.get("chunk_index") != chunk_index:
+                raise ContractError(f"{contract}: neplatné pořadí částí souboru.")
+            if not isinstance(ch.get("has_more"), bool):
+                raise ContractError(f"{contract}: has_more musí být boolean.")
             resp_id = str(resp.get("id") or "")
             self._log_api_action(
                 f"{contract}:{path}",
@@ -1871,7 +1866,10 @@ class RunWorker(QThread):
             if not ch.get("has_more"):
                 break
 
-            chunk_index = int(ch.get("next_chunk_index") or (chunk_index + 1))
+            next_index = ch.get("next_chunk_index")
+            if type(next_index) is not int or next_index != chunk_index + 1:
+                raise ContractError(f"{contract}: neplatný index následující části.")
+            chunk_index = next_index
             if chunk_index > 5000:
                 raise ContractError("Chunk loop guard")
 

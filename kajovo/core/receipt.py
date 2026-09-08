@@ -76,6 +76,11 @@ class ReceiptDB:
     def insert(self, r: Receipt) -> int:
         con = self._connect()
         try:
+            con.execute("BEGIN IMMEDIATE")
+            if r.response_id:
+                existing = con.execute("SELECT id FROM receipts WHERE response_id = ? LIMIT 1", (r.response_id,)).fetchone()
+                if existing:
+                    return int(existing[0])
             cur = con.execute(
                 '''INSERT INTO receipts
                    (run_id, created_at, project, model, mode, flow_type, response_id, batch_id,

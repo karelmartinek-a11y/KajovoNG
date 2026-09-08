@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+from ..core.resources import resource_path
 
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPainter, QPixmap, QColor, QLinearGradient, QFont
+from PySide6.QtGui import QPainter, QPixmap, QColor, QLinearGradient
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsOpacityEffect
 
 
@@ -23,8 +24,7 @@ class SplashScreen(QWidget):
         self._logo = QLabel()
         self._logo.setAlignment(Qt.AlignCenter)
 
-        base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "resources"))
-        logo_path = os.path.join(base, "Kajovo_new.png")
+        logo_path = str(resource_path("Kajovo_new.png"))
         pm = QPixmap(logo_path) if os.path.exists(logo_path) else QPixmap()
         if not pm.isNull():
             self._logo.setPixmap(pm.scaled(170, 170, Qt.KeepAspectRatio, Qt.SmoothTransformation))

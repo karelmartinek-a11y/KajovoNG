@@ -1,9 +1,8 @@
 from __future__ import annotations
-from .widgets import msg_info, msg_warning, msg_critical, msg_question
+from .widgets import msg_info, msg_warning
 
-import os, subprocess
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
-from PySide6.QtCore import Qt
+import os
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton
 from .theme import DARK_STYLESHEET
 
 class ApiKeyDialog(QDialog):
@@ -49,14 +48,8 @@ class ApiKeyDialog(QDialog):
         self.edit.setEchoMode(QLineEdit.Normal)
 
     def _setx(self, value: str) -> bool:
-        # Works on Windows; on other OS fallback only for current process
-        try:
-            if os.name == "nt":
-                subprocess.run(["setx", "OPENAI_API_KEY", value], capture_output=True, text=True, check=True, shell=False)
-                return True
-        except Exception:
-            return False
-        return False
+        from ..core.secret_store import persist_api_key
+        return persist_api_key(value)
 
     def on_save(self):
         val = (self.edit.text() or "").strip()

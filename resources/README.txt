@@ -1,2 +1,7 @@
-Place montserrat_regular.ttf and montserrat_bold.ttf here.
-You can run scripts/fetch_fonts.ps1 to download from Google Fonts.
+Prostředky aplikace KájovoNG:
+- Kajovo_new.png: zdrojové logo.
+- montserrat_regular.ttf, montserrat_bold.ttf: fonty Montserrat, Git LFS.
+- app_icon.png: generovaný výstup Build/generate_icons.py.
+
+Fonty získáte po klonování příkazem git lfs pull.
+Licenční informace jsou v THIRD_PARTY_NOTICES.md.

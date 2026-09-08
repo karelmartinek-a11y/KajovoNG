@@ -15,7 +15,7 @@ class CircuitBreaker:
         self._open_until = 0.0
 
     def allow(self) -> bool:
-        return time.time() >= self._open_until
+        return time.monotonic() >= self._open_until
 
     def on_success(self) -> None:
         self._count = 0
@@ -24,14 +24,15 @@ class CircuitBreaker:
     def on_failure(self) -> None:
         self._count += 1
         if self._count >= self.failures:
-            self._open_until = time.time() + self.cooldown_s
+            self._open_until = time.monotonic() + self.cooldown_s
 
 def with_retry(fn: Callable[[], T], policy: RetryPolicy, breaker: Optional[CircuitBreaker]=None) -> T:
     last: Optional[Exception] = None
+    if policy.max_attempts < 1:
+        raise ValueError("max_attempts musí být alespoň 1.")
     for attempt in range(1, policy.max_attempts + 1):
         if breaker and not breaker.allow():
-            time.sleep(min(policy.circuit_breaker_cooldown_s, 3.0))
-            continue
+            time.sleep(max(0.0, breaker._open_until - time.monotonic()))
         try:
             out = fn()
             if breaker:
@@ -40,7 +41,14 @@ def with_retry(fn: Callable[[], T], policy: RetryPolicy, breaker: Optional[Circu
         except OpenAIError as e:
             last = e
             msg = str(e)
-            transient = any(code in msg for code in (" 429:", " 500:", " 502:", " 503:", " 504:"))
+            import re
+            cause = e.__cause__
+            status = e.status_code or getattr(cause, "status_code", None)
+            if isinstance(status, int):
+                transient = status == 429 or 500 <= status < 600
+            else:
+                transient = (type(cause).__name__ in ("APITimeoutError", "APIConnectionError")
+                             or bool(re.search(r"\b(?:429|5\d\d)\b", msg)))
             if not transient:
                 raise
         except (TimeoutError, OSError) as e:
@@ -49,7 +57,8 @@ def with_retry(fn: Callable[[], T], policy: RetryPolicy, breaker: Optional[Circu
             breaker.on_failure()
         delay = min(policy.max_delay_s, policy.base_delay_s * (2 ** (attempt-1)))
         delay += random.random() * policy.jitter_s
-        time.sleep(delay)
+        if attempt < policy.max_attempts:
+            time.sleep(delay)
     if last:
         raise last
     raise RuntimeError("retry_failed")

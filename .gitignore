@@ -25,4 +25,5 @@ resources/app_icon.png
 /_skill_runs/
 /_ai_delivery/
 /dist/
+/*.spec
 /build/

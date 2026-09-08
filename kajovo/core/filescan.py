@@ -9,7 +9,7 @@ SENSITIVE_NAMES = {".env",".env.local",".env.prod",".pypirc","id_rsa","id_ed2551
 SECRET_PATTERNS = [
     re.compile(r"OPENAI[_-]?API[_-]?KEY\s*[:=]\s*['\"]?[A-Za-z0-9-_]{10,}"),
     re.compile(r"(?i)\b(secret|token|password|api[_-]?key)\b\s*[:=]"),
-    re.compile(r"-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----"),
+    re.compile(r"-----BEGIN (?:(?:RSA|OPENSSH|EC|ENCRYPTED|DSA) )?PRIVATE KEY-----"),
 ]
 
 @dataclass
@@ -59,7 +59,10 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
     for cur, dirs, files in os.walk(root_dir):
         kept = []
         for d in dirs:
-            if d in deny_dirs:
+            if d.casefold() in {name.casefold() for name in deny_dirs}:
+                continue
+            dir_path = os.path.join(cur, d)
+            if os.path.islink(dir_path) or os.path.isjunction(dir_path):
                 continue
             if is_versing_snapshot_dir(d, root_name):
                 continue
@@ -97,7 +100,7 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
                 items.append(ScanItem(rel_path, abs_path, size, None, False, "empty_file", False))
                 continue
 
-            sensitive = (fn.lower() in SENSITIVE_NAMES) or rel_path.lower().endswith(".env")
+            sensitive = (fn.lower() in SENSITIVE_NAMES) or fn.lower().startswith(".env.") or rel_path.lower().endswith(".env")
             if size > max_size_bytes:
                 items.append(ScanItem(rel_path, abs_path, size, None, False, "too_large", sensitive))
                 continue

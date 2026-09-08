@@ -8,6 +8,7 @@ from PySide6.QtGui import QFontDatabase, QFont, QIcon, QPixmap
 from PySide6.QtCore import Qt, QCoreApplication
 
 from kajovo.core.config import load_settings
+from kajovo.core.resources import resource_path
 from kajovo.ui.mainwindow import MainWindow
 
 def _project_root() -> Path:
@@ -17,7 +18,7 @@ def _project_root() -> Path:
 
 
 def _resource_path(*parts: str) -> Path:
-    return _project_root().joinpath("resources", *parts)
+    return resource_path(str(Path(*parts)))
 
 
 def _load_fonts() -> None:

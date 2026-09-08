@@ -8,10 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .config import RetryPolicy
 from .pricing import PriceTable, compute_cost
-from .pricing_fetcher import PricingFetcher
 from .receipt import Receipt, ReceiptDB
-from .openai_client import OpenAIClient
-from .retry import CircuitBreaker, with_retry
+from .retry import CircuitBreaker
 
 
 @dataclass
@@ -81,10 +79,12 @@ class PricingAuditor:
         base = getattr(self.s, "log_dir", "LOG") or "LOG"
         if os.path.isabs(base):
             return base
-        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        root_dir = os.path.abspath(os.curdir)
         return os.path.join(root_dir, base)
 
     def _refresh_pricing_if_needed(self, summary: AuditSummary) -> None:
+        if not self.s.pricing.auto_refresh_on_start:
+            return
         ttl_hours = getattr(getattr(self.s, "pricing", None), "cache_ttl_hours", 72)
         now = time.time()
         stale = (
@@ -99,21 +99,7 @@ class PricingAuditor:
             summary.pricing_refresh = "url"
             self.log("Pricing refreshed from URL.")
             return
-        if not self.api_key:
-            summary.errors.append(f"Pricing refresh failed (no API key): {msg}")
-            return
-        try:
-            client = OpenAIClient(self.api_key)
-            resp = with_retry(lambda: client.create_response(PricingFetcher.payload()), self.retry, self.breaker)
-            rows = PricingFetcher.parse_response(resp)
-            if rows:
-                self.pt.update_from_rows(rows, verified=False, source="GPT fallback")
-                summary.pricing_refresh = "model"
-                self.log(f"Pricing refreshed via model ({len(rows)} rows).")
-            else:
-                summary.errors.append("Pricing refresh via model returned empty rows.")
-        except Exception as exc:
-            summary.errors.append(f"Pricing refresh via model failed: {exc}")
+        summary.errors.append(f"Ceník není ověřený: {msg}")
 
     def _iter_run_dirs(self, log_dir: str) -> List[str]:
         runs = []
@@ -240,7 +226,7 @@ class PricingAuditor:
                     existing["total_cost"] = receipt.total_cost
                     return "updated"
                 return "skipped"
-        if batch_id:
+        if batch_id and not response_id:
             existing = idx.get("batch", {}).get(batch_id)
             if existing:
                 if self._needs_update(existing.get("total_cost", 0.0), receipt.total_cost):
@@ -271,6 +257,10 @@ class PricingAuditor:
         resp: Dict[str, Any],
         req_meta: List[Tuple[str, bool, float]],
     ) -> Optional[Tuple[Receipt, Optional[str], Optional[str], bool]]:
+        if not isinstance(resp, dict):
+            return None
+        if not (resp.get("usage") or resp.get("object") == "response" or str(resp.get("id", "")).startswith("resp_")):
+            return None
         run_id = os.path.basename(run_dir)
         fname = os.path.basename(resp_path)
         label = self._infer_label(fname)
@@ -288,7 +278,7 @@ class PricingAuditor:
         usage, inp, outp = self._extract_usage(resp)
         zero_usage = inp == 0 and outp == 0
         use_fs = self._match_request_tools(label, os.path.getmtime(resp_path), req_meta)
-        row = self.pt.get(model) or PriceTable.builtin_fallback().get(model) or PriceTable.builtin_fallback().get("gpt-4o-mini")
+        row = self.pt.get(model) or PriceTable.builtin_fallback().get(model)
         total, tool_cost, storage_cost = compute_cost(row, inp, outp, is_batch=mode == "C", use_file_search=use_fs)
         notes = f"{flow or 'UNKNOWN'}"
         if zero_usage and usage:
@@ -350,13 +340,10 @@ class PricingAuditor:
 
     @staticmethod
     def _infer_label(name: str) -> str:
-        upper = name.upper()
-        for token in ("A3", "A2", "A1", "B3", "B2", "B1", "QA", "QFILE", "C_BATCH", "C"):
-            if token in upper:
-                return token
-        if "BATCH" in upper:
-            return "C"
-        return "UNKNOWN"
+        import re
+        upper = re.split(r"RUN_\d{12}_[A-Z0-9]{4}_", name.upper())[-1]
+        match = re.match(r"(A[0-3]|B[1-3]|QA|QFILE|C_BATCH|C)(?:_|\.|$)", upper)
+        return match.group(1) if match else "UNKNOWN"
 
     @staticmethod
     def _infer_mode_flow(label: str) -> Tuple[str, str]:

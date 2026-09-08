@@ -1,4 +1,4 @@
-﻿$root = 'C:\\github\\KajovoNG'
+$root = 'C:\\github\\KajovoNG'
 $zip = 'C:\\github\\KajovoNG\\KajovoNG.zip'
 $exclude = @('.git', 'venv', '.venv', 'env', 'LOG', 'LOGS', 'OUT', 'OUTPUT', 'IN', '__pycache__')
 $files = Get-ChildItem -LiteralPath $root -Recurse -Force | Where-Object {

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from .widgets import msg_info, msg_warning, msg_critical, msg_question, dialog_save_file
+from .widgets import msg_info, msg_warning, msg_critical, dialog_save_file
 
 import json
 import os
@@ -278,6 +278,9 @@ class PricingPanel(QWidget):
         self._set_audit_status("Audit running...")
 
     def _on_audit_done(self, summary: dict):
+        if self.audit_worker:
+            self.audit_worker.wait()
+            self.audit_worker.deleteLater()
         self.audit_worker = None
         msg = (
             f"Audit DONE: runs={summary.get('runs_scanned')}, responses={summary.get('responses_seen')}, "
@@ -290,6 +293,9 @@ class PricingPanel(QWidget):
         self.load_receipts()
 
     def _on_audit_error(self, err: str):
+        if self.audit_worker:
+            self.audit_worker.wait()
+            self.audit_worker.deleteLater()
         self.audit_worker = None
         self._log(f"Audit failed: {err}")
         self._set_audit_status(f"Audit failed: {err}")

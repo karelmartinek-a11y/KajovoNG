@@ -1,8 +1,7 @@
 from __future__ import annotations
-from .widgets import msg_info, msg_warning, msg_critical, msg_question
+from .widgets import msg_info, msg_critical
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QMessageBox, QTextEdit, QFormLayout
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QLineEdit, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QFormLayout
 from .theme import DARK_STYLESHEET
 
 from ..core.config import save_settings, DEFAULT_SETTINGS_FILE
@@ -19,10 +18,12 @@ class SettingsDialog(QDialog):
         v = QVBoxLayout(self)
 
         form = QFormLayout()
-        self.chk_mask = QCheckBox("Mask secrets in logs")
-        self.chk_mask.setChecked(bool(self.s.logging.mask_secrets))
-        self.chk_encrypt = QCheckBox("Encrypt logs (basic)")
-        self.chk_encrypt.setChecked(bool(self.s.logging.encrypt_logs))
+        self.chk_mask = QCheckBox("Redakce známých tajných polí je vždy aktivní")
+        self.chk_mask.setEnabled(False)
+        self.chk_mask.setChecked(True)
+        self.chk_encrypt = QCheckBox("Šifrování logů není dostupné; chraňte adresář LOG")
+        self.chk_encrypt.setEnabled(False)
+        self.chk_encrypt.setChecked(False)
         self.chk_allow_sensitive = QCheckBox("Allow upload of sensitive files (danger)")
         self.chk_allow_sensitive.setChecked(bool(self.s.security.allow_upload_sensitive))
 

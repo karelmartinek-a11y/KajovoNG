@@ -16,9 +16,14 @@ from PySide6.QtWidgets import (
     QInputDialog,
 )
 from PySide6.QtCore import Qt, QPoint, Signal
-from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication
 from .theme import DARK_STYLESHEET
+
+
+def app_icon():
+    from PySide6.QtGui import QIcon
+    from ..core.resources import resource_path
+    return QIcon(str(resource_path("Kajovo_new.png")))
 
 
 class TitleBar(QWidget):

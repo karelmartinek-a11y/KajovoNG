@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional
 import requests
 
 class OpenAIError(Exception):
-    pass
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 class OpenAIClient:
     def __init__(self, api_key: str, base_url: str = "https://api.openai.com/v1", timeout_s: float = 60.0):
@@ -19,12 +21,12 @@ class OpenAIClient:
         self._sdk = None
         try:
             from openai import OpenAI  # type: ignore
-            self._sdk = OpenAI(api_key=api_key)
+            self._sdk = OpenAI(api_key=api_key, base_url=self.base_url, timeout=self.timeout_s, max_retries=0)
         except Exception:
             self._sdk = None
 
         self.session = requests.Session()
-        self.session.headers.update({"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+        self.session.headers.update({"Authorization": f"Bearer {api_key}"})
 
     def _should_retry(self, status_code: Optional[int], error: Optional[Exception]) -> bool:
         if error is not None:
@@ -47,11 +49,18 @@ class OpenAIClient:
             return ""
         return text[:max_chars]
 
-    def _req(self, method: str, path: str, json_body: Optional[Dict[str, Any]]=None, files=None, timeout: float=60.0) -> Any:
+    def _req(self, method: str, path: str, json_body: Optional[Dict[str, Any]]=None, files=None, timeout: Optional[float]=None) -> Any:
         url = self.base_url + path
         req_timeout = float(timeout if timeout is not None else self.timeout_s)
         last_error: Optional[str] = None
+        file_positions = []
+        for value in (files or {}).values():
+            stream = value[1] if isinstance(value, tuple) else value
+            if hasattr(stream, "tell") and hasattr(stream, "seek"):
+                file_positions.append((stream, stream.tell()))
         for attempt in range(1, self.max_attempts + 1):
+            for stream, position in file_positions:
+                stream.seek(position)
             r = None
             err: Optional[Exception] = None
             try:
@@ -64,7 +73,7 @@ class OpenAIClient:
                 if r.status_code >= 400:
                     excerpt = self._safe_err_excerpt(getattr(r, "text", ""))
                     if not self._should_retry(r.status_code, None) or attempt >= self.max_attempts:
-                        raise OpenAIError(f"{method} {path} -> {r.status_code}: {excerpt}")
+                        raise OpenAIError(f"{method} {path} -> {r.status_code}: {excerpt}", status_code=r.status_code)
                     delay = self._retry_delay(attempt, str(r.headers.get("retry-after", "")))
                     time.sleep(delay)
                     continue
@@ -77,14 +86,14 @@ class OpenAIClient:
                 err = ex
                 last_error = str(ex)
                 if not self._should_retry(None, err) or attempt >= self.max_attempts:
-                    raise OpenAIError(f"{method} {path} failed: {self._safe_err_excerpt(last_error or '')}")
+                    raise OpenAIError(f"{method} {path} failed: {self._safe_err_excerpt(last_error or '')}") from ex
                 time.sleep(self._retry_delay(attempt, ""))
         raise OpenAIError(f"{method} {path} failed: {self._safe_err_excerpt(last_error or 'unknown error')}")
 
     def list_models(self) -> List[Dict[str, Any]]:
         if self._sdk is not None:
             try:
-                return [m.model_dump() for m in self._sdk.models.list().data]  # type: ignore
+                return [m.model_dump() for m in self._sdk.models.list()]  # type: ignore
             except Exception:
                 pass
         data = self._req("GET", "/models")
@@ -93,11 +102,10 @@ class OpenAIClient:
     def list_files(self) -> List[Dict[str, Any]]:
         if self._sdk is not None:
             try:
-                return [f.model_dump() for f in self._sdk.files.list().data]  # type: ignore
+                return [f.model_dump() for f in self._sdk.files.list()]  # type: ignore
             except Exception:
                 pass
-        data = self._req("GET", "/files")
-        return data.get("data", [])
+        return self._list_all("/files")
 
     def upload_file(self, path: str, purpose: str = "user_data") -> Dict[str, Any]:
         if self._sdk is not None:
@@ -105,8 +113,8 @@ class OpenAIClient:
                 with open(path, "rb") as f:
                     obj = self._sdk.files.create(file=f, purpose=purpose)  # type: ignore
                 return obj.model_dump()  # type: ignore
-            except Exception:
-                pass
+            except Exception as exc:
+                raise OpenAIError(str(exc)) from exc
         with open(path, "rb") as f:
             files = {"file": (os.path.basename(path), f)}
             data = {"purpose": purpose}
@@ -117,8 +125,8 @@ class OpenAIClient:
             try:
                 obj = self._sdk.files.delete(file_id)  # type: ignore
                 return obj.model_dump()  # type: ignore
-            except Exception:
-                pass
+            except Exception as exc:
+                raise OpenAIError(str(exc)) from exc
         return self._req("DELETE", f"/files/{file_id}")
 
     def file_content(self, file_id: str) -> bytes:
@@ -143,13 +151,31 @@ class OpenAIClient:
             try:
                 obj = self._sdk.responses.create(**payload)  # type: ignore
                 return obj.model_dump()  # type: ignore
-            except Exception:
-                pass
+            except Exception as exc:
+                raise OpenAIError(str(exc)) from exc
         return self._req("POST", "/responses", json_body=payload, timeout=120.0)
 
     def list_vector_stores(self) -> List[Dict[str, Any]]:
-        data = self._req("GET", "/vector_stores")
-        return data.get("data", [])
+        return self._list_all("/vector_stores")
+
+    def _list_all(self, path: str) -> List[Dict[str, Any]]:
+        from urllib.parse import urlencode
+        rows = []
+        cursor = None
+        seen = set()
+        while True:
+            query = {"limit": 100}
+            if cursor:
+                query["after"] = cursor
+            page = self._req("GET", path + "?" + urlencode(query))
+            data = page.get("data", [])
+            rows.extend(data)
+            if not page.get("has_more"):
+                return rows
+            cursor = page.get("last_id") or (data[-1].get("id") if data else None)
+            if not cursor or cursor in seen:
+                raise OpenAIError("Neplatné stránkování API odpovědi.")
+            seen.add(cursor)
 
     def create_vector_store(self, name: str, expires_after_days: Optional[int]=None) -> Dict[str, Any]:
         body: Dict[str, Any] = {"name": name}
@@ -172,8 +198,7 @@ class OpenAIClient:
         return self._req("DELETE", f"/vector_stores/{vs_id}")
 
     def list_vector_store_files(self, vs_id: str) -> List[Dict[str, Any]]:
-        data = self._req("GET", f"/vector_stores/{vs_id}/files")
-        return data.get("data", [])
+        return self._list_all(f"/vector_stores/{vs_id}/files")
 
     def retrieve_vector_store_file(self, vs_id: str, vector_store_file_id: str) -> Dict[str, Any]:
         return self._req("GET", f"/vector_stores/{vs_id}/files/{vector_store_file_id}")
@@ -183,12 +208,11 @@ class OpenAIClient:
 
     def update_vector_store_file_attributes(self, vs_id: str, vector_store_file_id: str, attributes: Dict[str, Any]) -> Dict[str, Any]:
         body = {"attributes": attributes}
-        return self._req("PATCH", f"/vector_stores/{vs_id}/files/{vector_store_file_id}", json_body=body)
+        return self._req("POST", f"/vector_stores/{vs_id}/files/{vector_store_file_id}", json_body=body)
 
 
     def list_batches(self) -> List[Dict[str, Any]]:
-        data = self._req("GET", "/batches")
-        return data.get("data", [])
+        return self._list_all("/batches")
 
     def create_batch(self, input_file_id: str, endpoint: str = "/v1/responses", completion_window: str = "24h") -> Dict[str, Any]:
         body = {"input_file_id": input_file_id, "endpoint": endpoint, "completion_window": completion_window}

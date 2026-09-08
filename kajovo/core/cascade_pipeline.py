@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+import jsonschema
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -15,7 +16,9 @@ from .cascade_types import CascadeDefinition, CascadeStep
 from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths
 from .openai_client import OpenAIClient
 from .retry import CircuitBreaker, with_retry
-from .utils import ensure_dir, new_run_id, safe_join_under_root
+from .receipt import Receipt
+from .pricing import compute_cost, PriceTable
+from .utils import ensure_dir, new_run_id, safe_join_under_root, validate_relative_path, atomic_write_text
 
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*step\.(\d+)\.(response_id|json|out_file_path|out_file_id)(?::([^}]+))?\s*\}\}")
@@ -193,6 +196,7 @@ class CascadeRunConfig:
     cascade: CascadeDefinition
     in_dir: str
     out_dir: str
+    run_id: str = ""
 
 
 class CascadeRunWorker(QThread):
@@ -214,7 +218,7 @@ class CascadeRunWorker(QThread):
     ):
         super().__init__(parent)
         self.cfg = cfg
-        self.settings = settings
+        self.settings = copy.deepcopy(settings)
         self.api_key = api_key
         self.db = receipt_db
         self.price_table = price_table
@@ -290,8 +294,22 @@ class CascadeRunWorker(QThread):
             raise RuntimeError("Schema musí být JSON object.")
         if "type" not in schema and "properties" not in schema:
             raise RuntimeError("Schema musí obsahovat aspoň 'type' nebo 'properties'.")
+        jsonschema.Draft202012Validator.check_schema(schema)
+        def check_refs(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key in ("$ref", "$dynamicRef") and (not isinstance(child, str) or not child.startswith("#")):
+                        raise ValueError("JSON Schema smí odkazovat pouze uvnitř vlastního dokumentu.")
+                    check_refs(child)
+            elif isinstance(value, list):
+                for child in value:
+                    check_refs(child)
+        check_refs(schema)
 
     def _validate_json_output(self, obj: Dict[str, Any], schema: Dict[str, Any]) -> None:
+        if schema:
+            self._validate_schema_minimal(schema)
+        jsonschema.validate(obj, schema)
         if not isinstance(obj, dict):
             raise RuntimeError("JSON výstup musí být objekt.")
         required = schema.get("required")
@@ -338,14 +356,7 @@ class CascadeRunWorker(QThread):
         return ids
 
     def _normalize_expected_rel_path(self, rel_path: str) -> str:
-        rel = str(rel_path or "").strip().replace("\\", "/")
-        rel = rel.lstrip("/")
-        if not rel:
-            raise RuntimeError("Expected output file path nesmí být prázdný.")
-        parts = [p for p in rel.split("/") if p]
-        if any(p == ".." for p in parts):
-            raise RuntimeError(f"Expected output file path obsahuje '..': {rel_path}")
-        return "/".join(parts)
+        return validate_relative_path(rel_path)
 
     def _select_out_dir_for_step(self) -> str:
         runtime_out = (self.cfg.out_dir or "").strip()
@@ -355,6 +366,11 @@ class CascadeRunWorker(QThread):
 
     def _save_manifest_to_out(self, files: List[Dict[str, Any]], out_dir: str, step_idx: int) -> Dict[str, Any]:
         out_abs = os.path.abspath(out_dir)
+        validate_paths(files)
+        for row in files:
+            safe_join_under_root(out_abs, row["path"])
+            if not isinstance(row.get("content"), str):
+                raise ContractError("Obsah výstupního souboru musí být text.")
         ensure_dir(out_abs)
         saved: List[Dict[str, Any]] = []
         for row in files:
@@ -362,8 +378,7 @@ class CascadeRunWorker(QThread):
             content = str(row.get("content") or "")
             dst = safe_join_under_root(out_abs, rel.replace("/", os.sep))
             ensure_dir(os.path.dirname(dst))
-            with open(dst, "w", encoding="utf-8", newline="\n") as f:
-                f.write(content)
+            atomic_write_text(dst, content)
             saved.append({"path": rel, "dst": dst, "bytes": os.path.getsize(dst)})
         self.logger.save_json("manifests", f"cascade_step_{step_idx:02d}_out_saved_map", {"saved": saved, "out_dir": out_abs})
         return {"saved": saved, "out_dir": out_abs}
@@ -394,7 +409,9 @@ class CascadeRunWorker(QThread):
         for row in files:
             if not isinstance(row, dict):
                 raise RuntimeError(f"Krok {idx}: položka files[] musí být object.")
-            rel = self._normalize_expected_rel_path(str(row.get("path") or ""))
+            rel = self._normalize_expected_rel_path(row.get("path"))
+            if not isinstance(row.get("content"), str):
+                raise ContractError("Obsah výstupního souboru musí být text.")
             normalized_manifest.append({
                 "path": rel,
                 "content": str(row.get("content") or ""),
@@ -403,7 +420,6 @@ class CascadeRunWorker(QThread):
                 "mode": row.get("mode"),
             })
         validate_paths(normalized_manifest)
-        self._save_manifest_to_out(normalized_manifest, out_dir, idx)
 
         manifest_paths = {row["path"] for row in normalized_manifest}
         missing_manifest = [rel for rel in expected if rel not in manifest_paths]
@@ -411,6 +427,8 @@ class CascadeRunWorker(QThread):
             raise RuntimeError(
                 f"Krok {idx}: v manifestu chybí expected soubory: {', '.join(missing_manifest)}"
             )
+
+        self._save_manifest_to_out(normalized_manifest, out_dir, idx)
 
         out_abs = os.path.abspath(out_dir)
         out_files: Dict[str, Dict[str, str]] = {}
@@ -429,9 +447,11 @@ class CascadeRunWorker(QThread):
         return out_files
 
     def run(self):
-        run_id = new_run_id()
-        self.logger = CascadeLogger(self.settings.log_dir, run_id, project_name=self.cfg.project)
+        run_id = self.cfg.run_id or new_run_id()
         try:
+            self.logger = CascadeLogger(self.settings.log_dir, run_id, project_name=self.cfg.project)
+            if not self.cfg.cascade.steps:
+                raise ValueError("Kaskáda musí obsahovat alespoň jeden krok.")
             self.logger.update_state(
                 {
                     "status": "running",
@@ -518,7 +538,7 @@ class CascadeRunWorker(QThread):
                             "format": {
                                 "type": "json_schema",
                                 "name": f"cascade_step_{idx:02d}_schema",
-                                "strict": True,
+                                "strict": False,
                                 "schema": schema,
                             }
                         }
@@ -537,6 +557,22 @@ class CascadeRunWorker(QThread):
                 self._emit_status(base_p, 55, f"OpenAI request krok {idx}")
                 response = with_retry(lambda p=payload: client.create_response(p), self.settings.retry, self.breaker)
                 self.logger.save_json("responses", f"cascade_step_{idx:02d}", response)
+                if self.db is not None:
+                    usage = response.get("usage") or {}
+                    model = response.get("model") or step.model
+                    prices = self.price_table or PriceTable.builtin_fallback()
+                    row = prices.get(model)
+                    inp, out = int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
+                    total_cost, tool_cost, storage_cost = compute_cost(row, inp, out)
+                    self.db.insert(Receipt(
+                        run_id=run_id, created_at=time.time(), project=self.cfg.project,
+                        model=model, mode="KASKADA", flow_type=f"STEP_{idx}",
+                        response_id=response.get("id"), batch_id=None,
+                        input_tokens=inp, output_tokens=out, tool_cost=tool_cost,
+                        storage_cost=storage_cost, total_cost=total_cost,
+                        pricing_verified=bool(prices.verified and row), notes=step_label,
+                        log_paths={"run_dir": self.logger.paths.run_dir}, usage=usage,
+                    ))
 
                 response_id = str(response.get("id") or "").strip()
                 if response_id:

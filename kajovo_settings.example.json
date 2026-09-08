@@ -19,10 +19,10 @@
     "max_total_mb": 2048,
     "max_runs": 200,
     "encrypt_logs": false,
-    "mask_secrets": false
+    "mask_secrets": true
   },
   "pricing": {
-    "source_url": "",
+    "source_url": "https://openai.com/api/pricing/",
     "cache_ttl_hours": 72,
     "auto_refresh_on_start": true
   },

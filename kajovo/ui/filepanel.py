@@ -16,7 +16,7 @@ class FilesDeleteWorker(QThread):
     progress = Signal(int)
     status = Signal(str)
     logline = Signal(str)
-    finished = Signal(object, list)  # files or None, failures
+    result_ready = Signal(object, list)  # files or None, failures
 
     def __init__(self, api_key: str, file_ids: List[str], retry_cfg, breaker_failures: int, breaker_cooldown_s: int):
         super().__init__()
@@ -30,7 +30,7 @@ class FilesDeleteWorker(QThread):
         failures: List[str] = []
         files: List[dict] | None = None
         if not self.api_key:
-            self.finished.emit(files, ["Chybí OPENAI_API_KEY."])
+            self.result_ready.emit(files, ["Chybí OPENAI_API_KEY."])
             return
         client = OpenAIClient(self.api_key)
         breaker = CircuitBreaker(self.breaker_failures, self.breaker_cooldown_s)
@@ -51,7 +51,7 @@ class FilesDeleteWorker(QThread):
             files = with_retry(lambda: client.list_files(), self.retry_cfg, breaker)
         except Exception as e:
             self.logline.emit(f"Refresh failed: {e}")
-        self.finished.emit(files, failures)
+        self.result_ready.emit(files, failures)
 
 class FilesPanel(QWidget):
     attached_changed = Signal(list)  # list[str]
@@ -105,7 +105,8 @@ class FilesPanel(QWidget):
         self.btn_attach.clicked.connect(self.attach_selected)
         self.btn_detach.clicked.connect(self.detach_selected)
 
-        self.refresh()
+        if self.api_key:
+            self.refresh()
 
     def _wrap(self, title: str, widget: QWidget) -> QWidget:
         w = QWidget()
@@ -199,6 +200,7 @@ class FilesPanel(QWidget):
         worker.logline.connect(dialog.add_log)
 
         def on_done(files: List[dict] | None, failures: List[str]):
+            worker.wait()
             dialog.mark_done("Mazání dokončeno.")
             if files is not None:
                 self._apply_files_list(files)
@@ -209,7 +211,7 @@ class FilesPanel(QWidget):
             self._delete_dialog = None
             self._set_delete_controls_enabled(True)
 
-        worker.finished.connect(on_done)
+        worker.result_ready.connect(on_done)
         dialog.show()
         worker.start()
 

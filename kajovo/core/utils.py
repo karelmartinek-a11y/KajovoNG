@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os, re, json, time, hashlib, random, string, datetime
+import os, re, json, hashlib, secrets, string, datetime
 import ntpath
+import tempfile
 from typing import Any, Optional
 
 RUN_ID_RE = re.compile(r"^RUN_\d{12}_\w{4}$")
@@ -14,7 +15,7 @@ def ts_code(dt: Optional[datetime.datetime]=None) -> str:
     return dt.strftime("%d%m%Y%H%M")
 
 def new_run_id() -> str:
-    rnd = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4))
+    rnd = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
     return f"RUN_{ts_code()}_{rnd}"
 
 def sha256_file(path: str, max_bytes: Optional[int]=None) -> str:
@@ -39,11 +40,29 @@ def safe_json_dumps(obj: Any) -> str:
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
+
+def atomic_write_text(path: str, content: str) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    ensure_dir(directory)
+    fd, temporary = tempfile.mkstemp(prefix=".kajovo_", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if os.path.isfile(path):
+            import stat
+            os.chmod(temporary, stat.S_IMODE(os.stat(path).st_mode))
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+
 def is_versing_snapshot_dir(dir_name: str, root_name: str) -> bool:
     if not dir_name.startswith(root_name):
         return False
     tail = dir_name[len(root_name):]
-    return bool(re.fullmatch(r"\d{12}", tail))
+    return bool(re.fullmatch(r"\d{12}(?:\d{2})?", tail))
 
 
 def validate_relative_path(path: str) -> str:
@@ -52,6 +71,7 @@ def validate_relative_path(path: str) -> str:
     path = path.replace("\\", "/")
     reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
     reserved.update(f"{prefix}{i}" for prefix in ("COM", "LPT") for i in range(1, 10))
+    reserved.update(f"{prefix}{i}" for prefix in ("COM", "LPT") for i in "¹²³")
     for part in path.split("/"):
         if (not part or part in (".", "..") or part.endswith((" ", "."))
                 or any(ord(c) < 32 or c in '<>:"|?*' for c in part)

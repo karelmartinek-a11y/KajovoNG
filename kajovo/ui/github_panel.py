@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import time
 import difflib
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Optional, Dict, List, Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
@@ -27,12 +27,13 @@ from PySide6.QtWidgets import (
     QCheckBox,
 )
 from .widgets import BusyPopup
+from ..core.utils import safe_join_under_root
 
 
 class GitHubPanel(QWidget):
     logline = Signal(str)
 
-    _EXCLUDE_DIRS = ("venv", ".venv", "cache", "__pycache__")
+    _EXCLUDE_DIRS = ("venv", ".venv", "cache", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "node_modules", "LOG", "tmp_tests", "dist")
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -196,7 +197,9 @@ class GitHubPanel(QWidget):
     def _run_git(self, args, cwd=None) -> subprocess.CompletedProcess:
         if cwd is None:
             cwd = self.root
-        return subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True, text=True)
+        return subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=120,
+                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
 
     def _get_repo_root(self) -> Optional[str]:
         try:
@@ -295,7 +298,8 @@ class GitHubPanel(QWidget):
             git_dir = os.path.join(self.root, git_dir)
         out_dir = os.path.join(git_dir, "kajovo_milestones")
         os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"{tag_name}.diff")
+        import hashlib
+        out_path = os.path.join(out_dir, hashlib.sha256(tag_name.encode("utf-8")).hexdigest() + ".diff")
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         lines: List[str] = [
             f"# milestone: {tag_name}",
@@ -533,11 +537,9 @@ class GitHubPanel(QWidget):
             self._set_sync_status("Sync: n/a", "#6b7b8c")
             return
         try:
-            # set remote if provided
-            url = self.ed_remote.text().strip()
-            if url:
-                self._run_git(["remote", "remove", "origin"])
-                self._run_git(["remote", "add", "origin", url])
+            remote = self._run_git(["remote", "get-url", "origin"])
+            if remote.returncode == 0 and not self.ed_remote.text().strip():
+                self.ed_remote.setText(remote.stdout.strip())
             res = self._run_git(["status", "-sb"])
             txt = res.stdout.strip()
             if "ahead" in txt or "behind" in txt:
@@ -547,6 +549,17 @@ class GitHubPanel(QWidget):
         except Exception as e:
             self._set_sync_status(f"Sync: error {e}", "#9bb3c9")
 
+    def _configure_origin(self, url: str) -> bool:
+        if not url:
+            return True
+        current = self._run_git(["remote", "get-url", "origin"])
+        command = "set-url" if current.returncode == 0 else "add"
+        result = self._run_git(["remote", command, "origin", url])
+        if result.returncode:
+            msg_critical(self, "Git", result.stderr or "Nelze nastavit origin.")
+            return False
+        return True
+
     def _push(self):
         if not self._is_git_repo():
             msg_warning(self, "Git", "Není git repo.")
@@ -555,9 +568,8 @@ class GitHubPanel(QWidget):
         if not self._require_no_tracked_excludes():
             return
         url = self.ed_remote.text().strip()
-        if url:
-            self._run_git(["remote", "remove", "origin"])
-            self._run_git(["remote", "add", "origin", url])
+        if not self._configure_origin(url):
+            return
         with BusyPopup(self, "Push na remote..."):
             res = self._run_git(["push", "-u", "origin", "HEAD"])
             if res.returncode != 0:
@@ -571,11 +583,14 @@ class GitHubPanel(QWidget):
             msg_warning(self, "Git", "Není git repo.")
             return
         url = self.ed_remote.text().strip()
-        if url:
-            self._run_git(["remote", "remove", "origin"])
-            self._run_git(["remote", "add", "origin", url])
+        if not self._configure_origin(url):
+            return
+        branch = self._run_git(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        if branch.returncode:
+            msg_warning(self, "Git", "Pull vyžaduje aktivní větev.")
+            return
         with BusyPopup(self, "Pull z remote..."):
-            res = self._run_git(["pull", "--rebase", "origin", "HEAD"])
+            res = self._run_git(["pull", "--ff-only", "origin", branch.stdout.strip()])
             if res.returncode != 0:
                 msg_critical(self, "Pull", res.stderr or "Pull failed")
             else:
@@ -619,8 +634,12 @@ class GitHubPanel(QWidget):
         except Exception:
             entries = []
         for name in entries:
+            if name == ".git" or name in self._EXCLUDE_DIRS:
+                continue
             rel_path = os.path.join(rel_dir, name).replace("\\", "/") if rel_dir else name
             abs_path = os.path.join(abs_dir, name)
+            if os.path.islink(abs_path) or os.path.isjunction(abs_path):
+                continue
             st = status_map.get(rel_path)
             item = QTreeWidgetItem([name])
             item.setData(0, Qt.UserRole, rel_path)
@@ -702,9 +721,9 @@ class GitHubPanel(QWidget):
             self.txt_file.setReadOnly(True)
             self.btn_save.setEnabled(False)
         else:
-            self._load_current(rel_path)
-            self.txt_file.setReadOnly(False)
-            self.btn_save.setEnabled(True)
+            loaded = self._load_current(rel_path)
+            self.txt_file.setReadOnly(not loaded)
+            self.btn_save.setEnabled(loaded)
 
     def _save_file(self):
         path = self.lbl_file.text()
@@ -712,7 +731,7 @@ class GitHubPanel(QWidget):
             msg_info(self, "Save", "Není vybrán soubor.")
             return
         try:
-            abs_path = path if os.path.isabs(path) else os.path.join(self.root, path)
+            abs_path = safe_join_under_root(self.root, path)
             with open(abs_path, "w", encoding="utf-8") as f:
                 f.write(self.txt_file.toPlainText())
             self._log(f"Soubor uložen: {abs_path}")
@@ -722,13 +741,15 @@ class GitHubPanel(QWidget):
     def _load_current(self, rel_path: str):
         if not rel_path:
             self.txt_file.clear()
-            return
-        abs_path = os.path.join(self.root, rel_path)
+            return False
         try:
-            with open(abs_path, "r", encoding="utf-8", errors="ignore") as f:
+            abs_path = safe_join_under_root(self.root, rel_path)
+            with open(abs_path, "r", encoding="utf-8") as f:
                 self.txt_file.setPlainText(f.read())
+            return True
         except Exception as e:
             self.txt_file.setPlainText(f"<< nelze načíst soubor: {e} >>")
+            return False
 
     def _show_diff(self, rel_path: str):
         self.txt_file.clear()

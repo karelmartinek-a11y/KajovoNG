@@ -26,6 +26,7 @@ function Get-PythonCandidate {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $repoRoot
 $venvPath = Join-Path $repoRoot ".venv"
 $venvPython = Join-Path $venvPath "Scripts\python.exe"
 $installTarget = if ($RuntimeOnly) { "." } else { ".[dev]" }

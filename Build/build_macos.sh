@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 "$PYTHON_BIN" -m pip install --upgrade pip
-"$PYTHON_BIN" -m pip install -r requirements.txt pyinstaller
+"$PYTHON_BIN" -m pip install -e '.[dev]'
 "$PYTHON_BIN" Build/generate_icons.py
 
 ICON_ICNS="Build/assets/app_icon.icns"
@@ -33,7 +33,9 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS"
   --windowed \
   --name "$APP_NAME" \
   --icon "$ICON_ICNS" \
+  --collect-data kajovo.core.diagnostics \
   --add-data "resources/app_icon.png:resources" \
+  --add-data "resources/Kajovo_new.png:resources" \
   --add-data "resources/montserrat_regular.ttf:resources" \
   --add-data "resources/montserrat_bold.ttf:resources" \
   kajovo/app/main.py

@@ -21,7 +21,7 @@ class VectorStoresDeleteWorker(QThread):
     subprogress = Signal(int)
     status = Signal(str)
     logline = Signal(str)
-    finished = Signal(object, list, int, int)  # stores or None, errors, deleted, total
+    result_ready = Signal(object, list, int, int)  # stores or None, errors, deleted, total
 
     def __init__(self, api_key: str, store_ids: List[str], retry_cfg, breaker_failures: int, breaker_cooldown_s: int):
         super().__init__()
@@ -37,7 +37,7 @@ class VectorStoresDeleteWorker(QThread):
         deleted = 0
         total = len(self.store_ids)
         if not self.api_key:
-            self.finished.emit(stores, ["Chybí OPENAI_API_KEY."], deleted, total)
+            self.result_ready.emit(stores, ["Chybí OPENAI_API_KEY."], deleted, total)
             return
         client = OpenAIClient(self.api_key)
         breaker = CircuitBreaker(self.breaker_failures, self.breaker_cooldown_s)
@@ -49,7 +49,7 @@ class VectorStoresDeleteWorker(QThread):
             self.logline.emit(f"Načítám soubory ve store {vs_id}...")
             files: List[Dict[str, Any]] = []
             try:
-                files = with_retry(lambda: client.list_vector_store_files(vs_id), self.retry_cfg, breaker)
+                files = with_retry(lambda v=vs_id: client.list_vector_store_files(v), self.retry_cfg, breaker)
             except Exception as e:
                 errors.append(f"{vs_id}: nelze načíst soubory ({e})")
                 self.logline.emit(f"Chyba při načítání souborů {vs_id}: {e}")
@@ -65,7 +65,7 @@ class VectorStoresDeleteWorker(QThread):
                 self.status.emit(f"Mažu soubor {f_idx + 1}/{len(files)} ve store {vs_id}")
                 self.subprogress.emit(int((f_idx + 1) * 100 / max(1, len(files))))
                 try:
-                    with_retry(lambda fid=fid: client.delete_vector_store_file(vs_id, fid), self.retry_cfg, breaker)
+                    with_retry(lambda fid=fid, v=vs_id: client.delete_vector_store_file(v, fid), self.retry_cfg, breaker)
                 except Exception as e:
                     errors.append(f"{vs_id}/{fid}: {e}")
                     self.logline.emit(f"Chyba při mazání souboru {fid}: {e}")
@@ -74,7 +74,7 @@ class VectorStoresDeleteWorker(QThread):
                 self.logline.emit(f"Removed {len(files)} files from vector store {vs_id}")
             self.status.emit(f"Mažu vector store {vs_id}")
             try:
-                with_retry(lambda: client.delete_vector_store(vs_id), self.retry_cfg, breaker)
+                with_retry(lambda v=vs_id: client.delete_vector_store(v), self.retry_cfg, breaker)
                 deleted += 1
                 self.logline.emit(f"Deleted vector store: {vs_id}")
             except Exception as e:
@@ -87,7 +87,7 @@ class VectorStoresDeleteWorker(QThread):
             stores = with_retry(lambda: client.list_vector_stores(), self.retry_cfg, breaker)
         except Exception as e:
             self.logline.emit(f"Refresh failed: {e}")
-        self.finished.emit(stores, errors, deleted, total)
+        self.result_ready.emit(stores, errors, deleted, total)
 
 
 class FilesSelectorDialog(QDialog):
@@ -278,9 +278,9 @@ class VectorStoresPanel(QWidget):
         self.lst_vs.itemSelectionChanged.connect(self.list_files)
         self.lst_files.itemSelectionChanged.connect(self.show_selected_file_details)
 
-        self.refresh()
-
         self._cur_files: Dict[str, Dict[str, Any]] = {}
+        if self.api_key:
+            self.refresh()
 
     def set_api_key(self, api_key: str):
         self.api_key = api_key
@@ -386,6 +386,7 @@ class VectorStoresPanel(QWidget):
         worker.logline.connect(dialog.add_log)
 
         def on_done(stores: List[dict] | None, errors: List[str], deleted: int, total: int):
+            worker.wait()
             dialog.mark_done(f"Mazání dokončeno ({deleted}/{total}).")
             if stores is not None:
                 self._apply_vector_store_list(stores)
@@ -398,7 +399,7 @@ class VectorStoresPanel(QWidget):
             self._delete_dialog = None
             self._set_delete_controls_enabled(True)
 
-        worker.finished.connect(on_done)
+        worker.result_ready.connect(on_done)
         dialog.show()
         worker.start()
 
@@ -625,7 +626,7 @@ class VectorStoresPanel(QWidget):
             self.ed_file_info.setPlainText("")
             return
         vs = self._cur_files.get(vs_file_id, {})
-        file_id = vs.get("file_id", "")
+        file_id = vs.get("file_id") or vs.get("id", "")
         attrs = vs.get("attributes") or {}
         import json
         try:

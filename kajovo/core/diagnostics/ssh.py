@@ -14,6 +14,8 @@ def collect_ssh_diagnostics(
     password: str,
     on_line: Optional[Callable[[str], None]] = None,
     timeout_s: int = 900,
+    pin: Optional[str] = None,
+    pin_required: Optional[bool] = None,
 ) -> Tuple[str, List[str]]:
     os.makedirs(root, exist_ok=True)
     out_dir = os.path.join(root, "ssh")
@@ -42,30 +44,34 @@ def collect_ssh_diagnostics(
     if password:
         connect_kwargs["password"] = password
 
-    pin = os.environ.get("KAJOVO_SSH_HOSTKEY_SHA256", "").strip()
-    pin_required = os.environ.get("KAJOVO_SSH_PIN_REQUIRED", "").strip().lower() in ("1", "true", "yes", "on")
+    pin = os.environ.get("KAJOVO_SSH_HOSTKEY_SHA256", "").strip() if pin is None else pin.strip()
+    if pin_required is None:
+        pin_required = os.environ.get("KAJOVO_SSH_PIN_REQUIRED", "").strip().lower() in ("1", "true", "yes", "on")
     if pin_required and not pin:
         raise RuntimeError("SSH host key pin is required (set KAJOVO_SSH_HOSTKEY_SHA256).")
 
     log(f"SSH connecting to {user}@{host} with strict host-key policy (RejectPolicy).")
-    cli.connect(**connect_kwargs)
-    if pin:
-        remote = cli.get_transport().get_remote_server_key()
-        got = remote.get_fingerprint().hex()
-        expected = pin.lower().replace(":", "")
-        if got.lower() != expected:
-            cli.close()
-            raise RuntimeError("SSH host key fingerprint mismatch (explicit pin).")
-
-    commands = ["uname -a", "whoami", "uptime"]
-    lines: List[str] = []
-    for cmd in commands:
-        log(f"SSH exec: {cmd}")
-        stdin, stdout, stderr = cli.exec_command(cmd, timeout=min(timeout_s, 120))
-        out = stdout.read().decode("utf-8", errors="ignore")
-        err = stderr.read().decode("utf-8", errors="ignore")
-        lines.append(f"$ {cmd}\n{out}\n{err}\n")
-    cli.close()
+    try:
+        cli.connect(**connect_kwargs)
+        if pin:
+            import base64
+            import hashlib
+            remote = cli.get_transport().get_remote_server_key()
+            got = base64.b64encode(hashlib.sha256(remote.asbytes()).digest()).decode("ascii").rstrip("=")
+            expected = pin.removeprefix("SHA256:").rstrip("=")
+            if got != expected:
+                raise RuntimeError("Otisk SHA256 SSH hostitele neodpovídá nastavenému pinu.")
+        commands = ["uname -a", "whoami", "uptime"]
+        lines: List[str] = []
+        for cmd in commands:
+            log(f"SSH exec: {cmd}")
+            stdin, stdout, stderr = cli.exec_command(cmd, timeout=min(timeout_s, 120))
+            stdin.close()
+            out = stdout.read().decode("utf-8", errors="replace")
+            err = stderr.read().decode("utf-8", errors="replace")
+            lines.append(f"$ {cmd}\n{out}\n{err}\n")
+    finally:
+        cli.close()
 
     with open(fp, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import os, json, time, re
+import os, json, time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 import requests
-from bs4 import BeautifulSoup
+import math
+from .utils import atomic_write_text
 
 
 @dataclass
@@ -17,15 +18,24 @@ class PriceRow:
     file_search_per_1k: Optional[float] = None
     storage_per_gb_day: Optional[float] = None
 
+    def __post_init__(self):
+        if not isinstance(self.model, str) or not self.model.strip():
+            raise ValueError("Model ceníku nesmí být prázdný.")
+        for key, value in vars(self).items():
+            if key != "model" and value is not None and (not math.isfinite(value) or value < 0):
+                raise ValueError("Cena musí být konečné nezáporné číslo.")
+
     @staticmethod
     def from_dict(raw: Dict[str, Any]) -> "PriceRow":
+        if not isinstance(raw, dict) or not any(raw.get(key) is not None for key in ("input_per_1k", "input")) or not any(raw.get(key) is not None for key in ("output_per_1k", "output")):
+            raise ValueError("Cenový řádek vyžaduje vstupní a výstupní sazbu.")
         def _get(keys: tuple[str, ...], default: float = 0.0) -> float:
             for k in keys:
                 if k in raw and raw.get(k) is not None:
                     try:
                         return float(raw[k])
-                    except Exception:
-                        continue
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"Neplatná sazba {k}.") from exc
             return default
 
         return PriceRow(
@@ -57,12 +67,21 @@ class PriceTable:
     def load_cache(self) -> None:
         if not os.path.exists(self.cache_path):
             return
-        with open(self.cache_path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        self.last_updated = raw.get("last_updated")
+        try:
+            with open(self.cache_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict) or raw.get("schema_version") != 2:
+                return
+        except (OSError, ValueError):
+            return
+        timestamp = raw.get("last_updated")
+        self.last_updated = timestamp if isinstance(timestamp, (int, float)) and math.isfinite(timestamp) else None
         self.verified = bool(raw.get("verified"))
         self.last_fetch_source = raw.get("last_fetch_source", "") or ""
         self.rows = {}
+        if not isinstance(raw.get("rows"), list):
+            self.verified = False
+            return
         for r in raw.get("rows", []):
             try:
                 pr = PriceRow.from_dict(r)
@@ -72,14 +91,16 @@ class PriceTable:
                 continue
 
     def save_cache(self) -> None:
+        if not self.cache_path or self.cache_path == ":memory:":
+            return
         os.makedirs(os.path.dirname(self.cache_path) or ".", exist_ok=True)
-        with open(self.cache_path, "w", encoding="utf-8") as f:
-            json.dump({
+        atomic_write_text(self.cache_path, json.dumps({
+                "schema_version": 2,
                 "last_updated": self.last_updated,
                 "verified": self.verified,
                 "last_fetch_source": self.last_fetch_source,
                 "rows": [vars(r) for r in self.rows.values()],
-            }, f, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False, indent=2))
 
     def refresh_from_url(self, url: str, timeout_s: float = 20.0) -> Tuple[bool, str]:
         if not url or not str(url).strip():
@@ -115,27 +136,8 @@ class PriceTable:
             return self._fallback_with_reason(f"URL ceníku nedostupná: {reason}")
 
     def _parse_official_pricing_html(self, html: str) -> Dict[str, PriceRow]:
-        rows: Dict[str, PriceRow] = {}
-        if not html:
-            return rows
-        try:
-            soup = BeautifulSoup(html, "html.parser")
-            text = soup.get_text("\n", strip=True)
-        except Exception:
-            text = html
-        model_re = re.compile(r"\b(gpt-[a-z0-9\-]+)\b", re.IGNORECASE)
-        price_re = re.compile(r"\$\s*([0-9]+(?:\.[0-9]+)?)")
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        for i, ln in enumerate(lines):
-            mm = model_re.search(ln)
-            if not mm:
-                continue
-            model = mm.group(1).lower()
-            window = " ".join(lines[i:i+6])
-            vals = [float(m.group(1)) for m in price_re.finditer(window)]
-            if len(vals) >= 2:
-                rows[model] = PriceRow(model=model, input_per_1k=vals[0], output_per_1k=vals[1])
-        return rows
+        # HTML neobsahuje stabilní strojový kontrakt jednotek a kategorií cen.
+        return {}
 
     def _fallback_with_reason(self, reason: str) -> Tuple[bool, str]:
         self.verified = False
@@ -155,8 +157,8 @@ class PriceTable:
         pt = PriceTable(cache_path=":memory:")
         pt.verified = False
         pt.rows = {
-            "gpt-4o-mini": PriceRow("gpt-4o-mini", 0.15, 0.60),
-            "gpt-4o": PriceRow("gpt-4o", 5.00, 15.00),
+            "gpt-4o-mini": PriceRow("gpt-4o-mini", 0.00015, 0.00060, 0.000075, 0.00030),
+            "gpt-4o": PriceRow("gpt-4o", 0.00250, 0.01000, 0.00125, 0.00500),
         }
         return pt
 
@@ -200,7 +202,8 @@ class PriceTable:
             # keep existing rows and timestamp if nothing changed
             self.rows = self._merge_with_fallback(self.rows)
 
-        self.verified = verified
+        self.verified = bool(verified and set(merged) == set(rows))
+        self.last_updated = time.time()
         self.last_fetch_source = source
         if self.cache_path and self.cache_path != ":memory:":
             self.save_cache()
@@ -212,6 +215,7 @@ def compute_cost(
     is_batch: bool = False,
     use_file_search: bool = False,
     storage_gb_days: float = 0.0,
+    file_search_calls: int = 0,
 ) -> tuple[float, float, float]:
     """Return total, tool_cost, storage_cost."""
     if row is None:
@@ -221,7 +225,7 @@ def compute_cost(
     base = (input_tokens / 1000.0) * inp + (output_tokens / 1000.0) * outp
     tool_cost = 0.0
     if use_file_search and row.file_search_per_1k is not None:
-        tool_cost += (input_tokens / 1000.0) * row.file_search_per_1k
+        tool_cost += (file_search_calls / 1000.0) * row.file_search_per_1k
     storage_cost = 0.0
     if storage_gb_days > 0 and row.storage_per_gb_day is not None:
         storage_cost = float(storage_gb_days) * row.storage_per_gb_day

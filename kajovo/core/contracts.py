@@ -54,6 +54,8 @@ def parse_json_strict(text: str) -> Dict[str, Any]:
     raise ContractError("Response is not valid JSON (strict contract violated).")
 
 def validate_paths(files: List[Dict[str, Any]]) -> None:
+    if not isinstance(files, list):
+        raise ContractError("files musí být seznam.")
     seen = set()
     for f in files:
         if not isinstance(f, dict):
@@ -74,3 +76,7 @@ def validate_paths(files: List[Dict[str, Any]]) -> None:
         if p.casefold() in seen:
             raise ContractError(f"Duplicate path: {p}")
         seen.add(p.casefold())
+    for path in seen:
+        parts = path.split("/")
+        if any("/".join(parts[:i]) in seen for i in range(1, len(parts))):
+            raise ContractError(f"Soubor koliduje s nadřazeným adresářem: {path}")

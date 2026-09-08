@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import copy
+import hashlib
 import os
 import queue
 import shutil
@@ -87,7 +89,7 @@ class ScanPlan:
 
 
 def now_code() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
 
 def is_zip_path(path: Path) -> bool:
@@ -190,7 +192,7 @@ class ProgressTracker:
 class RunLogger:
     def __init__(self, backup_dir: Path, run_id: str) -> None:
         self.run_dir = backup_dir / f"utf8nobom_{run_id}"
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.run_dir.mkdir(parents=True, exist_ok=False)
         self.log_path = self.run_dir / "run_log.jsonl"
 
     def write(self, event: str, **payload: object) -> None:
@@ -219,6 +221,12 @@ def validate_input_paths(directory_values: Sequence[str], backup_value: str) -> 
         targets.append(TargetSpec(path=path))
     if not targets:
         raise ValueError("Zadejte alespoň jeden adresář ke kontrole.")
+    targets = [target for target in targets if not any(
+        target.path != other.path and target.path.is_relative_to(other.path)
+        for other in targets
+    )]
+    if len(targets) > 5:
+        raise ValueError("Lze zpracovat nejvýše pět adresářů.")
 
     backup_dir = Path(backup_value.strip()).expanduser().resolve()
     if not backup_value.strip():
@@ -240,9 +248,14 @@ def build_scan_plan(targets: Sequence[TargetSpec]) -> ScanPlan:
     total_units = 0
 
     for target in targets:
-        for root, _, files in os.walk(target.path):
+        for root, dirs, files in os.walk(target.path):
+            dirs[:] = [name for name in dirs if name.casefold() != ".git"
+                       and not (Path(root) / name).is_symlink()
+                       and not (Path(root) / name).is_junction()]
             for name in files:
                 path = Path(root) / name
+                if path.is_symlink():
+                    continue
                 try:
                     size = path.stat().st_size
                 except OSError:
@@ -266,16 +279,18 @@ def build_scan_plan(targets: Sequence[TargetSpec]) -> ScanPlan:
 
 
 def copy_directory_for_backup(source: Path, target: Path) -> None:
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(source, target)
+    shutil.copytree(source, target, symlinks=True)
 
 
 def make_zip_from_directory(source: Path, target_zip: Path) -> None:
     with zipfile.ZipFile(target_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for root, _, files in os.walk(source):
+        for root, dirs, files in os.walk(source):
+            dirs[:] = [name for name in dirs if not (Path(root) / name).is_symlink()
+                       and not (Path(root) / name).is_junction()]
             for name in files:
                 path = Path(root) / name
+                if path.is_symlink():
+                    continue
                 rel_path = path.relative_to(source)
                 archive.write(path, rel_path.as_posix())
 
@@ -286,7 +301,7 @@ def safe_zip_members(infos: Iterable[zipfile.ZipInfo]) -> list[zipfile.ZipInfo]:
         normalized = info.filename.replace("\\", "/")
         parts = [part for part in normalized.split("/") if part not in ("", ".")]
         if any(part == ".." for part in parts):
-            continue
+            raise ValueError(f"ZIP obsahuje nebezpečnou cestu: {info.filename}")
         safe_items.append(info)
     return safe_items
 
@@ -296,6 +311,7 @@ def rewrite_zip_if_needed(path: Path, tracker: ProgressTracker, logger: RunLogge
     processed_entries = 0
     try:
         with zipfile.ZipFile(path, "r") as source:
+            archive_comment = source.comment
             infos = safe_zip_members(source.infolist())
             staged: list[tuple[zipfile.ZipInfo, bytes]] = []
             changed = False
@@ -303,7 +319,7 @@ def rewrite_zip_if_needed(path: Path, tracker: ProgressTracker, logger: RunLogge
                 if info.is_dir():
                     staged.append((info, b""))
                     continue
-                raw = source.read(info.filename)
+                raw = source.read(info)
                 processed_entries += 1
                 if detect_text_bytes(raw[:4096], Path(info.filename).suffix):
                     normalized, entry_changed = normalize_text_bytes(raw)
@@ -327,8 +343,9 @@ def rewrite_zip_if_needed(path: Path, tracker: ProgressTracker, logger: RunLogge
     tmp_path = Path(tmp_name)
     try:
         with zipfile.ZipFile(tmp_path, "w") as target:
+            target.comment = archive_comment
             for info, payload in staged:
-                clone = zipfile.ZipInfo(filename=info.filename, date_time=info.date_time)
+                clone = copy.copy(info)
                 clone.compress_type = info.compress_type
                 clone.comment = info.comment
                 clone.create_system = info.create_system
@@ -354,7 +371,17 @@ def process_regular_file(path: Path, tracker: ProgressTracker, logger: RunLogger
         return False
     normalized, changed = normalize_text_bytes(raw)
     if changed:
-        path.write_bytes(normalized)
+        fd, temporary = tempfile.mkstemp(prefix=".utf8nobom_", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(normalized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            shutil.copymode(path, temporary)
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         logger.write("file_fixed", path=str(path), bytes=len(raw))
     tracker.advance(max(len(raw), 1), "Soubor", str(path))
     return changed
@@ -395,7 +422,7 @@ def run_job(
 
         for target in plan.directories:
             emit({"type": "status", "message": f"Vytvářím backup pro {target.path}..."})
-            safe_name = target.path.name or "adresar"
+            safe_name = (target.path.name or "adresar") + "_" + hashlib.sha256(str(target.path).encode("utf-8")).hexdigest()[:12]
             backup_copy = logger.run_dir / f"{safe_name}_copy"
             backup_zip = logger.run_dir / f"{safe_name}.zip"
             copy_directory_for_backup(target.path, backup_copy)
@@ -525,7 +552,7 @@ class Utf8NoBomApp:
         self.summary_var.set("0 % | uplynulo 0 s | ETA 0 s")
         self._append_log("Zahajuji kontrolu a opravu kódování.")
         self._set_running(True)
-        self.worker = threading.Thread(target=run_job, args=(targets, backup_dir, self.queue), daemon=True)
+        self.worker = threading.Thread(target=run_job, args=(targets, backup_dir, self.queue), daemon=False)
         self.worker.start()
 
     def _drain_queue(self) -> None:

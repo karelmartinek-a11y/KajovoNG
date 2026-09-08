@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
 )
 
-from ..core.config import AppSettings, SMTPSettings, save_settings, load_settings, DEFAULT_SETTINGS_FILE
+from ..core.config import AppSettings, SMTPSettings, save_settings, DEFAULT_SETTINGS_FILE
 from ..core.openai_client import OpenAIClient
 from ..core.pipeline import RunWorker, UiRunConfig
 from ..core.cascade_pipeline import CascadeRunWorker, CascadeRunConfig
@@ -56,7 +56,7 @@ from ..core.receipt import ReceiptDB
 from ..core.retry import CircuitBreaker, with_retry
 from ..core.runlog import RunLogger, find_last_incomplete_run
 from ..core.notifications import send_smtp_notification
-from ..core.utils import ensure_dir, new_run_id
+from ..core.utils import ensure_dir, new_run_id, safe_join_under_root, RUN_ID_RE
 from ..core.secret_store import get_secret
 
 from ..core.model_capabilities import ModelCapabilitiesCache, ModelProbeWorker, ModelCapabilities
@@ -70,6 +70,7 @@ from .pricing_panel import PricingPanel
 from .cascade_panel import CascadePanel
 from .response_request_panel import ResponseRequestPanel
 from .progress_dialog import ProgressDialog
+from .settings_dialog import SettingsDialog
 from .theme import DARK_STYLESHEET
 from .widgets import BusyPopup, style_progress_bar
 
@@ -97,7 +98,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 860)
 
         # normalize paths to keep LOG/cache inside repo root
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        base_dir = os.path.abspath(os.curdir)
         if not settings.log_dir:
             settings.log_dir = "LOG"
         if not os.path.isabs(settings.log_dir):
@@ -118,7 +119,7 @@ class MainWindow(QMainWindow):
         self.price_table = PriceTable(os.path.join(self.s.cache_dir, "price_table.json"))
         self.price_table.load_cache()
         if not self.price_table.rows:
-            self.price_table = PriceTable.builtin_fallback()
+            self.price_table.rows = PriceTable.builtin_fallback().rows
 
         self._relocate_legacy_logs_and_milestones()
 
@@ -180,9 +181,9 @@ class MainWindow(QMainWindow):
         self.tab_pricing = QWidget()
         self.tab_reqresp = QWidget()
         self.tab_help = QWidget()
-        self.tabs.addTab(self.tab_run, "RUN")
+        self.tabs.addTab(self._scroll_tab(self.tab_run), "RUN")
         self.tabs.addTab(self._scroll_tab(self.tab_files), "FILES API")
-        self.tabs.addTab(self.tab_cascade, "KASKÁDA")
+        self.tabs.addTab(self._scroll_tab(self.tab_cascade), "KASKÁDA")
         self.tabs.addTab(self._scroll_tab(self.tab_vector), "VECTOR STORES")
         self.tabs.addTab(self._scroll_tab(self.tab_settings), "SETTINGS")
         self.tabs.addTab(self._scroll_tab(self.tab_smtp), "SMTP")
@@ -235,6 +236,13 @@ class MainWindow(QMainWindow):
 
     def _active_run_count(self) -> int:
         return len(self._run_contexts)
+
+    def _select_tab(self, widget: QWidget):
+        for index in range(self.tabs.count()):
+            page = self.tabs.widget(index)
+            if page is widget or isinstance(page, QScrollArea) and page.widget() is widget:
+                self.tabs.setCurrentIndex(index)
+                return
 
     def _can_start_new_run(self) -> bool:
         return self._active_run_count() < self._max_parallel_runs
@@ -370,7 +378,9 @@ class MainWindow(QMainWindow):
         if worker is not None:
             try:
                 if worker.isRunning():
-                    worker.wait(timeout_ms)
+                    if not worker.wait(timeout_ms):
+                        QTimer.singleShot(500, lambda rk=run_key: self._dispose_run_context(rk, 0))
+                        return
             except Exception:
                 pass
             try:
@@ -524,6 +534,7 @@ class MainWindow(QMainWindow):
         gd = QGridLayout(g_dirs)
         gd.addWidget(QLabel("IN"), 0, 0)
         self.ed_in = QLineEdit()
+        self.ed_in.textChanged.connect(lambda text: self.ed_out.setText(text) if hasattr(self, "ed_out") and self.chk_in_eq_out.isChecked() else None)
         gd.addWidget(self.ed_in, 0, 1)
         self.btn_in = QPushButton("Browse")
         gd.addWidget(self.btn_in, 0, 2)
@@ -768,7 +779,7 @@ class MainWindow(QMainWindow):
         options = [self.GENERATE_MODEL_MAIN_OPTION] + self._generate_override_models()
         combos = [self.cb_model_a1, self.cb_model_a2, self.cb_model_a3]
         selected = [self._get_generate_model_override(cb) for cb in combos]
-        for combo, keep in zip(combos, selected):
+        for combo, keep in zip(combos, selected, strict=True):
             combo.blockSignals(True)
             combo.clear()
             combo.addItems(options)
@@ -881,8 +892,10 @@ class MainWindow(QMainWindow):
         form = QGridLayout()
         form.setVerticalSpacing(8)
         form.setHorizontalSpacing(12)
-        self.chk_mask = QCheckBox("Mask secrets in logs")
-        self.chk_encrypt = QCheckBox("Encrypt logs (basic)")
+        self.chk_mask = QCheckBox("Redakce známých tajných polí je vždy aktivní")
+        self.chk_mask.setEnabled(False)
+        self.chk_encrypt = QCheckBox("Šifrování logů není dostupné; chraňte adresář LOG")
+        self.chk_encrypt.setEnabled(False)
         self.chk_allow_sensitive = QCheckBox("Allow upload of sensitive files")
         self.txt_deny_ext = QPlainTextEdit()
         self.txt_deny_ext.setPlaceholderText("One extension per line (e.g. .exe)")
@@ -896,9 +909,9 @@ class MainWindow(QMainWindow):
         self.sp_batch_timeout = QDoubleSpinBox()
         self.sp_batch_timeout.setRange(60, 24 * 60 * 60)
         self.sp_batch_timeout.setSingleStep(10)
-        self.sp_temp = QDoubleSpinBox()
-        self.sp_temp.setRange(0.0, 2.0)
-        self.sp_temp.setSingleStep(0.1)
+        self.sp_default_temp = QDoubleSpinBox()
+        self.sp_default_temp.setRange(0.0, 2.0)
+        self.sp_default_temp.setSingleStep(0.1)
         self.ed_price_url = QLineEdit()
         self.chk_price_refresh = QCheckBox("Auto refresh pricing on start")
         form.addWidget(self.chk_mask, 0, 0, 1, 2)
@@ -913,7 +926,7 @@ class MainWindow(QMainWindow):
         form.addWidget(QLabel("Batch timeout (s)"), 6, 0)
         form.addWidget(self.sp_batch_timeout, 6, 1)
         form.addWidget(QLabel("Default temperature"), 7, 0)
-        form.addWidget(self.sp_temp, 7, 1)
+        form.addWidget(self.sp_default_temp, 7, 1)
         form.addWidget(QLabel("Pricing source URL"), 8, 0)
         form.addWidget(self.ed_price_url, 8, 1)
         form.addWidget(self.chk_price_refresh, 9, 0, 1, 2)
@@ -1063,14 +1076,14 @@ class MainWindow(QMainWindow):
             msg_warning(self, "SMTP", f"Test se nepodařil: {msg}")
 
     def _load_settings_tab(self):
-        self.chk_mask.setChecked(bool(self.s.logging.mask_secrets))
-        self.chk_encrypt.setChecked(bool(self.s.logging.encrypt_logs))
+        self.chk_mask.setChecked(True)
+        self.chk_encrypt.setChecked(False)
         self.chk_allow_sensitive.setChecked(bool(self.s.security.allow_upload_sensitive))
         self.txt_deny_ext.setPlainText("\n".join(self.s.security.deny_extensions_in or []))
         self.txt_deny_glob.setPlainText("\n".join(self.s.security.deny_globs_in or []))
         self.sp_batch_poll.setValue(float(getattr(self.s, "batch_poll_interval_s", 4.0)))
         self.sp_batch_timeout.setValue(float(getattr(self.s, "batch_timeout_s", 3600.0)))
-        self.sp_temp.setValue(float(getattr(self.s, "default_temperature", 0.2)))
+        self.sp_default_temp.setValue(float(getattr(self.s, "default_temperature", 0.2)))
         self.ed_price_url.setText(getattr(self.s.pricing, "source_url", ""))
         self.chk_price_refresh.setChecked(bool(getattr(self.s.pricing, "auto_refresh_on_start", True)))
         self.lbl_settings_status.setText("Loaded settings")
@@ -1085,7 +1098,7 @@ class MainWindow(QMainWindow):
         self.s.security.deny_globs_in = deny_glob
         self.s.batch_poll_interval_s = float(self.sp_batch_poll.value())
         self.s.batch_timeout_s = float(self.sp_batch_timeout.value())
-        self.s.default_temperature = float(self.sp_temp.value())
+        self.s.default_temperature = float(self.sp_default_temp.value())
         self.s.pricing.source_url = self.ed_price_url.text().strip()
         self.s.pricing.auto_refresh_on_start = bool(self.chk_price_refresh.isChecked())
         try:
@@ -1128,13 +1141,16 @@ class MainWindow(QMainWindow):
         txt = QPlainTextEdit()
         txt.setReadOnly(True)
         txt.setPlainText(
-            "v2 funkce:\n"
-            "- Načte dostupné modely (po API-KEY) a probuje kompatibility (previous_response_id, temperature, tools/file_search).\n"
-            "- Cache: cache/model_capabilities.json (TTL 7 dní; Probe models = force).\n"
+            "KájovoNG:\n"
+            "- Modely se načítají po nastavení API-KEY v SETTINGS.\n"
+            "- Placené ověření kompatibility se spouští pouze ručně tlačítkem Probe models.\n"
+            "- Výsledky ověření: cache/model_capabilities.json.\n"
             "- Find model: vyhledá model podle požadovaných funkcí.\n"
             "- Long prompt >150k: ingest A0 + navazující A1/A2/A3 přes previous_response_id.\n\n"
             "Pozn.: Response ID dostává každý úspěšný request na Responses API.\n"
-            "Probe pro previous_response_id nyní značí 'unsupported' jen když server explicitně odmítne parametr.\n"
+            "Probe označuje previous_response_id jako 'unsupported' při explicitním odmítnutí parametru serverem.\n"
+            "Logy nejsou šifrované. Ceny jsou odhad, nikoli vyúčtování poskytovatele.\n"
+            "Kanonická specifikace: docs/SSOT.md v repozitáři.\n"
         )
         v.addWidget(txt, 1)
 
@@ -1149,13 +1165,12 @@ class MainWindow(QMainWindow):
         # Progress bars should reflect real worker-reported values only.
         return
 
-    def _send_bzz_notification(self, rid: str):
+    def _send_bzz_notification(self, rid: str, project: str = "", out_dir: str = ""):
         smtp = getattr(self.s, "smtp", None)
         if not smtp:
             self.log("BZZonEND: SMTP nastavení není k dispozici.")
             return
         end_ts = time.strftime("%Y-%m-%d %H:%M:%S")
-        project = self.run_logger.project_name if self.run_logger else ""
         run_label = rid or "RUN"
         if project:
             run_label = f"{project} ({run_label})"
@@ -1164,7 +1179,7 @@ class MainWindow(QMainWindow):
             f"RUN: {rid or 'neznámý'}",
             f"Projekt: {project or 'NO_PROJECT'}",
             f"Dokončeno: {end_ts}",
-            f"OUT: {self.ed_out.text().strip() or '(nenastaveno)'}",
+            f"OUT: {out_dir or '(nenastaveno)'}",
         ]
         ok, msg = send_smtp_notification(smtp, subject, "\n".join(body_lines))
         if ok:
@@ -1258,7 +1273,7 @@ class MainWindow(QMainWindow):
                 "deny_glob": self.txt_deny_glob.toPlainText(),
                 "batch_poll": float(self.sp_batch_poll.value()),
                 "batch_timeout": float(self.sp_batch_timeout.value()),
-                "temperature": float(self.sp_temp.value()),
+                "temperature": float(self.sp_default_temp.value()),
                 "price_url": self.ed_price_url.text(),
                 "auto_price": bool(self.chk_price_refresh.isChecked()),
                 "smtp": {
@@ -1318,8 +1333,8 @@ class MainWindow(QMainWindow):
         self.chk_ssh_pin_required.setChecked(bool(ssh.get("pin_required", False)))
         self.ed_ssh_pwd.setText(get_secret("ssh_password") or "")
         settings = state.get("settings", {}) or {}
-        self.chk_mask.setChecked(bool(settings.get("mask", self.chk_mask.isChecked())))
-        self.chk_encrypt.setChecked(bool(settings.get("encrypt", self.chk_encrypt.isChecked())))
+        self.chk_mask.setChecked(True)
+        self.chk_encrypt.setChecked(False)
         self.chk_allow_sensitive.setChecked(
             bool(settings.get("allow_sensitive", self.chk_allow_sensitive.isChecked()))
         )
@@ -1327,7 +1342,7 @@ class MainWindow(QMainWindow):
         self.txt_deny_glob.setPlainText(settings.get("deny_glob", self.txt_deny_glob.toPlainText()))
         self.sp_batch_poll.setValue(float(settings.get("batch_poll", self.sp_batch_poll.value())))
         self.sp_batch_timeout.setValue(float(settings.get("batch_timeout", self.sp_batch_timeout.value())))
-        self.sp_temp.setValue(float(settings.get("temperature", self.sp_temp.value())))
+        self.sp_default_temp.setValue(float(settings.get("temperature", self.sp_default_temp.value())))
         self.ed_price_url.setText(settings.get("price_url", self.ed_price_url.text()))
         self.chk_price_refresh.setChecked(bool(settings.get("auto_price", self.chk_price_refresh.isChecked())))
         smtp_state = settings.get("smtp", {}) or {}
@@ -1418,7 +1433,7 @@ class MainWindow(QMainWindow):
         # default skip extensions always
         self.skip_exts_default = [".mp3", ".wav", ".flac", ".aac", ".ogg", ".mp4", ".mkv", ".avi", ".mov"]
         try:
-            self.tabs.setCurrentWidget(self.tab_run)
+            self._select_tab(self.tab_run)
         except Exception:
             pass
         try:
@@ -1752,28 +1767,6 @@ class MainWindow(QMainWindow):
 
     def _gather_completed_paths(self, run_id: str, out_dir: str) -> List[str]:
         paths: List[str] = []
-        resp_dir = os.path.join(self.s.log_dir, run_id, "responses")
-        if os.path.isdir(resp_dir):
-            for fn in os.listdir(resp_dir):
-                if "A3_FILE" not in fn and "B3_FILE" not in fn:
-                    continue
-                fp = os.path.join(resp_dir, fn)
-                try:
-                    with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                        raw = json.load(f)
-                    out_arr = raw.get("output", []) or []
-                    if not out_arr:
-                        continue
-                    content = out_arr[0].get("content") or []
-                    if not content:
-                        continue
-                    txt = content[0].get("text") or ""
-                    j = json.loads(txt)
-                    path = j.get("path")
-                    if isinstance(path, str):
-                        paths.append(path)
-                except Exception:
-                    continue
         mani_dir = os.path.join(self.s.log_dir, run_id, "manifests")
         if os.path.isdir(mani_dir):
             for fn in os.listdir(mani_dir):
@@ -1798,14 +1791,20 @@ class MainWindow(QMainWindow):
         # dedupe
         out: List[str] = []
         for p in paths:
-            if p not in out:
-                out.append(p)
+            try:
+                if p not in out and os.path.isfile(safe_join_under_root(out_dir, p)):
+                    out.append(p)
+            except ValueError:
+                continue
         return out
 
     def on_rerun(self):
         rid = self.ed_rerun.text().strip()
         if not rid:
             msg_info(self, "ReRun", "Zadej RUN_ID.")
+            return
+        if not RUN_ID_RE.fullmatch(rid):
+            msg_warning(self, "ReRun", "Neplatný formát RUN_ID.")
             return
         if not self._can_start_new_run():
             msg_warning(self, "ReRun", "Probíhá jiný RUN. Nejprve ho ukonči.")
@@ -1852,28 +1851,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log(f"STOP: wait before force-stop failed: {e}")
 
-        self.log("Force stopping RUN thread (terminate fallback).")
-        try:
-            worker.terminate()
-            worker.wait(2000)
-        except Exception as e:
-            self.log(f"STOP: terminate fallback failed: {e}")
-
-        run_logger = ctx.get("run_logger")
-        if run_logger:
-            try:
-                run_logger.update_state(
-                    {
-                        "status": "force_killed",
-                        "force_killed_at": time.time(),
-                        "reason": "ui.terminate_fallback",
-                    }
-                )
-                run_logger.event("ui.worker.force_kill", {"reason": "terminate_fallback"})
-            except Exception as e:
-                self.log(f"STOP: failed to write force-kill marker: {e}")
-
-        self._dispose_run_context(str(rk))
+        self.log("STOP: čekám na dokončení právě probíhající operace.")
+        return
 
     def _browse_dir(self, target: QLineEdit):
         d = dialog_select_dir(self, "Select directory", target.text() or os.getcwd())
@@ -1936,7 +1915,7 @@ class MainWindow(QMainWindow):
 
     def on_pricing(self):
         try:
-            self.tabs.setCurrentWidget(self.tab_pricing)
+            self._select_tab(self.tab_pricing)
         except Exception:
             pass
 
@@ -1967,13 +1946,8 @@ class MainWindow(QMainWindow):
         self._auto_probe_models_on_start()
 
     def _set_env_api_key(self, value: str) -> bool:
-        try:
-            if os.name == "nt":
-                subprocess.run(["setx", "OPENAI_API_KEY", value], capture_output=True, text=True, check=True, shell=False)
-                return True
-        except Exception:
-            return False
-        return False
+        from ..core.secret_store import persist_api_key
+        return persist_api_key(value)
 
     def _api_save(self):
         val = (self.ed_settings_apikey.text() or "").strip()
@@ -2017,10 +1991,8 @@ class MainWindow(QMainWindow):
 
     def _auto_refresh_pricing(self):
         try:
-            if not self.price_table.rows:
-                ok, _ = self.price_table.refresh_from_url(self.s.pricing.source_url)
-                if not ok and hasattr(self, "pricing_panel"):
-                    self.pricing_panel.on_refresh_via_model()
+            if self.s.pricing.auto_refresh_on_start and not self.price_table.rows:
+                self.price_table.refresh_from_url(self.s.pricing.source_url)
             self.pricing_panel.load_prices()
         except Exception:
             pass
@@ -2182,7 +2154,7 @@ class MainWindow(QMainWindow):
             return
         model_id = item.data(Qt.UserRole)
         self._set_active_model(model_id)
-        self.tabs.setCurrentWidget(self.tab_run)
+        self._select_tab(self.tab_run)
         self.log(f"Model selected from MODELS tab: {model_id}")
 
     def _set_active_model(self, model_id: str):
@@ -2221,21 +2193,8 @@ class MainWindow(QMainWindow):
         )
 
     def _auto_probe_models_on_start(self):
-        if not self.api_key:
-            return
-        models = set(self.all_models) if self.all_models else set()
-        # include anything already v combo box (uživatel mohl dopsat ručně)
-        for i in range(self.cb_model.count()):
-            txt = self.cb_model.itemText(i)
-            if txt:
-                models.add(txt)
-        current = self.cb_model.currentText()
-        if current:
-            models.add(current)
-        missing = [m for m in models if self.caps_cache.get(m) is None]
-        if not missing:
-            return
-        self._start_probe(missing, ttl_hours=0.0)
+        # Placené ověřovací požadavky spouští pouze explicitní tlačítko Probe.
+        self.on_model_changed(self.cb_model.currentText())
 
     def on_probe_models(self):
         if not self.api_key:
@@ -2259,6 +2218,8 @@ class MainWindow(QMainWindow):
 
     def _probe_finished(self):
         self.log("Model probe finished.")
+        if self.probe_worker:
+            self.probe_worker.deleteLater()
         self.probe_worker = None
         self.caps_cache.load()
         self.on_model_changed(self.cb_model.currentText())
@@ -2310,10 +2271,10 @@ class MainWindow(QMainWindow):
 
     def on_go(self):
         if not self._can_start_new_run():
-            msg_info(self, "Run", f"B??? maximum paraleln?ch RUN? ({self._max_parallel_runs}).")
+            msg_info(self, "Run", f"Běží maximum paralelních RUNů ({self._max_parallel_runs}).")
             return
         if not self.api_key:
-            msg_warning(self, "API-KEY", "Nejd??v nastav OPENAI_API_KEY.")
+            msg_warning(self, "API-KEY", "Nejdřív nastav OPENAI_API_KEY.")
             return
 
         mode = self.cb_mode.currentText()
@@ -2323,6 +2284,21 @@ class MainWindow(QMainWindow):
             self.chk_send_as_c.setChecked(False)
         if not self._validate_paths(mode, send_as_c):
             return
+        candidate_out = os.path.normcase(os.path.realpath(self.ed_out.text().strip()))
+        if not send_as_c and mode != "QA":
+            for active in self._run_contexts.values():
+                active_cfg = getattr(active.get("worker"), "cfg", None)
+                other_out = getattr(active_cfg, "out_dir", "")
+                if not other_out:
+                    continue
+                other_out = os.path.normcase(os.path.realpath(other_out))
+                try:
+                    overlaps = os.path.commonpath([candidate_out, other_out]) in (candidate_out, other_out)
+                except ValueError:
+                    overlaps = False
+                if overlaps:
+                    msg_warning(self, "OUT", "Do stejného nebo vnořeného OUT již zapisuje jiný běh.")
+                    return
 
         if mode == "QFILE" and send_as_c:
             msg_warning(self, "Mode", "QFILE nepodporuje SEND AS BATCH.")
@@ -2347,24 +2323,24 @@ class MainWindow(QMainWindow):
                 msg_critical(
                     self,
                     "Model",
-                    "Probe zjistil, ?e server explicitn? odm?t? previous_response_id pro tento model. "
-                    "Kask?du nelze spustit s t?mto modelem.",
+                    "Probe zjistil, že server explicitně odmítá previous_response_id pro tento model. "
+                    "Kaskádu nelze spustit s tímto modelem.",
                 )
                 return
 
         if mode == "KASKADA":
             if self.cb_run_cascade.count() == 0:
-                msg_warning(self, "Kask?da", "Nen? vybran? ulo?en? kask?da.")
+                msg_warning(self, "Kaskáda", "Není vybraná uložená kaskáda.")
                 return
             cpath = str(self.cb_run_cascade.currentData() or "").strip()
             if not cpath or not os.path.isfile(cpath):
-                msg_warning(self, "Kask?da", "Vybran? kask?da neexistuje.")
+                msg_warning(self, "Kaskáda", "Vybraná kaskáda neexistuje.")
                 return
             try:
                 with open(cpath, "r", encoding="utf-8") as f:
                     cdef = CascadeDefinition.from_dict(json.load(f))
             except Exception as e:
-                msg_critical(self, "Kask?da", f"Na?ten? kask?dy selhalo: {e}")
+                msg_critical(self, "Kaskáda", f"Načtení kaskády selhalo: {e}")
                 return
             cfg_c = CascadeRunConfig(
                 project=self.ed_project.text().strip(),
@@ -2372,9 +2348,10 @@ class MainWindow(QMainWindow):
                 in_dir=self.ed_in.text().strip(),
                 out_dir=self.ed_out.text().strip(),
             )
-            self.log(f"KASK?DA started: {os.path.basename(cpath)}")
+            self.log(f"KASKÁDA started: {os.path.basename(cpath)}")
             run_id = new_run_id()
             run_key = f"KASKADA:{run_id}"
+            cfg_c.run_id = run_id
             worker = CascadeRunWorker(cfg_c, self.s, self.api_key, self.db, self.price_table)
             dialog = ProgressDialog(self)
             dialog.btn_stop.clicked.connect(lambda _=False, rk=run_key: self.on_stop(run_key=rk))
@@ -2406,7 +2383,7 @@ class MainWindow(QMainWindow):
         input_file_ids = list(attached_file_ids)
         oversize_ids = []
         if attached_file_ids:
-            with BusyPopup(self, "Kontroluji velikost soubor?..."):
+            with BusyPopup(self, "Kontroluji velikost souborů..."):
                 try:
                     client = OpenAIClient(self.api_key)
                     for fid in attached_file_ids:
@@ -2439,7 +2416,6 @@ class MainWindow(QMainWindow):
             self.log(f"Oversize file_ids filtered (>{32}MB): {', '.join(oversize_ids)}")
 
         pin_required = bool(self.chk_ssh_pin_required.isChecked())
-        os.environ["KAJOVO_SSH_PIN_REQUIRED"] = "1" if pin_required else "0"
         if pin_required:
             self.log("SSH diagnostics policy: pin required is enabled.")
 
@@ -2475,6 +2451,8 @@ class MainWindow(QMainWindow):
             model_caps=caps_dict,
             resume_files=getattr(self, "_resume_files", []),
             resume_prev_id=getattr(self, "_resume_prev_id", None),
+            ssh_pin=os.environ.get("KAJOVO_SSH_HOSTKEY_SHA256", ""),
+            ssh_pin_required=pin_required,
         )
 
         run_key = f"RUN:{run_id}"
@@ -2521,7 +2499,7 @@ class MainWindow(QMainWindow):
         if not ctx:
             return
         if not force:
-            if msg_question(self, "STOP", "Zastavit aktu?ln? RUN? Rozd?lan? pr?ce se ztrat?.") != QMessageBox.Yes:
+            if msg_question(self, "STOP", "Zastavit aktuální RUN? Rozdělaná práce se ztratí.") != QMessageBox.Yes:
                 return
         try:
             worker = ctx.get("worker")
@@ -2535,6 +2513,8 @@ class MainWindow(QMainWindow):
 
     def on_run_ok(self, run_key: str, result: dict):
         ctx = self._run_contexts.get(run_key) or {}
+        completed_cfg = getattr(ctx.get("worker"), "cfg", None)
+        out_dir = getattr(completed_cfg, "out_dir", "")
         run_logger = ctx.get("run_logger")
         rid = str(ctx.get("run_id") or (run_logger.run_id if run_logger else "") or str((result or {}).get("run_id") or ""))
         is_batch = bool(ctx.get("send_as_c") or (result.get("mode") == "C"))
@@ -2565,13 +2545,12 @@ class MainWindow(QMainWindow):
         if self.txt_response_view is not None:
             self.txt_response_view.setPlainText(resp_text)
 
-        if self.chk_diag_win_out.isChecked() or self.chk_diag_ssh_out.isChecked():
+        if getattr(completed_cfg, "diag_windows_out", False) or getattr(completed_cfg, "diag_ssh_out", False):
             if not is_batch:
-                self._maybe_execute_repair(self.ed_out.text().strip())
+                self._maybe_execute_repair(out_dir)
 
-        out_dir = self.ed_out.text().strip()
         if (not is_batch) and out_dir and os.path.isdir(out_dir):
-            if msg_question(self, "Open OUT", "Otev??t OUT slo?ku?") == QMessageBox.Yes:
+            if msg_question(self, "Open OUT", "Otevřít OUT složku?") == QMessageBox.Yes:
                 try:
                     if os.name == "nt":
                         os.startfile(out_dir)  # type: ignore
@@ -2580,11 +2559,11 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
         if is_batch:
-            msg = f"BATCH request odesl?n (batch_id={batch_id or 'nezn?m?'}). Sleduj z?lo?ku BATCH a st?hni v?stup do OUT."
+            msg = f"BATCH request odeslán (batch_id={batch_id or 'neznámý'}). Sleduj záložku BATCH a stáhni výstup do OUT."
             self.log(msg)
 
         if notify_on_end:
-            self._send_bzz_notification(rid)
+            self._send_bzz_notification(rid, getattr(completed_cfg, "project", ""), out_dir)
 
     def on_run_err(self, run_key: str, err: str):
         ctx = self._run_contexts.get(run_key) or {}
@@ -2614,71 +2593,22 @@ class MainWindow(QMainWindow):
 
 
     def closeEvent(self, event):
-        # Ensure background threads stop cleanly to avoid QThread destruction errors.
-        if self._active_run_count() > 0:
-            if msg_question(self, "Exit", "Prob?h? RUN. Zastavit v?echny b?hy a ukon?it?") != QMessageBox.Yes:
-                event.ignore()
-                return
-            self.log("Stopping active RUNs before exit...")
-            for rk, ctx in list(self._run_contexts.items()):
-                worker = ctx.get("worker")
-                try:
-                    if worker is not None:
-                        worker.request_stop()
-                except Exception:
-                    pass
-            deadline = time.time() + 5.0
-            while time.time() < deadline:
-                running = False
-                for ctx in self._run_contexts.values():
-                    worker = ctx.get("worker")
-                    try:
-                        if worker is not None and worker.isRunning():
-                            running = True
-                            break
-                    except Exception:
-                        pass
-                if not running:
-                    break
-                try:
-                    from PySide6.QtWidgets import QApplication
-                    QApplication.processEvents()
-                except Exception:
-                    pass
-            for rk, ctx in list(self._run_contexts.items()):
-                worker = ctx.get("worker")
-                try:
-                    if worker is not None and worker.isRunning():
-                        worker.terminate()
-                        worker.wait(1000)
-                except Exception:
-                    pass
+        workers = [ctx.get("worker") for ctx in self._run_contexts.values()]
+        workers.extend([self.probe_worker, getattr(self.pricing_panel, "audit_worker", None),
+                        getattr(self.files_panel, "_delete_worker", None)])
+        workers.extend(getattr(self.vector_panel, name, None) for name in ("_upload_worker", "_delete_worker"))
+        active = [worker for worker in workers if worker is not None and worker.isRunning()]
+        if active:
+            for worker in active:
+                if hasattr(worker, "request_stop"):
+                    worker.request_stop()
+            self.log("Ukončení čeká na dokončení aktivních operací. Po jejich dokončení zavřete okno znovu.")
+            event.ignore()
+            return
         self._dispose_worker()
-
-        if self.probe_worker and self.probe_worker.isRunning():
-            if msg_question(self, "Exit", "Model probe je?t? b???. Zastavit a ukon?it?") != QMessageBox.Yes:
-                event.ignore()
-                return
-            self.log("Stopping model probe before exit...")
-            try:
-                self.probe_worker.request_stop()
-            except Exception as e:
-                self.log(f"Probe stop request failed: {e}")
-            if not self.probe_worker.wait(2000):
-                self.log("Model probe still running, applying terminate fallback on exit.")
-                try:
-                    self.probe_worker.terminate()
-                except Exception as e:
-                    self.log(f"Probe terminate fallback failed: {e}")
-                self.probe_worker.wait(1000)
-            try:
-                if hasattr(self, "_probe_busy") and self._probe_busy:
-                    self._probe_busy.close()
-            except Exception as e:
-                self.log(f"Failed to close probe busy popup: {e}")
         self._dispose_probe_worker()
-
-        self.progress_dialog = None
+        if self.pricing_audit_timer:
+            self.pricing_audit_timer.stop()
         super().closeEvent(event)
 
     def _maybe_execute_repair(self, out_dir: str):
@@ -2725,9 +2655,9 @@ class MainWindow(QMainWindow):
             if msg_question(self, "Repair warning", warn) != QMessageBox.Yes:
                 return
             if os.name == "nt" and script.lower().endswith(".bat"):
-                p = subprocess.run(["cmd", "/c", script], cwd=out_dir, capture_output=True, text=True, shell=False)
+                p = subprocess.run(["cmd", "/c", script], cwd=out_dir, capture_output=True, text=True, shell=False, timeout=120)
             else:
-                p = subprocess.run(["bash", script], cwd=out_dir, capture_output=True, text=True, shell=False)
+                p = subprocess.run(["bash", script], cwd=out_dir, capture_output=True, text=True, shell=False, timeout=120)
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(
                     "READMEREPAIR:\n"
@@ -2739,6 +2669,9 @@ class MainWindow(QMainWindow):
                     + "\n\nSTDERR:\n"
                     + (p.stderr or "")
                 )
-            msg_info(self, "Repair", f"Hotovo. Log: {log_path}")
+            if p.returncode:
+                msg_warning(self, "Repair", f"Oprava selhala ({p.returncode}). Log: {log_path}")
+            else:
+                msg_info(self, "Repair", f"Hotovo. Log: {log_path}")
         except Exception as e:
             msg_critical(self, "Repair", f"Nelze spustit: {e}")

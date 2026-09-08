@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import time
@@ -35,7 +36,7 @@ class CascadeRunPaths:
 
 class CascadeLogger:
     def __init__(self, base_log_dir: str, run_id: str, project_name: str = ""):
-        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        root_dir = os.path.abspath(os.curdir)
         if not base_log_dir:
             base_log_dir = os.path.join(root_dir, "LOG")
         if not os.path.isabs(base_log_dir):
@@ -48,6 +49,7 @@ class CascadeLogger:
         ensure_dir(self.base_log_dir)
 
         run_dir = os.path.join(self.base_log_dir, run_id)
+        os.makedirs(run_dir, exist_ok=False)
         self.paths = CascadeRunPaths(
             run_id=run_id,
             run_dir=run_dir,
@@ -131,6 +133,7 @@ class CascadeLogger:
             "files": self.paths.files_dir,
         }.get(kind, self.paths.misc_dir)
         safe = "".join(c for c in name if c.isalnum() or c in "._-")[:140]
+        safe += "_" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
         prefix = "".join(c for c in self.project_name if c.isalnum() or c in "._-")[:60]
         safe2 = f"{prefix}_{self.run_id}_{safe}" if prefix else f"{self.run_id}_{safe}"
         path = os.path.join(folder, f"{safe2}.json")

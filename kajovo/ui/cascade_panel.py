@@ -432,7 +432,6 @@ class CascadePanel(QWidget):
     def _on_steps_reordered(self):
         new_steps: List[CascadeStep] = []
         for row in range(self.lst_steps.count()):
-            txt = self.lst_steps.item(row).text()
             old_idx = self.lst_steps.item(row).data(Qt.UserRole)
             try:
                 old_idx = int(old_idx)
@@ -504,7 +503,7 @@ class CascadePanel(QWidget):
         try:
             parsed = json.loads(raw)
         except Exception as e:
-            raise ValueError(f"Input Content není validní JSON: {e}")
+            raise ValueError(f"Input Content není validní JSON: {e}") from e
         if not isinstance(parsed, (dict, list)):
             raise ValueError("Input Content musí být JSON object nebo list")
         return parsed

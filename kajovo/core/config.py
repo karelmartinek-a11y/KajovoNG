@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os, json
-from dataclasses import dataclass, asdict, field
+import math
+from dataclasses import dataclass, asdict, field, fields, is_dataclass
 from typing import List, Optional
-from .utils import ensure_dir
+from .utils import ensure_dir, atomic_write_text
 from .secret_store import get_secret, set_secret
 
 DEFAULT_SETTINGS_FILE = "kajovo_settings.json"
@@ -107,30 +108,53 @@ class AppSettings:
     dry_run_modify: bool = False
 
 def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
-    if not os.path.exists(path):
-        return AppSettings()
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
+    raw = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError("Nastavení musí být JSON objekt.")
 
     def merge(obj, data):
+        allowed = {f.name for f in fields(obj)}
         for k, v in data.items():
-            if not hasattr(obj, k):
+            if k not in allowed:
                 continue
             cur = getattr(obj, k)
-            if hasattr(cur, "__dict__") and isinstance(v, dict):
+            if is_dataclass(cur):
+                if not isinstance(v, dict):
+                    raise ValueError(f"Nastavení {k} musí být objekt.")
                 merge(cur, v)
             else:
+                optional_list = k in ("deny_extensions_in", "allow_extensions_in", "deny_globs_in", "allow_globs_in")
+                if cur is not None and not (optional_list and v is None) and type(v) is not type(cur) and not (type(cur) is float and type(v) is int):
+                    raise ValueError(f"Nesprávný typ nastavení {k}.")
+                if (isinstance(cur, list) or k.startswith(("allow_", "deny_")) and k != "allow_upload_sensitive") and v is not None:
+                    if not isinstance(v, list) or not all(isinstance(item, str) for item in v):
+                        raise ValueError(f"Nastavení {k} musí být seznam textů.")
                 setattr(obj, k, v)
 
     s = AppSettings()
     merge(s, raw)
+    numeric_positive = [s.retry.max_attempts, s.retry.circuit_breaker_failures,
+                        s.batch_poll_interval_s, s.batch_timeout_s, s.smtp.port,
+                        s.logging.max_total_mb, s.logging.max_runs]
+    numeric_nonnegative = [s.retry.base_delay_s, s.retry.max_delay_s, s.retry.jitter_s,
+                           s.retry.circuit_breaker_cooldown_s, s.pricing.cache_ttl_hours]
+    if any(not math.isfinite(v) or v <= 0 for v in numeric_positive) or any(
+        not math.isfinite(v) or v < 0 for v in numeric_nonnegative
+    ) or not 0 <= s.default_temperature <= 2 or s.smtp.port > 65535:
+        raise ValueError("Číselné nastavení je mimo povolený rozsah.")
     # Backward compatibility: migrate plaintext secrets to OS keyring / env store.
+    migration_results = []
     if s.smtp.password:
-        set_secret("smtp_password", s.smtp.password)
+        migration_results.append(set_secret("smtp_password", s.smtp.password))
     if s.ssh.password:
-        set_secret("ssh_password", s.ssh.password)
+        migration_results.append(set_secret("ssh_password", s.ssh.password))
     s.smtp.password = get_secret("smtp_password") or ""
     s.ssh.password = get_secret("ssh_password") or ""
+    if migration_results and all(migration_results):
+        save_settings(s, path)
     return s
 
 def save_settings(s: AppSettings, path: str = DEFAULT_SETTINGS_FILE) -> None:
@@ -141,5 +165,4 @@ def save_settings(s: AppSettings, path: str = DEFAULT_SETTINGS_FILE) -> None:
     # Never persist credentials in plaintext JSON.
     payload.setdefault("smtp", {})["password"] = ""
     payload.setdefault("ssh", {})["password"] = ""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))

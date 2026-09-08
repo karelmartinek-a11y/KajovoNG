@@ -57,19 +57,21 @@ def _err_indicates_param_unsupported(err: str, param_name: str) -> bool:
         f"unrecognized parameter: {key}",
         f"unexpected parameter: {key}",
         f"unsupported parameter: {key}",
-        f"additional properties are not allowed",
-        f"extra fields not permitted",
+        "additional properties are not allowed",
+        "extra fields not permitted",
         f"'{key}' is not permitted",
         f"'{key}' was unexpected",
         f"{key} is not allowed",
         f"{key} is not supported",
-        f"invalid request",  # combined with key check below
+        "invalid request",  # combined with key check below
     ]
     if any(n in e for n in needles) and (key in e):
         return True
     # Also catch structured validation where key appears with "unknown" nearby
-    if key in e and ("unknown" in e or "unrecognized" in e or "unsupported" in e) and (
-        "parameter" in e or "field" in e
+    if (
+        key in e
+        and ("unknown" in e or "unrecognized" in e or "unsupported" in e)
+        and ("parameter" in e or "field" in e)
     ):
         return True
     return False
@@ -118,7 +120,9 @@ class ModelCapabilities:
             supports_temperature=bool(d.get("supports_temperature", True)),
             supports_tools=bool(d.get("supports_tools", False)),
             supports_file_search=bool(d.get("supports_file_search", False)),
-            supports_vector_store=bool(d.get("supports_vector_store", d.get("supports_file_search", False))),
+            supports_vector_store=bool(
+                d.get("supports_vector_store", d.get("supports_file_search", False))
+            ),
             notes=str(d.get("notes", "")),
             errors=dict(d.get("errors") or {}),
         )
@@ -213,10 +217,9 @@ class ModelCapabilitiesCache:
 
 
 class ModelProbeWorker(QThread):
-    progress = Signal(int)               # 0..100
-    model_status = Signal(str, str)      # model_id, status line
+    progress = Signal(int)  # 0..100
+    model_status = Signal(str, str)  # model_id, status line
     logline = Signal(str)
-    finished = Signal()
 
     def __init__(
         self,
@@ -241,17 +244,27 @@ class ModelProbeWorker(QThread):
     def run(self) -> None:
         if not self.api_key:
             self.logline.emit("Model probe: missing OPENAI_API_KEY.")
-            self.finished.emit()
             return
 
         client = OpenAIClient(self.api_key)
-        breaker = CircuitBreaker(self.settings.retry.circuit_breaker_failures, self.settings.retry.circuit_breaker_cooldown_s)
+        breaker = CircuitBreaker(
+            self.settings.retry.circuit_breaker_failures,
+            self.settings.retry.circuit_breaker_cooldown_s,
+        )
 
         # Shared vector store + file for file_search probe (best-effort)
         vs_id: Optional[str] = None
         fs_ready = False
+        fid = None
+        tmp_path = None
         try:
-            vs = with_retry(lambda: client.create_vector_store(f"caps_probe_{int(time.time())}"), self.settings.retry, breaker)
+            vs = with_retry(
+                lambda: client.create_vector_store(
+                    f"caps_probe_{int(time.time())}", expires_after_days=1
+                ),
+                self.settings.retry,
+                breaker,
+            )
             vs_id = vs.get("id")
             if vs_id:
                 tmp_dir = getattr(self.settings, "cache_dir", "cache")
@@ -260,45 +273,73 @@ class ModelProbeWorker(QThread):
                 needle = f"NEEDLE_{int(time.time())}"
                 with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
                     f.write(f"hello\n{needle}\nbye\n")
-                up = with_retry(lambda: client.upload_file(tmp_path, purpose="user_data"), self.settings.retry, breaker)
+                up = with_retry(
+                    lambda: client.upload_file(tmp_path, purpose="user_data"),
+                    self.settings.retry,
+                    breaker,
+                )
                 fid = up.get("id")
                 if fid:
-                    with_retry(lambda: client.add_file_to_vector_store(vs_id, fid, attributes={"source_path": tmp_path}), self.settings.retry, breaker)
-                    fs_ready = True
+                    with_retry(
+                        lambda: client.add_file_to_vector_store(
+                            vs_id, fid, attributes={"source_path": tmp_path}
+                        ),
+                        self.settings.retry,
+                        breaker,
+                    )
+                    deadline = time.monotonic() + 120
+                    while not self._stop and time.monotonic() < deadline:
+                        status = client.retrieve_vector_store_file(vs_id, fid).get("status")
+                        if status == "completed":
+                            fs_ready = True
+                            break
+                        if status in ("failed", "cancelled"):
+                            break
+                        time.sleep(1)
         except Exception as e:
             self.logline.emit(f"Model probe: file_search setup failed (best-effort): {e}")
             fs_ready = False
-            vs_id = None
 
-        total = max(1, len(self.models_to_probe))
-        for idx, model_id in enumerate(self.models_to_probe):
-            if self._stop:
-                self.logline.emit("Model probe: stopped.")
-                break
+        try:
+            total = max(1, len(self.models_to_probe))
+            for idx, model_id in enumerate(self.models_to_probe):
+                if self._stop:
+                    self.logline.emit("Model probe: stopped.")
+                    break
 
-            if self.ttl_hours > 0 and not self.cache.is_stale(model_id, self.ttl_hours):
-                self.model_status.emit(model_id, "cached (skip)")
+                if self.ttl_hours > 0 and not self.cache.is_stale(model_id, self.ttl_hours):
+                    self.model_status.emit(model_id, "cached (skip)")
+                    self.progress.emit(int(((idx + 1) * 100) / total))
+                    continue
+
+                self.model_status.emit(model_id, "probing...")
+                self.progress.emit(int((idx * 100) / total))
+
+                caps = self._probe_one(client, breaker, model_id, vs_id=vs_id if fs_ready else None)
+                self.cache.upsert(caps)
+                try:
+                    self.cache.save()
+                except Exception:
+                    pass
+
+                self.model_status.emit(model_id, "ok" if caps.ok_basic else "failed")
+                self.logline.emit(
+                    f"CAPS {model_id}: basic={caps.ok_basic} prev_id={caps.supports_previous_response_id} "
+                    f"temp={caps.supports_temperature} tools={caps.supports_tools} file_search={caps.supports_file_search}"
+                )
                 self.progress.emit(int(((idx + 1) * 100) / total))
-                continue
-
-            self.model_status.emit(model_id, "probing...")
-            self.progress.emit(int((idx * 100) / total))
-
-            caps = self._probe_one(client, breaker, model_id, vs_id=vs_id if fs_ready else None)
-            self.cache.upsert(caps)
-            try:
-                self.cache.save()
-            except Exception:
-                pass
-
-            self.model_status.emit(model_id, "ok" if caps.ok_basic else "failed")
-            self.logline.emit(
-                f"CAPS {model_id}: basic={caps.ok_basic} prev_id={caps.supports_previous_response_id} "
-                f"temp={caps.supports_temperature} tools={caps.supports_tools} file_search={caps.supports_file_search}"
-            )
-            self.progress.emit(int(((idx + 1) * 100) / total))
-
-        self.finished.emit()
+        finally:
+            for identifier, delete in (
+                (vs_id, client.delete_vector_store),
+                (fid, client.delete_file),
+            ):
+                if identifier:
+                    try:
+                        delete(identifier)
+                    except Exception as exc:
+                        self.logline.emit(f"Úklid prostředků Probe selhal ({identifier}): {exc}")
+            if tmp_path and os.path.isfile(tmp_path):
+                os.remove(tmp_path)
 
     def _probe_one(
         self,
@@ -312,7 +353,7 @@ class ModelProbeWorker(QThread):
         # 1) Basic call
         payload_basic: Dict[str, Any] = {
             "model": model_id,
-            "instructions": "Return ONLY valid JSON: {\"contract\":\"CAP_PING\",\"ok\":true}. No extra text.",
+            "instructions": 'Return ONLY valid JSON: {"contract":"CAP_PING","ok":true}. No extra text.',
             "input": _mk_parts("ping", max_chars=20000),
         }
         ok_basic, resp1, err1 = _try_response(client, self.settings, breaker, payload_basic)
@@ -341,7 +382,7 @@ class ModelProbeWorker(QThread):
         if resp1_id:
             payload_prev: Dict[str, Any] = {
                 "model": model_id,
-                "instructions": "Return ONLY valid JSON: {\"contract\":\"CAP_PREV\",\"ok\":true}. No extra text.",
+                "instructions": 'Return ONLY valid JSON: {"contract":"CAP_PREV","ok":true}. No extra text.',
                 "input": _mk_parts("pong", max_chars=20000),
                 "previous_response_id": resp1_id,
             }
@@ -363,7 +404,7 @@ class ModelProbeWorker(QThread):
         payload_temp: Dict[str, Any] = {
             "model": model_id,
             "temperature": 1.1,
-            "instructions": "Return ONLY valid JSON: {\"contract\":\"CAP_TEMP\",\"ok\":true}. No extra text.",
+            "instructions": 'Return ONLY valid JSON: {"contract":"CAP_TEMP","ok":true}. No extra text.',
             "input": _mk_parts("temp", max_chars=20000),
         }
         ok_temp, _, errt = _try_response(client, self.settings, breaker, payload_temp)
@@ -386,9 +427,12 @@ class ModelProbeWorker(QThread):
                 "model": model_id,
                 "instructions": (
                     "Try to use file_search tool. Return ONLY valid JSON: "
-                    "{\"contract\":\"CAP_TOOLS\",\"ok\":true}. No extra text."
+                    '{"contract":"CAP_TOOLS","ok":true}. No extra text.'
                 ),
-                "input": _mk_parts("Search in files for the word NEEDLE and confirm you used file_search.", max_chars=20000),
+                "input": _mk_parts(
+                    "Search in files for the word NEEDLE and confirm you used file_search.",
+                    max_chars=20000,
+                ),
                 "tools": [{"type": "file_search", "vector_store_ids": [vs_id]}],
             }
             ok_tools, _, errx = _try_response(client, self.settings, breaker, payload_tools)

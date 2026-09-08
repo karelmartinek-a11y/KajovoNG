@@ -45,10 +45,10 @@ class PricingTests(unittest.TestCase):
             file_search_per_1k=0.5,
             storage_per_gb_day=0.25,
         )
-        total, tool, storage = compute_cost(row, 2000, 1000, use_file_search=True, storage_gb_days=2)
-        self.assertAlmostEqual(tool, 1.0)
+        total, tool, storage = compute_cost(row, 2000, 1000, use_file_search=True, storage_gb_days=2, file_search_calls=2)
+        self.assertAlmostEqual(tool, 0.001)
         self.assertAlmostEqual(storage, 0.5)
-        self.assertAlmostEqual(total, 5.5)
+        self.assertAlmostEqual(total, 4.501)
 
 
 class ReceiptDBTests(unittest.TestCase):

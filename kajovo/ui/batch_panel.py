@@ -19,7 +19,10 @@ from PySide6.QtWidgets import (
 
 from ..core.openai_client import OpenAIClient
 from ..core.retry import with_retry, CircuitBreaker
-from ..core.utils import safe_join_under_root
+from ..core.utils import safe_join_under_root, atomic_write_text
+from ..core.contracts import validate_paths, ContractError
+from ..core.receipt import Receipt, ReceiptDB
+from ..core.pricing import PriceTable, compute_cost
 from .widgets import BusyPopup
 
 
@@ -57,7 +60,8 @@ class BatchPanel(QWidget):
         self.btn_download.clicked.connect(self.download)
         self.btn_cancel.clicked.connect(self.cancel)
 
-        self.load()
+        if self.api_key:
+            self.load()
 
     def set_out_dir(self, out_dir: str):
         self.out_dir = out_dir or ""
@@ -141,7 +145,7 @@ class BatchPanel(QWidget):
     def _batch_run_info(self, batch_id: str) -> Optional[Dict[str, Any]]:
         if not batch_id:
             return None
-        if batch_id in self._batch_run_state_cache:
+        if self._batch_run_state_cache.get(batch_id):
             return self._batch_run_state_cache[batch_id]
         info = self._load_run_state_for_batch(batch_id)
         self._batch_run_state_cache[batch_id] = info
@@ -151,6 +155,8 @@ class BatchPanel(QWidget):
         texts = []
         if not isinstance(body, dict):
             return texts
+        if isinstance(body.get("output_text"), str):
+            return [body["output_text"]]
         outputs = body.get("output") or body.get("outputs") or body.get("data") or []
         for o in outputs:
             if not isinstance(o, dict):
@@ -173,6 +179,26 @@ class BatchPanel(QWidget):
                                 texts.append(t)
         return texts
 
+    def _record_batch_receipt(self, batch_id: str, body: dict, run_info, raw_path: str):
+        if not body.get("id") or not isinstance(body.get("usage"), dict):
+            return
+        usage = body["usage"]
+        model = body.get("model") or ""
+        prices = PriceTable(os.path.join(self.s.cache_dir, "price_table.json"))
+        prices.load_cache()
+        row = prices.get(model) or PriceTable.builtin_fallback().get(model)
+        inp, out = int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
+        total, tool, storage = compute_cost(row, inp, out, is_batch=True)
+        state = (run_info or {}).get("state") or {}
+        ReceiptDB(self.s.db_path).insert(Receipt(
+            run_id=(run_info or {}).get("run_id") or batch_id, created_at=time.time(),
+            project=state.get("project") or "UNKNOWN", model=model, mode="C", flow_type="C_FILES_ALL",
+            response_id=body["id"], batch_id=batch_id, input_tokens=inp, output_tokens=out,
+            total_cost=total, tool_cost=tool, storage_cost=storage,
+            pricing_verified=bool(prices.verified and row), notes="Batch output",
+            log_paths={"batch_output": raw_path}, usage=usage,
+        ))
+
     def _write_files_from_bundle(self, bundle: dict, target_root: str) -> list:
         written = []
         if not isinstance(bundle, dict):
@@ -181,24 +207,27 @@ class BatchPanel(QWidget):
         files = bundle.get("files") or []
         dest_root = target_root
         if root:
-            dest_root = os.path.join(target_root, root)
-        try:
-            os.makedirs(dest_root, exist_ok=True)
-        except Exception:
-            pass
+            dest_root = safe_join_under_root(target_root, root)
+        if not isinstance(files, list):
+            raise ContractError("files musí být seznam.")
+        validate_paths(files)
+        for row in files:
+            safe_join_under_root(dest_root, row["path"])
+            if not isinstance(row.get("content"), str):
+                raise ContractError("Obsah souboru musí být text.")
+        os.makedirs(dest_root, exist_ok=True)
         for f in files:
             path = f.get("path")
             content = f.get("content", "")
-            if not path:
+            if not isinstance(path, str) or not path:
                 continue
             try:
                 dest = safe_join_under_root(dest_root, path)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(content)
+                atomic_write_text(dest, content)
                 written.append(dest)
             except Exception as e:
-                self.logline.emit(f"Write failed {dest}: {e}")
+                raise RuntimeError(f"Zápis souboru {path} selhal: {e}") from e
         return written
 
     def _apply_contract_payload(
@@ -220,11 +249,22 @@ class BatchPanel(QWidget):
             if not path:
                 errors.append("A3_FILE payload missing path.")
                 return
-            content = payload.get("content") or ""
+            content = payload.get("content")
             chunking = payload.get("chunking") or {}
+            if not isinstance(content, str) or not isinstance(chunking, dict):
+                errors.append(f"Invalid chunk content for {path}")
+                chunked_files.setdefault(path, {})["invalid"] = True
+                return
             index = chunking.get("chunk_index", 0)
-            index = index if isinstance(index, int) else 0
             entry = chunked_files.setdefault(path, {"parts": {}, "chunk_count": 0})
+            entry.setdefault("parts", {})
+            entry.setdefault("chunk_count", 0)
+            if type(index) is not int or index < 0 or index in entry["parts"]:
+                errors.append(f"Invalid or duplicate chunk index for {path}")
+                entry["invalid"] = True
+                return
+            if chunking.get("has_more") is False:
+                entry["terminal"] = index
             entry["parts"][index] = content
             chunk_count = chunking.get("chunk_count")
             if isinstance(chunk_count, int) and chunk_count > entry["chunk_count"]:
@@ -241,19 +281,21 @@ class BatchPanel(QWidget):
         errors: List[str],
     ) -> None:
         for path, info in chunked_files.items():
+            if info.get("invalid"):
+                continue
             parts: Dict[int, str] = info.get("parts", {})
             if not parts:
                 continue
             indexes = sorted(parts.keys())
             chunk_count = info.get("chunk_count") or len(indexes)
-            if chunk_count and len(parts) < chunk_count:
+            if indexes != list(range(chunk_count)) or info.get("terminal") != chunk_count - 1:
                 errors.append(f"Incomplete chunks for {path}: {len(parts)}/{chunk_count}")
+                continue
             content = "".join(parts[idx] for idx in indexes)
             try:
                 dest = safe_join_under_root(target_dir, path)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(content)
+                atomic_write_text(dest, content)
                 written.append(dest)
             except Exception as exc:
                 errors.append(f"Write chunked file {path}: {exc}")
@@ -299,7 +341,7 @@ class BatchPanel(QWidget):
             try:
                 raw = with_retry(lambda: self.client.file_content(ofid), self.s.retry, self.breaker)
                 # always save raw JSONL as backup
-                raw_path = os.path.join(target_dir, f"batch_{bid}_output.jsonl")
+                raw_path = safe_join_under_root(target_dir, f"batch_{bid}_output.jsonl")
                 with open(raw_path, "wb") as f:
                     f.write(raw)
                 self.logline.emit(f"Batch {bid}: raw JSONL saved to {raw_path}")
@@ -322,6 +364,10 @@ class BatchPanel(QWidget):
                             body = data.get("response", {}).get("body") or data.get("body")
                         if not body:
                             continue
+                        if not isinstance(body, dict):
+                            errors.append("Batch response body must be an object.")
+                            continue
+                        self._record_batch_receipt(bid, body, run_info, raw_path)
                         texts = self._extract_texts(body)
                         for txt in texts:
                             txt = txt.strip()

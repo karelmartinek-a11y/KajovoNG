@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QSplitter,
 )
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
+from PySide6.QtGui import QPageSize
 from .theme import DARK_STYLESHEET
 
 from .widgets import msg_warning, msg_info, dialog_save_file
@@ -188,7 +189,7 @@ class ResponseRequestPanel(QWidget):
             msg_info(self, "Print", "Není vybrán žádný request/response.")
             return
         printer = QPrinter(QPrinter.HighResolution)
-        printer.setPageSize(QPrinter.A4)
+        printer.setPageSize(QPageSize(QPageSize.A4))
         printer.setFullPage(False)
         dlg = QPrintDialog(printer, self)
         dlg.setStyleSheet(DARK_STYLESHEET)
@@ -279,13 +280,13 @@ class ResponseRequestPanel(QWidget):
         t = text.strip()
         if not t:
             return None
-        if re.match(r"^\\d{4}-\\d{2}-\\d{2}$", t):
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", t):
             y, m, d = t.split("-")
             return f"{y}{m}{d}"
-        if re.match(r"^\\d{2}\\.\\d{2}\\.\\d{4}$", t):
+        if re.match(r"^\d{2}\.\d{2}\.\d{4}$", t):
             d, m, y = t.split(".")
             return f"{y}{m}{d}"
-        if re.match(r"^\\d{8}$", t):
+        if re.match(r"^\d{8}$", t):
             d, m, y = t[:2], t[2:4], t[4:]
             return f"{y}{m}{d}"
         return None

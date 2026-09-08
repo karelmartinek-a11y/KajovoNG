@@ -1,8 +1,8 @@
 from __future__ import annotations
-from .widgets import msg_info, msg_warning, msg_critical, msg_question, dialog_save_file
+from .widgets import msg_info, msg_warning, msg_critical, dialog_save_file
 
-import os, time, json
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QMessageBox
+import time
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem
 from PySide6.QtCore import Qt
 
 from ..core.openai_client import OpenAIClient
