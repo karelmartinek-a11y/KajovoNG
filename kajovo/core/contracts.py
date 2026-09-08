@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json, re
 from typing import Any, Dict, List
+from .utils import validate_relative_path
 
 class ContractError(Exception):
     pass
@@ -55,6 +56,8 @@ def parse_json_strict(text: str) -> Dict[str, Any]:
 def validate_paths(files: List[Dict[str, Any]]) -> None:
     seen = set()
     for f in files:
+        if not isinstance(f, dict):
+            raise ContractError("Položka files[] musí být objekt.")
         p = f.get("path","")
         if not isinstance(p, str) or not p:
             raise ContractError("Invalid path in files[]")
@@ -64,6 +67,10 @@ def validate_paths(files: List[Dict[str, Any]]) -> None:
             raise ContractError(f"Path cannot contain '..': {p}")
         if "\\" in p:
             raise ContractError(f"Path cannot contain \\: {p}")
-        if p in seen:
+        try:
+            validate_relative_path(p)
+        except ValueError as exc:
+            raise ContractError(str(exc)) from exc
+        if p.casefold() in seen:
             raise ContractError(f"Duplicate path: {p}")
-        seen.add(p)
+        seen.add(p.casefold())

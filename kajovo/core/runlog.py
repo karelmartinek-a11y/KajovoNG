@@ -8,7 +8,7 @@ import traceback
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
 
-from .utils import ensure_dir
+from .utils import ensure_dir, validate_relative_path
 
 _REDACT_KEYS = {
     "authorization",
@@ -41,6 +41,8 @@ class RunLogger:
         if not os.path.isabs(base_log_dir):
             base_log_dir = os.path.join(root_dir, base_log_dir)
         self.base_log_dir = base_log_dir
+        if "/" in validate_relative_path(run_id):
+            raise ValueError("Identifikátor běhu nesmí obsahovat adresář.")
         self.run_id = run_id
         self.project_name = project_name.strip() or "NO_PROJECT"
         ensure_dir(self.base_log_dir)
@@ -55,8 +57,9 @@ class RunLogger:
             manifests_dir=os.path.join(run_dir, "manifests"),
             misc_dir=os.path.join(run_dir, "misc"),
         )
-        for p in asdict(self.paths).values():
-            ensure_dir(p)
+        for key, p in asdict(self.paths).items():
+            if key != "run_id":
+                ensure_dir(p)
 
         self.events_path = os.path.join(self.paths.run_dir, "events.jsonl")
         self.state_path = os.path.join(self.paths.run_dir, "run_state.json")

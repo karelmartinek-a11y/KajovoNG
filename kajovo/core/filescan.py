@@ -28,6 +28,12 @@ def is_probably_binary(path: str) -> bool:
             data = f.read(4096)
         if b"\x00" in data:
             return True
+        try:
+            import codecs
+            codecs.getincrementaldecoder("utf-8")().decode(data, final=False)
+            return False
+        except UnicodeDecodeError:
+            pass
         text = sum((32 <= b <= 126) or b in (9,10,13) for b in data)
         return (len(data) > 0 and (text / len(data)) < 0.75)
     except Exception:
@@ -38,7 +44,7 @@ def match_any_glob(rel_path: str, patterns: Optional[List[str]]) -> bool:
         return False
     p = rel_path.replace("\\","/")
     for pat in patterns:
-        if fnmatch.fnmatch(p, pat):
+        if fnmatch.fnmatch(p, pat) or (pat.startswith("**/") and fnmatch.fnmatch(p, pat[3:])):
             return True
     return False
 
@@ -63,6 +69,9 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
         for fn in files:
             abs_path = os.path.join(cur, fn)
             rel_path = os.path.relpath(abs_path, root_dir).replace("\\","/")
+            if os.path.islink(abs_path):
+                items.append(ScanItem(rel_path, abs_path, 0, None, False, "symlink", True))
+                continue
             try:
                 size = os.path.getsize(abs_path)
             except Exception:
@@ -99,7 +108,7 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
             secret_hit = False
             try:
                 with open(abs_path, "r", encoding="utf-8", errors="ignore") as f:
-                    head = f.read(20000)
+                    head = f.read()
                 for rx in SECRET_PATTERNS:
                     if rx.search(head):
                         secret_hit = True
@@ -113,9 +122,10 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
 
             sha = None
             try:
-                sha = sha256_file(abs_path, max_bytes=5*1024*1024)
+                sha = sha256_file(abs_path)
             except Exception:
-                sha = None
+                items.append(ScanItem(rel_path, abs_path, size, None, False, "read_failed", True))
+                continue
 
             items.append(ScanItem(rel_path, abs_path, size, sha, True, "ok", False))
 

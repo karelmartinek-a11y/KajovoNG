@@ -18,7 +18,7 @@ from .pricing import PriceTable, compute_cost
 from .pricing_fetcher import PricingFetcher
 from .receipt import Receipt, ReceiptDB
 from .retry import CircuitBreaker, with_retry
-from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code
+from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root
 
 SUPPORTED_INPUT_FILE_EXTS = {
     ".art", ".bat", ".brf", ".c", ".cls", ".css", ".csv", ".diff", ".doc", ".docx", ".dot", ".eml", ".es",
@@ -912,6 +912,11 @@ class RunWorker(QThread):
 
     def _save_out_files(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
         out_dir = self.cfg.out_dir
+        validate_paths(files)
+        for row in files:
+            safe_join_under_root(out_dir, row["path"])
+            if not isinstance(row.get("content", ""), str):
+                raise ContractError("Obsah výstupního souboru musí být text.")
         ensure_dir(out_dir)
 
         if self.cfg.versing and files:
@@ -923,14 +928,14 @@ class RunWorker(QThread):
             self._check_stop()
             rel = f["path"]
             content = f.get("content", "")
-            dst = os.path.join(out_dir, rel.replace("/", os.sep))
+            dst = safe_join_under_root(out_dir, rel)
             ensure_dir(os.path.dirname(dst))
             before_size = os.path.getsize(dst) if os.path.exists(dst) else None
-            before = sha256_file(dst, max_bytes=2 * 1024 * 1024) if os.path.exists(dst) else None
+            before = sha256_file(dst) if os.path.exists(dst) else None
             with open(dst, "w", encoding="utf-8", newline="\n") as fp:
                 fp.write(content)
             after_size = os.path.getsize(dst)
-            after = sha256_file(dst, max_bytes=2 * 1024 * 1024)
+            after = sha256_file(dst)
             self.log.record_fs_change("write", src=rel, dst=dst, before=before, after=after, before_size=before_size, after_size=after_size)
             saved.append({"path": rel, "dst": dst, "bytes": after_size})
             self.subprogress.emit(int((i + 1) * 100 / max(1, len(files))))

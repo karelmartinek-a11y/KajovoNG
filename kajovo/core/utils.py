@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os, re, json, time, hashlib, random, string, datetime
+import ntpath
 from typing import Any, Optional
 
 RUN_ID_RE = re.compile(r"^RUN_\d{12}_\w{4}$")
@@ -45,13 +46,28 @@ def is_versing_snapshot_dir(dir_name: str, root_name: str) -> bool:
     return bool(re.fullmatch(r"\d{12}", tail))
 
 
+def validate_relative_path(path: str) -> str:
+    if not isinstance(path, str) or not path or ntpath.splitdrive(path)[0]:
+        raise ValueError("Cesta musí být neprázdná relativní cesta.")
+    path = path.replace("\\", "/")
+    reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    reserved.update(f"{prefix}{i}" for prefix in ("COM", "LPT") for i in range(1, 10))
+    for part in path.split("/"):
+        if (not part or part in (".", "..") or part.endswith((" ", "."))
+                or any(ord(c) < 32 or c in '<>:"|?*' for c in part)
+                or part.split(".")[0].upper() in reserved):
+            raise ValueError(f"Neplatná souborová cesta: {path}")
+    return path
+
+
 def safe_join_under_root(root: str, unsafe_rel_path: str) -> str:
     """Join a potentially unsafe relative path under root and block traversal.
 
     Raises ValueError when the resulting path escapes the provided root.
     """
-    root_abs = os.path.abspath(root)
-    candidate = os.path.abspath(os.path.join(root_abs, unsafe_rel_path))
-    if os.path.commonpath([root_abs, candidate]) != root_abs:
+    rel_path = validate_relative_path(unsafe_rel_path)
+    root_abs = os.path.realpath(root)
+    candidate = os.path.realpath(os.path.join(root_abs, *rel_path.split("/")))
+    if os.path.normcase(os.path.commonpath([root_abs, candidate])) != os.path.normcase(root_abs):
         raise ValueError(f"Path escapes target root: {unsafe_rel_path}")
     return candidate
