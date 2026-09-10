@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import os, json, time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 import requests
 import math
-import re
 from .cost_accounting import Rates, calculate, money, tokens
 from .utils import atomic_write_text
 
@@ -29,18 +28,45 @@ class PriceRow:
     long_input_multiplier: float = 1
     long_output_multiplier: float = 1
     output_token_limit: Optional[int] = None
+    mode_rates: dict = field(default_factory=dict)
+    regional_uplift: Optional[bool] = None
 
     def __post_init__(self):
         if not isinstance(self.model, str) or not self.model.strip():
             raise ValueError("Model ceníku nesmí být prázdný.")
         for key, value in vars(self).items():
-            if key not in ("model", "source", "verified_at") and value is not None:
+            if key not in ("model", "source", "verified_at", "mode_rates", "regional_uplift") and value is not None:
                 if key in ("context_threshold", "output_token_limit"):
                     tokens(value)
                 else:
                     setattr(self, key, money(value))
 
-    def rates(self, batch=False):
+        if self.regional_uplift is not None and type(self.regional_uplift) is not bool:
+            raise ValueError("Regionální příplatek vyžaduje boolean nebo neznámou hodnotu.")
+        if not isinstance(self.mode_rates, dict) or set(self.mode_rates) - {"default", "batch", "flex", "priority"}:
+            raise ValueError("Neplatné režimy ceníku.")
+        allowed = {"input", "output", "cached", "write", "long_input", "long_output", "long_cached", "long_write", "explicit_long_rates"}
+        for values in self.mode_rates.values():
+            if not isinstance(values, dict) or set(values) - allowed or values.get("input") is None or values.get("output") is None:
+                raise ValueError("Režim ceníku vyžaduje platné sazby vstupu a výstupu.")
+            if "explicit_long_rates" in values and type(values["explicit_long_rates"]) is not bool:
+                raise ValueError("Příznak explicitních dlouhých sazeb musí být boolean.")
+            for key, value in values.items():
+                if key != "explicit_long_rates" and value is not None:
+                    money(value)
+
+    def rates(self, batch=False, service_tier=None, regional=False):
+        if regional and self.regional_uplift is None:
+            return None
+        tier = "default" if service_tier in (None, "auto", "default") else "priority" if service_tier == "fast" else service_tier
+        mode = "batch" if batch else tier
+        if mode in self.mode_rates:
+            values = self.mode_rates[mode]
+            return Rates(model=self.model, source=self.source, verified_at=self.verified_at, batch=batch,
+                         threshold=self.context_threshold, service_tier=tier,
+                         regional_multiplier="1.1" if regional and self.regional_uplift else "1", **values)
+        if tier != "default":
+            return None
         inp = self.batch_input_per_1k if batch else self.input_per_1k
         out = self.batch_output_per_1k if batch else self.output_per_1k
         if inp is None or out is None:
@@ -91,6 +117,7 @@ class PriceRow:
             long_input_multiplier=raw.get("long_input_multiplier", 1),
             long_output_multiplier=raw.get("long_output_multiplier", 1),
             output_token_limit=raw.get("output_token_limit"),
+            mode_rates=raw.get("mode_rates") or {}, regional_uplift=raw.get("regional_uplift"),
         )
 
 class PriceTable:
@@ -100,6 +127,36 @@ class PriceTable:
         self.last_updated: Optional[float] = None
         self.verified: bool = False
         self.last_fetch_source: str = ""
+
+    def bootstrap(self):
+        """Vestavěné doložené sazby fungují i při prvním startu bez sítě."""
+        bundled = self.builtin_fallback()
+        self.load_cache()
+        for model, row in bundled.rows.items():
+            old = self.rows.get(model)
+            if old is None or not old.source or (old.source.startswith("https://developers.openai.com/") and old.verified_at < row.verified_at):
+                self.rows[model] = row
+        if self.last_updated is None:
+            self.last_updated = bundled.last_updated
+            self.last_fetch_source = bundled.last_fetch_source
+        self.verified = bool(self.rows) and all(self.is_verified(m) for m in self.rows)
+
+    def is_stale(self, ttl_hours=72):
+        return not self.rows or not self.last_updated or time.time() - self.last_updated > ttl_hours * 3600
+
+    def is_recent(self, model, ttl_hours=72):
+        from datetime import datetime, timezone
+        row = self.get(model)
+        if not self.is_verified(model):
+            return False
+        try:
+            when = datetime.fromisoformat(row.verified_at.replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            age = time.time() - when.timestamp()
+            return 0 <= age <= ttl_hours * 3600
+        except ValueError:
+            return False
 
     def load_cache(self) -> None:
         if not os.path.exists(self.cache_path):
@@ -151,6 +208,10 @@ class PriceTable:
                 from concurrent.futures import ThreadPoolExecutor
                 import re
                 models = sorted(set(re.findall(r"^\|\s*((?:gpt-|o[134](?:-|\b))[A-Za-z0-9_.-]*)\s*(?:\([^|]*\))?\s*\|", response.text, re.M)))
+                # Známé prahy a limity jsou verzované podklady distribuovaného ceníku.
+                # Další stránky potřebujeme jen pro dosud nepopsané modely.
+                reference = PriceTable.builtin_fallback().rows
+                models = sorted(set(models) - set(reference))
                 def fetch_model(model):
                     try:
                         r = requests.get("https://developers.openai.com/api/docs/models/" + model + ".md", timeout=timeout_s)
@@ -160,7 +221,9 @@ class PriceTable:
                         return model, ""
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     docs = dict(pool.map(fetch_model, models))
-                rows = parse_prices(response.text, docs)
+                rows = parse_prices(response.text, docs, reference_rows=reference)
+                if not rows:
+                    raise ValueError("Oficiální ceník neobsahuje použitelné sazby.")
                 self.update_from_rows(rows, verified=True, source=OPENAI_PRICING)
                 return True, "Oficiální sazby obnoveny; nedoložené kombinace zůstávají neznámé."
             r = requests.get(url, timeout=timeout_s)
@@ -206,21 +269,26 @@ class PriceTable:
         exact = self.rows.get(model)
         if exact is not None:
             return exact
-        alias = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
+        from .model_registry import model_spec
+        try:
+            alias = model_spec(model)["canonical"]
+        except ValueError:
+            return None
         return self.rows.get(alias) if alias != model else None
 
     def is_verified(self, model: str) -> bool:
-        row = self.rows.get(model)
-        return bool(row and ((row.source.startswith("https://developers.openai.com/") and row.verified_at) or self.verified))
+        row = self.get(model)
+        return bool(row and row.source.startswith("https://developers.openai.com/") and row.verified_at)
 
     @staticmethod
     def builtin_fallback() -> 'PriceTable':
         pt = PriceTable(cache_path=":memory:")
-        pt.verified = False
-        pt.rows = {
-            "gpt-4o-mini": PriceRow("gpt-4o-mini", 0.00015, 0.00060, 0.000075, 0.00030),
-            "gpt-4o": PriceRow("gpt-4o", 0.00250, 0.01000, 0.00125, 0.00500),
-        }
+        from importlib.resources import files
+        raw = json.loads(files("kajovo.core").joinpath("openai_prices.json").read_text(encoding="utf-8"))
+        pt.rows = {r["model"]: PriceRow.from_dict(r) for r in raw["rows"]}
+        pt.verified = True
+        pt.last_updated = raw["last_updated"]
+        pt.last_fetch_source = "Vestavěný oficiální ceník " + raw["verified_date"]
         return pt
 
     def _rows_equal(self, a: PriceRow, b: PriceRow) -> bool:
@@ -293,3 +361,22 @@ def compute_cost(
                if row and row.storage_per_gb_day is not None else None) if days else money(0)
     total = cost.total + tool + storage if all(v is not None for v in (cost.total, tool, storage)) else None
     return tuple(float(v) if v is not None else None for v in (total, tool, storage))
+
+
+def price_response(row, response, *, batch=False, rates=None, regional=False):
+    """Společné vyúčtování transportů; nula a nedoložená cena jsou rozdílné stavy."""
+    rates = rates or (row.rates(batch, response.get("service_tier"), regional) if row else None)
+    cost = calculate(rates, response.get("usage") or {})
+    tool = money(0)
+    reason = cost.reason
+    for output in response.get("output") or []:
+        kind = output.get("type", "")
+        if kind == "file_search_call":
+            if row and row.file_search_per_1k is not None and tool is not None:
+                tool += money(row.file_search_per_1k) / 1000
+            else:
+                tool, reason = None, "Chybí sazba volání file search."
+        elif kind.endswith("_call") and kind != "function_call":
+            tool, reason = None, f"Chybí sazba nástroje {kind}."
+    total = cost.total + tool if cost.total is not None and tool is not None else None
+    return total, tool, rates, reason

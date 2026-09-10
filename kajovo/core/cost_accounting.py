@@ -61,9 +61,16 @@ class Rates:
     threshold: int | None = None
     long_input_multiplier: Decimal = Decimal(1)
     long_output_multiplier: Decimal = Decimal(1)
+    long_input: Decimal | None = None
+    long_cached: Decimal | None = None
+    long_write: Decimal | None = None
+    long_output: Decimal | None = None
+    explicit_long_rates: bool = False
+    service_tier: str = "default"
+    regional_multiplier: Decimal = Decimal(1)
 
     def __post_init__(self):
-        for key in ("input", "output", "cached", "write", "long_input_multiplier", "long_output_multiplier"):
+        for key in ("input", "output", "cached", "write", "long_input_multiplier", "long_output_multiplier", "long_input", "long_cached", "long_write", "long_output", "regional_multiplier"):
             value = getattr(self, key)
             if value is not None:
                 object.__setattr__(self, key, money(value))
@@ -96,19 +103,23 @@ def calculate(rates: Rates | None, usage: dict) -> Cost:
             raise ValueError("Podkategorie tokenů překračují celkovou spotřebu.")
     except (ValueError, TypeError, AttributeError) as exc:
         return Cost(None, None, None, f"Neplatná spotřeba: {exc}")
-    if (cached and rates.cached is None) or (write and rates.write is None):
-        return Cost(None, None, None, "Chybí sazba cache.")
     long = rates.threshold is not None and inp > rates.threshold
-    ic = ((inp - cached - write) * rates.input + cached * (rates.cached or 0)
-          + write * (rates.write or 0)) / Decimal(1_000_000)
-    oc = out * rates.output / Decimal(1_000_000)
-    ic *= rates.long_input_multiplier if long else 1
-    oc *= rates.long_output_multiplier if long else 1
+    ir, cr, wr, outr = rates.input, rates.cached, rates.write, rates.output
+    if long and rates.explicit_long_rates:
+        ir, cr, wr, outr = rates.long_input, rates.long_cached, rates.long_write, rates.long_output
+        if ir is None or outr is None:
+            return Cost(None, None, None, "Ceník nedokládá sazbu pro dlouhý kontext v tomto režimu.")
+    if (cached and cr is None) or (write and wr is None):
+        return Cost(None, None, None, "Chybí sazba cache.")
+    ic = ((inp - cached - write) * ir + cached * (cr or 0) + write * (wr or 0)) / Decimal(1_000_000)
+    oc = out * outr / Decimal(1_000_000)
+    ic *= (rates.long_input_multiplier if long and not rates.explicit_long_rates else 1) * rates.regional_multiplier
+    oc *= (rates.long_output_multiplier if long and not rates.explicit_long_rates else 1) * rates.regional_multiplier
     return Cost(ic + oc, ic, oc)
 
 
-def quote(payload: dict, input_count: int | None, rates: Rates | None, samples=()) -> dict:
-    maximum = payload.get("max_output_tokens")
+def quote(payload: dict, input_count: int | None, rates: Rates | None, samples=(), model_output_limit=None) -> dict:
+    maximum = payload.get("max_output_tokens") or model_output_limit
     if maximum is not None:
         tokens(maximum)
         if maximum < 16:
@@ -129,16 +140,22 @@ def quote(payload: dict, input_count: int | None, rates: Rates | None, samples=(
     # Dynamické nástroje mohou přidat další vstupy a vlastní poplatky.
     if rates and input_count is not None and maximum and not payload.get("tools"):
         tokens(input_count)
-        upper = max(rates.input, rates.cached or 0, rates.write or 0)
         long = rates.threshold is not None and input_count > rates.threshold
-        ceiling = (input_count * upper * (rates.long_input_multiplier if long else 1)
-                   + maximum * rates.output * (rates.long_output_multiplier if long else 1)) / Decimal(1_000_000)
+        if long and rates.explicit_long_rates:
+            values, output_rate = (rates.long_input, rates.long_cached, rates.long_write), rates.long_output
+        else:
+            values, output_rate = (rates.input, rates.cached, rates.write), rates.output
+        if values[0] is not None and output_rate is not None:
+            upper = max(v or 0 for v in values)
+            ceiling = (input_count * upper * (rates.long_input_multiplier if long and not rates.explicit_long_rates else 1)
+                       + maximum * output_rate * (rates.long_output_multiplier if long and not rates.explicit_long_rates else 1)) / Decimal(1_000_000) * rates.regional_multiplier
     result = {"model": payload.get("model"), "input_tokens": input_count, "max_output_tokens": maximum,
               "reasoning": payload.get("reasoning"),
               "scenarios": scenarios, "sample_count": len(samples), "empirical": empirical,
               "maximum_usd": str(ceiling) if ceiling is not None else None,
               "rates": rates.snapshot() if rates else None, "payload_hash": fingerprint(payload),
               "tools": bool(payload.get("tools")), "created_at": time.time()}
+    result["reason"] = calculate(rates, {"input_tokens": input_count, "output_tokens": outputs[1]}).reason
     result["hash"] = fingerprint(result)
     return result
 

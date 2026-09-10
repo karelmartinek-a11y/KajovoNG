@@ -20,7 +20,7 @@ from .structured_output import resolve_schema, response_format, text_format, val
 from .openai_client import OpenAIClient
 from .retry import CircuitBreaker, with_retry
 from .receipt import Receipt
-from .pricing import compute_cost, PriceTable
+from .pricing import price_response, PriceTable
 from .utils import ensure_dir, new_run_id, safe_join_under_root, validate_relative_path, atomic_write_text
 
 
@@ -617,7 +617,12 @@ class CascadeRunWorker(QThread):
                     prices = self.price_table or PriceTable.builtin_fallback()
                     row = prices.get(model)
                     inp, out = int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
-                    total_cost, tool_cost, storage_cost = compute_cost(row, inp, out, usage=usage)
+                    total_cost, tool_cost, rates, reason = price_response(row, response)
+                    total_cost = float(total_cost) if total_cost is not None else None
+                    tool_cost = float(tool_cost) if tool_cost is not None else None
+                    storage_cost = 0.0
+                    usage.update(_pricing_reason=reason, _service_tier=response.get("service_tier"),
+                        _file_search_calls=sum(o.get("type") == "file_search_call" for o in response.get("output", [])))
                     self.db.insert(Receipt(
                         run_id=run_id, created_at=time.time(), project=self.cfg.project,
                         model=model, mode="KASKADA", flow_type=f"STEP_{idx}",
@@ -626,7 +631,7 @@ class CascadeRunWorker(QThread):
                         storage_cost=storage_cost, total_cost=total_cost,
                         pricing_verified=prices.is_verified(model), notes=step_label,
                         log_paths={"run_dir": self.logger.paths.run_dir}, usage=usage,
-                        pricing_snapshot=row.rates().snapshot() if row else {},
+                        pricing_snapshot=rates.snapshot() if rates else {},
                     ))
 
                 response_id = str(response.get("id") or "").strip()

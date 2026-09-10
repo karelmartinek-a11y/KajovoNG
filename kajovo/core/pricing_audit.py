@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import RetryPolicy
-from .pricing import PriceTable, compute_cost
+from .pricing import PriceTable, price_response
 from .receipt import Receipt, ReceiptDB
 from .retry import CircuitBreaker
 
@@ -58,7 +58,9 @@ class PricingAuditor:
         idx = self.db.existing_index()
         log_dir = self._abs_log_dir()
         if not os.path.isdir(log_dir):
-            summary.errors.append(f"Log dir not found: {log_dir}")
+            # Databázové účtenky lze doplnit i bez adresáře LOG.
+            summary.missing_runs += 1
+            summary.updated += self.db.reprice_missing(self.pt)
             return summary.as_dict()
 
         for run_dir in self._iter_run_dirs(log_dir):
@@ -73,6 +75,7 @@ class PricingAuditor:
             summary.missing_runs += res["missing"]
             if res["error"]:
                 summary.errors.append(res["error"])
+        summary.updated += self.db.reprice_missing(self.pt)
         return summary.as_dict()
 
     def _abs_log_dir(self) -> str:
@@ -105,7 +108,7 @@ class PricingAuditor:
         runs = []
         for name in os.listdir(log_dir):
             path = os.path.join(log_dir, name)
-            if os.path.isdir(path) and (name.startswith("RUN_") or name.startswith("TEST_")):
+            if os.path.isdir(path) and name.startswith(("RUN_", "TEST_", "PREFLIGHT_")):
                 runs.append(path)
         runs.sort()
         return runs
@@ -221,7 +224,7 @@ class PricingAuditor:
         if response_id:
             existing = idx.get("response", {}).get(response_id)
             if existing:
-                return "skipped"
+                return "updated" if self.db.fill_missing_price(existing["id"], receipt) else "skipped"
         if batch_id and not response_id:
             existing = idx.get("batch", {}).get(batch_id)
             if existing:
@@ -269,10 +272,11 @@ class PricingAuditor:
         )
         usage, inp, outp = self._extract_usage(resp)
         zero_usage = inp == 0 and outp == 0
-        use_fs = self._match_request_tools(label, os.path.getmtime(resp_path), req_meta)
         row = self.pt.get(model) or PriceTable.builtin_fallback().get(model)
-        total, tool_cost, storage_cost = compute_cost(row, inp, outp, is_batch=bool(batch_id) or mode == "C", use_file_search=use_fs,
-                                                   usage=usage, file_search_calls=sum(1 for o in resp.get("output", []) if o.get("type") == "file_search_call"))
+        total, tool_cost, rates, reason = price_response(row, resp, batch=bool(batch_id) or mode == "C")
+        storage_cost = 0.0
+        usage.update(_file_search_calls=sum(1 for o in resp.get("output", []) if o.get("type") == "file_search_call"),
+                     _service_tier=resp.get("service_tier"), _pricing_reason=reason)
         notes = f"{flow or 'UNKNOWN'}"
         if zero_usage and usage:
             notes += " (usage present but zero tokens)"
@@ -289,13 +293,14 @@ class PricingAuditor:
             batch_id=batch_id,
             input_tokens=inp,
             output_tokens=outp,
-            tool_cost=tool_cost,
+            tool_cost=float(tool_cost) if tool_cost is not None else None,
             storage_cost=storage_cost,
-            total_cost=total,
+            total_cost=float(total) if total is not None else None,
             pricing_verified=self.pt.is_verified(model),
             notes=notes,
             log_paths={"run_dir": run_dir, "response_file": resp_path},
             usage=usage if isinstance(usage, dict) else {},
+            pricing_snapshot=rates.snapshot() if rates else {},
         )
         return receipt, response_id, batch_id, zero_usage
 

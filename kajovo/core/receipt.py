@@ -172,6 +172,63 @@ class ReceiptDB:
                         (row_id, time.time(), canonical(asdict(r))))
         return
 
+    def fill_missing_price(self, row_id, receipt):
+        """Doplní jen nevyčíslený záznam a uchová původní podklady v revizi."""
+        import time
+        if not receipt.pricing_snapshot:
+            return False
+        cost = calculate(Rates(**receipt.pricing_snapshot), receipt.usage)
+        if cost.total is None or receipt.tool_cost is None or receipt.storage_cost is None:
+            return False
+        total = cost.total + money(receipt.tool_cost) + money(receipt.storage_cost)
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            old = con.execute("SELECT * FROM receipts WHERE id=?", (row_id,)).fetchone()
+            if not old or old["total_usd"] is not None:
+                return False
+            con.execute("INSERT INTO receipt_revisions(receipt_id,created_at,data_json) VALUES (?,?,?)",
+                        (row_id, time.time(), canonical(dict(old))))
+            con.execute("UPDATE receipts SET total_usd=?,total_cost=?,tool_cost=?,storage_cost=?,pricing_snapshot_json=?,usage_json=?,pricing_verified=?,notes=?,input_tokens=?,output_tokens=?,model=? WHERE id=?",
+                (str(total), float(total), float(receipt.tool_cost), float(receipt.storage_cost), canonical(receipt.pricing_snapshot),
+                 canonical(receipt.usage), int(receipt.pricing_verified), receipt.notes,
+                 receipt.usage["input_tokens"], receipt.usage["output_tokens"], receipt.model, row_id))
+            # Již uzavřenou cenu nikdy nepřepisujeme novým ceníkem.
+            if old["response_id"] and con.execute("SELECT 1 FROM sqlite_master WHERE name='cost_operations'").fetchone():
+                con.execute("UPDATE cost_operations SET actual_usd=?,status='settled',source_json=? WHERE response_id=? AND actual_usd IS NULL AND status='unknown'",
+                            (str(total), canonical(receipt.pricing_snapshot), old["response_id"]))
+        return True
+
+    def reprice_missing(self, prices):
+        """Obnoví ceny ze skutečné uložené spotřeby; bez sítě a bez vymyšlených tokenů."""
+        from .pricing import price_response
+        repaired = 0
+        for old in self.query(status="unknown"):
+            try:
+                usage = json.loads(old["usage_json"] or "{}")
+                snapshot = json.loads(old["pricing_snapshot_json"] or "null")
+                row = prices.get(old["model"])
+                batch = bool(old["batch_id"]) or old["mode"] in ("BATCH", "C") or "BATCH" in old["flow_type"]
+                output = [{"type": "file_search_call"}] * int(usage.get("_file_search_calls", 0))
+                body = {"usage": usage, "output": output, "service_tier": usage.get("_service_tier")}
+                total, tool, rates, reason = price_response(row, body, batch=batch,
+                    rates=Rates(**snapshot) if snapshot else None, regional=bool(usage.get("_regional")))
+                if total is None and snapshot and row:
+                    total, tool, rates, reason = price_response(row, body, batch=batch, regional=bool(usage.get("_regional")))
+                if usage.get("_unsupported_tools"):
+                    continue
+                if "_file_search_calls" not in usage:
+                    tool = old["tool_cost"]
+                if total is None or rates is None:
+                    continue
+                receipt = Receipt(old["run_id"], old["created_at"], old["project"], old["model"], old["mode"], old["flow_type"],
+                    old["response_id"], old["batch_id"], old["input_tokens"], old["output_tokens"], tool, old["storage_cost"],
+                    float(total), bool(rates.verified_at), old["notes"] + " | Cena doplněna ze spotřeby; sazby ověřeny " + (rates.verified_at or "ruční import"),
+                    {}, {**usage, "_pricing_reason": reason}, pricing_snapshot=rates.snapshot())
+                repaired += self.fill_missing_price(old["id"], receipt)
+            except (ValueError, TypeError, KeyError):
+                continue
+        return repaired
+
     def delete_ids(self, ids: List[int]) -> None:
         if not ids:
             return

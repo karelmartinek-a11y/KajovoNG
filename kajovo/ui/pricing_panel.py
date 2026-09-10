@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QSizePolicy,
     QLineEdit, QCheckBox, QFileDialog, QDialog, QTextBrowser, QDialogButtonBox, QInputDialog,
-    QDateEdit, QComboBox,
+    QDateEdit, QComboBox, QSpinBox, QGroupBox, QFormLayout,
 )
 
 from ..core.pricing import PriceRow, PriceTable
@@ -43,6 +43,27 @@ class PricingPanel(QWidget):
 
         v = QVBoxLayout(self)
 
+        intro = QLabel("Cena se počítá ze vstupních a výstupních tokenů. LIVE, Batch a zkušební volání mají vlastní položky. Částky jsou v USD; chybějící podklady nikdy neznamenají cenu nula.")
+        intro.setWordWrap(True)
+        v.addWidget(intro)
+        calculator = QGroupBox("Rychlá kalkulace — bez volání API")
+        form = QFormLayout(calculator)
+        self.calc_model, self.calc_mode = QComboBox(), QComboBox()
+        self.calc_mode.addItems(["LIVE · standardní", "BATCH", "LIVE · Flex", "LIVE · Priority / Fast"])
+        self.calc_input, self.calc_output = QSpinBox(), QSpinBox()
+        for field in (self.calc_input, self.calc_output):
+            field.setRange(0, 2_000_000)
+            field.setValue(1000)
+            field.valueChanged.connect(self.update_calculation)
+        self.calc_result = QLabel()
+        self.calc_result.setWordWrap(True)
+        self.calc_result.setStyleSheet("font-size: 16px; font-weight: 700;")
+        for label, field in (("Model", self.calc_model), ("Způsob odeslání", self.calc_mode), ("Vstupních tokenů", self.calc_input), ("Výstupních tokenů", self.calc_output)):
+            form.addRow(label, field)
+        form.addRow(self.calc_result)
+        self.calc_model.currentTextChanged.connect(self.update_calculation)
+        self.calc_mode.currentIndexChanged.connect(self.update_calculation)
+        v.addWidget(calculator)
         top = FlowLayout()
         self.lbl_status = QLabel("")
         self.lbl_summary = QLabel("")
@@ -50,7 +71,7 @@ class PricingPanel(QWidget):
         self.btn_refresh = QPushButton("Obnovit oficiální ceník")
         self.btn_refresh_api = QPushButton("Import ceníku JSON…")
         self.btn_reload_receipts = QPushButton("Načíst účtenky")
-        self.btn_audit = QPushButton("Ověřit ceny v LOG")
+        self.btn_audit = QPushButton("Doplnit ceny ze spotřeby a LOG")
         self.btn_export = QPushButton("Export JSON / CSV")
         self.btn_delete = QPushButton("Archivovat vybrané účtenky")
         self.btn_budgets = QPushButton("Rozpočty a rezervace…")
@@ -91,7 +112,7 @@ class PricingPanel(QWidget):
         self.date_from = QDateEdit(QDate.currentDate().addMonths(-1))
         self.date_until = QDateEdit(QDate.currentDate())
         self.filter_status = QComboBox()
-        self.filter_status.addItems(["Všechny ceny", "Doložená cena", "Neznámá / nedoložená cena"])
+        self.filter_status.addItems(["Všechny ceny", "Vyčíslená cena", "Cena chybí"])
         for field in (self.filter_dates, self.date_from, self.date_until, self.filter_status):
             date_filters.addWidget(field)
         self.filter_dates.toggled.connect(self.reset_page)
@@ -104,18 +125,18 @@ class PricingPanel(QWidget):
             lbl.setWordWrap(True)
             lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
-        self.tbl_prices = QTableWidget(0, 6)
-        self.tbl_prices.setHorizontalHeaderLabels(["Model", "Input/1k", "Output/1k", "Batch In/1k", "Batch Out/1k", "Verified"])
+        self.tbl_prices = QTableWidget(0, 8)
+        self.tbl_prices.setHorizontalHeaderLabels(["Model", "LIVE vstup", "LIVE výstup", "LIVE cache", "Batch vstup", "Batch výstup", "Batch cache", "Zdroj / ověřeno"])
         self.tbl_prices.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.tbl_prices.horizontalHeader().setStretchLastSection(True)
-        self.tbl_prices.horizontalHeader().resizeSection(0, 160)
+        self.tbl_prices.horizontalHeader().resizeSection(0, 235)
         self.tbl_prices.horizontalHeader().resizeSection(1, 100)
         self.tbl_prices.horizontalHeader().resizeSection(2, 110)
         self.data_tabs = ContentTabs()
-        self.data_tabs.addTab(self.tbl_prices, "Ceník")
+        self.data_tabs.addTab(self.tbl_prices, "Sazby USD za milion tokenů")
 
         self.tbl_receipts = QTableWidget(0, 10)
-        self.tbl_receipts.setHorizontalHeaderLabels(["ID", "Created", "Project", "Model", "Mode", "Flow", "InTok", "OutTok", "Total($)", "Verified"])
+        self.tbl_receipts.setHorizontalHeaderLabels(["ID", "Datum", "Projekt", "Model", "Režim", "Etapa", "Vstupní tokeny", "Výstupní tokeny", "Cena USD", "Podklady"])
         hr = self.tbl_receipts.horizontalHeader()
         hr.setSectionResizeMode(QHeaderView.Interactive)
         hr.setStretchLastSection(True)
@@ -129,7 +150,7 @@ class PricingPanel(QWidget):
         self.tbl_receipts.setSelectionMode(QTableWidget.MultiSelection)
         v.addWidget(QLabel("Účtenky – 100 záznamů na stránku; souhrn a export zahrnují celý filtr"))
         self.data_tabs.addTab(self.tbl_receipts, "Účtenky")
-        self.data_tabs.setCurrentWidget(self.tbl_receipts)
+        self.data_tabs.setCurrentWidget(self.tbl_receipts if self.db.query(limit=1) else self.tbl_prices)
         v.addWidget(self.data_tabs, 1)
 
         self.btn_refresh.clicked.connect(self.on_refresh)
@@ -156,16 +177,13 @@ class PricingPanel(QWidget):
         self.api_key = api_key or ""
 
     def _set_status(self, detail: str = ""):
-        ver = "VERIFIED" if self.pt.verified else "UNVERIFIED"
-        ts = (
-            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.pt.last_updated or 0))
-            if self.pt.last_updated
-            else "n/a"
-        )
-        src = self.pt.last_fetch_source or "unknown source"
-        text = f"Pricing [{self._shorten_source(src)}] {ver} | updated: {ts}"
+        ts = time.strftime("%d. %m. %Y %H:%M", time.localtime(self.pt.last_updated)) if self.pt.last_updated else "datum není známé"
+        stale = self.pt.is_stale(self.s.pricing.cache_ttl_hours)
+        text = f"Ceník: {len(self.pt.rows)} modelů · {self.pt.last_fetch_source or 'ruční sazby'} · {ts}"
+        if stale:
+            text += " · Starší sazby: doporučeno obnovit."
         if detail:
-            text += f" | {detail}"
+            text += " · " + detail
         self.lbl_status.setText(text)
 
     def _shorten_source(self, src: str) -> str:
@@ -187,12 +205,46 @@ class PricingPanel(QWidget):
                 it.setFlags(it.flags() ^ Qt.ItemIsEditable)
                 return it
 
-            self.tbl_prices.setItem(i, 0, item(r.model))
-            self.tbl_prices.setItem(i, 1, item(r.input_per_1k))
-            self.tbl_prices.setItem(i, 2, item(r.output_per_1k))
-            self.tbl_prices.setItem(i, 3, item("" if r.batch_input_per_1k is None else r.batch_input_per_1k))
-            self.tbl_prices.setItem(i, 4, item("" if r.batch_output_per_1k is None else r.batch_output_per_1k))
-            self.tbl_prices.setItem(i, 5, item("1" if self.pt.is_verified(r.model) else "0"))
+            from .receipt_view import amount
+            live, batch = r.rates(), r.rates(True)
+            values = [r.model, amount(live.input) if live else "Nedoloženo", amount(live.output) if live else "Nedoloženo",
+                amount(live.cached) if live else "Nedoloženo", amount(batch.input) if batch else "Nedoloženo",
+                amount(batch.output) if batch else "Nedoloženo", amount(batch.cached) if batch else "Nedoloženo",
+                ("OpenAI · " + r.verified_at[:10]) if self.pt.is_verified(r.model) else "Ruční / neověřené"]
+            for column, value in enumerate(values):
+                cell = item(value)
+                cell.setToolTip(r.source + (" · dlouhý kontext nad " + str(r.context_threshold) + " vstupních tokenů" if r.context_threshold else ""))
+                self.tbl_prices.setItem(i, column, cell)
+        current = self.calc_model.currentText()
+        self.calc_model.blockSignals(True)
+        self.calc_model.clear()
+        from ..core.model_registry import model_ids, selectable
+        self.calc_model.addItems(sorted(m for m in model_ids() if selectable(m)))
+        self.calc_model.setCurrentText(current or "gpt-5.2")
+        self.calc_model.blockSignals(False)
+        self.update_calculation()
+
+    def update_calculation(self, *_args):
+        from ..core.cost_accounting import calculate
+        from .receipt_view import amount
+        model = self.calc_model.currentText()
+        row = self.pt.get(model)
+        batch = self.calc_mode.currentIndex() == 1
+        tier = ("default", "default", "flex", "priority")[self.calc_mode.currentIndex()]
+        rates = row.rates(batch, tier) if row else None
+        if row:
+            for index in range(self.tbl_prices.rowCount()):
+                cell = self.tbl_prices.item(index, 0)
+                if cell and cell.text() == row.model:
+                    self.tbl_prices.selectRow(index)
+                    self.tbl_prices.scrollToItem(cell)
+                    break
+        cost = calculate(rates, {"input_tokens": self.calc_input.value(), "output_tokens": self.calc_output.value()})
+        if cost.total is None:
+            self.calc_result.setText("Cenu nelze vyčíslit: " + cost.reason)
+        else:
+            self.calc_result.setText("Jedno volání: " + amount(cost.total) + " · se stejně dlouhou zkouškou: " + amount(cost.total * 2) +
+                "\nVstup " + amount(cost.input) + " + výstup " + amount(cost.output) + ". Bez slevy za cache, nástrojů a regionálního příplatku.")
 
     def load_receipts(self):
         all_rows = self.db.query(**self.filters())
@@ -221,11 +273,13 @@ class PricingPanel(QWidget):
             self.tbl_receipts.setItem(i, 5, item(rget(r, "flow_type", "")))
             self.tbl_receipts.setItem(i, 6, item(rget(r, "input_tokens", 0)))
             self.tbl_receipts.setItem(i, 7, item(rget(r, "output_tokens", 0)))
-            self.tbl_receipts.setItem(i, 8, item(rget(r, "total_usd") or "neověřená / neznámá"))
-            self.tbl_receipts.setItem(i, 9, item(rget(r, "pricing_verified", 0)))
+            from .receipt_view import amount
+            self.tbl_receipts.setItem(i, 8, item(amount(rget(r, "total_usd", None))))
+            self.tbl_receipts.setItem(i, 9, item("Oficiální sazby" if rget(r, "pricing_verified", 0) else "Ruční / neúplné"))
 
         known = [Decimal(r["total_usd"]) for r in all_rows if r["total_usd"] is not None]
-        self.lbl_summary.setText(f"Záznamy: {len(all_rows)} | Vyčísleno: {sum(known, Decimal(0))} USD | Bez doložené ceny: {len(all_rows) - len(known)} | Strana {self.page + 1}")
+        from .receipt_view import amount
+        self.lbl_summary.setText(f"Účtenky: {len(all_rows)} · Vyčíslená část: {amount(sum(known, Decimal(0)))} · Cena chybí: {len(all_rows) - len(known)} · Strana {self.page + 1}")
 
     def filters(self):
         return dict(project=self.filter_project.text().strip(), run_id=self.filter_run.text().strip(),
@@ -336,6 +390,7 @@ class PricingPanel(QWidget):
     def _refresh_done(self, result):
         self.btn_refresh.setEnabled(True)
         self.load_prices(result[1])
+        self.start_audit(quiet=True)
 
     def on_refresh_via_model(self):
         self.on_import()
@@ -353,7 +408,7 @@ class PricingPanel(QWidget):
         self.audit_worker.finished_ok.connect(self._on_audit_done)
         self.audit_worker.finished_err.connect(self._on_audit_error)
         self.audit_worker.start()
-        self._set_audit_status("Audit running...")
+        self._set_audit_status("Doplňuji ceny podle uložené spotřeby…")
 
     def _on_audit_done(self, summary: dict):
         if self.audit_worker:
@@ -361,13 +416,14 @@ class PricingPanel(QWidget):
             self.audit_worker.deleteLater()
         self.audit_worker = None
         msg = (
-            f"Audit DONE: runs={summary.get('runs_scanned')}, responses={summary.get('responses_seen')}, "
-            f"inserted={summary.get('inserted')}, updated={summary.get('updated')}, zero_usage={summary.get('zero_usage')}"
+            f"Hotovo: projito běhů {summary.get('runs_scanned')}, odpovědí {summary.get('responses_seen')}, "
+            f"nových účtenek {summary.get('inserted')}, doplněných cen {summary.get('updated')}."
         )
         self._log(msg)
         if summary.get("errors"):
             self._log(f"Audit warnings: {summary.get('errors')}")
         self._set_audit_status(msg)
+        self.load_prices()
         self.load_receipts()
 
     def _on_audit_error(self, err: str):
@@ -375,8 +431,8 @@ class PricingPanel(QWidget):
             self.audit_worker.wait()
             self.audit_worker.deleteLater()
         self.audit_worker = None
-        self._log(f"Audit failed: {err}")
-        self._set_audit_status(f"Audit failed: {err}")
+        self._log(f"Doplnění cen selhalo: {err}")
+        self._set_audit_status(f"Doplnění cen selhalo: {err}")
 
     def _set_audit_status(self, text: str):
         try:

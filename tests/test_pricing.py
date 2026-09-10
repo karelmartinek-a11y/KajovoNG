@@ -12,11 +12,12 @@ def test_zero_batch_price_replaces_missing_price():
     assert compute_cost(table.get("model"), 1000, 1000, is_batch=True)[0] == 0
 
 
-def test_snapshot_uses_alias_as_unverified_estimate():
+def test_documented_snapshot_uses_verified_canonical_rate():
     table = PriceTable.builtin_fallback()
     table.verified = True
     assert table.get("gpt-4o-mini-2024-07-18") == table.get("gpt-4o-mini")
-    assert not table.is_verified("gpt-4o-mini-2024-07-18")
+    assert table.is_verified("gpt-4o-mini-2024-07-18")
+    assert table.get("gpt-4o-mini-2099-01-01") is None
     assert table.is_verified("gpt-4o-mini")
     assert table.get("gpt-4o-mini-unknown") is None
 

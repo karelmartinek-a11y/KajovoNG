@@ -42,7 +42,7 @@ RUN nabízí GENERATE pro vytvoření souborů, MODIFY pro úpravy, QA pro texto
 
 V RUN vyplňte projekt, režim a model a otevřete sekci **Zadání a výsledek**. IN/OUT, Batch a další volby jsou v **Parametry a adresáře**; přílohy, diagnostika a provozní detail mají vlastní sekce. **Spustit** a **Zastavit** zůstávají pod pracovní plochou. Na menší obrazovce se panely KASKÁDA a VECTOR STORES přepínají pomocí záložek.
 
-Průběh ukazuje dokončené jednotky, trvání a stáří poslední události. Zbývající čas se odhaduje až z několika dokončených jednotek stejné etapy. U čekání na API nebo ve frontě Batch může být neznámý. Předání dávky do API neznamená hotové soubory. PRICING nabízí samostatný ceník, účtenky a přehled rozpočtů; podrobné podklady lze rozbalit.
+Průběh ukazuje dokončené jednotky, trvání a stáří poslední události. Zbývající čas se odhaduje až z několika dokončených jednotek stejné etapy. U čekání na API nebo ve frontě Batch může být neznámý. Předání dávky do API neznamená hotové soubory. CENY A SPOTŘEBA nabízí samostatný ceník, účtenky a přehled rozpočtů; podrobné podklady lze rozbalit.
 
 Úplné hodnoty v seznamech a tabulkách zobrazí nápověda po najetí myší. Vybrané položky zkopírujete pomocí Ctrl+C nebo položkou **Kopírovat výběr** v místní nabídce.
 
@@ -58,13 +58,19 @@ IN se odesílá jako filtrovaný textový balíček. Ruční přílohy a očeká
 
 STOP zastavuje běh mezi operacemi a může čekat na dokončení právě probíhajícího požadavku. VERSING vytváří snapshot v OUT. Nastavení je v `kajovo_settings.json`, účtenky ve výchozím `kajovo.sqlite` a běhy v LOG; relativní cesty se vztahují k pracovnímu adresáři aplikace.
 
+V **CENY A SPOTŘEBA** je cena vidět i bez API klíče a bez předchozího běhu. V rychlé kalkulaci vyberte model, LIVE nebo Batch a počty vstupních/výstupních tokenů. Uvidíte cenu jednoho volání i cenu se stejně dlouhou placenou zkouškou. Ceník se dodává s aplikací a automaticky obnovuje při zastarání; při výpadku sítě zůstávají částky dostupné s datem zdroje.
+
+Cena tokenů = (běžný vstup × vstupní sazba + cache × její sazba + výstup × výstupní sazba) / 1 000 000. Reasoning se nepřičítá podruhé. Skutečný file search přidá poplatek za volání; průběžné úložiště je oddělené. Přesné sazby se liší podle modelu, režimu a délky kontextu.
+
+Pokud staré účtenky nemají cenu, použijte **Doplnit ceny ze spotřeby a LOG**. Stejná kontrola běží i při startu: doplní dostupné výpočty, ponechá původní podklady v historii a nevytvoří duplicitní účtenky. Bez skutečné spotřeby nebo sazby uvede důvod, nikoli nulu. Již vyčíslené účtenky se novým ceníkem nepřepisují.
+
 Před první generující operací se otevře **Odhad nákladů**. Obsahuje počet vstupních tokenů konkrétního požadavku, sazby, scénáře výstupu a dostupné maximum ceny. Budoucí kroky závislé na odpovědi zatím nemají známou cenu. Můžete nastavit tvrdý limit USD a maximum výstupních tokenů; změna výstupu vyvolá nový odhad a potvrzení. Příliš nízké maximum může přerušit generovaný soubor. Zrušení nebo zavření okna požadavek neodešle.
 
-GENERATE BATCH vyžaduje další potvrzení po živých A1/A2 před odesláním A3. Při nedostatečném rozpočtu se další odesílání pozastaví. Limit nelze bezpečně použít s nedoloženými sazbami, neurčeným maximem výstupu nebo dynamickými nástroji. Rozpočty a nevyřešené rezervace jsou dostupné v PRICING → Rozpočty a rezervace. Opakování souborů sdílí rozpočet původního běhu.
+GENERATE BATCH vyžaduje další potvrzení po živých A1/A2 před odesláním A3. Při nedostatečném rozpočtu se další odesílání pozastaví. Limit nelze bezpečně použít s nedoloženými sazbami nebo dynamickými nástroji. Bez vlastního limitu výstupu se použije doložené maximum modelu. Rozpočty a nevyřešené rezervace jsou dostupné v CENY A SPOTŘEBA → Rozpočty a rezervace. Opakování souborů sdílí rozpočet původního běhu.
 
 Po živém běhu se zobrazí samostatná **Výsledná účtenka**. U dávky se zobrazí po dokončení a načtení spotřeby na pozadí, nezávisle na importu do OUT. Jde o výpočet podle spotřeby API, nikoli fakturu poskytovatele. USD je rozhodující; CZK používá uložený orientační kurz ČNB s datem. Neznámé poplatky se nevydávají za nulu. Průběžné úložiště se do limitu jednorázových požadavků nezapočítává.
 
-PRICING nabízí oficiální obnovení ceníku, neověřený ruční import JSON, filtry projektu/běhu/modelu, stránkování, detail a úplný export filtrovaných účtenek do JSON nebo CSV. Archivace uchovává finanční historii. Ceník při neúspěšném obnovení zůstává zachován. Samostatný placený test cen spustíte `.venv\Scripts\python.exe scripts/verify_costs_live.py --live`.
+CENY A SPOTŘEBA nabízí oficiální obnovení ceníku, neověřený ruční import JSON, filtry projektu/běhu/modelu, stránkování, detail a úplný export filtrovaných účtenek do JSON nebo CSV. Archivace uchovává finanční historii. Ceník při neúspěšném obnovení zůstává zachován. Samostatný placený test cen spustíte `.venv\Scripts\python.exe scripts/verify_costs_live.py --live`.
 
 Logy obsahují zadání, odpovědi a případně zdrojový kód. Redakce známých tajných polí není šifrování ani úplná anonymizace. Adresář LOG, databázi a výstupy chraňte před nepovolaným přístupem.
 

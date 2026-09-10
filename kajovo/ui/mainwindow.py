@@ -123,9 +123,7 @@ class MainWindow(QMainWindow):
 
         self.db = ReceiptDB(self.s.db_path)
         self.price_table = PriceTable(os.path.join(self.s.cache_dir, "price_table.json"))
-        self.price_table.load_cache()
-        if not self.price_table.rows:
-            self.price_table.rows = PriceTable.builtin_fallback().rows
+        self.price_table.bootstrap()
 
         self._relocate_legacy_logs_and_milestones()
 
@@ -197,7 +195,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._scroll_tab(self.tab_models), "MODELS")
         self.tabs.addTab(self._scroll_tab(self.tab_batch), "BATCH")
         self.tabs.addTab(self._scroll_tab(self.tab_git), "GITHUB")
-        self.tabs.addTab(self._scroll_tab(self.tab_pricing), "PRICING")
+        self.tabs.addTab(self._scroll_tab(self.tab_pricing), "CENY A SPOTŘEBA")
         self.tabs.addTab(self._scroll_tab(self.tab_reqresp), "REQUEST/RESPONSE")
         self.tabs.addTab(self._scroll_tab(self.tab_help), "HELP")
 
@@ -1272,7 +1270,7 @@ class MainWindow(QMainWindow):
             "- Odhad nákladů potvrďte před generováním; u GENERATE BATCH také po A2. Změna maxima výstupu odhad přepočítá.\n"
             "- Volitelný limit USD rezervuje maximum další operace; neznámou cenu ani dynamické nástroje nelze ohraničit.\n"
             "- Výsledná účtenka se otevře po běhu; u dávek po načtení konečné spotřeby, nezávisle na importu do OUT.\n"
-            "- PRICING: oficiální ceník, ruční JSON import, rozpočty, archiv účtenek a úplný export JSON/CSV. CZK je orientační kurz ČNB.\n"
+            "- CENY A SPOTŘEBA: oficiální ceník, ruční JSON import, rozpočty, archiv účtenek a úplný export JSON/CSV. CZK je orientační kurz ČNB.\n"
             "- BATCH kontroluje výsledky a umožňuje ruční opakování či opravu podle připomínky. Sestavení a testy spusťte ručně.\n"
             "- KASKÁDA: expected_out_files spouští uložení manifestu a upload očekávaných souborů.\n\n"
             "Response ID identifikuje odpověď a umožňuje navazující požadavek.\n"
@@ -2141,7 +2139,7 @@ class MainWindow(QMainWindow):
 
     def _auto_refresh_pricing(self):
         try:
-            if self.s.pricing.auto_refresh_on_start and not self.price_table.rows:
+            if self.s.pricing.auto_refresh_on_start and self.price_table.is_stale(self.s.pricing.cache_ttl_hours):
                 self.pricing_panel.on_refresh()
             self.pricing_panel.load_prices()
         except Exception:
@@ -2331,6 +2329,8 @@ class MainWindow(QMainWindow):
 
     # Ovládání schopností modelů.
     def on_model_changed(self, model_id: str):
+        if hasattr(self, "pricing_panel"):
+            self.pricing_panel.calc_model.setCurrentText(model_id)
         caps = self.caps_cache.get(model_id)
         self._render_caps_label(caps)
 

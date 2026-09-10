@@ -105,7 +105,7 @@ Podmínky odpovídají [vstupním souborům](https://developers.openai.com/api/d
 | MODELS | seznam API a pevná matice → dostupné pracovní modely; bez ručního probe |
 | BATCH | seznam na pracovním vlákně, časované sledování, stažení souborů a cancel |
 | GITHUB | Git subprocess → stav, diff, commit, remote a synchronizace repozitáře |
-| PRICING | PriceTable / ReceiptDB → načtení sazeb, přepočet, zobrazení a export evidence |
+| CENY A SPOTŘEBA | PriceTable / ReceiptDB → načtení sazeb, přepočet, zobrazení a export evidence |
 | REQUEST/RESPONSE | RunLogger a uložené požadavky → filtrování, zobrazení a výběr podkladů ReRun |
 | HELP | Dokumentace a odkazy aplikace |
 

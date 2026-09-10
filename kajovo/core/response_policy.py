@@ -20,8 +20,9 @@ class PreflightPending(RuntimeError):
 
 
 class PreflightTransport:
-    def __init__(self, client):
+    def __init__(self, client, expected_payload=None):
         self.client = client
+        self.expected_payload = copy.deepcopy(expected_payload)
 
     def validate_access(self, payload, batch=False):
         prepare_payload(payload)
@@ -32,6 +33,10 @@ class PreflightTransport:
 
     def create_response(self, payload):
         self.validate_access(payload)
+        if self.expected_payload is not None and payload != self.expected_payload:
+            error = ValueError("Rozpočet změnil parametry zkoušky; připravte nový odhad pracovního požadavku.")
+            error.request_sent = False
+            raise error
         return self.client._send_response(payload)
 
 
@@ -106,7 +111,7 @@ class ResponsePolicy:
             return
         trial = copy.deepcopy(payload)
         try:
-            result = self.trial_live(trial)
+            result = self.trial_live(trial, expected_payload=payload)
             if trial != payload:
                 raise ValueError("Nastavení se při zkušebním volání změnilo; pracovní požadavek nebyl odeslán.")
             self._live_verified.add(key)
@@ -121,12 +126,12 @@ class ResponsePolicy:
     def consume_live(self, payload):
         self._live_verified.discard(self.key(payload))
 
-    def trial_live(self, payload):
+    def trial_live(self, payload, expected_payload=None):
         from .runlog import RunLogger
         log = RunLogger(str(self.log_dir), "PREFLIGHT_" + uuid.uuid4().hex, "Zkušební volání")
         log.save_json("requests", "preflight", payload)
         try:
-            adapter = PreflightTransport(self.client)
+            adapter = PreflightTransport(self.client, expected_payload)
             controller = getattr(self.client, "cost_control", None)
             result = controller.execute(adapter, payload, stage="PREFLIGHT") if controller else adapter.create_response(payload)
             log.save_json("responses", "preflight", result)
@@ -142,11 +147,18 @@ class ResponsePolicy:
         if not getattr(self, "db_path", None) or (not batch and getattr(self.client, "cost_control", None)):
             return
         from .receipt import Receipt, ReceiptDB
+        from .pricing import PriceTable, price_response
         usage = result.get("usage") or {}
-        ReceiptDB(self.db_path).insert(Receipt(run_id, time.time(), "Zkušební volání", result.get("model") or payload["model"],
+        prices = PriceTable.builtin_fallback()
+        model = result.get("model") or payload["model"]
+        total, tool, rates, reason = price_response(prices.get(model), result, batch=batch)
+        usage = {**usage, "_pricing_reason": reason, "_service_tier": result.get("service_tier"),
+            "_file_search_calls": sum(o.get("type") == "file_search_call" for o in result.get("output", []))}
+        ReceiptDB(self.db_path).insert(Receipt(run_id, time.time(), "Zkušební volání", model,
             "PREFLIGHT", "PREFLIGHT_BATCH" if batch else "PREFLIGHT", result.get("id"), None,
-            usage.get("input_tokens", 0), usage.get("output_tokens", 0), None, None, None, batch,
-            "Spotřeba zkušebního volání; cena nebyla potvrzena ceníkem.", {}, usage))
+            usage.get("input_tokens", 0), usage.get("output_tokens", 0), float(tool) if tool is not None else None,
+            0.0, float(total) if total is not None else None, bool(rates and rates.verified_at),
+            "Spotřeba zkušebního volání", {}, usage, pricing_snapshot=rates.snapshot() if rates else {}))
 
     def ensure_batch(self, payloads):
         """Jedna skutečná zkušební dávka pro všechny dosud neověřené řádky."""

@@ -21,7 +21,7 @@ from .contracts import validate_chunk_metadata
 from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths, structure_response_format, file_response_format
 from .filescan import build_manifest, scan_tree
 from .openai_client import OpenAIClient
-from .pricing import PriceTable, compute_cost
+from .pricing import PriceTable, compute_cost, price_response
 from .receipt import Receipt, ReceiptDB
 from .retry import CircuitBreaker, with_retry
 from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root, atomic_write_text
@@ -1013,8 +1013,12 @@ class RunWorker(QThread):
         model = resp.get("model") or self.cfg.model
         row = self.price_table.get(model) or PriceTable.builtin_fallback().get(model)
         verified = self.price_table.is_verified(model)
-        search_calls = sum(1 for item in resp.get("output", []) if isinstance(item, dict) and item.get("type") == "file_search_call")
-        total, tool_cost, storage_cost = compute_cost(row, inp, out, is_batch=is_batch, use_file_search=self._used_file_search, file_search_calls=search_calls, usage=usage)
+        total, tool_cost, rates, reason = price_response(row, resp, batch=is_batch)
+        total = float(total) if total is not None else None
+        tool_cost = float(tool_cost) if tool_cost is not None else None
+        storage_cost = 0.0
+        usage.update(_pricing_reason=reason, _service_tier=resp.get("service_tier"),
+            _file_search_calls=sum(o.get("type") == "file_search_call" for o in resp.get("output", [])))
         r = Receipt(
             run_id=self.log.run_id,
             created_at=time.time(),
@@ -1033,7 +1037,7 @@ class RunWorker(QThread):
             notes=(self.cfg.prompt or "")[:4000],
             log_paths={"run_dir": self.log.paths.run_dir},
             usage=usage,
-            pricing_snapshot=row.rates(is_batch).snapshot() if row and row.rates(is_batch) else {},
+            pricing_snapshot=rates.snapshot() if rates else {},
         )
         self.db.insert(r)
         self._has_receipt = True
