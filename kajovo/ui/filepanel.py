@@ -6,8 +6,8 @@ from typing import List
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QMessageBox
 from PySide6.QtCore import Signal, QThread
 
-from ..core.openai_client import OpenAIClient
-from ..core.retry import with_retry, CircuitBreaker
+from .background import OpenAIClient, with_retry
+from ..core.retry import CircuitBreaker
 from .widgets import BusyPopup
 from .task_progress_dialog import TaskProgressDialog
 
@@ -16,7 +16,7 @@ class FilesDeleteWorker(QThread):
     progress = Signal(int)
     status = Signal(str)
     logline = Signal(str)
-    result_ready = Signal(object, list)  # files or None, failures
+    result_ready = Signal(object, list)  # Soubory nebo None, počet chyb.
 
     def __init__(self, api_key: str, file_ids: List[str], retry_cfg, breaker_failures: int, breaker_cooldown_s: int):
         super().__init__()
@@ -71,10 +71,10 @@ class FilesPanel(QWidget):
         top = QHBoxLayout()
         top.addWidget(QLabel("Files API"))
         top.addStretch(1)
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_upload = QPushButton("Upload")
-        self.btn_delete = QPushButton("Delete")
-        self.btn_delete_all = QPushButton("Del ALL")
+        self.btn_refresh = QPushButton("Obnovit")
+        self.btn_upload = QPushButton("Nahrát")
+        self.btn_delete = QPushButton("Odstranit")
+        self.btn_delete_all = QPushButton("Odstranit vše")
         top.addWidget(self.btn_refresh)
         top.addWidget(self.btn_upload)
         top.addWidget(self.btn_delete)
@@ -91,8 +91,8 @@ class FilesPanel(QWidget):
         v.addLayout(lists, 1)
 
         btns = QHBoxLayout()
-        self.btn_attach = QPushButton("Attach →")
-        self.btn_detach = QPushButton("← Detach")
+        self.btn_attach = QPushButton("Připojit →")
+        self.btn_detach = QPushButton("← Odpojit")
         btns.addStretch(1)
         btns.addWidget(self.btn_attach)
         btns.addWidget(self.btn_detach)

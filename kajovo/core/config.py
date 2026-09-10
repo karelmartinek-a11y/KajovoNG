@@ -51,7 +51,7 @@ class LoggingPolicy:
 
 @dataclass
 class PricingPolicy:
-    # Use official OpenAI pricing page as primary source.
+    # Adresa zdroje ceníku pro ruční i automatické načtení.
     source_url: str = "https://openai.com/api/pricing/"
     cache_ttl_hours: int = 72
     auto_refresh_on_start: bool = True
@@ -103,6 +103,7 @@ class AppSettings:
     ssh: SSHSettings = field(default_factory=SSHSettings)
     batch_poll_interval_s: float = 4.0
     batch_timeout_s: float = 60.0 * 60.0
+    response_timeout_s: float = 300.0
     default_model: str = ""
     default_temperature: float = 0.2
     dry_run_modify: bool = False
@@ -137,7 +138,7 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
     s = AppSettings()
     merge(s, raw)
     numeric_positive = [s.retry.max_attempts, s.retry.circuit_breaker_failures,
-                        s.batch_poll_interval_s, s.batch_timeout_s, s.smtp.port,
+                        s.batch_poll_interval_s, s.batch_timeout_s, s.response_timeout_s, s.smtp.port,
                         s.logging.max_total_mb, s.logging.max_runs]
     numeric_nonnegative = [s.retry.base_delay_s, s.retry.max_delay_s, s.retry.jitter_s,
                            s.retry.circuit_breaker_cooldown_s, s.pricing.cache_ttl_hours]
@@ -145,7 +146,7 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
         not math.isfinite(v) or v < 0 for v in numeric_nonnegative
     ) or not 0 <= s.default_temperature <= 2 or s.smtp.port > 65535:
         raise ValueError("Číselné nastavení je mimo povolený rozsah.")
-    # Backward compatibility: migrate plaintext secrets to OS keyring / env store.
+    # Hesla načtená z JSON se přesouvají do keyringu nebo prostředí.
     migration_results = []
     if s.smtp.password:
         migration_results.append(set_secret("smtp_password", s.smtp.password))
@@ -162,7 +163,7 @@ def save_settings(s: AppSettings, path: str = DEFAULT_SETTINGS_FILE) -> None:
     set_secret("smtp_password", s.smtp.password or "")
     set_secret("ssh_password", s.ssh.password or "")
     payload = asdict(s)
-    # Never persist credentials in plaintext JSON.
+    # Hesla se do JSON neukládají.
     payload.setdefault("smtp", {})["password"] = ""
     payload.setdefault("ssh", {})["password"] = ""
     atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))

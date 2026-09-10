@@ -13,7 +13,7 @@ SOURCE_LOGO = RESOURCES / "Kajovo_new.png"
 
 
 def _square_crop(img: Image.Image) -> Image.Image:
-    """Center-crop to a square before resizing so the icon doesn't distort."""
+    """Před změnou velikosti ořízne střed na čtverec, aby se ikona nedeformovala."""
     w, h = img.size
     side = min(w, h)
     left = (w - side) // 2
@@ -39,7 +39,7 @@ def main() -> None:
     img = Image.open(SOURCE_LOGO).convert("RGBA")
     img = _square_crop(img)
 
-    # Runtime window icon (PNG) + Windows exe icon (ICO) + favicon
+    # Ikona okna (PNG), programu Windows (ICO) a favicon.
     _save_png(img, RESOURCES / "app_icon.png", 512)
     _save_png(img, BUILD_ASSETS / "app_icon.png", 512)
     _save_ico(img, BUILD_ASSETS / "app_icon.ico", sizes=[256, 128, 64, 48, 32, 24, 16])

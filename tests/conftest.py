@@ -16,6 +16,15 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def isolated_api_key_store(monkeypatch):
+    """Testy nesmějí načítat ani měnit skutečný klíč v registru uživatele."""
+    monkeypatch.setattr("kajovo.core.secret_store._read_persisted_api_key", lambda: None)
+    def blocked(*args, **kwargs):
+        raise AssertionError("Test musí nahradit trvalé ukládání API klíče.")
+    monkeypatch.setattr("kajovo.ui.mainwindow.MainWindow._set_env_api_key", blocked)
+
+
+@pytest.fixture(autouse=True)
 def no_live_http(monkeypatch):
     """Regresní test nesmí provést skutečný síťový HTTP požadavek."""
     def blocked(*args, **kwargs):

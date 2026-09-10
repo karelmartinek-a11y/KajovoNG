@@ -37,7 +37,7 @@ class AuditSummary:
 
 
 class PricingAuditor:
-    """Deterministically scan LOG/* runs and ensure receipts/pricing coverage."""
+    """Doplní a přepočítá účtenky podle uložených běhů v LOG."""
 
     def __init__(self, settings, price_table: PriceTable, receipt_db: ReceiptDB, api_key: str = "", log_fn=None):
         self.s = settings
@@ -152,7 +152,7 @@ class PricingAuditor:
         resp_dir = os.path.join(run_dir, "responses")
         results = {"responses": 0, "inserted": 0, "updated": 0, "zero_usage": 0, "missing": 0, "error": ""}
         if not os.path.isdir(resp_dir):
-            # no responses at all
+            # Běh neobsahuje žádnou odpověď.
             results["missing"] += self._maybe_insert_fallback(run_dir, run_state, idx)
             return results
 
@@ -204,7 +204,7 @@ class PricingAuditor:
             output_tokens=0,
             tool_cost=0.0,
             storage_cost=0.0,
-            total_cost=0.0,
+            total_cost=None,
             pricing_verified=False,
             notes=f"Audit fallback (no responses; status={status})",
             log_paths={"run_dir": run_dir},
@@ -221,18 +221,10 @@ class PricingAuditor:
         if response_id:
             existing = idx.get("response", {}).get(response_id)
             if existing:
-                if self._needs_update(existing.get("total_cost", 0.0), receipt.total_cost):
-                    self.db.update_row(existing["id"], receipt)
-                    existing["total_cost"] = receipt.total_cost
-                    return "updated"
                 return "skipped"
         if batch_id and not response_id:
             existing = idx.get("batch", {}).get(batch_id)
             if existing:
-                if self._needs_update(existing.get("total_cost", 0.0), receipt.total_cost):
-                    self.db.update_row(existing["id"], receipt)
-                    existing["total_cost"] = receipt.total_cost
-                    return "updated"
                 return "skipped"
         row_id = self.db.insert(receipt)
         if response_id:
@@ -244,7 +236,7 @@ class PricingAuditor:
 
     @staticmethod
     def _needs_update(existing_total: float, new_total: float) -> bool:
-        # Avoid zeros unless they are genuinely zero; update if delta is meaningful.
+        # Aktualizace při nenulových nákladech nebo významném rozdílu.
         if existing_total == 0.0 and new_total != 0.0:
             return True
         return abs(float(existing_total) - float(new_total)) > 1e-6
@@ -279,7 +271,8 @@ class PricingAuditor:
         zero_usage = inp == 0 and outp == 0
         use_fs = self._match_request_tools(label, os.path.getmtime(resp_path), req_meta)
         row = self.pt.get(model) or PriceTable.builtin_fallback().get(model)
-        total, tool_cost, storage_cost = compute_cost(row, inp, outp, is_batch=mode == "C", use_file_search=use_fs)
+        total, tool_cost, storage_cost = compute_cost(row, inp, outp, is_batch=bool(batch_id) or mode == "C", use_file_search=use_fs,
+                                                   usage=usage, file_search_calls=sum(1 for o in resp.get("output", []) if o.get("type") == "file_search_call"))
         notes = f"{flow or 'UNKNOWN'}"
         if zero_usage and usage:
             notes += " (usage present but zero tokens)"
@@ -296,10 +289,10 @@ class PricingAuditor:
             batch_id=batch_id,
             input_tokens=inp,
             output_tokens=outp,
-            tool_cost=float(tool_cost),
-            storage_cost=float(storage_cost),
-            total_cost=float(total),
-            pricing_verified=bool(self.pt.verified and row is not None),
+            tool_cost=tool_cost,
+            storage_cost=storage_cost,
+            total_cost=total,
+            pricing_verified=self.pt.is_verified(model),
             notes=notes,
             log_paths={"run_dir": run_dir, "response_file": resp_path},
             usage=usage if isinstance(usage, dict) else {},
@@ -363,7 +356,7 @@ class PricingAuditor:
 
     @staticmethod
     def _match_request_tools(label: str, resp_mtime: float, req_meta: List[Tuple[str, bool, float]]) -> bool:
-        # Pick the latest request with the same label that occurred before the response.
+        # Výběr posledního požadavku stejného označení před danou odpovědí.
         candidates = [m for m in req_meta if m[0] == label and m[2] <= resp_mtime + 1]
         if not candidates:
             return False

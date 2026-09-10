@@ -12,8 +12,10 @@ kajovo.sqlite
 kajovo_state.json
 kajovo/kajovo_state.json
 kajovo_settings.json
+.env
+.env.local
 
-# generated branding assets
+# Generované grafické prostředky.
 resources/app_icon.png
 
 *.egg-info/
@@ -27,3 +29,9 @@ resources/app_icon.png
 /dist/
 /*.spec
 /build/
+/Build/lib/
+/Build/Kajovo/
+/Build/bdist.*/
+*.sqlite-wal
+*.sqlite-shm
+*.before-cost-v1.bak

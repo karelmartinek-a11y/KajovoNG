@@ -22,13 +22,15 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QRadioButton,
-    QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ..core.cascade_types import CascadeDefinition, CascadeStep
+from ..core.request_rules import uses_reasoning_defaults, validate_response_payload
 from .widgets import dialog_input_text, dialog_open_file, dialog_select_dir, msg_critical, msg_info, msg_warning
+from .layouts import FlowLayout, scroll_content, ContentTabs, AdaptivePanels
 
 
 class CascadePanel(QWidget):
@@ -47,13 +49,14 @@ class CascadePanel(QWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(6)
 
-        top = QHBoxLayout()
+        top = FlowLayout()
         top.addWidget(QLabel("Název kaskády"))
         self.ed_name = QLineEdit("nova_kaskada")
         top.addWidget(self.ed_name, 1)
         self.cb_saved = QComboBox()
-        self.cb_saved.setMinimumWidth(240)
-        self.btn_refresh_saved = QPushButton("Refresh")
+        self.cb_saved.setMinimumContentsLength(16)
+        self.cb_saved.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.btn_refresh_saved = QPushButton("Obnovit")
         self.btn_save = QPushButton("Uložit kaskádu")
         self.btn_save_as = QPushButton("Uložit jako...")
         self.btn_load = QPushButton("Načíst kaskádu")
@@ -66,18 +69,18 @@ class CascadePanel(QWidget):
         root.addLayout(top)
 
         out_row = QHBoxLayout()
-        out_row.addWidget(QLabel("Default OUT directory (Kaskáda)"))
+        out_row.addWidget(QLabel("Výchozí adresář OUT"))
         self.ed_default_out_dir = QLineEdit()
-        self.btn_default_out_browse = QPushButton("Browse")
+        self.btn_default_out_browse = QPushButton("Vybrat…")
         out_row.addWidget(self.ed_default_out_dir, 1)
         out_row.addWidget(self.btn_default_out_browse)
         root.addLayout(out_row)
 
-        split = QSplitter(Qt.Orientation.Horizontal)
+        split = AdaptivePanels(("Editor", "Kroky"))
         split.setChildrenCollapsible(False)
         root.addWidget(split, 1)
 
-        # LEFT: editor kroku
+        # Vlevo: editor kroku.
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(4, 4, 4, 4)
@@ -111,11 +114,13 @@ class CascadePanel(QWidget):
         prev_l.addWidget(self.ed_prev_resp, 1)
         prev_l.addWidget(self.cb_prev_var)
         fm.addRow("previous_response_id", prev_row)
-        self.lbl_prev_hint = QLabel("Pole je aktivní od kroku 2.")
+        self.lbl_prev_hint = QLabel("Existující Response ID lze zadat i v prvním kroku; proměnnou předchozího kroku až od druhého.")
+        self.lbl_prev_hint.setWordWrap(True)
+        fm.setRowWrapPolicy(QFormLayout.WrapLongRows)
         fm.addRow("", self.lbl_prev_hint)
         lv.addWidget(box_meta)
 
-        box_input = QGroupBox("Inputs")
+        box_input = QGroupBox("Vstupy")
         iv = QVBoxLayout(box_input)
         self.txt_instructions = QPlainTextEdit()
         self.txt_instructions.setPlaceholderText("Instructions")
@@ -134,21 +139,21 @@ class CascadePanel(QWidget):
         iv.addWidget(self.txt_input_content)
         lv.addWidget(box_input)
 
-        box_files = QGroupBox("Files")
+        box_files = QGroupBox("Soubory")
         fv = QVBoxLayout(box_files)
         self.lst_files = QListWidget()
         fv.addWidget(self.lst_files, 1)
         fr = QHBoxLayout()
-        self.btn_add_file_ids = QPushButton("Add file_id(s)")
-        self.btn_add_local_file = QPushButton("Add local file")
-        self.btn_remove_file = QPushButton("Remove")
+        self.btn_add_file_ids = QPushButton("Přidat file_id")
+        self.btn_add_local_file = QPushButton("Přidat místní soubor")
+        self.btn_remove_file = QPushButton("Odebrat")
         fr.addWidget(self.btn_add_file_ids)
         fr.addWidget(self.btn_add_local_file)
         fr.addWidget(self.btn_remove_file)
         fv.addLayout(fr)
         lv.addWidget(box_files, 1)
 
-        box_out = QGroupBox("Output / JSON schema")
+        box_out = QGroupBox("Výstup / JSON schéma")
         ov = QVBoxLayout(box_out)
         trow = QHBoxLayout()
         self.rb_out_text = QRadioButton("TEXT")
@@ -172,13 +177,13 @@ class CascadePanel(QWidget):
         ov.addWidget(self.btn_schema_custom)
         lv.addWidget(box_out)
 
-        box_expected = QGroupBox("Expected output files (QFILE-like)")
+        box_expected = QGroupBox("Očekávané výstupní soubory")
         ev = QVBoxLayout(box_expected)
-        self.chk_expected_out_files = QCheckBox("Enable expected output files")
+        self.chk_expected_out_files = QCheckBox("Ukládat očekávané soubory")
         self.lst_expected_out_files = QListWidget()
         expected_btns = QHBoxLayout()
-        self.btn_add_expected_out_file = QPushButton("Add")
-        self.btn_remove_expected_out_file = QPushButton("Remove")
+        self.btn_add_expected_out_file = QPushButton("Přidat")
+        self.btn_remove_expected_out_file = QPushButton("Odebrat")
         expected_btns.addWidget(self.btn_add_expected_out_file)
         expected_btns.addWidget(self.btn_remove_expected_out_file)
         ev.addWidget(self.chk_expected_out_files)
@@ -196,7 +201,7 @@ class CascadePanel(QWidget):
         editor_buttons.addWidget(self.btn_save_step)
         lv.addLayout(editor_buttons)
 
-        # RIGHT: seznam kroků
+        # Vpravo: seznam kroků.
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(4, 4, 4, 4)
@@ -206,7 +211,7 @@ class CascadePanel(QWidget):
         self.lst_steps.setDragDropMode(QListWidget.InternalMove)
         self.lst_steps.setDefaultDropAction(Qt.MoveAction)
         rv.addWidget(self.lst_steps, 1)
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         self.btn_add_step = QPushButton("Přidat krok")
         self.btn_delete_step = QPushButton("Smazat krok")
         self.btn_duplicate_step = QPushButton("Duplikovat krok")
@@ -225,6 +230,28 @@ class CascadePanel(QWidget):
         split.setStretchFactor(1, 1)
         split.setSizes([980, 460])
 
+        self.editor_sections = ContentTabs()
+        for box, title in ((box_meta, "Nastavení"), (box_input, "Zadání"), (box_files, "Přílohy"),
+                           (box_out, "Formát"), (box_expected, "Soubory")):
+            lv.removeWidget(box)
+            self.editor_sections.addTab(scroll_content(box), title)
+        lv.insertWidget(0, self.editor_sections, 1)
+        # Každý druh vstupu dostává samostatný editor místo tří vysokých polí.
+        input_tabs = QTabWidget()
+        for field, title in ((self.txt_instructions, "Instrukce"), (self.txt_input_text, "Text"),
+                             (self.txt_input_content, "Content JSON")):
+            iv.removeWidget(field)
+            field.setMinimumHeight(0)
+            input_tabs.addTab(field, title)
+        while iv.count():
+            item = iv.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        iv.addWidget(input_tabs, 1)
+        self._editor_split = split
+        self.cb_step_model.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cb_step_model.setMinimumContentsLength(12)
+
         self.btn_add_step.clicked.connect(self.add_step)
         self.btn_delete_step.clicked.connect(self.delete_selected_step)
         self.btn_duplicate_step.clicked.connect(self.duplicate_selected_step)
@@ -241,6 +268,8 @@ class CascadePanel(QWidget):
         self.chk_expected_out_files.toggled.connect(self._update_expected_out_enabled)
 
         self.btn_save_step.clicked.connect(self.save_current_step)
+        self.cb_step_model.currentTextChanged.connect(self._update_temperature_enabled)
+        self.chk_step_temp.toggled.connect(self._update_temperature_enabled)
         self.btn_insert_var.clicked.connect(self.insert_variable)
         self.cb_prev_var.currentTextChanged.connect(self._on_prev_var_selected)
 
@@ -275,11 +304,19 @@ class CascadePanel(QWidget):
             idx = self.cb_step_model.findText(current)
             if idx >= 0:
                 self.cb_step_model.setCurrentIndex(idx)
+
                 return
         if preferred:
             idx = self.cb_step_model.findText(preferred)
             if idx >= 0:
                 self.cb_step_model.setCurrentIndex(idx)
+
+    def _update_temperature_enabled(self, *_):
+        supported = not uses_reasoning_defaults(self.cb_step_model.currentText())
+        self.chk_step_temp.setEnabled(supported)
+        if not supported:
+            self.chk_step_temp.setChecked(False)
+        self.sp_step_temp.setEnabled(supported and self.chk_step_temp.isChecked())
 
     def _sanitize_name(self, raw: str) -> str:
         out = re.sub(r"[^A-Za-z0-9._-]+", "_", (raw or "").strip())
@@ -452,8 +489,10 @@ class CascadePanel(QWidget):
         self.ed_step_title.setText(step.title)
         if step.model:
             idx = self.cb_step_model.findText(step.model)
-            if idx >= 0:
-                self.cb_step_model.setCurrentIndex(idx)
+            if idx < 0:
+                self.cb_step_model.addItem(step.model)
+                idx = self.cb_step_model.findText(step.model)
+            self.cb_step_model.setCurrentIndex(idx)
         self.chk_step_temp.setChecked(step.temperature is not None)
         if step.temperature is not None:
             self.sp_step_temp.setValue(float(step.temperature))
@@ -487,8 +526,9 @@ class CascadePanel(QWidget):
         self._update_expected_out_enabled()
 
         first = index == 0
-        self.ed_prev_resp.setEnabled(not first)
+        self.ed_prev_resp.setEnabled(True)
         self.cb_prev_var.setEnabled(not first)
+        self._update_temperature_enabled()
 
     def _selected_step(self) -> Optional[CascadeStep]:
         i = self.current_step_index
@@ -537,6 +577,15 @@ class CascadePanel(QWidget):
             expected_out_files = self._collect_expected_out_files()
             if output_type == "text" and schema_kind is not None:
                 raise ValueError("Schema lze použít jen pro JSON output.")
+            if schema_kind == "custom" and step.output_schema_custom is None:
+                raise ValueError("Custom schema není načtené.")
+            payload = {"model": self.cb_step_model.currentText().strip()}
+            if self.chk_step_temp.isChecked():
+                payload["temperature"] = float(self.sp_step_temp.value())
+            if input_content is not None:
+                parts = input_content if isinstance(input_content, list) else [input_content]
+                payload["input"] = [{"role": "user", "content": parts}]
+            validate_response_payload(payload)
         except ValueError as e:
             msg_warning(self, "Kaskáda", str(e))
             return False
@@ -555,11 +604,8 @@ class CascadePanel(QWidget):
         step.expected_out_files = expected_out_files
         if schema_kind != "custom":
             step.output_schema_custom = None
-        elif step.output_schema_custom is None:
-            msg_warning(self, "Kaskáda", "Custom schema není načtené.")
-            return False
 
-        # files from list widget
+        # Soubory vybrané v seznamu.
         ids: List[str] = []
         lps: List[str] = []
         for i in range(self.lst_files.count()):

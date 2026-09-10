@@ -1,1 +1,1 @@
-"""Diagnostics helpers."""
+"""Pomocné funkce pro diagnostiku."""

@@ -6,23 +6,66 @@ from typing import Optional
 SERVICE_NAME = "kajovo"
 
 
-def persist_api_key(value: str) -> bool:
-    """Uloží API klíč do uživatelského prostředí Windows bez argumentu procesu."""
+class APIKeyStoreError(RuntimeError):
+    """Chyba úložiště bez přihlašovacích údajů v chybové zprávě."""
+
+
+def _read_persisted_api_key() -> Optional[str]:
     if os.name != "nt":
-        return False
+        return None
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            value, kind = winreg.QueryValueEx(key, "OPENAI_API_KEY")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise APIKeyStoreError("Nelze přečíst uložený API klíč z uživatelského registru Windows.") from exc
+    if kind != winreg.REG_SZ or not isinstance(value, str):
+        raise APIKeyStoreError("Uložený API klíč má neplatný typ záznamu v registru Windows.")
+    return value
+
+
+def load_api_key() -> str:
+    """Uložená hodnota včetně výslovného smazání má přednost před prostředím rodiče."""
+    stored = _read_persisted_api_key()
+    value = stored if stored is not None else os.environ.get("OPENAI_API_KEY", "")
+    os.environ["OPENAI_API_KEY"] = value
+    return value
+
+
+def persist_api_key(value: str) -> bool:
+    """Zapíše a ověří trvalou hodnotu; prázdný záznam potlačuje staré prostředí."""
+    if os.name != "nt":
+        raise APIKeyStoreError("Trvalé ukládání API klíče vyžaduje uživatelský registr Windows.")
+    if not isinstance(value, str):
+        raise APIKeyStoreError("API klíč musí být text.")
     try:
         import winreg
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-            if value:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+            try:
+                previous = winreg.QueryValueEx(key, "OPENAI_API_KEY")
+            except FileNotFoundError:
+                previous = None
+            written = False
+            try:
                 winreg.SetValueEx(key, "OPENAI_API_KEY", 0, winreg.REG_SZ, value)
-            else:
-                try:
-                    winreg.DeleteValue(key, "OPENAI_API_KEY")
-                except FileNotFoundError:
-                    pass
+                written = True
+                if winreg.QueryValueEx(key, "OPENAI_API_KEY") != (value, winreg.REG_SZ):
+                    raise OSError("Ověření zápisu selhalo.")
+            except OSError:
+                if written:
+                    try:
+                        if previous is None:
+                            winreg.DeleteValue(key, "OPENAI_API_KEY")
+                        else:
+                            winreg.SetValueEx(key, "OPENAI_API_KEY", 0, previous[1], previous[0])
+                    except OSError as exc:
+                        raise APIKeyStoreError("Ověření uložení API klíče i obnovení původního záznamu selhalo. Aktuální klíč nebyl změněn.") from exc
+                raise
         return True
-    except OSError:
-        return False
+    except OSError as exc:
+        raise APIKeyStoreError("API klíč se nepodařilo trvale uložit a ověřit v uživatelském registru Windows. Aktuální klíč nebyl změněn.") from exc
 
 
 def _env_name(key: str) -> str:

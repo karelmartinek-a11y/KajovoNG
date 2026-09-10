@@ -1,8 +1,4 @@
-"""
-Compatibility shim package.
+"""Spouštěcí balíček pro ``python -m kajovong``.
 
-Expose the desktop launcher under ``python -m kajovong`` so users can
-start the app with the shorter module name. The actual implementation
-lives in ``kajovo``.
-"""
+Implementaci aplikace poskytuje balíček ``kajovo``."""
 

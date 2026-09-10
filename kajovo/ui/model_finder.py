@@ -48,8 +48,8 @@ class ModelFinderDialog(QDialog):
         v.addWidget(self.lst, 1)
 
         btns = QHBoxLayout()
-        self.btn_apply = QPushButton("Use selected")
-        self.btn_close = QPushButton("Close")
+        self.btn_apply = QPushButton("Použít vybrané")
+        self.btn_close = QPushButton("Zavřít")
         btns.addStretch(1)
         btns.addWidget(self.btn_apply)
         btns.addWidget(self.btn_close)

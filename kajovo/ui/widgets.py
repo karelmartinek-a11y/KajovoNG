@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QInputDialog,
 )
 from PySide6.QtCore import Qt, QPoint, Signal
-from PySide6.QtWidgets import QApplication
 from .theme import DARK_STYLESHEET
 
 
@@ -33,7 +32,7 @@ class TitleBar(QWidget):
 
     def __init__(self, title: str = "Kaja", parent=None):
         super().__init__(parent)
-        self.setFixedHeight(38)
+        self.setMinimumHeight(38)
         self._drag_pos: QPoint | None = None
 
         layout = QHBoxLayout(self)
@@ -42,8 +41,7 @@ class TitleBar(QWidget):
 
         self.lbl = QLabel(title)
         self.lbl.setStyleSheet("font-weight: 600;")
-        layout.addWidget(self.lbl)
-        layout.addStretch(1)
+        layout.addWidget(self.lbl, 1)
 
         self.btn_min = QPushButton("-")
         self.btn_min.setFixedSize(36, 26)
@@ -89,10 +87,8 @@ class TitleBar(QWidget):
 
 
 def style_progress_bar(bar: QProgressBar, *, indeterminate: bool = False) -> None:
-    """
-    Standardize progress bar visuals to the popup look used for GPT queries.
-    """
-    bar.setFixedHeight(18)
+    """Sjednotí vzhled ukazatele průběhu s dialogy požadavků."""
+    bar.setMinimumHeight(bar.fontMetrics().height() + 10)
     bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
     if indeterminate:
         bar.setRange(0, 0)
@@ -185,11 +181,14 @@ class StyledMessageDialog(QDialog):
         v.setSpacing(10)
 
         self.titlebar = TitleBar(title, self)
+        self.titlebar.btn_min.hide()
+        self.titlebar.btn_max.hide()
         self.titlebar.lbl.setStyleSheet("font-weight: 700; font-size: 14px;")
         self.titlebar.request_close.connect(self._on_close)
         v.addWidget(self.titlebar)
 
         self.lbl = QLabel(text)
+        self.lbl.setTextFormat(Qt.PlainText)
         self.lbl.setWordWrap(True)
         v.addWidget(self.lbl)
 
@@ -250,18 +249,17 @@ def msg_question(parent: QWidget, title: str, text: str, *, details: str | None 
 
 
 class BusyPopup:
-    """
-    Lightweight modal-ish progress helper; shows an indeterminate bar and closes automatically.
-    Usage:
-        with BusyPopup(parent, "Loading..."):
-            do_work()
-    """
+    """Zobrazí neurčitý průběh a po opuštění kontextu okno zavře.
+
+    Použití:
+        with BusyPopup(parent, "Načítání…"):
+            do_work()"""
 
     def __init__(self, parent: QWidget, text: str = "Pracuji..."):
         self.dialog = QDialog(parent)
         self.dialog.setWindowTitle(text)
         self.dialog.setModal(True)
-        self.dialog.setFixedSize(420, 150)
+        self.dialog.resize(520, 240)
         self.dialog.setStyleSheet(DARK_STYLESHEET)
         layout = QVBoxLayout(self.dialog)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -272,20 +270,22 @@ class BusyPopup:
         self.label.setWordWrap(True)
         style_progress_bar(self.bar, indeterminate=True)
         layout.addWidget(self.label)
+        from .activity import ActivityLine
+        self.activity = ActivityLine(self.dialog)
+        layout.addWidget(self.activity)
         layout.addWidget(self.bar)
 
     def update_text(self, text: str):
         self.label.setText(text)
         self.dialog.setWindowTitle(text)
-        QApplication.processEvents()
+        self.activity.touch()
 
     def start(self):
-        """Explicit start without context manager."""
+        """Zobrazí okno bez správce kontextu."""
         return self.__enter__()
 
     def __enter__(self):
         self.dialog.show()
-        QApplication.processEvents()
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -293,6 +293,7 @@ class BusyPopup:
         return False
 
     def close(self):
+        self.activity.finish()
         try:
             self.dialog.accept()
         except Exception:

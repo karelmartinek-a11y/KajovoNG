@@ -5,7 +5,7 @@ import time
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem
 from PySide6.QtCore import Qt
 
-from ..core.openai_client import OpenAIClient
+from .background import OpenAIClient
 from ..core.retry import with_retry, CircuitBreaker
 
 class BatchMonitorWindow(QWidget):
@@ -21,7 +21,7 @@ class BatchMonitorWindow(QWidget):
         v = QVBoxLayout(self)
         top = QHBoxLayout()
         self.lbl = QLabel("Batches (OpenAI)")
-        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh = QPushButton("Obnovit")
         self.btn_download = QPushButton("Download output")
         self.btn_cancel = QPushButton("Cancel batch")
         top.addWidget(self.lbl)

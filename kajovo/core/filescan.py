@@ -54,7 +54,7 @@ def ext_of(path: str) -> str:
 
 def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Optional[List[str]],
               allow_exts: Optional[List[str]], deny_globs: Optional[List[str]], allow_globs: Optional[List[str]],
-              max_size_bytes: int = 10*1024*1024) -> List[ScanItem]:
+              max_size_bytes: int = 10*1024*1024, allow_sensitive: bool = False) -> List[ScanItem]:
     items: List[ScanItem] = []
     for cur, dirs, files in os.walk(root_dir):
         kept = []
@@ -119,7 +119,7 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
             except Exception:
                 secret_hit = True
 
-            if sensitive or secret_hit:
+            if (sensitive or secret_hit) and not allow_sensitive:
                 items.append(ScanItem(rel_path, abs_path, size, None, False, "sensitive_or_secret_detected", True))
                 continue
 
@@ -130,7 +130,7 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
                 items.append(ScanItem(rel_path, abs_path, size, None, False, "read_failed", True))
                 continue
 
-            items.append(ScanItem(rel_path, abs_path, size, sha, True, "ok", False))
+            items.append(ScanItem(rel_path, abs_path, size, sha, True, "ok", sensitive or secret_hit))
 
     items.sort(key=lambda x: x.rel_path)
     return items

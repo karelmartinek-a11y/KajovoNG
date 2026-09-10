@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 import requests
 import math
+import re
+from .cost_accounting import Rates, calculate, money, tokens
 from .utils import atomic_write_text
 
 
@@ -17,13 +19,39 @@ class PriceRow:
     batch_output_per_1k: Optional[float] = None
     file_search_per_1k: Optional[float] = None
     storage_per_gb_day: Optional[float] = None
+    cached_input_per_1k: Optional[float] = None
+    cache_write_per_1k: Optional[float] = None
+    batch_cached_input_per_1k: Optional[float] = None
+    batch_cache_write_per_1k: Optional[float] = None
+    source: str = ""
+    verified_at: str = ""
+    context_threshold: Optional[int] = None
+    long_input_multiplier: float = 1
+    long_output_multiplier: float = 1
+    output_token_limit: Optional[int] = None
 
     def __post_init__(self):
         if not isinstance(self.model, str) or not self.model.strip():
             raise ValueError("Model ceníku nesmí být prázdný.")
         for key, value in vars(self).items():
-            if key != "model" and value is not None and (not math.isfinite(value) or value < 0):
-                raise ValueError("Cena musí být konečné nezáporné číslo.")
+            if key not in ("model", "source", "verified_at") and value is not None:
+                if key in ("context_threshold", "output_token_limit"):
+                    tokens(value)
+                else:
+                    setattr(self, key, money(value))
+
+    def rates(self, batch=False):
+        inp = self.batch_input_per_1k if batch else self.input_per_1k
+        out = self.batch_output_per_1k if batch else self.output_per_1k
+        if inp is None or out is None:
+            return None
+        cached = self.batch_cached_input_per_1k if batch else self.cached_input_per_1k
+        write = self.batch_cache_write_per_1k if batch else self.cache_write_per_1k
+        return Rates(self.model, money(inp) * 1000, money(out) * 1000,
+                     money(cached) * 1000 if cached is not None else None,
+                     money(write) * 1000 if write is not None else None,
+                     self.source or "neověřený ceník", self.verified_at, batch, self.context_threshold,
+                     money(self.long_input_multiplier), money(self.long_output_multiplier))
 
     @staticmethod
     def from_dict(raw: Dict[str, Any]) -> "PriceRow":
@@ -33,7 +61,7 @@ class PriceRow:
             for k in keys:
                 if k in raw and raw.get(k) is not None:
                     try:
-                        return float(raw[k])
+                        return money(raw[k])
                     except (TypeError, ValueError) as exc:
                         raise ValueError(f"Neplatná sazba {k}.") from exc
             return default
@@ -54,6 +82,15 @@ class PriceRow:
             storage_per_gb_day=(
                 _get(("storage_per_gb_day", "storage_gb_day")) if raw.get("storage_per_gb_day") is not None or raw.get("storage_gb_day") is not None else None
             ),
+            cached_input_per_1k=raw.get("cached_input_per_1k"),
+            cache_write_per_1k=raw.get("cache_write_per_1k"),
+            batch_cached_input_per_1k=raw.get("batch_cached_input_per_1k"),
+            batch_cache_write_per_1k=raw.get("batch_cache_write_per_1k"),
+            source=str(raw.get("source") or ""), verified_at=str(raw.get("verified_at") or ""),
+            context_threshold=raw.get("context_threshold"),
+            long_input_multiplier=raw.get("long_input_multiplier", 1),
+            long_output_multiplier=raw.get("long_output_multiplier", 1),
+            output_token_limit=raw.get("output_token_limit"),
         )
 
 class PriceTable:
@@ -100,13 +137,32 @@ class PriceTable:
                 "verified": self.verified,
                 "last_fetch_source": self.last_fetch_source,
                 "rows": [vars(r) for r in self.rows.values()],
-            }, ensure_ascii=False, indent=2))
+            }, ensure_ascii=False, indent=2, default=str))
 
     def refresh_from_url(self, url: str, timeout_s: float = 20.0) -> Tuple[bool, str]:
         if not url or not str(url).strip():
             self.verified = False
             return False, "pricing URL is empty"
         try:
+            from .price_sources import OPENAI_PRICING, parse_prices
+            if url.rstrip("/") in ("https://openai.com/api/pricing", "https://developers.openai.com/api/docs/pricing", OPENAI_PRICING):
+                response = requests.get(OPENAI_PRICING, timeout=timeout_s)
+                response.raise_for_status()
+                from concurrent.futures import ThreadPoolExecutor
+                import re
+                models = sorted(set(re.findall(r"^\|\s*((?:gpt-|o[134](?:-|\b))[A-Za-z0-9_.-]*)\s*(?:\([^|]*\))?\s*\|", response.text, re.M)))
+                def fetch_model(model):
+                    try:
+                        r = requests.get("https://developers.openai.com/api/docs/models/" + model + ".md", timeout=timeout_s)
+                        r.raise_for_status()
+                        return model, r.text
+                    except requests.RequestException:
+                        return model, ""
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    docs = dict(pool.map(fetch_model, models))
+                rows = parse_prices(response.text, docs)
+                self.update_from_rows(rows, verified=True, source=OPENAI_PRICING)
+                return True, "Oficiální sazby obnoveny; nedoložené kombinace zůstávají neznámé."
             r = requests.get(url, timeout=timeout_s)
             r.raise_for_status()
             ctype = (r.headers.get("content-type") or "").lower()
@@ -117,12 +173,13 @@ class PriceTable:
                 for row in data.get("rows", []):
                     try:
                         pr = PriceRow.from_dict(row)
+                        pr.source, pr.verified_at = f"ruční JSON {url}", ""
                         if pr.model:
                             rows[pr.model] = pr
                     except Exception:
                         continue
                 if rows:
-                    self.update_from_rows(rows, verified=True, source=f"URL {url}")
+                    self.update_from_rows(rows, verified=False, source=f"ruční JSON {url}")
                     return True, "OK"
 
             parsed_rows = self._parse_official_pricing_html(r.text)
@@ -140,17 +197,21 @@ class PriceTable:
         return {}
 
     def _fallback_with_reason(self, reason: str) -> Tuple[bool, str]:
-        self.verified = False
-        fallback_rows = PriceTable.builtin_fallback().rows
-        if fallback_rows:
-            try:
-                self.update_from_rows(fallback_rows, verified=False, source="builtin fallback (estimate)")
-            except Exception:
-                pass
-        return False, f"{reason} Použit neověřeno/odhad fallback."
+        if not self.rows:
+            self.rows = PriceTable.builtin_fallback().rows
+            self.verified = False
+        return False, f"{reason} Zachován poslední dostupný ceník."
 
     def get(self, model: str) -> Optional[PriceRow]:
-        return self.rows.get(model)
+        exact = self.rows.get(model)
+        if exact is not None:
+            return exact
+        alias = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
+        return self.rows.get(alias) if alias != model else None
+
+    def is_verified(self, model: str) -> bool:
+        row = self.rows.get(model)
+        return bool(row and ((row.source.startswith("https://developers.openai.com/") and row.verified_at) or self.verified))
 
     @staticmethod
     def builtin_fallback() -> 'PriceTable':
@@ -167,21 +228,22 @@ class PriceTable:
             a.model == b.model
             and float(a.input_per_1k) == float(b.input_per_1k)
             and float(a.output_per_1k) == float(b.output_per_1k)
-            and (a.batch_input_per_1k or 0.0) == (b.batch_input_per_1k or 0.0)
-            and (a.batch_output_per_1k or 0.0) == (b.batch_output_per_1k or 0.0)
-            and (a.file_search_per_1k or 0.0) == (b.file_search_per_1k or 0.0)
-            and (a.storage_per_gb_day or 0.0) == (b.storage_per_gb_day or 0.0)
+            and a.batch_input_per_1k == b.batch_input_per_1k
+            and a.batch_output_per_1k == b.batch_output_per_1k
+            and a.file_search_per_1k == b.file_search_per_1k
+            and a.storage_per_gb_day == b.storage_per_gb_day
+            and vars(a) == vars(b)
         )
 
     def _merge_with_fallback(self, rows: Dict[str, PriceRow]) -> Dict[str, PriceRow]:
-        merged = dict(self.rows)  # keep existing prices so they stay available
+        merged = dict(self.rows)  # Zachování dosavadních sazeb.
         merged.update(rows or {})
-        # ensure baseline GPT models are always present
+        # Doplnění chybějících modelů z vestavěného ceníku.
         for model, pr in PriceTable.builtin_fallback().rows.items():
             merged.setdefault(model, pr)
         return merged
 
-    def update_from_rows(self, rows: Dict[str, PriceRow], verified: bool, source: str = "GPT-4.1") -> None:
+    def update_from_rows(self, rows: Dict[str, PriceRow], verified: bool, source: str = "ruční import") -> None:
         if not rows:
             return
         merged = self._merge_with_fallback(rows)
@@ -199,7 +261,7 @@ class PriceTable:
             self.last_updated = time.time()
             self.rows = merged
         else:
-            # keep existing rows and timestamp if nothing changed
+            # Při stejných sazbách se zachovají řádky; čas obnovení se aktualizuje níže.
             self.rows = self._merge_with_fallback(self.rows)
 
         self.verified = bool(verified and set(merged) == set(rows))
@@ -216,18 +278,18 @@ def compute_cost(
     use_file_search: bool = False,
     storage_gb_days: float = 0.0,
     file_search_calls: int = 0,
-) -> tuple[float, float, float]:
-    """Return total, tool_cost, storage_cost."""
-    if row is None:
-        return 0.0, 0.0, 0.0
-    inp = row.batch_input_per_1k if is_batch and row.batch_input_per_1k is not None else row.input_per_1k
-    outp = row.batch_output_per_1k if is_batch and row.batch_output_per_1k is not None else row.output_per_1k
-    base = (input_tokens / 1000.0) * inp + (output_tokens / 1000.0) * outp
-    tool_cost = 0.0
-    if use_file_search and row.file_search_per_1k is not None:
-        tool_cost += (file_search_calls / 1000.0) * row.file_search_per_1k
-    storage_cost = 0.0
-    if storage_gb_days > 0 and row.storage_per_gb_day is not None:
-        storage_cost = float(storage_gb_days) * row.storage_per_gb_day
-    total = base + tool_cost + storage_cost
-    return total, tool_cost, storage_cost
+    usage: Optional[dict] = None,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Vrátí celkové náklady, náklady nástrojů a úložiště v USD."""
+    tokens(input_tokens)
+    tokens(output_tokens)
+    tokens(file_search_calls)
+    days = money(storage_gb_days)
+    cost = calculate(row.rates(is_batch) if row else None,
+                     usage if usage is not None else {"input_tokens": input_tokens, "output_tokens": output_tokens})
+    tool = (money(row.file_search_per_1k) * file_search_calls / 1000
+            if row and row.file_search_per_1k is not None else None) if file_search_calls else money(0)
+    storage = (money(row.storage_per_gb_day) * days
+               if row and row.storage_per_gb_day is not None else None) if days else money(0)
+    total = cost.total + tool + storage if all(v is not None for v in (cost.total, tool, storage)) else None
+    return tuple(float(v) if v is not None else None for v in (total, tool, storage))

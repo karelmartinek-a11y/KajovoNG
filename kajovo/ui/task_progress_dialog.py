@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushBu
 
 from .theme import DARK_STYLESHEET
 from .widgets import style_progress_bar
+from .activity import ActivityLine
 
 
 class TaskProgressDialog(QDialog):
@@ -25,6 +26,8 @@ class TaskProgressDialog(QDialog):
         self.lbl_status = QLabel("...")
         self.lbl_status.setWordWrap(True)
         v.addWidget(self.lbl_status)
+        self.activity = ActivityLine(self)
+        v.addWidget(self.activity)
 
         self.pb = QProgressBar()
         style_progress_bar(self.pb)
@@ -38,10 +41,11 @@ class TaskProgressDialog(QDialog):
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(2000)
         v.addWidget(self.log, 1)
 
         row = QHBoxLayout()
-        self.btn_close = QPushButton("Close")
+        self.btn_close = QPushButton("Zavřít")
         self.btn_close.setEnabled(False)
         self.btn_close.clicked.connect(self.accept)
         row.addStretch(1)
@@ -50,9 +54,11 @@ class TaskProgressDialog(QDialog):
 
     def set_status(self, text: str):
         self.lbl_status.setText(text)
+        self.activity.touch()
 
     def set_progress(self, value: int):
         self.pb.setValue(value)
+        self.activity.touch()
 
     def set_subprogress(self, value: int):
         if self.pb_sub.isHidden():
@@ -66,9 +72,14 @@ class TaskProgressDialog(QDialog):
         self._done = True
         self.btn_close.setEnabled(True)
         self.set_status(status)
+        self.activity.finish()
 
     def closeEvent(self, event):
         if not self._done:
             event.ignore()
             return
         super().closeEvent(event)
+
+    def reject(self):
+        if self._done:
+            super().reject()

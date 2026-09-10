@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsOpacityEffe
 
 
 class SplashScreen(QWidget):
-    """Lightweight, frameless splash to show the new brand on startup."""
+    """Bezrámové úvodní okno s logem aplikace."""
 
     def __init__(self, *, title: str = "Kájovo NG", subtitle: str = "Neural console", parent=None):
         super().__init__(parent)
@@ -33,7 +33,7 @@ class SplashScreen(QWidget):
 
         self._title = QLabel(title)
         self._title.setAlignment(Qt.AlignCenter)
-        self._title.setStyleSheet("font-size: 26px; font-weight: 800;")
+        self._title.setStyleSheet("color: #EAEAEA; font-size: 26px; font-weight: 700;")
         v.addWidget(self._title)
 
         self._sub = QLabel(subtitle)
@@ -77,7 +77,7 @@ class SplashScreen(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
 
-        # rounded card background with a subtle gradient (colors from the new logo)
+        # Zaoblené pozadí s přechodem v barvách loga.
         rect = self.rect().adjusted(6, 6, -6, -6)
         grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
         grad.setColorAt(0.0, QColor("#0F111A"))
@@ -88,7 +88,7 @@ class SplashScreen(QWidget):
         p.setBrush(grad)
         p.drawRoundedRect(rect, 22, 22)
 
-        # inner border
+        # Vnitřní okraj.
         inner = rect.adjusted(1, 1, -1, -1)
         p.setPen(QColor(141, 121, 196, 120))
         p.setBrush(Qt.NoBrush)

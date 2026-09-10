@@ -81,10 +81,9 @@ def validate_relative_path(path: str) -> str:
 
 
 def safe_join_under_root(root: str, unsafe_rel_path: str) -> str:
-    """Join a potentially unsafe relative path under root and block traversal.
+    """Sestaví cestu pod určeným kořenem a vyhodnotí souborové odkazy.
 
-    Raises ValueError when the resulting path escapes the provided root.
-    """
+    Neplatná relativní cesta nebo únik mimo kořen vyvolá ValueError."""
     rel_path = validate_relative_path(unsafe_rel_path)
     root_abs = os.path.realpath(root)
     candidate = os.path.realpath(os.path.join(root_abs, *rel_path.split("/")))

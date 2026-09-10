@@ -70,9 +70,11 @@ def main():
 
     _load_fonts()
 
-    # default font (falls back if Montserrat missing)
+    # Výchozí písmo; při nedostupném Montserratu zůstává systémové.
     f = QFont("Montserrat", 10)
     app.setFont(f)
+    from ..ui.layouts import install_ui_style
+    install_ui_style()
 
     app_icon = _load_app_icon()
     app.setWindowIcon(app_icon)

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .layouts import FlowLayout, AdaptivePanels
 from .widgets import msg_info, msg_warning, msg_critical, msg_question, dialog_input_text
 
 import time
@@ -7,11 +8,11 @@ from typing import List, Optional, Dict, Any
 from PySide6.QtCore import Signal, QThread
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget, QListWidgetItem,
-    QLineEdit, QLabel, QMessageBox, QSplitter, QDialog, QDialogButtonBox, QPlainTextEdit
+    QLineEdit, QLabel, QMessageBox, QDialog, QDialogButtonBox, QPlainTextEdit
 )
 
-from ..core.openai_client import OpenAIClient
-from ..core.retry import with_retry, CircuitBreaker
+from .background import OpenAIClient, with_retry
+from ..core.retry import CircuitBreaker
 from .widgets import BusyPopup
 from .task_progress_dialog import TaskProgressDialog
 
@@ -21,7 +22,7 @@ class VectorStoresDeleteWorker(QThread):
     subprogress = Signal(int)
     status = Signal(str)
     logline = Signal(str)
-    result_ready = Signal(object, list, int, int)  # stores or None, errors, deleted, total
+    result_ready = Signal(object, list, int, int)  # Úložiště nebo None, chyby, odstraněné položky, celkový počet.
 
     def __init__(self, api_key: str, store_ids: List[str], retry_cfg, breaker_failures: int, breaker_cooldown_s: int):
         super().__init__()
@@ -102,12 +103,12 @@ class FilesSelectorDialog(QDialog):
         self.setStyleSheet(DARK_STYLESHEET)
 
         v = QVBoxLayout(self)
-        top = QHBoxLayout()
+        top = FlowLayout()
         top.addWidget(QLabel("Filtrovat:"))
         self.ed_filter = QLineEdit()
         self.ed_filter.setPlaceholderText("text v id/filename")
         top.addWidget(self.ed_filter, 1)
-        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh = QPushButton("Obnovit")
         top.addWidget(self.btn_refresh)
         v.addLayout(top)
 
@@ -166,14 +167,14 @@ class VectorStoresPanel(QWidget):
         self._delete_dialog: TaskProgressDialog | None = None
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(8, 8, 8, 8)
+        v.setContentsMargins(2, 2, 2, 2)
         v.setSpacing(8)
 
-        top = QHBoxLayout()
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_create = QPushButton("Create")
-        self.btn_delete = QPushButton("Delete")
-        self.btn_delete_all = QPushButton("Del ALL")
+        top = FlowLayout()
+        self.btn_refresh = QPushButton("Obnovit")
+        self.btn_create = QPushButton("Vytvořit")
+        self.btn_delete = QPushButton("Odstranit")
+        self.btn_delete_all = QPushButton("Odstranit vše")
         top.addWidget(self.btn_refresh)
         top.addWidget(self.btn_create)
         top.addWidget(self.btn_delete)
@@ -181,10 +182,10 @@ class VectorStoresPanel(QWidget):
         top.addStretch(1)
         v.addLayout(top)
 
-        split = QSplitter()
+        split = AdaptivePanels(("Úložiště", "Soubory", "Detail souboru"))
         v.addWidget(split, 1)
 
-        # Left: vector stores
+        # Vlevo: úložiště.
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
@@ -194,31 +195,31 @@ class VectorStoresPanel(QWidget):
         lv.addWidget(self.lst_vs, 1)
 
         attach_row = QHBoxLayout()
-        self.btn_attach = QPushButton("Attach →")
-        self.btn_detach = QPushButton("← Detach")
+        self.btn_attach = QPushButton("Připojit →")
+        self.btn_detach = QPushButton("← Odpojit")
         attach_row.addStretch(1)
         attach_row.addWidget(self.btn_attach)
         attach_row.addWidget(self.btn_detach)
         lv.addLayout(attach_row)
 
-        lv.addWidget(QLabel("Attached to RUN"))
+        lv.addWidget(QLabel("Připojené k běhu"))
         self.lst_attached = QListWidget()
         self.lst_attached.setSelectionMode(QListWidget.MultiSelection)
         lv.addWidget(self.lst_attached, 1)
 
-        # Middle: files in selected vector store
+        # Uprostřed: soubory vybraného úložiště.
         middle = QWidget()
         rv = QVBoxLayout(middle)
         rv.setContentsMargins(0, 0, 0, 0)
-        rv.addWidget(QLabel("Files in selected store"))
+        rv.addWidget(QLabel("Soubory ve vybraném úložišti"))
 
-        file_row = QHBoxLayout()
+        file_row = FlowLayout()
         self.ed_file_id = QLineEdit()
         self.ed_file_id.setPlaceholderText("file_id (from Files API)")
-        self.btn_add_file = QPushButton("Add file")
-        self.btn_add_from_files = QPushButton("Add z Files API")
-        self.btn_list_files = QPushButton("List files")
-        self.btn_remove_file = QPushButton("Remove selected")
+        self.btn_add_file = QPushButton("Přidat soubor")
+        self.btn_add_from_files = QPushButton("Přidat z Files API")
+        self.btn_list_files = QPushButton("Načíst soubory")
+        self.btn_remove_file = QPushButton("Odebrat vybrané")
         file_row.addWidget(self.ed_file_id, 1)
         file_row.addWidget(self.btn_add_file)
         file_row.addWidget(self.btn_add_from_files)
@@ -229,7 +230,7 @@ class VectorStoresPanel(QWidget):
         self.lst_files = QListWidget()
         rv.addWidget(self.lst_files, 1)
 
-        # Right: details of selected file
+        # Vpravo: podrobnosti vybraného souboru.
         detail = QWidget()
         dv = QVBoxLayout(detail)
         dv.setContentsMargins(0, 0, 0, 0)
@@ -248,7 +249,7 @@ class VectorStoresPanel(QWidget):
         self.ed_file_info.setReadOnly(True)
         dv.addWidget(self.ed_file_info, 1)
 
-        btn_detail = QHBoxLayout()
+        btn_detail = FlowLayout()
         self.btn_save_attrs = QPushButton("Uložit atributy")
         self.btn_refresh_detail = QPushButton("Obnovit detail")
         btn_detail.addWidget(self.btn_save_attrs)
@@ -407,7 +408,7 @@ class VectorStoresPanel(QWidget):
         sel = self.lst_vs.selectedItems()
         if not sel:
             return None
-        # If multiple selected, use the first one for single actions.
+        # Akce nad jednou položkou použije první vybranou položku.
         return sel[0].data(32)
 
     def create_store(self):
@@ -430,7 +431,7 @@ class VectorStoresPanel(QWidget):
         vs_id = self._selected_vs_id()
         if not vs_id:
             return
-        # Preload files so we can clean them up before deletion (API often rejects delete if files remain).
+        # Načtení souborů pro jejich odpojení před odstraněním úložiště.
         files: List[Dict[str, Any]] = []
         try:
             files = with_retry(lambda: self.client.list_vector_store_files(vs_id), self.s.retry, self.breaker)
@@ -562,7 +563,7 @@ class VectorStoresPanel(QWidget):
             except Exception as e:
                 msg_critical(self, "Remove file", str(e))
 
-    # ---------- Attach / detach ----------
+    # Připojení a odpojení souborů.
     def attach_selected(self):
         sel = self.lst_vs.selectedItems()
         for it in sel:

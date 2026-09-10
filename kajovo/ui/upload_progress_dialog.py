@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 
 from .theme import DARK_STYLESHEET
 from .widgets import style_progress_bar, TitleBar, app_icon
+from .activity import ActivityLine
 
 
 class UploadProgressDialog(QDialog):
@@ -26,6 +27,8 @@ class UploadProgressDialog(QDialog):
         v.setSpacing(10)
 
         self.titlebar = TitleBar(title, self)
+        self.titlebar.btn_min.hide()
+        self.titlebar.btn_max.hide()
         self.titlebar.request_close.connect(self.reject)
         v.addWidget(self.titlebar)
 
@@ -40,6 +43,8 @@ class UploadProgressDialog(QDialog):
         self.lbl_current = QLabel("")
         self.lbl_current.setWordWrap(True)
         v.addWidget(self.lbl_current)
+        self.activity = ActivityLine(self)
+        v.addWidget(self.activity)
 
         self.pb = QProgressBar()
         style_progress_bar(self.pb)
@@ -47,12 +52,13 @@ class UploadProgressDialog(QDialog):
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(2000)
         v.addWidget(self.log, 1)
 
         row = QHBoxLayout()
-        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel = QPushButton("Zrušit")
         self.btn_cancel.clicked.connect(self._handle_cancel)
-        self.btn_close = QPushButton("Close")
+        self.btn_close = QPushButton("Zavřít")
         self.btn_close.setEnabled(False)
         self.btn_close.clicked.connect(self.accept)
         row.addStretch(1)
@@ -68,12 +74,14 @@ class UploadProgressDialog(QDialog):
 
     def set_status(self, text: str):
         self.lbl_status.setText(text)
+        self.activity.touch()
 
     def set_current(self, text: str):
         self.lbl_current.setText(text)
 
     def set_progress(self, value: int):
         self.pb.setValue(value)
+        self.activity.touch()
 
     def add_log(self, line: str):
         self.log.appendPlainText(line)
@@ -83,6 +91,7 @@ class UploadProgressDialog(QDialog):
         self.btn_cancel.setEnabled(False)
         self.btn_close.setEnabled(True)
         self.set_status(status)
+        self.activity.finish()
 
     def _handle_cancel(self):
         if self._cancelled:
@@ -93,9 +102,7 @@ class UploadProgressDialog(QDialog):
                 self._cancel_handler()
             except Exception:
                 pass
-        # po zrušení dovolíme dialog zavřít
-        self._done = True
-        self.btn_close.setEnabled(True)
+        # Zavření povoluje až potvrzení konce workerem.
         self.btn_cancel.setEnabled(False)
         self.set_status("Ruším...")
 
@@ -103,10 +110,12 @@ class UploadProgressDialog(QDialog):
         # ESC nebo zavření dialogu se chová jako cancel
         if not self._done:
             self._handle_cancel()
+            return
         super().reject()
 
     def closeEvent(self, event):
         if not self._done:
-            # zavření křížkem = okamžité zrušení
             self._handle_cancel()
+            event.ignore()
+            return
         super().closeEvent(event)

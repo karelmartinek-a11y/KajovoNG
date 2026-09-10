@@ -10,10 +10,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
+from .progress import ProgressEvent
 
 from .cascade_log import CascadeLogger
 from .cascade_types import CascadeDefinition, CascadeStep
-from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths
+from .contracts import ContractError, validate_paths
+from .request_rules import validate_response_payload
+from .structured_output import resolve_schema, response_format, text_format, validate_output, restore_optional_fields
 from .openai_client import OpenAIClient
 from .retry import CircuitBreaker, with_retry
 from .receipt import Receipt
@@ -124,7 +127,7 @@ PRESET_PROMPTS_SCHEMA: Dict[str, Any] = {
                         "type": ["string", "null"],
                         "description": (
                             "Volitelný výraz pro previous_response_id. "
-                            "Podporované placeholdery: {{step.N.response_id}} a {{step.N.json}}. Pokud implementace podporuje out-file placeholdery, lze použít i {{step.N.out_file_id:REL_PATH}} a {{step.N.out_file_path:REL_PATH}}."
+                            "Podporované výrazy: {{step.N.response_id}}, {{step.N.json}}, {{step.N.out_file_id:REL_PATH}} a {{step.N.out_file_path:REL_PATH}}."
                         ),
                     },
                     "output_type": {"type": "string", "enum": ["text", "json"]},
@@ -201,6 +204,7 @@ class CascadeRunConfig:
 
 class CascadeRunWorker(QThread):
     progress = Signal(int)
+    progress_event = Signal(object)
     subprogress = Signal(int)
     status = Signal(str)
     logline = Signal(str)
@@ -217,7 +221,9 @@ class CascadeRunWorker(QThread):
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
-        self.cfg = cfg
+        self.cfg = copy.deepcopy(cfg)
+        if not self.cfg.out_dir.strip():
+            self.cfg.out_dir = self.cfg.cascade.default_out_dir.strip()
         self.settings = copy.deepcopy(settings)
         self.api_key = api_key
         self.db = receipt_db
@@ -251,20 +257,27 @@ class CascadeRunWorker(QThread):
             key = match.group(2)
             rel_suffix = (match.group(3) or "").strip()
             if key == "response_id":
-                return str(context.get(f"step.{idx}.response_id", ""))
+                storage_key = f"step.{idx}.response_id"
+                if not context.get(storage_key):
+                    raise ContractError(f"Chybí hodnota odkazu: {storage_key}")
+                return str(context[storage_key])
             if key == "json":
-                val = context.get(f"step.{idx}.json")
-                if val is None:
-                    return ""
+                storage_key = f"step.{idx}.json"
+                if storage_key not in context:
+                    raise ContractError(f"Chybí hodnota odkazu: {storage_key}")
+                val = context[storage_key]
                 if isinstance(val, str):
                     return val
                 return json.dumps(val, ensure_ascii=False)
             if key in ("out_file_path", "out_file_id"):
                 if not rel_suffix:
-                    return ""
-                norm_rel = rel_suffix.replace("\\", "/").strip().lstrip("/")
+                    raise ContractError("Odkaz na výstupní soubor vyžaduje relativní cestu.")
+                validate_relative_path(rel_suffix)
+                norm_rel = rel_suffix
                 storage_key = f"step.{idx}.{key}:{norm_rel}"
-                return str(context.get(storage_key, ""))
+                if not context.get(storage_key):
+                    raise ContractError(f"Chybí hodnota odkazu: {storage_key}")
+                return str(context[storage_key])
             return ""
 
         return PLACEHOLDER_RE.sub(repl, text)
@@ -452,6 +465,24 @@ class CascadeRunWorker(QThread):
             self.logger = CascadeLogger(self.settings.log_dir, run_id, project_name=self.cfg.project)
             if not self.cfg.cascade.steps:
                 raise ValueError("Kaskáda musí obsahovat alespoň jeden krok.")
+            for step_index, step in enumerate(self.cfg.cascade.steps, 1):
+                if step.expected_out_files and step.output_type == "text":
+                    step.output_type = "json"
+                    step.output_schema_kind = "manifest"
+                probe_payload = {"model": step.model, "input": "kontrola"}
+                if step.temperature is not None:
+                    probe_payload["temperature"] = step.temperature
+                validate_response_payload(probe_payload)
+                schema = self._schema_for_step(step)
+                if schema is not None:
+                    self._validate_schema_minimal(schema)
+                if step.expected_out_files:
+                    if step.output_type != "json":
+                        raise ValueError("Výstupní soubory vyžadují JSON manifest.")
+                    validate_paths([{"path": path} for path in step.expected_out_files])
+                for match in PLACEHOLDER_RE.finditer(json.dumps(step.to_dict())):
+                    if not 1 <= int(match.group(1)) < step_index:
+                        raise ValueError("Krok může odkazovat pouze na předchozí kroky.")
             self.logger.update_state(
                 {
                     "status": "running",
@@ -465,7 +496,27 @@ class CascadeRunWorker(QThread):
                 }
             )
             self._emit_status(1, 0, f"KASKÁDA start: {self.cfg.cascade.name}")
-            client = OpenAIClient(self.api_key)
+            client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
+            client.configure_validation(self.settings, getattr(self, "cost_control", None))
+            prepared_schemas = {}
+            per_step_text = {}
+            for idx, step in enumerate(self.cfg.cascade.steps, 1):
+                check = {"model": step.model, "input": "kontrola", "text": text_format()}
+                if step.temperature is not None:
+                    check["temperature"] = step.temperature
+                if step.previous_response_id_expr:
+                    check["previous_response_id"] = "resp_preflight"
+                client.preflight_response(check)
+                if step.output_type == "json":
+                    original = self._schema_for_step(step)
+                    if step.output_schema_kind == "prompts":
+                        original = copy.deepcopy(PRESET_PROMPTS_SCHEMA)
+                        props = original["properties"]["steps"]["items"]["properties"]
+                        for field in ("input_content_json", "output_schema_custom"):
+                            props[field] = {"type": ["string", "null"], "description": "JSON serializovaný do textu, nebo null."}
+                    prepared_schemas[idx] = resolve_schema(client, step.model, step.instructions + "\n" + step.input_text,
+                        original, [s.to_dict() for s in self.cfg.cascade.steps[idx:]], getattr(self, "cost_control", None))
+                    self.logger.save_json("misc", f"schema_{idx}", prepared_schemas[idx])
             context: Dict[str, Any] = {}
             per_step_response_ids: Dict[str, str] = {}
             per_step_json: Dict[str, Any] = {}
@@ -479,6 +530,7 @@ class CascadeRunWorker(QThread):
                 step_label = step.title or f"Step {idx}"
                 base_p = int((idx - 1) * 100 / total)
                 self._emit_status(base_p, 0, f"Krok {idx}/{total}: {step_label}")
+                self.progress_event.emit(ProgressEvent("KASKÁDA", completed=idx - 1, total=total, unit="kroků", detail=step_label))
                 self.logger.event("cascade.step.start", {"idx": idx, "title": step_label, "model": step.model})
 
                 file_ids: List[str] = []
@@ -486,6 +538,29 @@ class CascadeRunWorker(QThread):
                     resolved_fid = self._resolve_text(fid_expr, context).strip()
                     if resolved_fid:
                         file_ids.append(resolved_fid)
+                resolved_instructions = self._resolve_text(step.instructions, context)
+                resolved_input_text = self._resolve_text(step.input_text, context)
+                resolved_prev_expr = self._resolve_text(step.previous_response_id_expr or "", context).strip()
+                resolved_content_json = self._resolve_json(step.input_content_json, context) if step.input_content_json is not None else None
+
+                if resolved_content_json is not None:
+                    content_parts = self._normalize_content_parts(resolved_content_json, idx)
+                else:
+                    content_parts = [{"type": "input_text", "text": resolved_input_text}]
+
+                check_parts = copy.deepcopy(content_parts)
+                check_parts += [{"type": "input_file", "file_id": fid} for fid in file_ids]
+                if step.files_local_paths:
+                    check_parts.append({"type": "input_file", "file_id": "file_preflight"})
+                precheck = {"model": step.model, "instructions": resolved_instructions,
+                    "input": [{"role": "user", "content": check_parts}],
+                    "text": response_format(f"cascade_step_{idx:02d}_schema", prepared_schemas[idx]) if step.output_type == "json" else text_format()}
+                if step.temperature is not None:
+                    precheck["temperature"] = step.temperature
+                if resolved_prev_expr:
+                    precheck["previous_response_id"] = resolved_prev_expr
+                validate_response_payload(precheck)
+                client.validate_access(precheck)
                 for local_path in step.files_local_paths or []:
                     self._check_stop()
                     resolved_path = self._resolve_text(local_path, context)
@@ -501,16 +576,6 @@ class CascadeRunWorker(QThread):
                         raise RuntimeError(f"Upload souboru nevrátil file_id: {resolved_path}")
                     file_ids.append(fid)
                     self.logger.event("cascade.step.file_upload.ok", {"idx": idx, "path": resolved_path, "file_id": fid})
-
-                resolved_instructions = self._resolve_text(step.instructions, context)
-                resolved_input_text = self._resolve_text(step.input_text, context)
-                resolved_prev_expr = self._resolve_text(step.previous_response_id_expr or "", context).strip()
-                resolved_content_json = self._resolve_json(step.input_content_json, context) if step.input_content_json is not None else None
-
-                if resolved_content_json is not None:
-                    content_parts = self._normalize_content_parts(resolved_content_json, idx)
-                else:
-                    content_parts = [{"type": "input_text", "text": resolved_input_text}]
 
                 existing_file_ids = self._extract_input_file_ids(content_parts)
                 for fid in file_ids:
@@ -531,31 +596,20 @@ class CascadeRunWorker(QThread):
                     payload["previous_response_id"] = resolved_prev_expr
 
                 schema = self._schema_for_step(step)
+                payload["text"] = response_format(f"cascade_step_{idx:02d}_schema", prepared_schemas[idx]) if step.output_type == "json" else text_format()
                 if step.output_type == "json":
-                    if schema is not None:
-                        self._validate_schema_minimal(schema)
-                        payload["text"] = {
-                            "format": {
-                                "type": "json_schema",
-                                "name": f"cascade_step_{idx:02d}_schema",
-                                "strict": False,
-                                "schema": schema,
-                            }
-                        }
-                    else:
-                        payload["text"] = {"format": {"type": "json_object"}}
-
-                    if step.output_schema_kind == "prompts":
-                        input_messages.append(copy.deepcopy(PROMPTS_JSON_DEVELOPER_MESSAGE))
-                    else:
-                        input_messages.append(copy.deepcopy(JSON_ONLY_DEVELOPER_MESSAGE))
+                    input_messages.append(copy.deepcopy(PROMPTS_JSON_DEVELOPER_MESSAGE if step.output_schema_kind == "prompts" else JSON_ONLY_DEVELOPER_MESSAGE))
 
                 input_messages.append({"type": "message", "role": "user", "content": content_parts})
                 payload["input"] = input_messages
 
                 self.logger.save_json("requests", f"cascade_step_{idx:02d}", payload)
                 self._emit_status(base_p, 55, f"OpenAI request krok {idx}")
-                response = with_retry(lambda p=payload: client.create_response(p), self.settings.retry, self.breaker)
+                self.progress_event.emit(ProgressEvent("KASKÁDA", "waiting", detail=f"Krok {idx}: čekám na API."))
+                controller = getattr(self, "cost_control", None)
+                response = controller.execute(client, payload, stage=f"STEP_{idx}") if controller else client.create_response(payload)
+                if isinstance(response.get("usage"), dict):
+                    response["usage"].update(_reasoning=payload.get("reasoning"), _completed=response.get("status") == "completed")
                 self.logger.save_json("responses", f"cascade_step_{idx:02d}", response)
                 if self.db is not None:
                     usage = response.get("usage") or {}
@@ -563,15 +617,16 @@ class CascadeRunWorker(QThread):
                     prices = self.price_table or PriceTable.builtin_fallback()
                     row = prices.get(model)
                     inp, out = int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
-                    total_cost, tool_cost, storage_cost = compute_cost(row, inp, out)
+                    total_cost, tool_cost, storage_cost = compute_cost(row, inp, out, usage=usage)
                     self.db.insert(Receipt(
                         run_id=run_id, created_at=time.time(), project=self.cfg.project,
                         model=model, mode="KASKADA", flow_type=f"STEP_{idx}",
                         response_id=response.get("id"), batch_id=None,
                         input_tokens=inp, output_tokens=out, tool_cost=tool_cost,
                         storage_cost=storage_cost, total_cost=total_cost,
-                        pricing_verified=bool(prices.verified and row), notes=step_label,
+                        pricing_verified=prices.is_verified(model), notes=step_label,
                         log_paths={"run_dir": self.logger.paths.run_dir}, usage=usage,
+                        pricing_snapshot=row.rates().snapshot() if row else {},
                     ))
 
                 response_id = str(response.get("id") or "").strip()
@@ -581,9 +636,17 @@ class CascadeRunWorker(QThread):
                     last_response_id = response_id
 
                 parsed_json: Optional[Dict[str, Any]] = None
+                decoded = validate_output(response, payload)
+                if step.output_type == "text":
+                    self.logger.save_json("misc", f"step_{idx}_text", {"text": decoded["text"]})
+                    per_step_text[str(idx)] = decoded["text"]
                 if step.output_type == "json":
-                    text = extract_text_from_response(response)
-                    parsed_json = parse_json_strict(text)
+                    parsed_json = restore_optional_fields(decoded, schema or {})
+                    if step.output_schema_kind == "prompts":
+                        for generated_step in parsed_json.get("steps", []):
+                            for field in ("input_content_json", "output_schema_custom"):
+                                if isinstance(generated_step.get(field), str):
+                                    generated_step[field] = json.loads(generated_step[field])
                     self._validate_json_output(parsed_json, schema or {})
                     context[f"step.{idx}.json"] = parsed_json
                     per_step_json[str(idx)] = parsed_json
@@ -611,6 +674,7 @@ class CascadeRunWorker(QThread):
                     },
                 )
                 self._emit_status(int(idx * 100 / total), 100, f"Krok {idx} dokončen")
+                self.progress_event.emit(ProgressEvent("KASKÁDA", completed=idx, total=total, unit="kroků", detail=f"Krok {idx} dokončen."))
 
             result = {
                 "mode": "KASKADA",
@@ -618,6 +682,8 @@ class CascadeRunWorker(QThread):
                 "response_id": last_response_id,
                 "step_response_ids": per_step_response_ids,
                 "step_json_outputs": per_step_json,
+                "step_text_outputs": per_step_text,
+                "text": per_step_text.get(str(total), ""),
                 "step_out_files": per_step_out_files,
             }
             self.logger.update_state({

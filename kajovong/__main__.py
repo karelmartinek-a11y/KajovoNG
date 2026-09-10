@@ -1,9 +1,6 @@
-"""
-Entry point to run the Kajovo desktop app via ``python -m kajovong``.
+"""Vstupní bod ``python -m kajovong``.
 
-This delegates to ``kajovo.app.main.main`` to keep a single canonical
-launcher while offering the short module name the user requested.
-"""
+Aplikaci spouští společná funkce ``kajovo.app.main.main``."""
 
 from kajovo.app.main import main
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -9,6 +10,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from PySide6.QtCore import QThread, Signal
 
 from .openai_client import OpenAIClient
+from .request_rules import is_non_response_model, uses_reasoning_defaults
+from .structured_output import prepare_payload, validate_output
+from .utils import atomic_write_text
 from .retry import with_retry, CircuitBreaker
 
 
@@ -43,15 +47,14 @@ def _mk_parts(text: str, max_chars: int) -> List[Dict[str, Any]]:
 
 
 def _err_indicates_param_unsupported(err: str, param_name: str) -> bool:
-    """Heuristic: treat ONLY schema/validation style errors as true 'unsupported'.
+    """Heuristicky rozpozná odmítnutí schématu nebo parametru.
 
-    Any transient errors (429/5xx/network) should not mark capability as false.
-    """
+    Přechodné chyby 429, 5xx a sítě samy neznamenají nepodporovanou schopnost."""
     if not err:
         return False
     e = err.lower()
     key = param_name.lower()
-    # Typical phrases across SDK/proxy layers
+    # Rozpoznávané formulace chyb SDK a proxy.
     needles = [
         f"unknown parameter: {key}",
         f"unrecognized parameter: {key}",
@@ -63,11 +66,10 @@ def _err_indicates_param_unsupported(err: str, param_name: str) -> bool:
         f"'{key}' was unexpected",
         f"{key} is not allowed",
         f"{key} is not supported",
-        "invalid request",  # combined with key check below
     ]
     if any(n in e for n in needles) and (key in e):
         return True
-    # Also catch structured validation where key appears with "unknown" nearby
+    # Rozpoznání neznámého parametru ve validační zprávě.
     if (
         key in e
         and ("unknown" in e or "unrecognized" in e or "unsupported" in e)
@@ -84,7 +86,14 @@ def _try_response(
     payload: Dict[str, Any],
 ) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
     try:
-        resp = with_retry(lambda: client.create_response(payload), settings.retry, breaker)
+        prepare_payload(payload)
+        if isinstance(client, OpenAIClient):
+            client._policy.check_documented(payload)
+            resp = client._policy.probe(payload)
+        else:
+            controller = getattr(client, "cost_control", None)
+            resp = controller.execute(client, payload, stage="PROBE") if controller else client.create_response(payload)
+        validate_output(resp, payload)
         return True, resp, None
     except Exception as e:
         return False, None, str(e)
@@ -101,6 +110,7 @@ class ModelCapabilities:
     supports_tools: bool
     supports_file_search: bool
     supports_vector_store: bool = False
+    supports_structured_outputs: bool = False
 
     notes: str = ""
     errors: Dict[str, str] = None  # type: ignore
@@ -116,8 +126,9 @@ class ModelCapabilities:
             model=str(d.get("model", "")),
             tested_at=float(d.get("tested_at", 0.0)),
             ok_basic=bool(d.get("ok_basic", False)),
-            supports_previous_response_id=bool(d.get("supports_previous_response_id", True)),
-            supports_temperature=bool(d.get("supports_temperature", True)),
+            supports_previous_response_id=d.get("supports_previous_response_id") is True,
+            supports_temperature=d.get("supports_temperature") is True,
+            supports_structured_outputs=d.get("supports_structured_outputs") is True,
             supports_tools=bool(d.get("supports_tools", False)),
             supports_file_search=bool(d.get("supports_file_search", False)),
             supports_vector_store=bool(
@@ -132,13 +143,14 @@ class ModelCapabilitiesCache:
     def __init__(self, path: str):
         self.path = path
         self._data: Dict[str, ModelCapabilities] = {}
+        self.identity = None
         self._force_refresh_marker = f"{self.path}.force_refresh"
 
     @staticmethod
     def _apply_error_overrides(caps: ModelCapabilities) -> ModelCapabilities:
-        """Normalize flags from stored errors (handles older caches)."""
+        """Sjednotí příznaky schopností podle uložených chyb."""
         errs = caps.errors or {}
-        # Temperature: mark unsupported if any explicit or semi-explicit hint exists.
+        # Podpora teploty se odvozuje z uložených chyb parametru.
         for msg in errs.values():
             if not msg:
                 continue
@@ -148,10 +160,14 @@ class ModelCapabilitiesCache:
             if "unsupported parameter" in str(msg).lower() and "temperature" in str(msg).lower():
                 caps.supports_temperature = False
                 break
-        # previous_response_id explicit rejection
+        # Výslovné odmítnutí previous_response_id.
         if "previous_response_id_param" in errs:
             caps.supports_previous_response_id = False
         return caps
+
+    def bind(self, api_key, base_url="https://api.openai.com/v1"):
+        self.identity = hashlib.sha256(base_url.rstrip("/").encode()).hexdigest()
+        self.load()
 
     def load(self) -> None:
         self._data = {}
@@ -163,16 +179,21 @@ class ModelCapabilitiesCache:
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 root = json.load(f)
+            legacy = root.get("version") == 3 and self.identity == hashlib.sha256(b"https://api.openai.com/v1").hexdigest()
+            if self.identity is not None and not legacy and (root.get("identity") != self.identity or root.get("version") != 4):
+                return
             models = (root or {}).get("models") or {}
             for mid, obj in models.items():
                 if isinstance(obj, dict):
                     caps = ModelCapabilities.from_dict(obj)
+                    if legacy and not (caps.ok_basic and caps.supports_structured_outputs):
+                        continue
                     self._data[mid] = self._apply_error_overrides(caps)
         except Exception:
             self._data = {}
 
     def _clear_force_refresh(self) -> None:
-        """Remove the force-refresh marker and any stale cache so load starts fresh."""
+        """Odstraní příznak vynuceného obnovení a uloženou cache."""
         try:
             os.remove(self._force_refresh_marker)
         except Exception:
@@ -186,12 +207,12 @@ class ModelCapabilitiesCache:
     def save(self) -> None:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         root = {
-            "version": 2,
+            "version": 4,
+            "identity": self.identity,
             "saved_at": time.time(),
             "models": {k: v.to_dict() for k, v in self._data.items()},
         }
-        with open(self.path, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(root, f, ensure_ascii=False, indent=2)
+        atomic_write_text(self.path, json.dumps(root, ensure_ascii=False, indent=2))
 
     def get(self, model: str) -> Optional[ModelCapabilities]:
         return self._data.get(model)
@@ -218,7 +239,7 @@ class ModelCapabilitiesCache:
 
 class ModelProbeWorker(QThread):
     progress = Signal(int)  # 0..100
-    model_status = Signal(str, str)  # model_id, status line
+    model_status = Signal(str, str)  # Identifikátor modelu a stavová zpráva.
     logline = Signal(str)
 
     def __init__(
@@ -227,14 +248,14 @@ class ModelProbeWorker(QThread):
         api_key: str,
         cache: ModelCapabilitiesCache,
         models_to_probe: List[str],
-        ttl_hours: float = 168.0,
+        ttl_hours: float = 24.0,
         parent=None,
     ):
         super().__init__(parent)
         self.settings = settings
         self.api_key = api_key
         self.cache = cache
-        self.models_to_probe = models_to_probe
+        self.models_to_probe = [model for model in models_to_probe if not is_non_response_model(model)]
         self.ttl_hours = ttl_hours
         self._stop = False
 
@@ -246,13 +267,17 @@ class ModelProbeWorker(QThread):
             self.logline.emit("Model probe: missing OPENAI_API_KEY.")
             return
 
-        client = OpenAIClient(self.api_key)
+        client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
+        client.configure_validation(self.settings, getattr(self, "cost_control", None))
+        self.cache.bind(self.api_key)
+        available = {row["id"] for row in client.list_models()}
+        self.models_to_probe = [model for model in self.models_to_probe if model in available]
         breaker = CircuitBreaker(
             self.settings.retry.circuit_breaker_failures,
             self.settings.retry.circuit_breaker_cooldown_s,
         )
 
-        # Shared vector store + file for file_search probe (best-effort)
+        # Sdílené úložiště a soubor pro ověření file_search.
         vs_id: Optional[str] = None
         fs_ready = False
         fid = None
@@ -316,6 +341,8 @@ class ModelProbeWorker(QThread):
                 self.progress.emit(int((idx * 100) / total))
 
                 caps = self._probe_one(client, breaker, model_id, vs_id=vs_id if fs_ready else None)
+                if getattr(getattr(client, "cost_control", None), "cancelled", False):
+                    break
                 self.cache.upsert(caps)
                 try:
                     self.cache.save()
@@ -350,7 +377,7 @@ class ModelProbeWorker(QThread):
     ) -> ModelCapabilities:
         errs: Dict[str, str] = {}
 
-        # 1) Basic call
+        # Základní požadavek.
         payload_basic: Dict[str, Any] = {
             "model": model_id,
             "instructions": 'Return ONLY valid JSON: {"contract":"CAP_PING","ok":true}. No extra text.',
@@ -363,7 +390,7 @@ class ModelProbeWorker(QThread):
                 model=model_id,
                 tested_at=time.time(),
                 ok_basic=False,
-                supports_previous_response_id=True,
+                supports_previous_response_id=False,
                 supports_temperature=False,
                 supports_tools=False,
                 supports_file_search=False,
@@ -374,11 +401,10 @@ class ModelProbeWorker(QThread):
 
         resp1_id = str(resp1.get("id", ""))
 
-        # previous_response_id: optimistic default.
-        # If the model can produce a response id, chaining typically works.
-        supports_prev = True
+        # Samotné získání ID neprokazuje podporu návaznosti.
+        supports_prev = False
 
-        # 2) previous_response_id continuity test (only to detect *explicit* rejection)
+        # Ověření návaznosti; rozhoduje výslovné odmítnutí parametru.
         if resp1_id:
             payload_prev: Dict[str, Any] = {
                 "model": model_id,
@@ -391,35 +417,40 @@ class ModelProbeWorker(QThread):
                 supports_prev = True
             else:
                 if errp:
-                    # Only mark false if error clearly indicates schema/param rejection.
+                    # Podpora se odmítá pouze při chybě schématu nebo parametru.
                     if _err_indicates_param_unsupported(errp, "previous_response_id"):
                         supports_prev = False
                         errs["previous_response_id_param"] = errp
                     else:
-                        supports_prev = True
+                        supports_prev = False
                         errs["previous_response_id_inconclusive"] = errp
 
-        # 3) temperature test (try a non-default)
-        supports_temp = True
+        # Ověření jiné než výchozí teploty.
+        supports_temp = not uses_reasoning_defaults(model_id)
         payload_temp: Dict[str, Any] = {
             "model": model_id,
             "temperature": 1.1,
             "instructions": 'Return ONLY valid JSON: {"contract":"CAP_TEMP","ok":true}. No extra text.',
             "input": _mk_parts("temp", max_chars=20000),
         }
-        ok_temp, _, errt = _try_response(client, self.settings, breaker, payload_temp)
+        if supports_temp:
+            ok_temp, _, errt = _try_response(client, self.settings, breaker, payload_temp)
+        else:
+            ok_temp, errt = False, None
         if ok_temp:
             supports_temp = True
+        elif uses_reasoning_defaults(model_id):
+            supports_temp = False
         else:
             if errt and _err_indicates_param_unsupported(errt, "temperature"):
                 supports_temp = False
                 errs["temperature_param"] = errt
             else:
-                supports_temp = True
+                supports_temp = False
                 if errt:
                     errs["temperature_inconclusive"] = errt
 
-        # 4) tools/file_search test (best-effort; needs shared vs_id)
+        # Ověření file_search se sdíleným úložištěm.
         supports_tools = False
         supports_file_search = False
         if vs_id:
@@ -434,9 +465,10 @@ class ModelProbeWorker(QThread):
                     max_chars=20000,
                 ),
                 "tools": [{"type": "file_search", "vector_store_ids": [vs_id]}],
+                "tool_choice": {"type": "file_search"},
             }
-            ok_tools, _, errx = _try_response(client, self.settings, breaker, payload_tools)
-            if ok_tools:
+            ok_tools, tool_response, errx = _try_response(client, self.settings, breaker, payload_tools)
+            if ok_tools and any(item.get("type") == "file_search_call" for item in (tool_response or {}).get("output", [])):
                 supports_tools = True
                 supports_file_search = True
             else:
@@ -445,13 +477,14 @@ class ModelProbeWorker(QThread):
                     supports_file_search = False
                     errs["tools_param"] = errx
                 else:
-                    # inconclusive: keep disabled (safer) but record reason
+                    # Neprůkazný výsledek ponechá funkci vypnutou a zaznamená důvod.
                     errs["tools_inconclusive"] = errx or "unknown"
 
         return ModelCapabilities(
             model=model_id,
             tested_at=time.time(),
             ok_basic=True,
+            supports_structured_outputs=True,
             supports_previous_response_id=supports_prev,
             supports_temperature=supports_temp,
             supports_tools=supports_tools,

@@ -4,7 +4,6 @@ from .widgets import (
     msg_warning,
     msg_critical,
     msg_question,
-    StyledMessageDialog,
     dialog_open_file,
     dialog_save_file,
     dialog_select_dir,
@@ -47,19 +46,21 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.config import AppSettings, SMTPSettings, save_settings, DEFAULT_SETTINGS_FILE
-from ..core.openai_client import OpenAIClient
+from .background import OpenAIClient, with_retry
 from ..core.pipeline import RunWorker, UiRunConfig
 from ..core.cascade_pipeline import CascadeRunWorker, CascadeRunConfig
 from ..core.cascade_types import CascadeDefinition
 from ..core.pricing import PriceTable
 from ..core.receipt import ReceiptDB
-from ..core.retry import CircuitBreaker, with_retry
+from ..core.retry import CircuitBreaker
 from ..core.runlog import RunLogger, find_last_incomplete_run
 from ..core.notifications import send_smtp_notification
 from ..core.utils import ensure_dir, new_run_id, safe_join_under_root, RUN_ID_RE
-from ..core.secret_store import get_secret
+from ..core.secret_store import get_secret, load_api_key, APIKeyStoreError
 
 from ..core.model_capabilities import ModelCapabilitiesCache, ModelProbeWorker, ModelCapabilities
+from ..core.compat import validate_input_file_sizes
+from ..core.request_rules import uses_reasoning_defaults, validate_run_options, is_non_response_model
 from ..core.contracts import parse_json_strict, extract_text_from_response
 
 from .filepanel import FilesPanel
@@ -82,7 +83,7 @@ def _caps_prev_id_explicitly_unsupported(caps: Optional[ModelCapabilities]) -> b
         return False
     if caps.supports_previous_response_id:
         return False
-    # Only treat as explicit if probe captured schema-style rejection.
+    # Rozhoduje odmítnutí schématu zaznamenané ověřovacím požadavkem.
     err = (caps.errors or {}).get("previous_response_id_param", "")
     return bool(err)
 
@@ -97,7 +98,7 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.Window)
         self.resize(1280, 860)
 
-        # normalize paths to keep LOG/cache inside repo root
+        # Relativní LOG a cache se vztahují k pracovnímu adresáři.
         base_dir = os.path.abspath(os.curdir)
         if not settings.log_dir:
             settings.log_dir = "LOG"
@@ -108,7 +109,12 @@ class MainWindow(QMainWindow):
         if not os.path.isabs(settings.cache_dir):
             settings.cache_dir = os.path.join(base_dir, settings.cache_dir)
         self.s = settings
-        self.api_key = os.environ.get("OPENAI_API_KEY", "")
+        try:
+            self.api_key = load_api_key()
+        except APIKeyStoreError as exc:
+            self.api_key = ""
+            os.environ["OPENAI_API_KEY"] = ""
+            msg_critical(self, "API-KEY", str(exc))
         self.breaker = CircuitBreaker(self.s.retry.circuit_breaker_failures, self.s.retry.circuit_breaker_cooldown_s)
 
         ensure_dir(self.s.log_dir)
@@ -123,9 +129,9 @@ class MainWindow(QMainWindow):
 
         self._relocate_legacy_logs_and_milestones()
 
-        # model capabilities cache + probe worker
+        # Cache schopností modelů a ověřovací worker.
         self.caps_cache = ModelCapabilitiesCache(os.path.join(self.s.cache_dir, "model_capabilities.json"))
-        self.caps_cache.load()
+        self.caps_cache.bind(self.api_key)
         self.probe_worker: Optional[ModelProbeWorker] = None
         self.all_models: List[str] = []
         self.skip_paths_current: List[str] = []
@@ -149,6 +155,8 @@ class MainWindow(QMainWindow):
         self._last_run_send_as_c = False
 
         root = QWidget()
+        from .layouts import install_ui_style
+        install_ui_style()
         root.setStyleSheet(DARK_STYLESHEET)
         v = QVBoxLayout(root)
         v.setContentsMargins(10, 10, 10, 10)
@@ -158,7 +166,7 @@ class MainWindow(QMainWindow):
         run_header_layout = QHBoxLayout(self.run_header_bar)
         run_header_layout.setContentsMargins(0, 0, 0, 0)
         run_header_layout.setSpacing(6)
-        run_header_layout.addWidget(QLabel("Runs"))
+        run_header_layout.addWidget(QLabel("Běhy"))
         self.run_header_minimized = QWidget()
         self.run_header_minimized_layout = QHBoxLayout(self.run_header_minimized)
         self.run_header_minimized_layout.setContentsMargins(0, 0, 0, 0)
@@ -208,7 +216,7 @@ class MainWindow(QMainWindow):
         self._build_help_tab()
 
         self.setCentralWidget(root)
-        # propagate OUT dir to batch panel for downloads
+        # Adresář OUT se předává panelu pro stahování dávek.
         try:
             self.batch_panel.set_out_dir(self.ed_out.text())
             self.ed_out.textChanged.connect(lambda txt: self.batch_panel.set_out_dir(txt))
@@ -367,8 +375,29 @@ class MainWindow(QMainWindow):
             "bzz": bool(getattr(dialog, "chk_bzz", None) and dialog.chk_bzz.isChecked()),
         }
         self._run_order.append(run_key)
+        worker.progress_event.connect(lambda event, key=run_key: self._on_progress_event(key, event))
+        if getattr(worker, "cost_control", None):
+            worker.cost_control.progress_event.connect(lambda event, key=run_key: self._on_cost_progress(key, event))
         self._set_active_run(run_key)
         self._update_progress_timer_state()
+
+    def _on_cost_progress(self, run_key, event):
+        from dataclasses import replace
+        dialog = (self._run_contexts.get(run_key) or {}).get("dialog")
+        if dialog:
+            self._on_progress_event(run_key, replace(event, stage=dialog.clock.stage))
+
+    def _on_progress_event(self, run_key, event):
+        dialog = (self._run_contexts.get(run_key) or {}).get("dialog")
+        if dialog is None:
+            return
+        dialog.on_progress_event(event)
+        if self._active_run_key == run_key:
+            for source, target in ((dialog.pb, self.pb), (dialog.pb_sub, self.pb_sub)):
+                target.setRange(source.minimum(), source.maximum())
+                target.setValue(source.value())
+                target.setFormat(source.format())
+                target.setTextVisible(source.isTextVisible())
 
     def _dispose_run_context(self, run_key: str, timeout_ms: int = 10000) -> None:
         ctx = self._run_contexts.get(run_key)
@@ -399,7 +428,7 @@ class MainWindow(QMainWindow):
         self._set_active_run(self._active_run_key)
         self._update_progress_timer_state()
 
-    # ---------- build tabs ----------
+    # Sestavení záložek.
     def _build_run_tab(self):
         w = self.tab_run
         outer = QVBoxLayout(w)
@@ -439,7 +468,7 @@ class MainWindow(QMainWindow):
         row_c_l.addWidget(QLabel("Vybraná kaskáda"))
         self.cb_run_cascade = QComboBox()
         self.cb_run_cascade.setMinimumWidth(280)
-        self.btn_run_cascade_refresh = QPushButton("Refresh")
+        self.btn_run_cascade_refresh = QPushButton("Obnovit")
         row_c_l.addWidget(self.cb_run_cascade)
         row_c_l.addWidget(self.btn_run_cascade_refresh)
         row_c_l.addStretch(1)
@@ -456,7 +485,7 @@ class MainWindow(QMainWindow):
         self.cb_model = QComboBox()
         top.addWidget(self.cb_model, row, 1)
 
-        self.btn_models = QPushButton("Refresh models")
+        self.btn_models = QPushButton("Obnovit modely")
         top.addWidget(self.btn_models, row, 2)
         if not hasattr(self, "_refresh_models_best_effort"):
             self._refresh_models_best_effort = lambda: None  # type: ignore
@@ -536,14 +565,14 @@ class MainWindow(QMainWindow):
         self.ed_in = QLineEdit()
         self.ed_in.textChanged.connect(lambda text: self.ed_out.setText(text) if hasattr(self, "ed_out") and self.chk_in_eq_out.isChecked() else None)
         gd.addWidget(self.ed_in, 0, 1)
-        self.btn_in = QPushButton("Browse")
+        self.btn_in = QPushButton("Vybrat…")
         gd.addWidget(self.btn_in, 0, 2)
         self.btn_in.clicked.connect(lambda: self._browse_dir(self.ed_in))
 
         gd.addWidget(QLabel("OUT"), 1, 0)
         self.ed_out = QLineEdit()
         gd.addWidget(self.ed_out, 1, 1)
-        self.btn_out = QPushButton("Browse")
+        self.btn_out = QPushButton("Vybrat…")
         gd.addWidget(self.btn_out, 1, 2)
         self.btn_out.clicked.connect(lambda: self._browse_dir(self.ed_out))
 
@@ -586,7 +615,7 @@ class MainWindow(QMainWindow):
         self.btn_load_state.clicked.connect(self.on_load_state)
         self.btn_exit.clicked.connect(self.on_exit)
         self.btn_rerun.clicked.connect(self.on_rerun)
-        # pricing and batch tabs are available via their own tabs; toolbar buttons removed per request
+        # Ceník a dávky mají samostatné záložky.
 
         self.pb = QProgressBar()
         self.pb_sub = QProgressBar()
@@ -599,13 +628,13 @@ class MainWindow(QMainWindow):
 
         right = QVBoxLayout()
 
-        g_diag = QGroupBox("Diagnostics")
+        g_diag = QGroupBox("Diagnostika")
         dg = QGridLayout(g_diag)
 
-        self.chk_diag_win_in = QCheckBox("Windows IN (collect)")
-        self.chk_diag_win_out = QCheckBox("Windows OUT (execute repair script if present)")
-        self.chk_diag_ssh_in = QCheckBox("SSH IN (collect)")
-        self.chk_diag_ssh_out = QCheckBox("SSH OUT (execute repair script if present)")
+        self.chk_diag_win_in = QCheckBox("Sběr diagnostiky Windows IN")
+        self.chk_diag_win_out = QCheckBox("Spustit dostupný opravný skript Windows OUT")
+        self.chk_diag_ssh_in = QCheckBox("Sběr diagnostiky SSH IN")
+        self.chk_diag_ssh_out = QCheckBox("Spustit dostupný opravný skript SSH OUT")
         self.chk_ssh_pin_required = QCheckBox("SSH pin required (KAJOVO_SSH_HOSTKEY_SHA256)")
 
         dg.addWidget(self.chk_diag_win_in, 0, 0, 1, 2)
@@ -627,7 +656,7 @@ class MainWindow(QMainWindow):
         dg.addWidget(QLabel("SSH key"), 7, 0)
         self.ed_ssh_key = QLineEdit()
         dg.addWidget(self.ed_ssh_key, 7, 1)
-        self.btn_ssh_key = QPushButton("Browse")
+        self.btn_ssh_key = QPushButton("Vybrat…")
         dg.addWidget(self.btn_ssh_key, 7, 2)
         self.btn_ssh_key.clicked.connect(lambda: self._browse_file(self.ed_ssh_key))
 
@@ -635,7 +664,7 @@ class MainWindow(QMainWindow):
         self.ed_ssh_pwd = QLineEdit()
         self.ed_ssh_pwd.setEchoMode(QLineEdit.Password)
         dg.addWidget(self.ed_ssh_pwd, 8, 1)
-        self.btn_ssh_save = QPushButton("Save SSH")
+        self.btn_ssh_save = QPushButton("Uložit SSH")
         dg.addWidget(self.btn_ssh_save, 8, 2)
         self.btn_ssh_save.clicked.connect(self._save_ssh_settings)
 
@@ -665,18 +694,94 @@ class MainWindow(QMainWindow):
         mid.addLayout(right, 1)
         outer.addLayout(mid, 1)
 
-        # reactions
+        # Nastavení má vlastní sekce; hlavní akce zůstávají mimo jejich obsah.
+        from shiboken6 import delete
+        from .layouts import FlowLayout, scroll_content, ContentTabs
+        delete(outer)
+        for child in w.findChildren(QWidget, options=Qt.FindDirectChildrenOnly):
+            child.hide()
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(6, 6, 6, 6)
+        header = QGridLayout()
+        for col, (label, field) in enumerate((("Projekt", self.ed_project), ("Režim", self.cb_mode), ("Model", self.cb_model))):
+            header.addWidget(QLabel(label), 0, col)
+            field.setMaximumWidth(16777215)
+            field.setMinimumWidth(0)
+            if isinstance(field, QComboBox):
+                field.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+                field.setMinimumContentsLength(12)
+            header.addWidget(field, 1, col)
+            field.show()
+        header.setColumnStretch(0, 2)
+        header.setColumnStretch(1, 1)
+        header.setColumnStretch(2, 2)
+        outer.addLayout(header)
+        self.run_sections = ContentTabs()
+        outer.addWidget(self.run_sections, 1)
+        self.run_sections.addTab(prompt_split, "Zadání a výsledek")
+        prompt_split.show()
+        params = QWidget()
+        pv = QVBoxLayout(params)
+        controls = FlowLayout()
+        self.sp_temp.setPrefix("Temperature: ")
+        for field in (self.chk_send_as_c, self.btn_models, self.ed_model_filter, self.sp_temp, self.ed_response_id):
+            controls.addWidget(field)
+            field.show()
+        pv.addLayout(controls)
+        self.lbl_caps.setWordWrap(True)
+        pv.addWidget(self.lbl_caps)
+        self.lbl_caps.show()
+        for combo in (self.cb_model_a1, self.cb_model_a2, self.cb_model_a3):
+            combo.setMinimumWidth(0)
+            combo.setMinimumContentsLength(10)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        pv.addWidget(self.row_generate_models)
+        self.row_generate_models.show()
+        pv.addWidget(self.row_cascade_selector)
+        pv.addWidget(g_dirs)
+        g_dirs.show()
+        rerun = FlowLayout()
+        rerun.addWidget(self.ed_rerun)
+        rerun.addWidget(self.btn_rerun)
+        self.ed_rerun.show()
+        self.btn_rerun.show()
+        pv.addLayout(rerun)
+        pv.addStretch(1)
+        self.run_sections.addTab(scroll_content(params), "Parametry a adresáře")
+        self.run_sections.addTab(self.txt_attached_summary, "Přílohy")
+        self.txt_attached_summary.show()
+        self.run_sections.addTab(scroll_content(g_diag), "Diagnostika")
+        g_diag.show()
+        self.run_sections.addTab(splitter_log, "Provozní detail")
+        splitter_log.show()
+        self.txt_log.setMaximumBlockCount(2000)
+        actions = QHBoxLayout()
+        for button, title in ((self.btn_go, "Spustit"), (self.btn_stop, "Zastavit"), (self.btn_new, "Nový"),
+                              (self.btn_save_state, "Uložit"), (self.btn_load_state, "Načíst"), (self.btn_exit, "Zavřít")):
+            button.setText(title)
+            button.show()
+            actions.addWidget(button)
+        self.btn_go.setObjectName("PrimaryButton")
+        outer.addLayout(actions)
+        bars = QHBoxLayout()
+        for bar in (self.pb, self.pb_sub):
+            bars.addWidget(bar)
+            bar.show()
+        outer.addLayout(bars)
+
+        # Propojení signálů.
         self.cb_model.currentTextChanged.connect(self.on_model_changed)
+        self.chk_send_as_c.toggled.connect(lambda _: self.on_mode_changed(self.cb_mode.currentText()))
         self._refresh_generate_model_overrides()
         self._apply_saved_ssh()
 
     def _relocate_legacy_logs_and_milestones(self):
-        """Move stray RUN_* directories and milestone-*.zip from repo root to LOG/milestones."""
+        """Přesune RUN_* z pracovního adresáře do LOG a archivy milníků do LOG/milestones."""
         try:
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
             log_dir = self.s.log_dir
             ensure_dir(log_dir)
-            # move RUN_* from base_dir
+            # Přesun běhů z pracovního adresáře do LOG.
             for path in glob.glob(os.path.join(base_dir, "RUN_*")):
                 name = os.path.basename(path)
                 dest = os.path.join(log_dir, name)
@@ -700,7 +805,7 @@ class MainWindow(QMainWindow):
                             self.log(f"Smazán prázdný duplicitní {name} po selhání přesunu.")
                     except Exception:
                         pass
-            # move milestone zips
+            # Přesun archivů milníků.
             ms_dir = os.path.join(log_dir, "milestones")
             ensure_dir(ms_dir)
             for path in glob.glob(os.path.join(base_dir, "milestone-*.zip")):
@@ -751,6 +856,11 @@ class MainWindow(QMainWindow):
             model_id = str(model or "").strip()
             if not model_id or model_id in seen:
                 continue
+            caps = self.caps_cache.get(model_id)
+            if is_non_response_model(model_id):
+                continue
+            if caps and not self.caps_cache.is_stale(model_id, 24) and not caps.ok_basic:
+                continue
             seen.add(model_id)
             out.append(model_id)
         return out
@@ -767,10 +877,13 @@ class MainWindow(QMainWindow):
             combo.setCurrentText(self.GENERATE_MODEL_MAIN_OPTION)
             return
         idx = combo.findText(target)
-        if idx < 0:
-            combo.addItem(target)
-            idx = combo.findText(target)
         if idx >= 0:
+            combo.setCurrentIndex(idx)
+        else:
+            combo.addItem(target)
+            idx = combo.count() - 1
+            combo.model().item(idx).setEnabled(False)
+            combo.model().item(idx).setToolTip("Uložený model není dostupný. Vyberte dostupný model.")
             combo.setCurrentIndex(idx)
 
     def _refresh_generate_model_overrides(self) -> None:
@@ -805,14 +918,14 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(10, 10, 10, 10)
 
         search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Search models"))
+        search_row.addWidget(QLabel("Hledat modely"))
         self.ed_model_search_tab = QLineEdit()
         self.ed_model_search_tab.setPlaceholderText("Filter by model id")
         search_row.addWidget(self.ed_model_search_tab, 1)
         v.addLayout(search_row)
 
         actions_row = QHBoxLayout()
-        self.btn_probe = QPushButton("Probe models")
+        self.btn_probe = QPushButton("Ověřit modely")
         actions_row.addStretch(1)
         actions_row.addWidget(self.btn_probe)
         v.addLayout(actions_row)
@@ -842,7 +955,7 @@ class MainWindow(QMainWindow):
         info_row.addStretch(1)
         info_row.addWidget(self.lbl_default_model)
         self.btn_set_default_model = QPushButton("Nastavit jako výchozí")
-        self.btn_apply_model = QPushButton("Use selected in RUN")
+        self.btn_apply_model = QPushButton("Použít v RUN")
         info_row.addWidget(self.btn_set_default_model)
         info_row.addWidget(self.btn_apply_model)
         v.addLayout(info_row)
@@ -864,7 +977,7 @@ class MainWindow(QMainWindow):
 
     def _build_settings_tab(self):
         v = QVBoxLayout(self.tab_settings)
-        v.setContentsMargins(10, 10, 10, 10)
+        v.setContentsMargins(8, 8, 8, 8)
 
         api_box = QGroupBox("API-KEY management")
         api_layout = QHBoxLayout(api_box)
@@ -909,27 +1022,31 @@ class MainWindow(QMainWindow):
         self.sp_batch_timeout = QDoubleSpinBox()
         self.sp_batch_timeout.setRange(60, 24 * 60 * 60)
         self.sp_batch_timeout.setSingleStep(10)
+        self.sp_response_timeout = QDoubleSpinBox()
+        self.sp_response_timeout.setRange(1, 86400)
         self.sp_default_temp = QDoubleSpinBox()
         self.sp_default_temp.setRange(0.0, 2.0)
         self.sp_default_temp.setSingleStep(0.1)
         self.ed_price_url = QLineEdit()
-        self.chk_price_refresh = QCheckBox("Auto refresh pricing on start")
+        self.chk_price_refresh = QCheckBox("Obnovit ceník při spuštění")
         form.addWidget(self.chk_mask, 0, 0, 1, 2)
         form.addWidget(self.chk_encrypt, 1, 0, 1, 2)
         form.addWidget(self.chk_allow_sensitive, 2, 0, 1, 2)
-        form.addWidget(QLabel("Deny extensions (IN mirror)"), 3, 0)
+        form.addWidget(QLabel("Vyloučené přípony vstupu"), 3, 0)
         form.addWidget(self.txt_deny_ext, 3, 1)
-        form.addWidget(QLabel("Deny globs (IN mirror)"), 4, 0)
+        form.addWidget(QLabel("Vyloučené vzory cest vstupu"), 4, 0)
         form.addWidget(self.txt_deny_glob, 4, 1)
-        form.addWidget(QLabel("Batch poll interval (s)"), 5, 0)
+        form.addWidget(QLabel("Interval kontroly dávky (s)"), 5, 0)
         form.addWidget(self.sp_batch_poll, 5, 1)
-        form.addWidget(QLabel("Batch timeout (s)"), 6, 0)
+        form.addWidget(QLabel("Limit sledování dávky (s)"), 6, 0)
         form.addWidget(self.sp_batch_timeout, 6, 1)
-        form.addWidget(QLabel("Default temperature"), 7, 0)
+        form.addWidget(QLabel("Výchozí temperature"), 7, 0)
         form.addWidget(self.sp_default_temp, 7, 1)
-        form.addWidget(QLabel("Pricing source URL"), 8, 0)
+        form.addWidget(QLabel("URL ceníku"), 8, 0)
         form.addWidget(self.ed_price_url, 8, 1)
         form.addWidget(self.chk_price_refresh, 9, 0, 1, 2)
+        form.addWidget(QLabel("Čekání na odpověď API (s)"), 10, 0)
+        form.addWidget(self.sp_response_timeout, 10, 1)
         adv_layout.addLayout(form)
         self.lbl_settings_status = QLabel("")
         self.lbl_settings_status.setStyleSheet("color: #7aa7c7;")
@@ -976,7 +1093,7 @@ class MainWindow(QMainWindow):
         form.addWidget(self.ed_smtp_pwd, 2, 1, 1, 3)
         form.addWidget(self.chk_smtp_tls, 3, 1)
         form.addWidget(self.chk_smtp_ssl, 3, 2)
-        form.addWidget(QLabel("From"), 4, 0)
+        form.addWidget(QLabel("Odesílatel"), 4, 0)
         form.addWidget(self.ed_smtp_from, 4, 1, 1, 3)
         form.addWidget(QLabel("Upozornění na e-mail"), 5, 0)
         form.addWidget(self.ed_smtp_to, 5, 1, 1, 3)
@@ -1066,7 +1183,8 @@ class MainWindow(QMainWindow):
             ]
         )
         with BusyPopup(self, "Odesílám SMTP test..."):
-            ok, msg = send_smtp_notification(smtp, subject, body)
+            from .background import run_io
+            ok, msg = run_io(lambda: send_smtp_notification(smtp, subject, body))
         if ok:
             self.lbl_smtp_status.setText("SMTP test úspěšný — e-mail odeslán.")
             self.log("SMTP test odeslán.")
@@ -1083,6 +1201,7 @@ class MainWindow(QMainWindow):
         self.txt_deny_glob.setPlainText("\n".join(self.s.security.deny_globs_in or []))
         self.sp_batch_poll.setValue(float(getattr(self.s, "batch_poll_interval_s", 4.0)))
         self.sp_batch_timeout.setValue(float(getattr(self.s, "batch_timeout_s", 3600.0)))
+        self.sp_response_timeout.setValue(self.s.response_timeout_s)
         self.sp_default_temp.setValue(float(getattr(self.s, "default_temperature", 0.2)))
         self.ed_price_url.setText(getattr(self.s.pricing, "source_url", ""))
         self.chk_price_refresh.setChecked(bool(getattr(self.s.pricing, "auto_refresh_on_start", True)))
@@ -1098,6 +1217,7 @@ class MainWindow(QMainWindow):
         self.s.security.deny_globs_in = deny_glob
         self.s.batch_poll_interval_s = float(self.sp_batch_poll.value())
         self.s.batch_timeout_s = float(self.sp_batch_timeout.value())
+        self.s.response_timeout_s = float(self.sp_response_timeout.value())
         self.s.default_temperature = float(self.sp_default_temp.value())
         self.s.pricing.source_url = self.ed_price_url.text().strip()
         self.s.pricing.auto_refresh_on_start = bool(self.chk_price_refresh.isChecked())
@@ -1146,15 +1266,24 @@ class MainWindow(QMainWindow):
             "- Placené ověření kompatibility se spouští pouze ručně tlačítkem Probe models.\n"
             "- Výsledky ověření: cache/model_capabilities.json.\n"
             "- Find model: vyhledá model podle požadovaných funkcí.\n"
-            "- Long prompt >150k: ingest A0 + navazující A1/A2/A3 přes previous_response_id.\n\n"
-            "Pozn.: Response ID dostává každý úspěšný request na Responses API.\n"
+            "- GENERATE/MODIFY: zadání nad 150 000 znaků se zavádí přes A0 s návazností odpovědí.\n"
+            "- QA/BATCH: dlouhé zadání se předává v textových částech zprávy.\n"
+            "- QFILE ukládá jeden úplný soubor a nepodporuje SEND AS BATCH.\n"
+            "- GENERATE BATCH: A1/A2 živě, A3 jeden kompletní soubor na úlohu dávky.\n"
+            "- Odhad nákladů potvrďte před generováním; u GENERATE BATCH také po A2. Změna maxima výstupu odhad přepočítá.\n"
+            "- Volitelný limit USD rezervuje maximum další operace; neznámou cenu ani dynamické nástroje nelze ohraničit.\n"
+            "- Výsledná účtenka se otevře po běhu; u dávek po načtení konečné spotřeby, nezávisle na importu do OUT.\n"
+            "- PRICING: oficiální ceník, ruční JSON import, rozpočty, archiv účtenek a úplný export JSON/CSV. CZK je orientační kurz ČNB.\n"
+            "- BATCH kontroluje výsledky a umožňuje ruční opakování či opravu podle připomínky. Sestavení a testy spusťte ručně.\n"
+            "- KASKÁDA: expected_out_files spouští uložení manifestu a upload očekávaných souborů.\n\n"
+            "Response ID identifikuje odpověď a umožňuje navazující požadavek.\n"
             "Probe označuje previous_response_id jako 'unsupported' při explicitním odmítnutí parametru serverem.\n"
             "Logy nejsou šifrované. Ceny jsou odhad, nikoli vyúčtování poskytovatele.\n"
             "Kanonická specifikace: docs/SSOT.md v repozitáři.\n"
         )
         v.addWidget(txt, 1)
 
-    # ---------- helpers ----------
+    # Pomocné metody.
     def _ts(self) -> str:
         return time.strftime("%Y%m%d %H%M%S")
 
@@ -1162,8 +1291,11 @@ class MainWindow(QMainWindow):
         self._progress_last_ts = time.time()
 
     def _pulse_progress(self):
-        # Progress bars should reflect real worker-reported values only.
-        return
+        dialog = (self._run_contexts.get(self._active_run_key) or {}).get("dialog")
+        if dialog:
+            elapsed, age, eta = dialog.clock.times()
+            self.statusBar().showMessage(f"{dialog.clock.stage} · Trvání {int(elapsed)} s · Poslední událost před {int(age)} s"
+                                         + (f" · ETA asi {int(eta)} s" if eta is not None else " · ETA nelze určit"))
 
     def _send_bzz_notification(self, rid: str, project: str = "", out_dir: str = ""):
         smtp = getattr(self.s, "smtp", None)
@@ -1298,12 +1430,12 @@ class MainWindow(QMainWindow):
         if mi >= 0:
             self.cb_mode.setCurrentIndex(mi)
         self.chk_send_as_c.setChecked(bool(state.get("send_as_c", False)))
-        # model filter + list
+        # Filtr a seznam modelů.
         mf = state.get("model_filter", "")
         self.ed_model_filter.blockSignals(True)
         self.ed_model_filter.setText(mf)
         self.ed_model_filter.blockSignals(False)
-        # reapply filter with preserved model selection
+        # Obnovení filtru se zachováním vybraného modelu.
         self._apply_model_filter(preserve=state.get("model", None))
         model = state.get("model", "")
         if model:
@@ -1430,7 +1562,7 @@ class MainWindow(QMainWindow):
         self.pb_sub.setValue(0)
         self._last_run_send_as_c = False
         self.skip_paths_current = []
-        # default skip extensions always
+        # Výchozí vyloučené přípony platí vždy.
         self.skip_exts_default = [".mp3", ".wav", ".flac", ".aac", ".ogg", ".mp4", ".mkv", ".avi", ".mov"]
         try:
             self._select_tab(self.tab_run)
@@ -1534,7 +1666,13 @@ class MainWindow(QMainWindow):
                     with open(fp, "r", encoding="utf-8", errors="ignore") as f:
                         raw = json.load(f)
                     if isinstance(raw, dict) and raw.get("ui_state"):
-                        return raw["ui_state"]
+                        saved_scope = run_id
+                        try:
+                            with open(os.path.join(run_dir, "run_state.json"), encoding="utf-8") as state_file:
+                                saved_scope = json.load(state_file).get("cost_scope", run_id)
+                        except (OSError, ValueError, AttributeError):
+                            pass
+                        return {**raw["ui_state"], "cost_scope": saved_scope}
                 except Exception:
                     continue
         except Exception:
@@ -1544,7 +1682,7 @@ class MainWindow(QMainWindow):
     def _load_last_response_id(self, run_id: str) -> Optional[str]:
         if not run_id:
             return None
-        # prefer stored last response
+        # Přednost má uložená poslední odpověď.
         candidate = self._load_last_response_id_from_state(run_id)
         if candidate:
             return candidate
@@ -1589,7 +1727,7 @@ class MainWindow(QMainWindow):
                 state = json.load(f)
         except Exception:
             return None
-        # ReRun should continue from the latest successful step, not always from A2/B2.
+        # ReRun navazuje na poslední úspěšný krok.
         resp = state.get("last_response_id")
         if resp:
             return str(resp)
@@ -1622,7 +1760,7 @@ class MainWindow(QMainWindow):
                     continue
             return None
 
-        # Prefer structure response (A2/B2) to allow cascading continuation.
+        # Přednost má struktura A2/B2 pro navazující kaskádu.
         candidate = newest_by_pattern(["A2_response"])
         if candidate:
             return candidate
@@ -1636,11 +1774,11 @@ class MainWindow(QMainWindow):
         if candidate:
             return candidate
 
-        # Fallback: newest any response id
+        # Záložní volba: nejnovější dostupné ID odpovědi.
         return newest_by_pattern([])
 
     def _find_related_runs_by_out_dir(self, run_id: str) -> List[str]:
-        """Find other run_ids that wrote to the same out_dir (for multi ReRun chains)."""
+        """Najde související běhy zapisující do stejného OUT pro navazující ReRun."""
         out_dir = None
         state_path = os.path.join(self.s.log_dir, run_id, "run_state.json")
         if os.path.isfile(state_path):
@@ -1678,7 +1816,7 @@ class MainWindow(QMainWindow):
         return [rid for _, rid in related]
 
     def _load_structure_from_run(self, run_id: str) -> tuple[List[dict], Optional[str]]:
-        """Load last A2 structure (files list, response_id) from run logs, with related-run fallback."""
+        """Načte strukturu a ID odpovědi z logů běhu, případně ze souvisejících běhů."""
 
         def _load_single(rid: str) -> tuple[List[dict], Optional[str]]:
             resp_dir = os.path.join(self.s.log_dir, rid, "responses")
@@ -1712,7 +1850,7 @@ class MainWindow(QMainWindow):
         return [], resp_id
 
     def _load_structure_from_manifest(self, run_id: str) -> tuple[List[dict], Optional[str]]:
-        """Fallback: read persisted resume manifest (created during ReRun skip of A1/A2)."""
+        """Načte uložený manifest pokračování bez kroků A1/A2."""
         mani_dir = os.path.join(self.s.log_dir, run_id, "manifests")
         if not os.path.isdir(mani_dir):
             return [], None
@@ -1724,7 +1862,7 @@ class MainWindow(QMainWindow):
                     return data.get("resume_files", []) or [], data.get("resume_prev_id")
                 except Exception:
                     continue
-        # fallback: derive minimal structure from any saved_map if available
+        # Záložní struktura se sestaví z manifestu uložených souborů.
         try:
             mani_files = sorted(
                 [
@@ -1788,7 +1926,7 @@ class MainWindow(QMainWindow):
                                 paths.append(pth)
                 except Exception:
                     continue
-        # dedupe
+        # Odstranění duplicit.
         out: List[str] = []
         for p in paths:
             try:
@@ -1821,7 +1959,7 @@ class MainWindow(QMainWindow):
             self.log(f"ReRun {rid}: navazuji na response_id={last_resp}")
         else:
             self.log(f"ReRun {rid}: response_id nenalezen, běžný restart.")
-        # preload structure/files for resume (skip A1/A2)
+        # Načtení struktury pro pokračování bez A1/A2.
         try:
             files, resp_id = self._load_structure_from_run(rid)
             self._resume_files = files
@@ -1831,7 +1969,11 @@ class MainWindow(QMainWindow):
         except Exception:
             self._resume_files = []
             self._resume_prev_id = last_resp or ""
-        self.on_go()
+        self._resume_cost_scope = state.get("cost_scope", rid) if isinstance(state, dict) else rid
+        try:
+            self.on_go()
+        finally:
+            self._resume_cost_scope = None
 
 
     def _kill_worker_if_running(self, run_key: Optional[str] = None):
@@ -1842,14 +1984,6 @@ class MainWindow(QMainWindow):
         worker = ctx.get("worker")
         if not worker or not worker.isRunning():
             return
-
-        self.log("STOP: worker still running after cooperative request, waiting extra grace period...")
-        try:
-            if worker.wait(2000):
-                self.log("STOP: worker finished cooperatively during grace period.")
-                return
-        except Exception as e:
-            self.log(f"STOP: wait before force-stop failed: {e}")
 
         self.log("STOP: čekám na dokončení právě probíhající operace.")
         return
@@ -1928,7 +2062,13 @@ class MainWindow(QMainWindow):
         self.ed_settings_apikey.setEchoMode(QLineEdit.Normal)
 
     def _apply_api_key_change(self):
-        self.api_key = os.environ.get("OPENAI_API_KEY", "")
+        try:
+            self.api_key = load_api_key()
+        except APIKeyStoreError as exc:
+            self.api_key = ""
+            os.environ["OPENAI_API_KEY"] = ""
+            msg_critical(self, "API-KEY", str(exc))
+        self.caps_cache.bind(self.api_key)
         self.files_panel.set_api_key(self.api_key)
         try:
             self.vector_panel.set_api_key(self.api_key)
@@ -1954,19 +2094,30 @@ class MainWindow(QMainWindow):
         if not val:
             msg_warning(self, "API-KEY", "Prázdný klíč nelze uložit.")
             return
+        try:
+            if not self._set_env_api_key(val):
+                raise APIKeyStoreError("API klíč nebyl trvale uložen. Aktuální klíč nebyl změněn.")
+        except APIKeyStoreError as exc:
+            self.ed_settings_apikey.setEchoMode(QLineEdit.Password)
+            msg_critical(self, "API-KEY", str(exc))
+            return
         os.environ["OPENAI_API_KEY"] = val
-        ok = self._set_env_api_key(val)
         self._apply_api_key_change()
-        self.log("API key saved (env updated)." + ("" if ok else " (jen aktuální sezení)"))
-        msg_info(self, "API-KEY", "Uloženo." + ("" if ok else " (Jen pro aktuální běh.)"))
+        self.log("API klíč byl trvale uložen a ověřen.")
+        msg_info(self, "API-KEY", "API klíč byl uložen a bude dostupný i při příštím spuštění.")
         self.ed_settings_apikey.setEchoMode(QLineEdit.Password)
 
     def _api_delete(self):
+        try:
+            if not self._set_env_api_key(""):
+                raise APIKeyStoreError("API klíč nebyl trvale smazán. Aktuální klíč nebyl změněn.")
+        except APIKeyStoreError as exc:
+            msg_critical(self, "API-KEY", str(exc))
+            return
         os.environ["OPENAI_API_KEY"] = ""
-        ok = self._set_env_api_key("")
         self._apply_api_key_change()
-        self.log("API key deleted from env." + ("" if ok else " (jen aktuální sezení)"))
-        msg_info(self, "API-KEY", "Smazáno." + ("" if ok else " (Jen pro aktuální běh.)"))
+        self.log("API klíč byl trvale smazán.")
+        msg_info(self, "API-KEY", "API klíč byl smazán i pro příští spuštění.")
         self.ed_settings_apikey.clear()
         self.ed_settings_apikey.setEchoMode(QLineEdit.Password)
 
@@ -1984,15 +2135,15 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     self.log(f"Model refresh failed: {e}")
         if not self.all_models:
-            self.all_models = ["gpt-4o-mini", "gpt-4o"]
+            self.log("Katalog modelů není dostupný; obnovení modelů je nutné před spuštěním.")
 
-        preferred = getattr(self.s, "default_model", "") or current       
+        preferred = getattr(self.s, "default_model", "") or current
         self._apply_model_filter(preserve=preferred if preferred else None)
 
     def _auto_refresh_pricing(self):
         try:
             if self.s.pricing.auto_refresh_on_start and not self.price_table.rows:
-                self.price_table.refresh_from_url(self.s.pricing.source_url)
+                self.pricing_panel.on_refresh()
             self.pricing_panel.load_prices()
         except Exception:
             pass
@@ -2006,7 +2157,7 @@ class MainWindow(QMainWindow):
         try:
             if self.pricing_audit_timer is None:
                 self.pricing_audit_timer = QTimer(self)
-                self.pricing_audit_timer.setInterval(int(15 * 60 * 1000))  # every 15 minutes
+                self.pricing_audit_timer.setInterval(int(15 * 60 * 1000))  # Každých 15 minut.
                 self.pricing_audit_timer.timeout.connect(lambda: self.pricing_panel.start_audit(quiet=True))
                 self.pricing_audit_timer.start()
         except Exception:
@@ -2019,10 +2170,12 @@ class MainWindow(QMainWindow):
 
     def _apply_model_filter(self, preserve: Optional[str] = None, *_unused):
         filt = (self.ed_model_filter.text() or "").strip().lower()
-        models = list(self.all_models)
+        models = [
+            model for model in self.all_models
+            if not is_non_response_model(model)
+            and (self.caps_cache.get(model) is None or self.caps_cache.is_stale(model, 24) or self.caps_cache.get(model).ok_basic)
+        ]
         filtered = [m for m in models if filt in m.lower()] if filt else models
-        if not filtered and models:
-            filtered = models
         sel = preserve or self.cb_model.currentText()
         if sel == self.ed_model_filter.text():
             sel = self.cb_model.currentText()
@@ -2032,6 +2185,14 @@ class MainWindow(QMainWindow):
             self.cb_model.addItems(filtered)
         if sel and sel in filtered:
             self.cb_model.setCurrentText(sel)
+        elif sel and sel not in models:
+            self.cb_model.addItem(sel)
+            idx = self.cb_model.count() - 1
+            self.cb_model.model().item(idx).setEnabled(False)
+            self.cb_model.model().item(idx).setToolTip("Uložená volba není dostupná; nebyla nahrazena jiným modelem.")
+            self.cb_model.setCurrentIndex(idx)
+        elif sel:
+            self.cb_model.setCurrentIndex(-1)
         elif filtered:
             self.cb_model.setCurrentIndex(0)
         self.cb_model.blockSignals(False)
@@ -2159,20 +2320,24 @@ class MainWindow(QMainWindow):
 
     def _set_active_model(self, model_id: str):
         idx = self.cb_model.findText(model_id)
-        if idx < 0:
-            self.cb_model.addItem(model_id)
-            idx = self.cb_model.findText(model_id)
         if idx >= 0:
             self.cb_model.setCurrentIndex(idx)
+        else:
+            self.cb_model.addItem(model_id)
+            idx = self.cb_model.count() - 1
+            self.cb_model.model().item(idx).setEnabled(False)
+            self.cb_model.setCurrentIndex(idx)
+            self.log(f"Uložený model není dostupný: {model_id}; vyberte dostupný model.")
         self._refresh_generate_model_overrides()
 
-    # ---------- model caps UX ----------
+    # Ovládání schopností modelů.
     def on_model_changed(self, model_id: str):
         caps = self.caps_cache.get(model_id)
         self._render_caps_label(caps)
 
-        supports_temp = True if caps is None else bool(caps.supports_temperature)
+        supports_temp = not uses_reasoning_defaults(model_id) and (caps is None or bool(caps.supports_temperature))
         self.sp_temp.setEnabled(supports_temp)
+        self.sp_temp.setToolTip("Teplota je dostupná pouze pro modely, které ji podporují ve výchozím režimu.")
         if not supports_temp:
             self.sp_temp.setValue(0.0)
 
@@ -2201,7 +2366,7 @@ class MainWindow(QMainWindow):
             msg_warning(self, "Probe", "Nejdřív nastav OPENAI_API_KEY.")
             return
         models = list(self.all_models) if self.all_models else [self.cb_model.itemText(i) for i in range(self.cb_model.count())]
-        self._start_probe(models, ttl_hours=0.0)  # force probe all
+        self._start_probe(models, ttl_hours=0.0)  # Vynucené ověření všech modelů.
 
     def _start_probe(self, models: List[str], ttl_hours: float):
         if self.probe_worker is not None:
@@ -2210,6 +2375,10 @@ class MainWindow(QMainWindow):
         self.log(f"Starting model probe for {len(models)} model(s)...")
         self._probe_busy = BusyPopup(self, "Probe models...").start()
         self.probe_worker = ModelProbeWorker(self.s, self.api_key, self.caps_cache, models_to_probe=models, ttl_hours=ttl_hours)
+        from .cost_dialog import CostController
+        self._probe_cost_scope = "PROBE:" + new_run_id()
+        self.probe_worker.cost_control = CostController(self.db, self.price_table, self._probe_cost_scope, self,
+                                                        stopped=lambda: self.probe_worker is None or self.probe_worker._stop, mode="PROBE")
         self.probe_worker.progress.connect(self.pb_sub.setValue)
         self.probe_worker.logline.connect(self.log)
         self.probe_worker.model_status.connect(lambda mid, st: self.log(f"Probe {mid}: {st}"))
@@ -2217,12 +2386,15 @@ class MainWindow(QMainWindow):
         self.probe_worker.start()
 
     def _probe_finished(self):
+        if getattr(self, "_probe_cost_scope", None):
+            from .cost_dialog import show_final_receipt
+            show_final_receipt(self, self.db, self._probe_cost_scope)
         self.log("Model probe finished.")
         if self.probe_worker:
             self.probe_worker.deleteLater()
         self.probe_worker = None
         self.caps_cache.load()
-        self.on_model_changed(self.cb_model.currentText())
+        self._apply_model_filter(preserve=self.cb_model.currentText())
         try:
             if hasattr(self, "_probe_busy") and self._probe_busy:
                 self._probe_busy.close()
@@ -2230,7 +2402,7 @@ class MainWindow(QMainWindow):
             pass
         self._probe_busy = None
 
-    # ---------- run ----------
+    # Spuštění běhu.
     def _validate_paths(self, mode: str, send_as_c: bool) -> bool:
         in_dir = self.ed_in.text().strip()
         out_dir = self.ed_out.text().strip()
@@ -2254,12 +2426,21 @@ class MainWindow(QMainWindow):
         is_qfile = mode == "QFILE"
         is_cascade = mode == "KASKADA"
         is_generate = mode == "GENERATE"
-        self.chk_send_as_c.setEnabled((not is_qfile) and (not is_cascade))
-        if is_qfile:
+        self.chk_send_as_c.setEnabled(mode in ("GENERATE", "MODIFY"))
+        blocked = self.chk_send_as_c.blockSignals(True)
+        if is_qfile or mode == "QA":
             self.chk_send_as_c.setChecked(False)
         if is_cascade:
             self.chk_send_as_c.setChecked(False)
-        self.ed_response_id.setEnabled(not is_cascade)
+        self.chk_send_as_c.blockSignals(blocked)
+        batch = self.chk_send_as_c.isChecked()
+        self.ed_response_id.setEnabled(not is_cascade and (not batch or is_generate))
+        self.ed_response_id.setToolTip("GENERATE BATCH používá návaznost pouze v živé přípravě A1/A2.")
+        for checkbox in (self.chk_diag_win_in, self.chk_diag_ssh_in, self.chk_diag_win_out, self.chk_diag_ssh_out):
+            enabled = not is_cascade and (not batch or is_generate and checkbox in (self.chk_diag_win_in, self.chk_diag_ssh_in))
+            checkbox.setEnabled(enabled)
+            if not enabled:
+                checkbox.setChecked(False)
         if hasattr(self, "row_cascade_selector"):
             self.row_cascade_selector.setVisible(is_cascade)
         if hasattr(self, "row_generate_models"):
@@ -2285,7 +2466,7 @@ class MainWindow(QMainWindow):
         if not self._validate_paths(mode, send_as_c):
             return
         candidate_out = os.path.normcase(os.path.realpath(self.ed_out.text().strip()))
-        if not send_as_c and mode != "QA":
+        if not send_as_c and mode not in ("QA", "KASKADA"):
             for active in self._run_contexts.values():
                 active_cfg = getattr(active.get("worker"), "cfg", None)
                 other_out = getattr(active_cfg, "out_dir", "")
@@ -2317,8 +2498,8 @@ class MainWindow(QMainWindow):
             "errors": {},
         }
 
-        # Hard gate only if explicit param rejection was detected.
-        if (not send_as_c) and mode in ("GENERATE", "MODIFY"):
+        # Běh blokuje výslovné odmítnutí potřebného parametru.
+        if (not send_as_c) and mode == "MODIFY":
             if caps and _caps_prev_id_explicitly_unsupported(caps):
                 msg_critical(
                     self,
@@ -2342,27 +2523,52 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 msg_critical(self, "Kaskáda", f"Načtení kaskády selhalo: {e}")
                 return
+            available = set(self.all_models)
+            for step in cdef.steps:
+                model_id = str(step.model or "").strip()
+                if model_id not in available:
+                    msg_warning(
+                        self,
+                        "Kaskáda",
+                        f"{model_id or '(prázdný model)'} není v aktuálním katalogu účtu.",
+                    )
+                    return
             cfg_c = CascadeRunConfig(
                 project=self.ed_project.text().strip(),
                 cascade=cdef,
                 in_dir=self.ed_in.text().strip(),
-                out_dir=self.ed_out.text().strip(),
+                out_dir=self.ed_out.text().strip() or cdef.default_out_dir.strip(),
             )
+            if cfg_c.out_dir:
+                candidate = os.path.normcase(os.path.realpath(cfg_c.out_dir))
+                for active in self._run_contexts.values():
+                    active_cfg = getattr(active.get("worker"), "cfg", None)
+                    other = getattr(active_cfg, "out_dir", "")
+                    if not other or getattr(active_cfg, "send_as_c", False) or getattr(active_cfg, "mode", "") == "QA":
+                        continue
+                    other = os.path.normcase(os.path.realpath(other))
+                    try:
+                        overlap = os.path.commonpath([candidate, other]) in (candidate, other)
+                    except ValueError:
+                        overlap = False
+                    if overlap:
+                        msg_warning(self, "OUT", "Do výstupního adresáře kaskády již zapisuje jiný běh.")
+                        return
             self.log(f"KASKÁDA started: {os.path.basename(cpath)}")
             run_id = new_run_id()
             run_key = f"KASKADA:{run_id}"
             cfg_c.run_id = run_id
             worker = CascadeRunWorker(cfg_c, self.s, self.api_key, self.db, self.price_table)
+            from .cost_dialog import CostController
+            worker.cost_control = CostController(self.db, self.price_table, run_id, self, stopped=lambda: worker._stop, project=worker.cfg.project, mode=getattr(worker.cfg, "mode", "KASKADA"))
             dialog = ProgressDialog(self)
             dialog.btn_stop.clicked.connect(lambda _=False, rk=run_key: self.on_stop(run_key=rk))
             dialog.btn_close.clicked.connect(lambda _=False, rk=run_key: self._minimize_run_dialog(rk))
             dialog.show()
             self._register_run_context(run_key, run_id, "KASKADA", worker, dialog, None, False)
             self._progress_last_ts = time.time()
-            worker.progress.connect(self.pb.setValue)
             worker.progress.connect(lambda v, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_progress(v) if self._run_contexts.get(rk, {}).get("dialog") else None)
             worker.progress.connect(lambda _: self._mark_progress_activity())
-            worker.subprogress.connect(self.pb_sub.setValue)
             worker.subprogress.connect(lambda v, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_subprogress(v) if self._run_contexts.get(rk, {}).get("dialog") else None)
             worker.subprogress.connect(lambda _: self._mark_progress_activity())
             worker.status.connect(lambda s, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_status(s) if self._run_contexts.get(rk, {}).get("dialog") else None)
@@ -2374,46 +2580,19 @@ class MainWindow(QMainWindow):
             worker.start()
             return
 
-        run_id = new_run_id()
-        run_logger = RunLogger(self.s.log_dir, run_id, project_name=self.ed_project.text().strip())
-        self.log(f"RUN started: {run_id}")
-
         attached_file_ids = self.files_panel.attached_ids()
         attached_vector_store_ids = self.vector_panel.attached_ids()
         input_file_ids = list(attached_file_ids)
-        oversize_ids = []
         if attached_file_ids:
             with BusyPopup(self, "Kontroluji velikost souborů..."):
                 try:
                     client = OpenAIClient(self.api_key)
-                    for fid in attached_file_ids:
-                        try:
-                            meta = with_retry(lambda f=fid: client.retrieve_file(f), self.s.retry, self.breaker)
-                            size = int(meta.get("bytes") or 0)
-                        except Exception:
-                            size = 0
-                        if size > 32 * 1024 * 1024:
-                            oversize_ids.append(fid)
-                except Exception:
-                    oversize_ids = []
-        if oversize_ids:
-            input_file_ids = [fid for fid in attached_file_ids if fid not in oversize_ids]
-            if not attached_vector_store_ids:
-                dlg = StyledMessageDialog(
-                    self,
-                    "Files API",
-                    "Soubor(y) nad 32MB nelze odeslat jako input_file.\n"
-                    "Pokud chceš použít data, založ Vector Store a připoj jej.\n\n"
-                    "Mám pokračovat jen s textovou referencí (bez input_file)?"
-                    ,
-                    buttons=[("Jen text", QMessageBox.AcceptRole), ("Zrušit", QMessageBox.RejectRole)],
-                    default_code=QMessageBox.AcceptRole,
-                )
-                if dlg.exec() != QMessageBox.AcceptRole:
-                    self.log(f"Oversize file_ids blocked (>32MB): {', '.join(oversize_ids)}")
+                    metadata = [with_retry(lambda f=fid: client.retrieve_file(f), self.s.retry, self.breaker)
+                                for fid in attached_file_ids]
+                    validate_input_file_sizes(metadata)
+                except Exception as exc:
+                    msg_warning(self, "Přílohy", str(exc))
                     return
-                self.log(f"Oversize file_ids allowed as text-only (>32MB): {', '.join(oversize_ids)}")
-            self.log(f"Oversize file_ids filtered (>{32}MB): {', '.join(oversize_ids)}")
 
         pin_required = bool(self.chk_ssh_pin_required.isChecked())
         if pin_required:
@@ -2425,10 +2604,10 @@ class MainWindow(QMainWindow):
             mode=mode,
             send_as_c=send_as_c,
             model=model_id,
-            model_a1=self._get_generate_model_override(self.cb_model_a1),
-            model_a2=self._get_generate_model_override(self.cb_model_a2),
-            model_a3=self._get_generate_model_override(self.cb_model_a3),
-            response_id=self.ed_response_id.text().strip(),
+            model_a1=self._get_generate_model_override(self.cb_model_a1) if mode == "GENERATE" else "",
+            model_a2=self._get_generate_model_override(self.cb_model_a2) if mode == "GENERATE" else "",
+            model_a3=self._get_generate_model_override(self.cb_model_a3) if mode == "GENERATE" else "",
+            response_id=self.ed_response_id.text().strip() if not send_as_c or mode == "GENERATE" else "",
             attached_file_ids=attached_file_ids,
             input_file_ids=input_file_ids,
             attached_vector_store_ids=attached_vector_store_ids,
@@ -2449,14 +2628,29 @@ class MainWindow(QMainWindow):
             skip_paths=list(self.skip_paths_current),
             skip_exts=list(self.skip_exts_default),
             model_caps=caps_dict,
+            caps_by_model={m: c.to_dict() for m in (self.cb_model_a1.currentText(), self.cb_model_a2.currentText(), self.cb_model_a3.currentText())
+                           if (c := self.caps_cache.get(m)) is not None},
             resume_files=getattr(self, "_resume_files", []),
             resume_prev_id=getattr(self, "_resume_prev_id", None),
             ssh_pin=os.environ.get("KAJOVO_SSH_HOSTKEY_SHA256", ""),
             ssh_pin_required=pin_required,
+            available_models=list(self.all_models),
         )
 
+        try:
+            validate_run_options(cfg)
+        except ValueError as exc:
+            msg_warning(self, "Kombinace voleb", str(exc))
+            return
+        run_id = new_run_id()
+        run_logger = RunLogger(self.s.log_dir, run_id, project_name=self.ed_project.text().strip())
+        self.log(f"RUN started: {run_id}")
         run_key = f"RUN:{run_id}"
         worker = RunWorker(cfg, self.s, self.api_key, run_logger, self.db, self.price_table)
+        from .cost_dialog import CostController
+        cost_scope = getattr(self, "_resume_cost_scope", None) or run_id
+        worker.cost_control = CostController(self.db, self.price_table, cost_scope, self, stopped=lambda: worker._stop, project=worker.cfg.project, mode=getattr(worker.cfg, "mode", "KASKADA"))
+        run_logger.update_state({"cost_scope": cost_scope})
         dialog = ProgressDialog(self)
         dialog.btn_stop.clicked.connect(lambda _=False, rk=run_key: self.on_stop(run_key=rk))
         dialog.btn_close.clicked.connect(lambda _=False, rk=run_key: self._minimize_run_dialog(rk))
@@ -2468,11 +2662,9 @@ class MainWindow(QMainWindow):
         self._register_run_context(run_key, run_id, mode, worker, dialog, run_logger, bool(send_as_c))
         self._progress_last_ts = time.time()
 
-        worker.progress.connect(self.pb.setValue)
         worker.progress.connect(lambda v, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_progress(v) if self._run_contexts.get(rk, {}).get("dialog") else None)
         worker.progress.connect(lambda _: self._mark_progress_activity())
 
-        worker.subprogress.connect(self.pb_sub.setValue)
         worker.subprogress.connect(lambda v, rk=run_key: self._run_contexts.get(rk, {}).get("dialog").set_subprogress(v) if self._run_contexts.get(rk, {}).get("dialog") else None)
         worker.subprogress.connect(lambda _: self._mark_progress_activity())
 
@@ -2485,7 +2677,7 @@ class MainWindow(QMainWindow):
         worker.finished_ok.connect(lambda result, rk=run_key: self.on_run_ok(rk, result))
         worker.finished_err.connect(lambda err, rk=run_key: self.on_run_err(rk, err))
         worker.start()
-        # clear resume hints after start
+        # Po spuštění se vymažou podklady pokračování z rozhraní.
         self._resume_files = []
         self._resume_prev_id = None
 
@@ -2505,6 +2697,10 @@ class MainWindow(QMainWindow):
             worker = ctx.get("worker")
             if worker is not None:
                 worker.request_stop()
+                dialog = ctx.get("dialog")
+                if dialog:
+                    dialog.set_status("Ruším běh; čekám na potvrzení ukončení právě probíhající operace.")
+                    dialog.btn_stop.setEnabled(False)
         except Exception as e:
             self.log(f"STOP: request_stop failed: {e}")
         self.log("Stop requested (cooperative).")
@@ -2512,6 +2708,8 @@ class MainWindow(QMainWindow):
 
 
     def on_run_ok(self, run_key: str, result: dict):
+        self.caps_cache.load()
+        self._apply_model_filter()
         ctx = self._run_contexts.get(run_key) or {}
         completed_cfg = getattr(ctx.get("worker"), "cfg", None)
         out_dir = getattr(completed_cfg, "out_dir", "")
@@ -2525,10 +2723,14 @@ class MainWindow(QMainWindow):
             notify_on_end = bool(dlg.chk_bzz.isChecked())
             self._bzz_default = notify_on_end
 
+        from ..core.progress import ProgressEvent
+        self._on_progress_event(run_key, ProgressEvent("RUN", "batch_pending" if is_batch else "completed"))
+
+        if not is_batch:
+            from .cost_dialog import show_final_receipt
+            show_final_receipt(self, self.db, getattr(getattr(ctx.get("worker"), "cost_control", None), "scope", rid))
         self.log(f"RUN completed: {rid}")
         self._dispose_run_context(run_key)
-        self.pb.setValue(100)
-        self.pb_sub.setValue(100)
 
         last_resp_id = str(result.get("response_id") or "")
         if last_resp_id and self.ed_response_id.isEnabled():
@@ -2547,7 +2749,10 @@ class MainWindow(QMainWindow):
 
         if getattr(completed_cfg, "diag_windows_out", False) or getattr(completed_cfg, "diag_ssh_out", False):
             if not is_batch:
-                self._maybe_execute_repair(out_dir)
+                if completed_cfg.diag_windows_out:
+                    self._maybe_execute_repair(out_dir, completed_cfg, remote=False)
+                if completed_cfg.diag_ssh_out:
+                    self._maybe_execute_repair(out_dir, completed_cfg, remote=True)
 
         if (not is_batch) and out_dir and os.path.isdir(out_dir):
             if msg_question(self, "Open OUT", "Otevřít OUT složku?") == QMessageBox.Yes:
@@ -2566,10 +2771,16 @@ class MainWindow(QMainWindow):
             self._send_bzz_notification(rid, getattr(completed_cfg, "project", ""), out_dir)
 
     def on_run_err(self, run_key: str, err: str):
+        self.caps_cache.load()
+        self._apply_model_filter()
+        from ..core.progress import ProgressEvent
+        self._on_progress_event(run_key, ProgressEvent("RUN", "cancelled" if err in ("STOPPED", "STOP_REQUESTED") else "failed", detail=err))
         ctx = self._run_contexts.get(run_key) or {}
         run_logger = ctx.get("run_logger")
         rid = str(ctx.get("run_id") or (run_logger.run_id if run_logger else ""))
         self.log(f"RUN failed: {rid} -> {err}")
+        from .cost_dialog import show_final_receipt
+        show_final_receipt(self, self.db, getattr(getattr(ctx.get("worker"), "cost_control", None), "scope", rid))
         self._dispose_run_context(run_key)
         msg_critical(self, "RUN failed", err)
 
@@ -2593,8 +2804,14 @@ class MainWindow(QMainWindow):
 
 
     def closeEvent(self, event):
+        if getattr(self.batch_panel, "_operation_task", None) is not None:
+            control = getattr(self.batch_panel, "_cost_control", None)
+            if control:
+                control.cancelled = True
+            event.ignore()
+            return
         workers = [ctx.get("worker") for ctx in self._run_contexts.values()]
-        workers.extend([self.probe_worker, getattr(self.pricing_panel, "audit_worker", None),
+        workers.extend([self.probe_worker, getattr(self.pricing_panel, "audit_worker", None), getattr(self.pricing_panel, "refresh_worker", None),
                         getattr(self.files_panel, "_delete_worker", None)])
         workers.extend(getattr(self.vector_panel, name, None) for name in ("_upload_worker", "_delete_worker"))
         active = [worker for worker in workers if worker is not None and worker.isRunning()]
@@ -2611,10 +2828,10 @@ class MainWindow(QMainWindow):
             self.pricing_audit_timer.stop()
         super().closeEvent(event)
 
-    def _maybe_execute_repair(self, out_dir: str):
+    def _maybe_execute_repair(self, out_dir: str, cfg, remote: bool = False):
         if not out_dir or not os.path.isdir(out_dir):
             return
-        readme = os.path.join(out_dir, EXPECTED_REPAIR_README)
+        readme = safe_join_under_root(out_dir, EXPECTED_REPAIR_README)
         if not os.path.exists(readme):
             self.log("Diagnostics OUT: readmerepair.txt not found.")
             return
@@ -2629,35 +2846,37 @@ class MainWindow(QMainWindow):
         if msg_question(self, "Repair", f"Nalezen {EXPECTED_REPAIR_README}. Automatické spuštění je defaultně vypnuté. Chcete pokračovat ručně?") != QMessageBox.Yes:
             return
 
-        candidates = [
-            os.path.join(out_dir, "RUN_THIS_SCRIPT_REPAIRME_KAJOVO_WINDOWS.bat"),
-            os.path.join(out_dir, "run_this_script_repairme_kajovo_windows.bat"),
-            os.path.join(out_dir, "run_this_script_repairme_kajovo.sh"),
-            os.path.join(out_dir, "RUN_THIS_SCRIPT_REPAIRME_KAJOVO.sh"),
-        ]
+        names = (["run_this_script_repairme_kajovo.sh", "RUN_THIS_SCRIPT_REPAIRME_KAJOVO.sh"] if remote else
+                 ["RUN_THIS_SCRIPT_REPAIRME_KAJOVO_WINDOWS.bat", "run_this_script_repairme_kajovo_windows.bat"])
+        candidates = [safe_join_under_root(out_dir, name) for name in names]
         script = next((p for p in candidates if os.path.exists(p)), None)
         if not script:
             msg_warning(self, "Repair", "Repair script nebyl nalezen.")
             return
 
-        log_path = os.path.join(out_dir, "_repair_exec_log.txt")
+        log_path = safe_join_under_root(out_dir, "_repair_ssh_exec_log.txt" if remote else "_repair_exec_log.txt")
         try:
             import hashlib
             with open(script, "rb") as sf:
-                sha256 = hashlib.sha256(sf.read()).hexdigest()
+                script_bytes = sf.read()
+                sha256 = hashlib.sha256(script_bytes).hexdigest()
             preview = (content[:2000] + "\n..." ) if len(content) > 2000 else content
             warn = (
                 "POZOR: spouštíte nedůvěryhodný repair script.\n\n"
                 f"Script: {os.path.basename(script)}\n"
                 f"SHA256: {sha256}\n\n"
+                f"Cíl: {cfg.ssh_user + '@' + cfg.ssh_host if remote else 'místní Windows'}\n\n"
                 f"Obsah {EXPECTED_REPAIR_README}:\n{preview}"
             )
             if msg_question(self, "Repair warning", warn) != QMessageBox.Yes:
                 return
-            if os.name == "nt" and script.lower().endswith(".bat"):
+            if remote:
+                from ..core.diagnostics.ssh import execute_ssh_repair
+                p = execute_ssh_repair(script_bytes, cfg)
+            elif os.name == "nt" and script.lower().endswith(".bat"):
                 p = subprocess.run(["cmd", "/c", script], cwd=out_dir, capture_output=True, text=True, shell=False, timeout=120)
             else:
-                p = subprocess.run(["bash", script], cwd=out_dir, capture_output=True, text=True, shell=False, timeout=120)
+                raise RuntimeError("Oprava Windows vyžaduje systém Windows.")
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(
                     "READMEREPAIR:\n"

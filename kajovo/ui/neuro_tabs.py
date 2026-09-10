@@ -10,16 +10,14 @@ from PySide6.QtWidgets import QTabWidget, QWidget, QGraphicsOpacityEffect
 @dataclass
 class _AnimState:
     active_index: int = 0
-    progress: float = 0.0  # 0..1 during switch
-    pulse: float = 0.0     # subtle breathing
+    progress: float = 0.0  # Průběh přepnutí v rozsahu 0 až 1.
+    pulse: float = 0.0     # Jemná pulzace.
 
 
 class NeuralThreadsOverlay(QWidget):
-    """Paints "threads" from the app logo to each tab.
+    """Kreslí spojnice mezi logem a záložkami.
 
-    This widget is transparent for mouse events and is meant to be placed as a child
-    of QTabBar (same geometry), so it naturally tracks tab movement and resizing.
-    """
+    Vrstva neblokuje myš a jako potomek QTabBar sleduje jeho rozměry a polohu."""
 
     def __init__(self, tab_widget: QTabWidget, logo_widget: QWidget):
         super().__init__(tab_widget.tabBar())
@@ -62,14 +60,14 @@ class NeuralThreadsOverlay(QWidget):
         self._switch_anim.start()
 
     def _logo_point_local(self) -> QPointF:
-        # Map logo center to this overlay coordinate space.
+        # Převod středu loga do souřadnic překryvné vrstvy.
         p = self._logo.mapToGlobal(self._logo.rect().center())
         return QPointF(self.mapFromGlobal(p))
 
     def _tab_center(self, idx: int) -> QPointF:
         tb = self._tabs.tabBar()
         r: QRect = tb.tabRect(idx)
-        # slightly under the tab label, looks more "wired"
+        # Konec spojnice mírně pod popiskem záložky.
         return QPointF(r.center().x(), r.bottom() - 2)
 
     def paintEvent(self, _ev) -> None:
@@ -86,13 +84,13 @@ class NeuralThreadsOverlay(QWidget):
         ink = QColor("#0F111A")
         coral = QColor("#E04050")
 
-        # A subtle breathing width.
+        # Jemně proměnlivá šířka spojnice.
         pulse = 0.65 + 0.35 * (1.0 - abs(0.5 - self._state.pulse) * 2.0)
 
         for i in range(self._tabs.count()):
             dst = self._tab_center(i)
 
-            # Control points create a "neural" arc.
+            # Řídicí body oblouku spojnice.
             mid_x = (origin.x() + dst.x()) * 0.5
             c1 = QPointF(mid_x, origin.y() + 6)
             c2 = QPointF(mid_x, dst.y() - 14)
@@ -104,7 +102,7 @@ class NeuralThreadsOverlay(QWidget):
             base_alpha = 140 if active else 64
             glow_alpha = 110 if active else 0
 
-            # Background "shadow" to separate lines from tabs.
+            # Stín odděluje spojnice od záložek.
             shadow_pen = QPen(ink)
             shadow_pen.setWidthF(3.8 * pulse)
             shadow_pen.setCapStyle(Qt.RoundCap)
@@ -113,7 +111,7 @@ class NeuralThreadsOverlay(QWidget):
             p.setPen(shadow_pen)
             p.drawPath(path)
 
-            # Main thread line.
+            # Hlavní spojnice.
             pen = QPen(teal if not active else lilac)
             pen.setWidthF((2.0 if not active else 2.6) * pulse)
             pen.setCapStyle(Qt.RoundCap)
@@ -122,7 +120,7 @@ class NeuralThreadsOverlay(QWidget):
             p.setPen(pen)
             p.drawPath(path)
 
-            # Active pulse accent (a small "spark").
+            # Zvýraznění aktivního pulzu.
             if active:
                 t = self._state.progress
                 spark = path.pointAtPercent(0.15 + 0.78 * t)
@@ -155,7 +153,7 @@ class NeuralThreadsOverlay(QWidget):
 
 
 class NeuroTabWidget(QTabWidget):
-    """QTabWidget with branded "neural" transitions."""
+    """QTabWidget s animovanými spojnicemi a přechody."""
 
     def __init__(self, *, logo_widget: QWidget, parent=None):
         super().__init__(parent)
@@ -186,7 +184,7 @@ class NeuroTabWidget(QTabWidget):
             anim.setEndValue(1.0)
             anim.setEasingCurve(QEasingCurve.OutCubic)
 
-            # A light "reveal" shift (keeps layout intact).
+            # Mírný posun při zobrazení zachovává rozložení.
             start_pos = w.pos()
             w.move(start_pos.x() + 10, start_pos.y())
             slide = QPropertyAnimation(w, b"pos", w)
@@ -196,7 +194,7 @@ class NeuroTabWidget(QTabWidget):
             slide.setEasingCurve(QEasingCurve.OutCubic)
 
             def _cleanup():
-                # Do not keep effects forever; reduces rendering overhead.
+                # Odstranění dokončeného efektu snižuje náklady vykreslování.
                 w.setGraphicsEffect(None)
 
             anim.finished.connect(_cleanup)

@@ -1,11 +1,5 @@
-# Build assets output
+# Grafické prostředky sestavení
 
-This folder is intentionally source-only in git.
+`Build/generate_icons.py` vytváří ikony `app_icon.png`, `app_icon.ico` a `favicon.ico`. Sestavení macOS vytváří také `app_icon.icns`.
 
-Generated icon binaries are created during build by `Build/generate_icons.py` and are **not committed**:
-- `app_icon.png`
-- `app_icon.ico`
-- `app_icon.icns` (macOS build)
-- `favicon.ico`
-
-Run one of the build scripts to regenerate them.
+Generované ikony se necommitují. Vytvoří je příslušný [sestavovací skript](../README.md).

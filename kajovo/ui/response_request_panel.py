@@ -47,7 +47,7 @@ class ResponseRequestPanel(QWidget):
         self.ed_fulltext = QLineEdit()
         self.ed_fulltext.setPlaceholderText("Fulltext (obsah request/response)")
         self.btn_filter = QPushButton("Filtrovat")
-        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh = QPushButton("Obnovit")
         filters.addWidget(self.ed_run_id, 1)
         filters.addWidget(self.ed_resp_id, 1)
         filters.addWidget(self.ed_date, 1)
@@ -80,8 +80,8 @@ class ResponseRequestPanel(QWidget):
         rv.addWidget(QLabel("Detail (request/response)"))
         action_row = QHBoxLayout()
         action_row.addStretch(1)
-        self.btn_save = QPushButton("Save TXT")
-        self.btn_print = QPushButton("Print TXT")
+        self.btn_save = QPushButton("Uložit TXT")
+        self.btn_print = QPushButton("Tisknout")
         action_row.addWidget(self.btn_save)
         action_row.addWidget(self.btn_print)
         rv.addLayout(action_row)
@@ -107,7 +107,7 @@ class ResponseRequestPanel(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Refresh when the tab becomes visible so newly created RUNs show up.
+        # Zobrazení záložky obnoví seznam běhů.
         self.refresh_runs()
 
     def refresh_runs(self):

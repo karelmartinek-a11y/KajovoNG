@@ -1,223 +1,102 @@
 from __future__ import annotations
 
-import re
 import time
-from typing import Dict, Optional
-
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QPlainTextEdit,
-    QProgressBar,
-    QPushButton,
-    QVBoxLayout,
-)
-
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QVBoxLayout
+from ..core.progress import ProgressClock, ProgressEvent
 from .theme import DARK_STYLESHEET
 from .widgets import style_progress_bar
 
 
 class ProgressDialog(QDialog):
-    _A3_FILE_RE = re.compile(r"A3:\s*FILE\s+(.+?)\s+\((\d+)\s*/\s*(\d+)\)", re.IGNORECASE)
+    """Stav backendu a měřené jednotky; čekání na API nemá fiktivní procenta."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("RUN")
+        self.setWindowTitle("Průběh běhu")
         self.setModal(False)
-        self.resize(760, 620)
+        self.resize(760, 480)
         self.setStyleSheet(DARK_STYLESHEET)
-        self._start = time.time()
-        self._steps: Dict[str, QLabel] = {}
-        self._active_step: Optional[str] = None
-
-        v = QVBoxLayout(self)
-        v.setContentsMargins(12, 12, 12, 12)
-        v.setSpacing(10)
-
-        self.lbl = QLabel("Running...")
-        self.lbl.setWordWrap(True)
-        v.addWidget(self.lbl)
-
-        self.lbl_file = QLabel("A3 files: waiting for file list")
-        self.lbl_file.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        v.addWidget(self.lbl_file)
-
-        self._build_steps(v)
-
-        self.pb = QProgressBar()
-        self.pb_sub = QProgressBar()
-        style_progress_bar(self.pb)
-        style_progress_bar(self.pb_sub)
-        self.pb.setFormat("Overall: %p%")
-        self.pb_sub.setFormat("Current step: %p%")
-        v.addWidget(self.pb)
-        v.addWidget(self.pb_sub)
-
+        self.clock = ProgressClock()
+        layout = QVBoxLayout(self)
+        self.lbl = QLabel("Příprava běhu")
+        self.lbl_file = QLabel("")
+        self.lbl_time = QLabel("")
+        for label in (self.lbl, self.lbl_file, self.lbl_time):
+            label.setWordWrap(True)
+            label.setTextFormat(Qt.PlainText)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(label)
+        self.pb, self.pb_sub = QProgressBar(), QProgressBar()
+        style_progress_bar(self.pb, indeterminate=True)
+        style_progress_bar(self.pb_sub, indeterminate=True)
+        layout.addWidget(self.pb)
+        layout.addWidget(self.pb_sub)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        v.addWidget(self.log, 1)
-
+        self.log.setMaximumBlockCount(2000)
+        layout.addWidget(self.log, 1)
         row = QHBoxLayout()
-        self.btn_stop = QPushButton("STOP")
-        self.chk_bzz = QCheckBox("BZZonEND")
-        self.btn_close = QPushButton("Hide")
-        row.addWidget(self.btn_stop)
-        row.addWidget(self.chk_bzz)
-        row.addStretch(1)
-        row.addWidget(self.btn_close)
-        v.addLayout(row)
-
+        self.btn_stop = QPushButton("Zastavit")
+        self.chk_bzz = QCheckBox("Upozornit po skončení")
+        self.btn_close = QPushButton("Skrýt")
+        for widget in (self.btn_stop, self.chk_bzz, self.btn_close):
+            row.addWidget(widget)
+        layout.addLayout(row)
         self.btn_close.clicked.connect(self.hide)
-
-    def _build_steps(self, layout: QVBoxLayout) -> None:
-        title = QLabel("Sequence")
-        title.setStyleSheet("font-weight: 600;")
-        layout.addWidget(title)
-
-        for key, text in [
-            ("prep", "1) Preparation / diagnostics"),
-            ("a1", "2) A1 plan"),
-            ("a2", "3) A2 structure"),
-            ("a3", "4) A3 file generation"),
-            ("save", "5) Save output files"),
-            ("done", "6) Done"),
-        ]:
-            lbl = QLabel(f"[ ] {text}")
-            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            self._steps[key] = lbl
-            layout.addWidget(lbl)
-
-    def set_progress(self, p: int):
-        self.pb.setValue(p)
-        if p >= 80 and self._active_step == "a3":
-            self._set_step("a3", "done")
-            self._set_step("save", "active")
-        if p >= 100:
-            self._set_step("save", "done")
-            self._set_step("done", "done")
+        self.timer = QTimer(self)
+        self.timer.setInterval(1000)
+        self.timer.timeout.connect(self._update_eta)
+        self.timer.start()
         self._update_eta()
 
-    def set_subprogress(self, p: int):
-        self.pb_sub.setValue(p)
+    def set_progress(self, value):
+        # Pevně vážená procenta nejsou důkazem dokončení operace.
+        pass
 
-    def set_status(self, s: str):
-        self.lbl.setText(s)
-        self._apply_status_to_steps(s)
-        self._apply_file_progress_from_text(s)
-        self._update_eta()
+    def set_subprogress(self, value):
+        pass
 
-    def add_log(self, line: str):
-        normalized = self._normalize_log_line(line)
-        if normalized:
-            self.log.appendPlainText(normalized)
-        self._apply_status_to_steps(line)
-        self._apply_file_progress_from_text(line)
+    def set_status(self, text):
+        self.lbl.setText(str(text))
 
-    def _normalize_log_line(self, line: str) -> str:
-        txt = str(line or "").strip()
-        if not txt:
-            return ""
+    def add_log(self, line):
+        if line:
+            self.log.appendPlainText(str(line))
 
-        m = re.match(r"^(\d{8}\s\d{6})\s*\|\s*(.*)$", txt)
-        if m:
-            raw_ts, body = m.group(1), m.group(2).strip()
-            ts = f"{raw_ts[9:11]}:{raw_ts[11:13]}:{raw_ts[13:15]}"
+    def on_progress_event(self, event: ProgressEvent):
+        self.clock.update(event)
+        if event.detail:
+            self.lbl.setText(event.detail)
+        names = {"waiting": "Čeká na poskytovatele", "active": "Probíhá", "completed": "Dokončeno",
+                 "approval": "Čeká na potvrzení ceny",
+                 "failed": "Chyba", "cancelled": "Zrušeno", "batch_pending": "Dávka čeká na zpracování"}
+        self.lbl_file.setText(f"{event.stage} · {names.get(event.state, event.state)}")
+        if self.clock.total is not None:
+            total = self.clock.total
+            self.pb_sub.setRange(0, max(1, total))
+            self.pb_sub.setValue(self.clock.completed)
+            self.pb_sub.setTextVisible(True)
+            self.pb_sub.setFormat(f"Dokončeno {self.clock.completed}/{total} {self.clock.unit}")
         else:
-            body = txt
-            ts = time.strftime("%H:%M:%S")
-
-        stage = self._extract_stage(body)
-        return f"{ts} | {stage} | {body}"
-
-    def _extract_stage(self, body: str) -> str:
-        head = (body.split("|", 1)[0] or "").strip()
-        if ":" in head:
-            return (head.split(":", 1)[0] or "RUN").strip().upper()
-
-        up = head.upper()
-        for token in ("A1", "A2", "A3", "B1", "B2", "B3", "QA", "QFILE", "C", "VERSING"):
-            if up.startswith(token):
-                return token
-        return "RUN"
-
-    def _set_step(self, key: str, state: str) -> None:
-        lbl = self._steps.get(key)
-        if lbl is None:
-            return
-
-        text = lbl.text()
-        base = text[text.find("]") + 2 :] if "]" in text else text
-
-        marker = "[ ]"
-        if state == "active":
-            marker = "[>]"
-            self._active_step = key
-        elif state == "done":
-            marker = "[x]"
-            if self._active_step == key:
-                self._active_step = None
-        elif state == "skip":
-            marker = "[-]"
-
-        lbl.setText(f"{marker} {base}")
-
-    def _apply_status_to_steps(self, text: str) -> None:
-        t = (text or "").lower()
-
-        if "rerun: using existing a2 structure" in t:
-            self._set_step("prep", "done")
-            self._set_step("a1", "skip")
-            self._set_step("a2", "skip")
-            self._set_step("a3", "active")
-            return
-
-        if "a1:" in t:
-            self._set_step("prep", "done")
-            self._set_step("a1", "active")
-            return
-
-        if "a2:" in t:
-            self._set_step("prep", "done")
-            self._set_step("a1", "done")
-            self._set_step("a2", "active")
-            return
-
-        if "a3:" in t:
-            self._set_step("prep", "done")
-            self._set_step("a1", "done")
-            self._set_step("a2", "done")
-            self._set_step("a3", "active")
-            return
-
-        if "versing:" in t or "snapshot before write" in t:
-            self._set_step("a3", "done")
-            self._set_step("save", "active")
-            return
-
-        if "run completed" in t:
-            self._set_step("prep", "done")
-            self._set_step("a1", "done")
-            self._set_step("a2", "done")
-            self._set_step("a3", "done")
-            self._set_step("save", "done")
-            self._set_step("done", "done")
-
-    def _apply_file_progress_from_text(self, text: str) -> None:
-        m = self._A3_FILE_RE.search(str(text or ""))
-        if not m:
-            return
-
-        path, idx, total = m.group(1).strip(), m.group(2), m.group(3)
-        self.lbl_file.setText(f"A3 files: {idx}/{total} | {path}")
+            style_progress_bar(self.pb_sub, indeterminate=True)
+        if event.stage == "RUN" and event.state in ("completed", "failed", "cancelled", "batch_pending"):
+            self.lbl.setText(event.detail or names[event.state])
+            self.pb.setRange(0, 100)
+            self.pb.setValue(100 if event.state == "completed" else 0)
+            self.pb.setTextVisible(True)
+            self.pb.setFormat(names[event.state])
+            self.btn_stop.setEnabled(False)
+            self.pb_sub.setRange(0, 100)
+            self.pb_sub.setValue(100 if event.state == "completed" else 0)
+            self.pb_sub.setTextVisible(False)
+            self.timer.stop()
+        self._update_eta()
 
     def _update_eta(self):
-        p = self.pb.value()
-        if p <= 1:
-            return
-        elapsed = time.time() - self._start
-        total = elapsed * (100.0 / p)
-        eta = max(0.0, total - elapsed)
-        self.setWindowTitle(f"RUN | ETA {int(eta)}s")
+        elapsed, age, eta = self.clock.times()
+        duration = time.strftime("%H:%M:%S", time.gmtime(elapsed))
+        estimate = f"asi {int(eta)} s v této etapě" if eta is not None else "nelze určit"
+        heartbeat = "Obnovování zobrazení: 1 s" if self.clock.finished is None else "Měření ukončeno"
+        self.lbl_time.setText(f"Trvání {duration} · Odhad zbývajícího času: {estimate}\n"
+                              f"Poslední událost backendu před {int(age)} s · {heartbeat}")

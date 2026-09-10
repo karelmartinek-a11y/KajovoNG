@@ -4,8 +4,20 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock
 
-from utf8nobom.app import RunLogger, normalize_text_bytes, repair_mojibake_text, rewrite_zip_if_needed
+import pytest
+
+from utf8nobom.app import (
+    RunLogger,
+    TargetSpec,
+    build_scan_plan,
+    copy_directory_for_backup,
+    normalize_text_bytes,
+    repair_mojibake_text,
+    rewrite_zip_if_needed,
+    validate_input_paths,
+)
 
 
 class DummyTracker:
@@ -49,3 +61,44 @@ class Utf8NoBomTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_utf8_backup_never_overwrites_existing_backup(tmp_path):
+    source, backup = tmp_path / "source", tmp_path / "backup"
+    source.mkdir()
+    backup.mkdir()
+    (backup / "original.txt").write_text("keep", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        copy_directory_for_backup(source, backup)
+    assert (backup / "original.txt").read_text() == "keep"
+
+
+def test_utf8_plan_skips_git_and_deduplicates_nested_targets(tmp_path):
+    source, backup = tmp_path / "source", tmp_path / "backup"
+    source.mkdir()
+    backup.mkdir()
+    nested = source / "nested"
+    nested.mkdir()
+    (source / ".git").mkdir()
+    (source / ".git" / "config").write_text("metadata")
+    (nested / "file.txt").write_text("content")
+    targets, _ = validate_input_paths([str(nested), str(source)], str(backup))
+    assert targets == [TargetSpec(source)]
+    assert [task.path for task in build_scan_plan(targets).file_tasks] == [nested / "file.txt"]
+
+
+def test_zip_preserves_comment_and_rejects_unsafe_paths_without_changes(tmp_path):
+    path = tmp_path / "test.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.comment = b"important metadata"
+        archive.writestr("file.txt", b"\xef\xbb\xbftext")
+    rewrite_zip_if_needed(path, Mock(), RunLogger(tmp_path, "safe"))
+    with zipfile.ZipFile(path) as archive:
+        assert archive.comment == b"important metadata"
+        assert archive.read("file.txt") == b"text"
+    with zipfile.ZipFile(path, "a") as archive:
+        archive.writestr("../unsafe.txt", b"data")
+    original = path.read_bytes()
+    with pytest.raises(ValueError):
+        rewrite_zip_if_needed(path, Mock(), RunLogger(tmp_path, "unsafe"))
+    assert path.read_bytes() == original

@@ -24,7 +24,7 @@ class SettingsDialog(QDialog):
         self.chk_encrypt = QCheckBox("Šifrování logů není dostupné; chraňte adresář LOG")
         self.chk_encrypt.setEnabled(False)
         self.chk_encrypt.setChecked(False)
-        self.chk_allow_sensitive = QCheckBox("Allow upload of sensitive files (danger)")
+        self.chk_allow_sensitive = QCheckBox("Povolit nahrávání citlivých souborů")
         self.chk_allow_sensitive.setChecked(bool(self.s.security.allow_upload_sensitive))
 
         self.sp_batch_poll = QDoubleSpinBox()
@@ -36,6 +36,9 @@ class SettingsDialog(QDialog):
         self.sp_batch_timeout.setRange(60, 24*60*60)
         self.sp_batch_timeout.setValue(int(getattr(self.s, "batch_timeout_s", 3600)))
 
+        self.sp_response_timeout = QSpinBox()
+        self.sp_response_timeout.setRange(1, 86400)
+        self.sp_response_timeout.setValue(int(self.s.response_timeout_s))
         self.txt_deny_ext = QTextEdit()
         self.txt_deny_ext.setPlaceholderText("Jedna přípona na řádek, např. .exe")
         self.txt_deny_ext.setPlainText("\n".join(self.s.security.deny_extensions_in or []))
@@ -47,7 +50,7 @@ class SettingsDialog(QDialog):
         self.ed_price_url = QLineEdit()
         self.ed_price_url.setText(getattr(self.s.pricing, "source_url", ""))
 
-        self.chk_price_refresh = QCheckBox("Auto refresh pricing on start")
+        self.chk_price_refresh = QCheckBox("Obnovit ceník při spuštění")
         self.chk_price_refresh.setChecked(bool(getattr(self.s.pricing, "auto_refresh_on_start", True)))
 
         self.sp_temp = QDoubleSpinBox()
@@ -60,12 +63,13 @@ class SettingsDialog(QDialog):
         form.addRow(self.chk_encrypt)
         form.addRow(QLabel("Security"), QLabel(""))
         form.addRow(self.chk_allow_sensitive)
-        form.addRow(QLabel("Deny extensions (IN mirror)"), self.txt_deny_ext)
-        form.addRow(QLabel("Deny globs (IN mirror)"), self.txt_deny_glob)
-        form.addRow(QLabel("Batch poll interval (s)"), self.sp_batch_poll)
-        form.addRow(QLabel("Batch timeout (s)"), self.sp_batch_timeout)
-        form.addRow(QLabel("Default temperature"), self.sp_temp)
-        form.addRow(QLabel("Pricing source URL"), self.ed_price_url)
+        form.addRow(QLabel("Vyloučené přípony vstupu"), self.txt_deny_ext)
+        form.addRow(QLabel("Vyloučené vzory cest vstupu"), self.txt_deny_glob)
+        form.addRow(QLabel("Interval kontroly dávky (s)"), self.sp_batch_poll)
+        form.addRow(QLabel("Limit sledování dávky (s)"), self.sp_batch_timeout)
+        form.addRow(QLabel("Čekání na odpověď API (s)"), self.sp_response_timeout)
+        form.addRow(QLabel("Výchozí temperature"), self.sp_temp)
+        form.addRow(QLabel("URL ceníku"), self.ed_price_url)
         form.addRow(self.chk_price_refresh)
 
         v.addLayout(form)
@@ -94,6 +98,7 @@ class SettingsDialog(QDialog):
         self.s.batch_poll_interval_s = float(self.sp_batch_poll.value())
         self.s.batch_timeout_s = int(self.sp_batch_timeout.value())
         self.s.default_temperature = float(self.sp_temp.value())
+        self.s.response_timeout_s = float(self.sp_response_timeout.value())
 
         self.s.pricing.source_url = self.ed_price_url.text().strip()
         self.s.pricing.auto_refresh_on_start = bool(self.chk_price_refresh.isChecked())

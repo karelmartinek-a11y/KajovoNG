@@ -1,9 +1,47 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import Callable, List, Optional, Tuple
 
 import paramiko
+
+
+def execute_ssh_repair(script: bytes, cfg, timeout_s: int = 120) -> subprocess.CompletedProcess:
+    """Spustí schválený skript přes stdin vzdáleného shellu s ověřením hostitele."""
+    import base64
+    import hashlib
+
+    if not cfg.ssh_host or not cfg.ssh_user:
+        raise ValueError("SSH oprava vyžaduje hostitele a uživatele.")
+    pin = (cfg.ssh_pin or "").strip()
+    if cfg.ssh_pin_required and not pin:
+        raise ValueError("SSH oprava vyžaduje nastavený otisk hostitele.")
+    client = paramiko.SSHClient()
+    try:
+        client.load_system_host_keys()
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        kwargs = {"hostname": cfg.ssh_host, "username": cfg.ssh_user,
+                  "timeout": 30, "banner_timeout": 30, "auth_timeout": 30,
+                  "allow_agent": True, "look_for_keys": bool(cfg.ssh_key)}
+        if cfg.ssh_key:
+            kwargs["key_filename"] = cfg.ssh_key
+        if cfg.ssh_password:
+            kwargs["password"] = cfg.ssh_password
+        client.connect(**kwargs)
+        if pin:
+            remote = client.get_transport().get_remote_server_key()
+            actual = base64.b64encode(hashlib.sha256(remote.asbytes()).digest()).decode("ascii").rstrip("=")
+            if actual != pin.removeprefix("SHA256:").rstrip("="):
+                raise RuntimeError("Otisk SHA256 SSH hostitele neodpovídá nastavenému pinu.")
+        stdin, stdout, stderr = client.exec_command("sh -s 2>&1", timeout=timeout_s)
+        stdin.write(script)
+        stdin.flush()
+        stdin.channel.shutdown_write()
+        output = stdout.read().decode("utf-8", errors="replace")
+        return subprocess.CompletedProcess("sh -s", stdout.channel.recv_exit_status(), output, "")
+    finally:
+        client.close()
 
 
 def collect_ssh_diagnostics(

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .layouts import FlowLayout, ContentSplitter
 from .widgets import msg_info, msg_warning, msg_critical, msg_question, dialog_select_dir, dialog_input_text
 
 import os
@@ -20,7 +21,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QListWidget,
     QListWidgetItem,
-    QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
     QTextEdit,
@@ -44,15 +44,15 @@ class GitHubPanel(QWidget):
         v.setContentsMargins(10, 10, 10, 10)
         v.setSpacing(8)
 
-        top = QHBoxLayout()
+        top = FlowLayout()
         self.ed_root = QLineEdit(self.root)
-        self.btn_browse = QPushButton("Browse")
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_init = QPushButton("Init repo")
-        self.btn_milestone = QPushButton("Create milestone")
-        self.btn_restore = QPushButton("Restore milestone")
-        self.btn_delete_milestone = QPushButton("Delete milestone")
-        self.btn_delete = QPushButton("Delete repo")
+        self.btn_browse = QPushButton("Vybrat…")
+        self.btn_refresh = QPushButton("Obnovit")
+        self.btn_init = QPushButton("Založit repozitář")
+        self.btn_milestone = QPushButton("Vytvořit milník")
+        self.btn_restore = QPushButton("Obnovit milník")
+        self.btn_delete_milestone = QPushButton("Odstranit milník")
+        self.btn_delete = QPushButton("Odstranit repozitář")
         self.chk_diff = QCheckBox("Diff vs milestone")
         for w in (
             self.ed_root,
@@ -86,7 +86,7 @@ class GitHubPanel(QWidget):
         status_row.addStretch(1)
         v.addLayout(status_row)
 
-        split = QSplitter()
+        split = ContentSplitter()
         v.addWidget(split, 1)
 
         left = QWidget()
@@ -111,7 +111,7 @@ class GitHubPanel(QWidget):
         rv.setSpacing(6)
         self.lbl_file = QLabel("No file selected")
         self.txt_file = QTextEdit()
-        self.btn_save = QPushButton("Save file")
+        self.btn_save = QPushButton("Uložit soubor")
         self.btn_save.clicked.connect(self._save_file)
         rv.addWidget(self.lbl_file)
         rv.addWidget(self.txt_file, 1)
@@ -135,7 +135,7 @@ class GitHubPanel(QWidget):
 
         self.refresh()
 
-    # --- helpers ---
+    # Pomocné metody.
     def _log(self, msg: str):
         try:
             self.logline.emit(msg)
@@ -195,11 +195,12 @@ class GitHubPanel(QWidget):
                 self._on_tree_clicked()
 
     def _run_git(self, args, cwd=None) -> subprocess.CompletedProcess:
+        from .background import run_io
         if cwd is None:
             cwd = self.root
-        return subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True, text=True,
+        return run_io(lambda: subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=120,
-                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}))
 
     def _get_repo_root(self) -> Optional[str]:
         try:
@@ -217,7 +218,7 @@ class GitHubPanel(QWidget):
         return self._get_repo_root() is not None
 
     def _ensure_git_identity(self):
-        """Ensure local git user.name/email are set so empty commits succeed."""
+        """Doplní místní identitu Git potřebnou k vytvoření commitu."""
         try:
             name = self._run_git(["config", "--get", "user.name"], cwd=self.root)
             email = self._run_git(["config", "--get", "user.email"], cwd=self.root)
@@ -465,7 +466,7 @@ class GitHubPanel(QWidget):
             return
         tag_name = name.strip()
         base_tag = self._latest_tag()
-        # Ensure there is a HEAD; if not, create an empty seed commit.
+        # Repozitář bez HEAD dostane prázdný úvodní commit.
         if not self._ensure_head_commit():
             msg_critical(self, "Git", "Nelze vytvořit počáteční commit pro milestone.")
             return
@@ -531,7 +532,7 @@ class GitHubPanel(QWidget):
             msg_critical(self, "Git", str(e))
         self.refresh()
 
-    # --- sync / remote ---
+    # Synchronizace a vzdálený repozitář.
     def _check_sync(self):
         if not self._is_git_repo():
             self._set_sync_status("Sync: n/a", "#6b7b8c")
@@ -601,7 +602,7 @@ class GitHubPanel(QWidget):
         self.lbl_sync.setText(text)
         self.lbl_sync.setStyleSheet(f"color: {color};")
 
-    # --- diff helpers ---
+    # Zobrazení rozdílů.
     def _git_show(self, tag: str, rel_path: str) -> Optional[str]:
         res = self._run_git(["show", f"{tag}:{rel_path}"])
         if res.returncode != 0:
@@ -618,7 +619,7 @@ class GitHubPanel(QWidget):
                 parts = line.split("\t")
                 if len(parts) >= 2:
                     status[parts[1].replace("\\", "/")] = parts[0]
-        # untracked
+        # Neverzované soubory.
         res2 = self._run_git(["status", "--porcelain"])
         if res2.returncode == 0:
             for line in res2.stdout.splitlines():
@@ -656,7 +657,7 @@ class GitHubPanel(QWidget):
                 elif st == "A":
                     item.setForeground(0, QColor("#2FA0FF"))
                 root_item.addChild(item)
-        # removed files not present on disk
+        # Odstraněné soubory, které nejsou na disku.
         for rel_path in list(include_removed):
             if rel_path.startswith(rel_dir) and "/" not in rel_path[len(rel_dir):].strip("/"):
                 name = os.path.basename(rel_path)
@@ -707,7 +708,7 @@ class GitHubPanel(QWidget):
             return None
         return sel.data(Qt.UserRole)
 
-    # --- file viewer ---
+    # Prohlížeč souborů.
     def _on_tree_clicked(self):
         sel = self.tree.selectedItems()
         if not sel:
@@ -766,18 +767,18 @@ class GitHubPanel(QWidget):
             except Exception:
                 cur_content = ""
 
-        # New file
+        # Nový soubor.
         if st == "A" and cur_content:
             html = "<pre style='color: #2FA0FF;'>" + self._html_escape(cur_content) + "</pre>"
             self.txt_file.setHtml(html)
             return
-        # Deleted file
+        # Odstraněný soubor.
         if st == "D" and tag_content is not None:
             html = "<pre style='color: #6b7b8c;'>" + self._html_escape(tag_content) + "</pre>"
             self.txt_file.setHtml(html)
             return
 
-        # Modified or unchanged: show diff hunks
+        # Zobrazení bloků změn souboru.
         before = (tag_content or "").splitlines()
         after = (cur_content or "").splitlines()
         diff = difflib.ndiff(before, after)

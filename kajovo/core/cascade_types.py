@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import time
+import math
 
 
 @dataclass
@@ -40,24 +41,36 @@ class CascadeStep:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CascadeStep":
-        data = data or {}
+        if not isinstance(data, dict):
+            raise ValueError("Krok kaskády musí být objekt.")
+        for key in ("title", "model", "instructions", "input_text", "output_type"):
+            if key in data and not isinstance(data[key], str):
+                raise ValueError(f"{key} musí být text.")
+        if data.get("previous_response_id_expr") is not None and not isinstance(data["previous_response_id_expr"], str):
+            raise ValueError("Výraz návaznosti musí být text nebo null.")
+        for key in ("files_existing_ids", "files_local_paths", "expected_out_files"):
+            value = data.get(key, [])
+            if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+                raise ValueError(f"{key} musí být seznam neprázdných textů.")
         output_type = str(data.get("output_type") or "text").lower()
         if output_type not in ("text", "json"):
-            output_type = "text"
+            raise ValueError("Neznámý typ výstupu kaskády.")
         output_schema_kind = data.get("output_schema_kind")
         if output_schema_kind not in (None, "manifest", "prompts", "custom"):
-            output_schema_kind = None
+            raise ValueError("Neznámý druh schématu kaskády.")
         input_content = data.get("input_content_json")
         if input_content is not None and not isinstance(input_content, (dict, list)):
-            input_content = None
+            raise ValueError("Strukturovaný vstup musí být objekt nebo seznam.")
         custom_schema = data.get("output_schema_custom")
         if custom_schema is not None and not isinstance(custom_schema, dict):
-            custom_schema = None
+            raise ValueError("Vlastní schéma musí být objekt.")
         temp_val = data.get("temperature")
         try:
             temperature = None if temp_val is None or temp_val == "" else float(temp_val)
-        except Exception:
-            temperature = None
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Teplota kaskády musí být číslo.") from exc
+        if isinstance(temp_val, bool) or temperature is not None and (not math.isfinite(temperature) or not 0 <= temperature <= 2):
+            raise ValueError("Teplota kaskády musí být konečné číslo od 0 do 2.")
         return cls(
             title=str(data.get("title") or ""),
             model=str(data.get("model") or ""),
@@ -86,18 +99,24 @@ class CascadeDefinition:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "version": int(self.version or 1),
+            "version": self.version,
             "name": self.name,
-            "created_at": float(self.created_at or time.time()),
-            "updated_at": float(self.updated_at or time.time()),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
             "steps": [s.to_dict() for s in (self.steps or [])],
             "default_out_dir": self.default_out_dir,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CascadeDefinition":
-        data = data or {}
-        steps_raw = data.get("steps") or []
+        if not isinstance(data, dict):
+            raise ValueError("Definice kaskády musí být objekt.")
+        for key in ("name", "default_out_dir"):
+            if key in data and not isinstance(data[key], str):
+                raise ValueError(f"{key} musí být text.")
+        steps_raw = data.get("steps", [])
+        if not isinstance(steps_raw, list) or any(not isinstance(row, dict) for row in steps_raw):
+            raise ValueError("Kroky kaskády musí být seznam objektů.")
         steps: List[CascadeStep] = []
         if isinstance(steps_raw, list):
             for row in steps_raw:
@@ -106,21 +125,12 @@ class CascadeDefinition:
         now = float(time.time())
         created_at = data.get("created_at", now)
         updated_at = data.get("updated_at", now)
-        try:
-            created_at = float(created_at)
-        except Exception:
-            created_at = now
-        try:
-            updated_at = float(updated_at)
-        except Exception:
-            updated_at = now
+        for timestamp in (created_at, updated_at):
+            if type(timestamp) not in (int, float) or not math.isfinite(timestamp) or timestamp < 0:
+                raise ValueError("Čas kaskády musí být konečné nezáporné číslo.")
         version = data.get("version", 1)
-        try:
-            version = int(version)
-        except Exception:
-            version = 1
-        if version <= 0:
-            version = 1
+        if type(version) is not int or version <= 0:
+            raise ValueError("Verze kaskády musí být kladné celé číslo.")
         return cls(
             name=str(data.get("name") or "Unnamed Cascade"),
             steps=steps,
