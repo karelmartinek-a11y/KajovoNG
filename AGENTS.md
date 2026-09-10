@@ -7,7 +7,7 @@ Kanonickou specifikací je `docs/SSOT.md`. Ověřujte chování ve zdrojovém k�
 - `kajovo/app`: vstupní body aplikace.
 - `kajovong`: modulový a konzolový spouštěč.
 - `kajovo/core`: orchestrace, API, kontrakty, bezpečnost, logy a účtenky.
-- `kajovo/ui`: desktopové rozhraní PySide6.
+- `kajovo/desktop`: desktopové rozhraní PySide6.
 - `utf8nobom`: pomocný převodník textů se zálohou.
 - `tests`: automatické regresní a desktopové testy.
 - `scripts`, `Build`: instalace, spuštění a sestavení.

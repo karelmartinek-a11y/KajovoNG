@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt, QCoreApplication
 
 from kajovo.core.config import load_settings
 from kajovo.core.resources import resource_path
-from kajovo.ui.mainwindow import MainWindow
+from kajovo.desktop.application import MainWindow
 
 def _project_root() -> Path:
     if getattr(sys, "frozen", False):
@@ -73,16 +73,21 @@ def main():
     # Výchozí písmo; při nedostupném Montserratu zůstává systémové.
     f = QFont("Montserrat", 10)
     app.setFont(f)
-    from ..ui.layouts import install_ui_style
+    from ..desktop.design import install_ui_style
     install_ui_style()
 
     app_icon = _load_app_icon()
     app.setWindowIcon(app_icon)
 
     settings = load_settings()
+    from kajovo.desktop.windows import SplashScreen
+    splash = SplashScreen()
+    splash.show()
+    app.processEvents()
     w = MainWindow(settings)
     w.setWindowIcon(app_icon)
     w.showMaximized()
+    splash.finish()
     sys.exit(app.exec())
 
 if __name__ == "__main__":

@@ -213,7 +213,7 @@ def test_batch_uses_only_supported_jsonl_fields(tmp_path):
 
 
 def test_batch_receipts_count_distinct_responses_once(tmp_path, qtbot):
-    from kajovo.ui.batch_panel import BatchPanel
+    from kajovo.desktop.batches import BatchPanel
     settings = AppSettings(db_path=str(tmp_path / "data.sqlite"), cache_dir=str(tmp_path / "cache"))
     panel = BatchPanel(settings, "")
     qtbot.addWidget(panel)

@@ -1,0 +1,224 @@
+druh,parametr,výchozí hodnota / možnosti,pravidlo,zdroj
+datový parametr,UiRunConfig.project,povinný,"Identifikátor projektu pro běh, logy a účtenky; kontrola před spuštěním",kajovo/core/pipeline.py:48
+datový parametr,UiRunConfig.prompt,povinný,Neprázdné zadání pro běžný běh; kaskáda používá kroky,kajovo/core/pipeline.py:49
+datový parametr,UiRunConfig.mode,povinný,GENERATE/MODIFY/QA/QFILE/KASKADA; REQUEST_COMBINATIONS.csv,kajovo/core/pipeline.py:50
+datový parametr,UiRunConfig.send_as_c,povinný,BATCH jen GENERATE/MODIFY; A1/A2 příprava LIVE; request_rules.py,kajovo/core/pipeline.py:51
+datový parametr,UiRunConfig.model,povinný,Přesný model z pevné matice; dostupnost katalogu; core/request_rules.py a MODEL_MATRIX.md,kajovo/core/pipeline.py:52
+datový parametr,UiRunConfig.model_a1,povinný,Volitelný model fáze A1/A2/A3; prázdný přebírá hlavní model; schopnosti každé fáze zvlášť,kajovo/core/pipeline.py:53
+datový parametr,UiRunConfig.model_a2,povinný,Volitelný model fáze A1/A2/A3; prázdný přebírá hlavní model; schopnosti každé fáze zvlášť,kajovo/core/pipeline.py:54
+datový parametr,UiRunConfig.model_a3,povinný,Volitelný model fáze A1/A2/A3; prázdný přebírá hlavní model; schopnosti každé fáze zvlášť,kajovo/core/pipeline.py:55
+datový parametr,UiRunConfig.response_id,povinný,Podpora previous_response_id modelem; samostatné BATCH položky bez návaznosti,kajovo/core/pipeline.py:56
+datový parametr,UiRunConfig.attached_file_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; validace ID a serverový preflight,kajovo/core/pipeline.py:57
+datový parametr,UiRunConfig.input_file_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; validace ID a serverový preflight,kajovo/core/pipeline.py:58
+datový parametr,UiRunConfig.attached_vector_store_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; validace ID a serverový preflight,kajovo/core/pipeline.py:59
+datový parametr,UiRunConfig.in_dir,povinný,MODIFY vyžaduje existující adresář; prázdný není pracovní adresář; security.py,kajovo/core/pipeline.py:60
+datový parametr,UiRunConfig.out_dir,povinný,Zapisující režim vyžaduje adresář; bezpečné cesty; nepřekrývat OUT aktivních běhů,kajovo/core/pipeline.py:61
+datový parametr,UiRunConfig.in_equals_out,povinný,Při zapnutí OUT přebírá IN,kajovo/core/pipeline.py:62
+datový parametr,UiRunConfig.versing,povinný,Snapshot OUT před přepisem; nenahrazuje kontrolu cest,kajovo/core/pipeline.py:63
+datový parametr,UiRunConfig.temperature,povinný,0–2; odesílá se pouze při podpoře modelu a reasoning režimu; core/response_policy.py,kajovo/core/pipeline.py:64
+datový parametr,UiRunConfig.use_file_search,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; validace ID a serverový preflight,kajovo/core/pipeline.py:65
+datový parametr,UiRunConfig.diag_windows_in,povinný,Dostupnost podle režimu/fáze; BATCH výstup bez diagnostiky; SSH vyžaduje připojení,kajovo/core/pipeline.py:67
+datový parametr,UiRunConfig.diag_windows_out,povinný,Dostupnost podle režimu/fáze; BATCH výstup bez diagnostiky; SSH vyžaduje připojení,kajovo/core/pipeline.py:68
+datový parametr,UiRunConfig.diag_ssh_in,povinný,Dostupnost podle režimu/fáze; BATCH výstup bez diagnostiky; SSH vyžaduje připojení,kajovo/core/pipeline.py:69
+datový parametr,UiRunConfig.diag_ssh_out,povinný,Dostupnost podle režimu/fáze; BATCH výstup bez diagnostiky; SSH vyžaduje připojení,kajovo/core/pipeline.py:70
+datový parametr,UiRunConfig.ssh_user,povinný,"Parametr SSH diagnostiky; heslo neexportovat, pin kontrolovat při pin_required; core/diagnostics_ssh.py",kajovo/core/pipeline.py:71
+datový parametr,UiRunConfig.ssh_host,povinný,"Parametr SSH diagnostiky; heslo neexportovat, pin kontrolovat při pin_required; core/diagnostics_ssh.py",kajovo/core/pipeline.py:72
+datový parametr,UiRunConfig.ssh_key,povinný,"Parametr SSH diagnostiky; heslo neexportovat, pin kontrolovat při pin_required; core/diagnostics_ssh.py",kajovo/core/pipeline.py:73
+datový parametr,UiRunConfig.ssh_password,povinný,"Parametr SSH diagnostiky; heslo neexportovat, pin kontrolovat při pin_required; core/diagnostics_ssh.py",kajovo/core/pipeline.py:74
+datový parametr,UiRunConfig.skip_paths,povinný,Podklady pokračování z LOG a ověřených dokončených cest; backend ověřuje souborový kontrakt,kajovo/core/pipeline.py:75
+datový parametr,UiRunConfig.skip_exts,povinný,Podklady pokračování z LOG a ověřených dokončených cest; backend ověřuje souborový kontrakt,kajovo/core/pipeline.py:76
+datový parametr,UiRunConfig.model_caps,povinný,Interní snímek pevné matice/katalogu; UI ho nebere jako uživatelské tvrzení o podpoře,kajovo/core/pipeline.py:79
+datový parametr,UiRunConfig.resume_files,None,Podklady pokračování z LOG a ověřených dokončených cest; backend ověřuje souborový kontrakt,kajovo/core/pipeline.py:81
+datový parametr,UiRunConfig.resume_prev_id,None,Podklady pokračování z LOG a ověřených dokončených cest; backend ověřuje souborový kontrakt,kajovo/core/pipeline.py:82
+datový parametr,UiRunConfig.ssh_pin,'',"Parametr SSH diagnostiky; heslo neexportovat, pin kontrolovat při pin_required; core/diagnostics_ssh.py",kajovo/core/pipeline.py:83
+datový parametr,UiRunConfig.ssh_pin_required,False,"Parametr SSH diagnostiky; heslo neexportovat, pin kontrolovat při pin_required; core/diagnostics_ssh.py",kajovo/core/pipeline.py:84
+datový parametr,UiRunConfig.caps_by_model,None,Interní snímek pevné matice/katalogu; UI ho nebere jako uživatelské tvrzení o podpoře,kajovo/core/pipeline.py:85
+datový parametr,UiRunConfig.available_models,None,Interní snímek pevné matice/katalogu; UI ho nebere jako uživatelské tvrzení o podpoře,kajovo/core/pipeline.py:87
+datový parametr,CascadeStep.title,'',Datový typ str; kontrakt CascadeStep; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:11
+datový parametr,CascadeStep.model,'',Přesný model z pevné matice; dostupnost katalogu; core/request_rules.py a MODEL_MATRIX.md,kajovo/core/cascade_types.py:12
+datový parametr,CascadeStep.temperature,None,0–2; odesílá se pouze při podpoře modelu a reasoning režimu; core/response_policy.py,kajovo/core/cascade_types.py:13
+datový parametr,CascadeStep.instructions,'',Datový typ str; kontrakt CascadeStep; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:14
+datový parametr,CascadeStep.input_text,'',Datový typ str; kontrakt CascadeStep; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:15
+datový parametr,CascadeStep.input_content_json,None,JSON objekt nebo pole; má přednost před input_text; API obsah validuje response_policy.py,kajovo/core/cascade_types.py:16
+datový parametr,CascadeStep.files_existing_ids,field(default_factory=list),Jedno file_id nebo proměnná předchozího kroku na řádek; typ a dostupnost kontroluje preflight,kajovo/core/cascade_types.py:17
+datový parametr,CascadeStep.files_local_paths,field(default_factory=list),Existující lokální soubory nebo proměnné předchozích kroků; bezpečnost a limit uploadu,kajovo/core/cascade_types.py:18
+datový parametr,CascadeStep.previous_response_id_expr,None,ID odpovědi nebo reference předchozího kroku; nebudoucí krok,kajovo/core/cascade_types.py:19
+datový parametr,CascadeStep.output_type,'text',text/json; očekávané soubory a schéma vyžadují json,kajovo/core/cascade_types.py:20
+datový parametr,CascadeStep.output_schema_kind,None,Bez schématu/manifest/prompts/custom; schéma jen JSON výstup,kajovo/core/cascade_types.py:21
+datový parametr,CascadeStep.output_schema_custom,None,JSON objekt s type nebo properties; Draft202012Validator.check_schema,kajovo/core/cascade_types.py:22
+datový parametr,CascadeStep.expected_out_files,field(default_factory=list),Bezpečné relativní cesty bez úniku z OUT; JSON výstup; kontrola úplnosti,kajovo/core/cascade_types.py:23
+datový parametr,CascadeDefinition.name,povinný,Datový typ str; kontrakt CascadeDefinition; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:93
+datový parametr,CascadeDefinition.steps,field(default_factory=list),Datový typ List[CascadeStep]; kontrakt CascadeDefinition; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:94
+datový parametr,CascadeDefinition.default_out_dir,'',Datový typ str; kontrakt CascadeDefinition; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:95
+datový parametr,CascadeDefinition.created_at,field(default_factory=lambda: float(time.time())),Datový typ float; kontrakt CascadeDefinition; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:96
+datový parametr,CascadeDefinition.updated_at,field(default_factory=lambda: float(time.time())),Datový typ float; kontrakt CascadeDefinition; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:97
+datový parametr,CascadeDefinition.version,1,Datový typ int; kontrakt CascadeDefinition; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:98
+datový parametr,RetryPolicy.max_attempts,6,"Datový typ int; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:38
+datový parametr,RetryPolicy.base_delay_s,0.8,"Datový typ float; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:39
+datový parametr,RetryPolicy.max_delay_s,20.0,"Datový typ float; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:40
+datový parametr,RetryPolicy.jitter_s,0.25,"Datový typ float; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:41
+datový parametr,RetryPolicy.circuit_breaker_failures,6,"Datový typ int; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:42
+datový parametr,RetryPolicy.circuit_breaker_cooldown_s,20.0,"Datový typ float; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:43
+datový parametr,LoggingPolicy.max_total_mb,2048,"Datový typ int; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:47
+datový parametr,LoggingPolicy.max_runs,200,"Datový typ int; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:48
+datový parametr,LoggingPolicy.encrypt_logs,False,"Datový typ bool; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:49
+datový parametr,LoggingPolicy.mask_secrets,False,"Datový typ bool; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:50
+datový parametr,PricingPolicy.source_url,'https://openai.com/api/pricing/',URL zdroje ceníku; při selhání ponechat poslední doložené sazby,kajovo/core/config.py:55
+datový parametr,PricingPolicy.cache_ttl_hours,72,Kladné hodiny; zastarání cache nesmaže ceník,kajovo/core/config.py:56
+datový parametr,PricingPolicy.auto_refresh_on_start,True,"Datový typ bool; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:57
+datový parametr,SecurityPolicy.allow_upload_sensitive,False,Výslovné povolení citlivých příloh; redakce zůstává aktivní,kajovo/core/config.py:61
+datový parametr,SecurityPolicy.deny_extensions_in,field(default_factory=lambda: list(DEFAULT_DENY_EXTENSIONS)),"Seznam přípon, jedna na řádek; filtr před sestavením IN",kajovo/core/config.py:62
+datový parametr,SecurityPolicy.allow_extensions_in,None,"Datový typ Optional[List[str]]; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:65
+datový parametr,SecurityPolicy.deny_globs_in,field(default_factory=lambda: list(DEFAULT_DENY_GLOBS)),"Seznam vzorů, jeden na řádek; filtr před sestavením IN",kajovo/core/config.py:66
+datový parametr,SecurityPolicy.allow_globs_in,None,"Datový typ Optional[List[str]]; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:69
+datový parametr,SMTPSettings.host,'',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:74
+datový parametr,SMTPSettings.port,587,SMTP 1–65535,kajovo/core/config.py:75
+datový parametr,SMTPSettings.username,'',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:76
+datový parametr,SMTPSettings.password,'',Maskované pole; nevkládá se do uloženého stavu projektu; chráněné úložiště,kajovo/core/config.py:77
+datový parametr,SMTPSettings.use_tls,True,STARTTLS; vzájemně výlučné s SSL,kajovo/core/config.py:78
+datový parametr,SMTPSettings.use_ssl,False,SSL; vzájemně výlučné s STARTTLS,kajovo/core/config.py:79
+datový parametr,SMTPSettings.from_email,'',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:80
+datový parametr,SMTPSettings.to_email,'',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:81
+datový parametr,SSHSettings.user,'',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:86
+datový parametr,SSHSettings.host,'',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:87
+datový parametr,SSHSettings.key,'',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:88
+datový parametr,SSHSettings.password,'',Maskované pole; nevkládá se do uloženého stavu projektu; chráněné úložiště,kajovo/core/config.py:89
+datový parametr,SSHSettings.pin_required,False,"Datový typ bool; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:90
+datový parametr,AppSettings.db_path,'kajovo.sqlite',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:95
+datový parametr,AppSettings.log_dir,'LOG',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:96
+datový parametr,AppSettings.cache_dir,'cache',"Datový typ str; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:97
+datový parametr,AppSettings.retry,field(default_factory=RetryPolicy),"Datový typ RetryPolicy; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:98
+datový parametr,AppSettings.logging,field(default_factory=LoggingPolicy),"Datový typ LoggingPolicy; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:99
+datový parametr,AppSettings.pricing,field(default_factory=PricingPolicy),"Datový typ PricingPolicy; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:100
+datový parametr,AppSettings.security,field(default_factory=SecurityPolicy),"Datový typ SecurityPolicy; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:101
+datový parametr,AppSettings.smtp,field(default_factory=SMTPSettings),"Datový typ SMTPSettings; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:102
+datový parametr,AppSettings.ssh,field(default_factory=SSHSettings),"Datový typ SSHSettings; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:103
+datový parametr,AppSettings.batch_poll_interval_s,4.0,Ovladač 0.5–60 sekund; serverové sledování omezené timeoutem,kajovo/core/config.py:104
+datový parametr,AppSettings.batch_timeout_s,60.0 * 60.0,Ovladač 60–86400 sekund; konec sledování není zrušení serverové dávky,kajovo/core/config.py:105
+datový parametr,AppSettings.response_timeout_s,300.0,Ovladač 1–86400 sekund; po timeoutu generující požadavek neopakovat,kajovo/core/config.py:106
+datový parametr,AppSettings.default_model,'',Textový identifikátor; při použití vyžaduje pevnou matici a dostupnost,kajovo/core/config.py:107
+datový parametr,AppSettings.default_temperature,0.2,0–2; schopnosti konkrétního modelu rozhodují při běhu,kajovo/core/config.py:108
+datový parametr,AppSettings.dry_run_modify,False,"Datový typ bool; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:109
+ovladač,self.txt_log,editor(readonly=True),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/application.py:157
+ovladač,self.ed_project,text(placeholder='Název projektu'),Text; význam a další validace v obslužné metodě,kajovo/desktop/application.py:307
+ovladač,self.cb_mode,"combo(['GENERATE', 'MODIFY', 'QA', 'QFILE', 'KASKADA'])",Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/application.py:308
+ovladač,self.cb_model,combo(),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/application.py:309
+ovladač,self.chk_send_as_c,QCheckBox('Odeslat jako BATCH'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:311
+ovladač,self.cb_run_cascade,combo(),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/application.py:315
+ovladač,self.txt_prompt,editor(height=170),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/application.py:323
+ovladač,self.chk_in_eq_out,QCheckBox('IN = OUT'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:355
+ovladač,self.chk_versing,QCheckBox('Snapshot před prvním zápisem'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:356
+ovladač,self.sp_temp,"number(self.s.default_temperature, maximum=2, decimal=True)",Rozsah/minimum/maximum je uveden v konstrukci; design.number,kajovo/desktop/application.py:358
+ovladač,self.ed_response_id,text(placeholder='resp_…'),Text; význam a další validace v obslužné metodě,kajovo/desktop/application.py:360
+ovladač,self.ed_rerun,text(placeholder='RUN_ID pro pokračování'),Text; význam a další validace v obslužné metodě,kajovo/desktop/application.py:377
+ovladač,self.chk_diag_win_in,QCheckBox('Shromáždit diagnostiku Windows ze vstupu'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:383
+ovladač,self.chk_diag_win_out,QCheckBox('Nabídnout spuštění opravného skriptu Windows'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:384
+ovladač,self.chk_diag_ssh_in,QCheckBox('Shromáždit diagnostiku přes SSH'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:385
+ovladač,self.chk_diag_ssh_out,QCheckBox('Nabídnout spuštění opravného skriptu SSH'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:386
+ovladač,self.chk_ssh_pin_required,QCheckBox('Vyžadovat pin KAJOVO_SSH_HOSTKEY_SHA256'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:402
+ovladač,self.txt_response_view,editor(readonly=True),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/application.py:414
+ovladač,self.ed_model_search_tab,text(placeholder='Hledat model podle názvu'),Text; význam a další validace v obslužné metodě,kajovo/desktop/application.py:436
+omezení ovladače,self.btn_stop,,self.btn_stop.setEnabled(False),kajovo/desktop/application.py:419
+ovladač,field,QCheckBox(title),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/application.py:451
+omezení ovladače,self.sp_temp,,self.sp_temp.setEnabled(allowed),kajovo/desktop/application.py:529
+omezení ovladače,self.chk_send_as_c,,"self.chk_send_as_c.setEnabled(mode in ('GENERATE', 'MODIFY'))",kajovo/desktop/application.py:565
+omezení ovladače,self.row_generate_models,,self.row_generate_models.setEnabled(mode == 'GENERATE'),kajovo/desktop/application.py:571
+omezení ovladače,self.ed_response_id,,self.ed_response_id.setEnabled(mode != 'KASKADA' and (not batch or mode == 'GENERATE')),kajovo/desktop/application.py:572
+omezení ovladače,self.btn_stop,,self.btn_stop.setEnabled(bool(self._run_contexts)),kajovo/desktop/application.py:914
+omezení ovladače,item,,item.setEnabled(False),kajovo/desktop/application.py:503
+omezení ovladače,field.model().item(field.count() - 1),,field.model().item(field.count() - 1).setEnabled(False),kajovo/desktop/application.py:515
+omezení ovladače,field,,field.setEnabled(allowed),kajovo/desktop/application.py:584
+omezení ovladače,self.btn_stop,,self.btn_stop.setEnabled(True),kajovo/desktop/application.py:885
+omezení ovladače,context['dialog'].btn_stop,,context['dialog'].btn_stop.setEnabled(False),kajovo/desktop/application.py:905
+omezení ovladače,self.btn_refresh,,self.btn_refresh.setEnabled(False),kajovo/desktop/batches.py:218
+omezení ovladače,self.btn_refresh,,self.btn_refresh.setEnabled(True),kajovo/desktop/batches.py:232
+omezení ovladače,action,,action.setEnabled(False),kajovo/desktop/batches.py:320
+omezení ovladače,action,,action.setEnabled(True),kajovo/desktop/batches.py:330
+ovladač,self.saved,combo(),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/cascades.py:26
+ovladač,self.ed_name,text('Nová kaskáda'),Text; význam a další validace v obslužné metodě,kajovo/desktop/cascades.py:28
+ovladač,self.ed_default_out_dir,text(placeholder='Výchozí OUT kaskády'),Text; význam a další validace v obslužné metodě,kajovo/desktop/cascades.py:43
+ovladač,self.ed_step_title,text(),Text; význam a další validace v obslužné metodě,kajovo/desktop/cascades.py:65
+ovladač,self.cb_step_model,combo(models()),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/cascades.py:66
+ovladač,self.chk_step_temp,QCheckBox('Poslat teplotu'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/cascades.py:67
+ovladač,self.sp_step_temp,"number(0.2, maximum=2, decimal=True)",Rozsah/minimum/maximum je uveden v konstrukci; design.number,kajovo/desktop/cascades.py:68
+ovladač,self.ed_prev_resp,text(placeholder='resp_… nebo proměnná předchozího kroku'),Text; význam a další validace v obslužné metodě,kajovo/desktop/cascades.py:69
+ovladač,self.cb_prev_var,combo(),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/cascades.py:77
+ovladač,self.txt_instructions,editor(),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:79
+ovladač,self.txt_input_text,editor(),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:80
+ovladač,self.txt_input_content,editor(),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:94
+ovladač,self.file_ids,editor(height=80),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:96
+ovladač,self.local_paths,editor(height=80),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:97
+ovladač,self.variable,combo(),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/cascades.py:103
+ovladač,self.output_type,"combo(['text', 'json'])",Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/cascades.py:108
+ovladač,self.schema_kind,"combo(['Bez schématu', 'manifest', 'prompts', 'custom'])",Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/cascades.py:109
+ovladač,self.custom_schema,editor('{}'),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:111
+ovladač,self.expected_files,editor(height=100),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:116
+omezení ovladače,self.expected_files,,self.expected_files.setEnabled(False),kajovo/desktop/cascades.py:120
+omezení ovladače,self.chk_step_temp,,self.chk_step_temp.setEnabled(allowed),kajovo/desktop/cascades.py:157
+omezení ovladače,self.sp_step_temp,,self.sp_step_temp.setEnabled(allowed),kajovo/desktop/cascades.py:158
+omezení ovladače,self.tabs,,self.tabs.setEnabled(index >= 0),kajovo/desktop/cascades.py:245
+omezení ovladače,self.cb_prev_var,,self.cb_prev_var.setEnabled(index > 0),kajovo/desktop/cascades.py:285
+omezení ovladače,self.custom_schema,,self.custom_schema.setEnabled(custom),kajovo/desktop/cascades.py:383
+omezení ovladače,item,,item.setEnabled(False),kajovo/desktop/cascades.py:140
+omezení ovladače,self.expected_files,,self.expected_files.setEnabled(value == 'json'),kajovo/desktop/cascades.py:118
+ovladač,self.calc_model,combo(),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/costs.py:49
+ovladač,self.calc_mode,"combo(['LIVE · standardní', 'BATCH', 'LIVE · Flex', 'LIVE · Priority / Fast'])",Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/costs.py:50
+ovladač,self.filter_archived,QCheckBox('Archivované'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/costs.py:109
+ovladač,self.filter_dates,QCheckBox('Období'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/costs.py:110
+ovladač,self.filter_status,"combo(['Všechny ceny', 'Vyčíslená cena', 'Cena chybí'])",Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/costs.py:118
+omezení ovladače,self.previous_page,,self.previous_page.setEnabled(self.page > 0),kajovo/desktop/costs.py:287
+omezení ovladače,self.next_page,,self.next_page.setEnabled((self.page + 1) * 100 < len(records)),kajovo/desktop/costs.py:288
+omezení ovladače,field,,"field.setRange(minimum, maximum)",kajovo/desktop/design.py:168
+ovladač,self.txt_log,"editor(readonly=True, height=80)",Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/dialogs.py:192
+ovladač,self.chk_bzz,QCheckBox('Upozornit po dokončení'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/dialogs.py:195
+ovladač,self.txt_log,"editor(readonly=True, height=80)",Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/dialogs.py:264
+omezení ovladače,self.pb,,"self.pb.setRange(0, 0)",kajovo/desktop/dialogs.py:187
+omezení ovladače,self.pb_sub,,"self.pb_sub.setRange(0, 0)",kajovo/desktop/dialogs.py:188
+omezení ovladače,self.pb,,"self.pb.setRange(0, 0)",kajovo/desktop/dialogs.py:262
+omezení ovladače,self.btn_close,,self.btn_close.setEnabled(False),kajovo/desktop/dialogs.py:270
+omezení ovladače,self.pb,,"self.pb.setRange(0, 100)",kajovo/desktop/dialogs.py:295
+omezení ovladače,self.pb_sub,,"self.pb_sub.setRange(0, 100)",kajovo/desktop/dialogs.py:300
+omezení ovladače,self.pb,,"self.pb.setRange(0, 100)",kajovo/desktop/dialogs.py:311
+omezení ovladače,self.btn_close,,self.btn_close.setEnabled(True),kajovo/desktop/dialogs.py:312
+omezení ovladače,self.btn_cancel,,self.btn_cancel.setEnabled(False),kajovo/desktop/dialogs.py:313
+omezení ovladače,self.btn_cancel,,self.btn_cancel.setEnabled(enabled and (not self._cancelled) and (not self._done)),kajovo/desktop/dialogs.py:322
+omezení ovladače,self.btn_cancel,,self.btn_cancel.setEnabled(False),kajovo/desktop/dialogs.py:328
+omezení ovladače,self.pb_sub,,"self.pb_sub.setRange(0, self.clock.total)",kajovo/desktop/dialogs.py:223
+omezení ovladače,self.pb_sub,,"self.pb_sub.setRange(0, 0)",kajovo/desktop/dialogs.py:227
+omezení ovladače,self.pb,,"self.pb.setRange(0, 100)",kajovo/desktop/dialogs.py:229
+omezení ovladače,self.pb_sub,,"self.pb_sub.setRange(0, max(1, self.clock.total or 1))",kajovo/desktop/dialogs.py:231
+omezení ovladače,self.btn_stop,,self.btn_stop.setEnabled(False),kajovo/desktop/dialogs.py:233
+ovladač,self.limit,"text('' if limit is None else limit, 'Bez pevného limitu')",Text; význam a další validace v obslužné metodě,kajovo/desktop/finance.py:156
+ovladač,self.output,"number(output_limit, maximum=1000000)",Rozsah/minimum/maximum je uveden v konstrukci; design.number,kajovo/desktop/finance.py:157
+ovladač,self.ed_run_id,text(placeholder='RUN ID'),Text; význam a další validace v obslužné metodě,kajovo/desktop/history.py:20
+ovladač,self.ed_resp_id,text(placeholder='Response ID'),Text; význam a další validace v obslužné metodě,kajovo/desktop/history.py:21
+ovladač,self.ed_date,text(placeholder='Datum DD.MM.YYYY'),Text; význam a další validace v obslužné metodě,kajovo/desktop/history.py:22
+ovladač,self.ed_fulltext,text(placeholder='Hledat v obsahu'),Text; význam a další validace v obslužné metodě,kajovo/desktop/history.py:23
+ovladač,self.txt_detail,editor(readonly=True),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/history.py:49
+ovladač,self.ed_file_id,text(placeholder='file_id ze Soubory API'),Text; význam a další validace v obslužné metodě,kajovo/desktop/resources.py:244
+ovladač,self.txt_detail,editor(readonly=True),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/resources.py:264
+ovladač,self.txt_attrs,editor('{}'),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/resources.py:265
+ovladač,query,text(placeholder='Filtrovat název nebo ID'),Text; význam a další validace v obslužné metodě,kajovo/desktop/resources.py:357
+omezení ovladače,action,,action.setEnabled(not active),kajovo/desktop/resources.py:35
+ovladač,self.api_key,"text(api_key, 'sk-…')",Text; význam a další validace v obslužné metodě,kajovo/desktop/settings.py:28
+ovladač,self.default_model,text(settings.default_model),Text; význam a další validace v obslužné metodě,kajovo/desktop/settings.py:49
+ovladač,self.default_temperature,"number(settings.default_temperature, maximum=2, decimal=True)",Rozsah/minimum/maximum je uveden v konstrukci; design.number,kajovo/desktop/settings.py:50
+ovladač,self.batch_poll,"number(settings.batch_poll_interval_s, 0.5, 60, True)",Rozsah/minimum/maximum je uveden v konstrukci; design.number,kajovo/desktop/settings.py:51
+ovladač,self.batch_timeout,"number(settings.batch_timeout_s, 60, 86400, True)",Rozsah/minimum/maximum je uveden v konstrukci; design.number,kajovo/desktop/settings.py:52
+ovladač,self.response_timeout,"number(settings.response_timeout_s, 1, 86400, True)",Rozsah/minimum/maximum je uveden v konstrukci; design.number,kajovo/desktop/settings.py:53
+ovladač,self.price_url,text(settings.pricing.source_url),Text; význam a další validace v obslužné metodě,kajovo/desktop/settings.py:54
+ovladač,self.price_refresh,QCheckBox('Obnovovat ceník při spuštění'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/settings.py:55
+ovladač,self.allow_sensitive,QCheckBox('Povolit nahrávání citlivých souborů'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/settings.py:71
+ovladač,self.deny_ext,editor('\n'.join(settings.security.deny_extensions_in or [])),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/settings.py:80
+ovladač,self.deny_glob,editor('\n'.join(settings.security.deny_globs_in or [])),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/settings.py:81
+ovladač,field,QCheckBox(title),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/settings.py:106
+ovladač,self.ed_root,text(self.root),Text; význam a další validace v obslužné metodě,kajovo/desktop/versions.py:52
+ovladač,self.ed_repo_name,text(placeholder='Název projektu'),Text; význam a další validace v obslužné metodě,kajovo/desktop/versions.py:66
+ovladač,self.ed_remote,text(placeholder='https://github.com/vlastník/repozitář.git'),Text; význam a další validace v obslužné metodě,kajovo/desktop/versions.py:67
+ovladač,self.chk_diff,QCheckBox('Porovnat se zvoleným milníkem'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/versions.py:103
+ovladač,self.txt_file,editor(),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/versions.py:111
+omezení ovladače,control,,control.setEnabled(not active),kajovo/desktop/versions.py:125
+ovladač,self.query,text(placeholder='Hledat model'),Text; význam a další validace v obslužné metodě,kajovo/desktop/windows.py:49
+ovladač,self.include_unknown,QCheckBox('Ukázat také nedostupné a nepodporované'),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/windows.py:63
+ovladač,control,QCheckBox(title),Boolean; navazující dostupnost podle režimu/modelu,kajovo/desktop/windows.py:58
+omezení ovladače,progress,,"progress.setRange(0, 0)",kajovo/desktop/windows.py:118

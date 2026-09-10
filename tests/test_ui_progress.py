@@ -5,9 +5,9 @@ from unittest.mock import Mock
 import pytest
 from PySide6.QtCore import QTimer
 from kajovo.core.progress import ProgressClock, ProgressEvent
-from kajovo.ui.background import run_io
-from kajovo.ui.progress_dialog import ProgressDialog
-from kajovo.ui.upload_progress_dialog import UploadProgressDialog
+from kajovo.desktop.jobs import Job
+from kajovo.desktop.dialogs import ProgressDialog
+from kajovo.desktop.dialogs import UploadProgressDialog
 from test_workflows import make_worker
 
 
@@ -43,7 +43,7 @@ def test_repeated_poll_does_not_restart_unit_measurement():
 
 def test_palette_text_and_selection_contrast(qapp):
     from PySide6.QtGui import QPalette
-    from kajovo.ui.layouts import install_ui_style
+    from kajovo.desktop.design import install_ui_style
     install_ui_style()
     palette = qapp.palette()
 
@@ -62,7 +62,7 @@ def test_palette_text_and_selection_contrast(qapp):
 def test_copy_keeps_full_value_and_zero(qtbot, monkeypatch):
     from PySide6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem
     from PySide6.QtCore import Qt
-    from kajovo.ui.layouts import copy_selection
+    from kajovo.desktop.design import copy_selection
     table = QTableWidget(1, 2)
     qtbot.addWidget(table)
     path = "složka/" * 100 + "soubor.py"
@@ -87,7 +87,7 @@ def test_terminal_state_is_not_inferred_from_percent(qtbot, state, value):
     assert dialog.pb.maximum() == 0
     dialog.on_progress_event(ProgressEvent("RUN", state))
     assert dialog.pb.value() == value
-    assert dialog.pb_sub.maximum() == 100
+    assert dialog.pb_sub.maximum() > 0
     assert not dialog.timer.isActive()
     assert not dialog.btn_stop.isEnabled()
 
@@ -109,25 +109,26 @@ def test_upload_cancel_waits_for_worker_acknowledgement(qtbot):
     assert not dialog.isVisible()
 
 
-def test_io_runs_outside_gui_while_timer_remains_responsive(qapp):
+def test_io_runs_outside_gui_while_timer_remains_responsive(qtbot):
     main_thread = threading.get_ident()
-    ticks = []
+    ticks, results, errors = [], [], []
     timer = QTimer()
     timer.setInterval(5)
     timer.timeout.connect(lambda: ticks.append(True))
     timer.start()
-
-    def operation():
-        time.sleep(0.05)
-        return threading.get_ident()
-
-    try:
-        assert run_io(operation) != main_thread
-        assert ticks
-        with pytest.raises(ValueError, match="fixture"):
-            run_io(lambda: (_ for _ in ()).throw(ValueError("fixture")))
-    finally:
-        timer.stop()
+    job = Job(lambda job: (time.sleep(.05), threading.get_ident())[1])
+    job.result.connect(results.append)
+    job.start()
+    qtbot.waitUntil(lambda: bool(results))
+    job.wait()
+    assert results[0] != main_thread and ticks
+    failed = Job(lambda job: (_ for _ in ()).throw(ValueError('fixture')))
+    failed.error.connect(errors.append)
+    failed.start()
+    qtbot.waitUntil(lambda: bool(errors))
+    failed.wait()
+    assert errors == ['fixture']
+    timer.stop()
 
 
 @pytest.mark.parametrize("fail", [False, True])

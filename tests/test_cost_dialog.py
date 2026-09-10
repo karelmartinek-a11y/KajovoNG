@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QTextBrowser
 import pytest
 import time
 
-from kajovo.ui.cost_dialog import CostController, EstimateDialog, show_final_receipt
+from kajovo.desktop.finance import CostController, EstimateDialog, show_final_receipt
 from kajovo.core.pricing import PriceRow, PriceTable
 from kajovo.core.receipt import ReceiptDB
 
@@ -20,7 +20,7 @@ def controller(tmp_path, monkeypatch):
     table.last_updated = time.time()
     table.rows["gpt-4.1"] = PriceRow("gpt-4.1", ".001", ".002", source="https://developers.openai.com/api/docs/pricing", verified_at="2026-09-09")
     result = CostController(ReceiptDB(str(tmp_path / "db.sqlite")), table, "run")
-    monkeypatch.setattr("kajovo.ui.cost_dialog.fetch_fx", lambda: {"date": "2026-09-09", "czk_per_usd": "21"})
+    monkeypatch.setattr("kajovo.desktop.finance.fetch_fx", lambda: {"date": "2026-09-09", "czk_per_usd": "21"})
     return result
 
 

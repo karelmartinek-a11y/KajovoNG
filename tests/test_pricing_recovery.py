@@ -13,9 +13,9 @@ from kajovo.core.receipt import Receipt, ReceiptDB
 from kajovo.core.config import AppSettings
 from kajovo.core.openai_client import OpenAIClient
 from kajovo.core.pricing_audit import PricingAuditor
-from kajovo.ui.cost_dialog import CostController
-from kajovo.ui.pricing_panel import PricingPanel
-from kajovo.ui.receipt_view import amount, estimate_summary
+from kajovo.desktop.finance import CostController
+from kajovo.desktop.costs import PricingPanel
+from kajovo.desktop.finance import amount, estimate_summary
 
 
 @pytest.fixture
@@ -176,7 +176,8 @@ def test_panel_shows_prices_before_any_run_and_recalculates(app, tmp_path):
     assert "0.007875 USD" in panel.calc_result.text()
     panel.calc_output.setValue(0)
     assert "0.000875 USD" in panel.calc_result.text()
-    assert "milion" in panel.data_tabs.tabText(0)
+    assert panel.data_tabs.tabText(0) == "Kalkulačka"
+    assert "milion" in panel.calc_explanation.text()
     assert panel.tbl_prices.rowCount() > 50
     panel.close()
 
