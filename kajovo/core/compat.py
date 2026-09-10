@@ -28,3 +28,14 @@ def validate_input_file_sizes(metadata: list[dict]) -> None:
         total += size
     if total > MAX_INPUT_FILE_BYTES:
         raise ValueError("Přímé přílohy dohromady překračují 50 MB.")
+
+
+SUPPORTED_INPUT_FILE_EXTS = {
+    ".art", ".bat", ".brf", ".c", ".cls", ".css", ".csv", ".diff", ".doc", ".docx", ".dot", ".eml", ".es",
+    ".h", ".hs", ".htm", ".html", ".hwp", ".hwpx", ".ics", ".ifb", ".java", ".js", ".json", ".keynote",
+    ".ksh", ".ltx", ".mail", ".markdown", ".md", ".mht", ".mhtml", ".mjs", ".nws", ".odt", ".pages", ".patch",
+    ".pdf", ".pl", ".pm", ".pot", ".ppa", ".pps", ".ppt", ".pptx", ".pwz", ".py", ".rst", ".rtf", ".scala",
+    ".sh", ".shtml", ".srt", ".sty", ".tex", ".text", ".txt", ".vcf", ".vtt", ".wiz",
+    ".xla", ".xlb", ".xlc", ".xlm", ".xls", ".xlsx", ".xlt", ".xlw", ".xml", ".yaml", ".yml",
+}
+SUPPORTED_INPUT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}

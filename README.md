@@ -17,7 +17,7 @@ git lfs pull
 
 Pro běžné spuštění stačí dvojklik na kořenový `start.bat`. Vytvoří chybějící projektové `.venv`, zkontroluje potřebné balíčky a jejich verze, podle potřeby je doinstaluje a otevře aplikaci. Doplnění závislostí může vyžadovat internet; vyhovující prostředí se kontroluje bez sítě. Python 3.12+ musí být již nainstalovaný. Při chybě se program nespustí a okno zobrazí důvod. Samotnou přípravu bez otevření aplikace lze spustit příkazem `.\start.bat -CheckOnly`.
 
-API klíč nastavte v aplikaci v sekci API-KEY na záložce SETTINGS nebo v proměnné prostředí `OPENAI_API_KEY`. Klíč se nevkládá do repozitáře. Běhy a ruční Probe mohou být zpoplatněné.
+API klíč nastavte v aplikaci v sekci API-KEY na záložce SETTINGS nebo v proměnné prostředí `OPENAI_API_KEY`. Klíč se nevkládá do repozitáře. Běhy zahrnují placené zkušební volání před pracovním odesláním.
 
 Na Windows volba „Uložit“ zachová klíč i pro další spuštění. Uložený klíč má přednost před proměnnou prostředí terminálu; restart Windows není nutný. Volba smazání zabrání i opětovnému načtení starého klíče z prostředí.
 
@@ -69,3 +69,7 @@ PRICING nabízí oficiální obnovení ceníku, neověřený ruční import JSON
 Logy obsahují zadání, odpovědi a případně zdrojový kód. Redakce známých tajných polí není šifrování ani úplná anonymizace. Adresář LOG, databázi a výstupy chraňte před nepovolaným přístupem.
 
 Licence projektu: [MIT](LICENSE). Licence závislostí a prostředků: [oznámení třetích stran](THIRD_PARTY_NOTICES.md).
+
+### Kompatibilita OpenAI
+
+Volby modelů omezuje [pevná matice](docs/MODEL_MATRIX.md); [kompletní parametry a pracovní kombinace](docs/REQUEST_MATRIX.md) rozlišují LIVE a BATCH. Před pracovním požadavkem proběhne skutečné zkušební volání se stejnými parametry. Zkušební Batch může čekat až 24 hodin: aplikace po minutě zobrazí ID a pracovní dávku neodešle. Opakované spuštění stejného zadání převezme výsledek již vytvořené zkoušky. Chyba ukáže odmítnutý parametr, pokud jej OpenAI uvede. Zkoušky jsou placené a zahrnuté v evidenci nákladů.

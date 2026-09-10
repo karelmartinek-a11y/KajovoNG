@@ -560,7 +560,7 @@ class CascadeRunWorker(QThread):
                 if resolved_prev_expr:
                     precheck["previous_response_id"] = resolved_prev_expr
                 validate_response_payload(precheck)
-                client.validate_access(precheck)
+                client.preflight_response(precheck)
                 for local_path in step.files_local_paths or []:
                     self._check_stop()
                     resolved_path = self._resolve_text(local_path, context)

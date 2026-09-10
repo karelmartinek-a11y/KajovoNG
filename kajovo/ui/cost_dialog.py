@@ -224,7 +224,7 @@ class CostController(QObject):
             self.ledger.settle(operation, None, usage={"_outcome": "api_rejected" if status in (400, 401, 403, 404, 422) else "transport_unknown",
                 "_error_type": type(exc.__cause__ or exc).__name__, "_http_status": status,
                 "_request_id": getattr(exc, "request_id", None), "_elapsed_s": getattr(exc, "elapsed_s", None)})
-            self.ledger.mark(operation, "released" if status in (400, 401, 403, 404, 422) else "unknown")
+            self.ledger.mark(operation, "released" if getattr(exc, "request_sent", None) is False or status in (400, 401, 403, 404, 422) else "unknown")
             raise
         from ..core.cost_accounting import Rates
         snapshot = items[0]["rates"]

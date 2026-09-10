@@ -42,7 +42,7 @@ def test_sampling_matrix(model, effort, temperature):
         payload["reasoning"] = {"effort": effort}
     if temperature is not None:
         payload["temperature"] = temperature
-    valid = not (model == "gpt-6-astra" and effort == "none")
+    valid = not (model in ("gpt-6-astra", "gpt-5-nano") and effort == "none")
     valid = valid and not (model == "gpt-4.1-nano" and effort is not None)
     if temperature is not None:
         valid = valid and temperature in (0, 0.5, 2) and (
@@ -107,7 +107,7 @@ def test_generate_rejects_unprobed_step_model_before_network():
         caps_by_model={"gpt-5.1": {"ok_basic": True}},
         available_models=["gpt-5.1", "gpt-5.1-codex"],
     )
-    with pytest.raises(ValueError, match="úspěšný aktuální probe"):
+    with pytest.raises(ValueError, match="povolenou konfiguraci v pevné matici"):
         validate_run_options(cfg)
 
 

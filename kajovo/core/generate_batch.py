@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import os
-import re
 import time
 import uuid
 from pathlib import Path
@@ -96,10 +95,7 @@ def digest(value):
 
 
 def validate_batch_model(model):
-    # Lokální seznam textových rodin; skutečný přístup ověřuje služba při přijetí dávky.
-    if not re.match(r"^(?:gpt-(?:4o|4\.1|5|6)(?:[.-]|$)|o[134](?:-|$))", model):
-        raise ValueError("Pro tento model není v aplikaci ověřena rodina podporující textový Batch.")
-    validate_response_payload({"model": model})
+    validate_response_payload({"model": model}, batch=True)
 
 
 def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=None):

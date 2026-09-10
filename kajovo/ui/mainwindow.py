@@ -58,7 +58,7 @@ from ..core.notifications import send_smtp_notification
 from ..core.utils import ensure_dir, new_run_id, safe_join_under_root, RUN_ID_RE
 from ..core.secret_store import get_secret, load_api_key, APIKeyStoreError
 
-from ..core.model_capabilities import ModelCapabilitiesCache, ModelProbeWorker, ModelCapabilities
+from ..core.model_capabilities import ModelCapabilitiesCache, ModelCapabilities
 from ..core.compat import validate_input_file_sizes
 from ..core.request_rules import uses_reasoning_defaults, validate_run_options, is_non_response_model
 from ..core.contracts import parse_json_strict, extract_text_from_response
@@ -132,7 +132,6 @@ class MainWindow(QMainWindow):
         # Cache schopností modelů a ověřovací worker.
         self.caps_cache = ModelCapabilitiesCache(os.path.join(self.s.cache_dir, "model_capabilities.json"))
         self.caps_cache.bind(self.api_key)
-        self.probe_worker: Optional[ModelProbeWorker] = None
         self.all_models: List[str] = []
         self.skip_paths_current: List[str] = []
         self.skip_exts_default: List[str] = [".mp3", ".wav", ".flac", ".aac", ".ogg", ".mp4", ".mkv", ".avi", ".mov"]
@@ -231,7 +230,7 @@ class MainWindow(QMainWindow):
         self._maybe_resume_hint()
         self._refresh_models_best_effort()
         self.refresh_run_cascades()
-        self._auto_probe_models_on_start()
+        self.on_model_changed(self.cb_model.currentText())
         self._auto_refresh_pricing()
         self._start_pricing_audit_loop()
 
@@ -845,7 +844,7 @@ class MainWindow(QMainWindow):
 
     def _current_model_list(self) -> List[str]:
         if self.all_models:
-            return list(self.all_models)
+            return [m for m in self.all_models if not is_non_response_model(m)]
         return [self.cb_model.itemText(i) for i in range(self.cb_model.count())]
 
     def _generate_override_models(self) -> List[str]:
@@ -925,9 +924,9 @@ class MainWindow(QMainWindow):
         v.addLayout(search_row)
 
         actions_row = QHBoxLayout()
-        self.btn_probe = QPushButton("Ověřit modely")
+        self.btn_matrix = QPushButton("Zobrazit pevnou matici")
         actions_row.addStretch(1)
-        actions_row.addWidget(self.btn_probe)
+        actions_row.addWidget(self.btn_matrix)
         v.addLayout(actions_row)
 
         feats = QHBoxLayout()
@@ -971,7 +970,7 @@ class MainWindow(QMainWindow):
         self.lst_models.itemDoubleClicked.connect(lambda _: self._apply_selected_model())
         self.btn_apply_model.clicked.connect(self._apply_selected_model)
         self.btn_set_default_model.clicked.connect(self._set_default_model)
-        self.btn_probe.clicked.connect(self.on_probe_models)
+        self.btn_matrix.clicked.connect(self.on_model_matrix)
 
         self._refresh_model_tab()
 
@@ -1263,8 +1262,8 @@ class MainWindow(QMainWindow):
         txt.setPlainText(
             "KájovoNG:\n"
             "- Modely se načítají po nastavení API-KEY v SETTINGS.\n"
-            "- Placené ověření kompatibility se spouští pouze ručně tlačítkem Probe models.\n"
-            "- Výsledky ověření: cache/model_capabilities.json.\n"
+            "- Volby omezuje pevná matice; před odesláním se ověřuje konkrétní požadavek.\n"
+            "- Matice: docs/MODEL_MATRIX.md; výsledek ověření v protokolu běhu.\n"
             "- Find model: vyhledá model podle požadovaných funkcí.\n"
             "- GENERATE/MODIFY: zadání nad 150 000 znaků se zavádí přes A0 s návazností odpovědí.\n"
             "- QA/BATCH: dlouhé zadání se předává v textových částech zprávy.\n"
@@ -1277,7 +1276,7 @@ class MainWindow(QMainWindow):
             "- BATCH kontroluje výsledky a umožňuje ruční opakování či opravu podle připomínky. Sestavení a testy spusťte ručně.\n"
             "- KASKÁDA: expected_out_files spouští uložení manifestu a upload očekávaných souborů.\n\n"
             "Response ID identifikuje odpověď a umožňuje navazující požadavek.\n"
-            "Probe označuje previous_response_id jako 'unsupported' při explicitním odmítnutí parametru serverem.\n"
+            "Návaznost a přílohy se kontrolují před zkušebním požadavkem.\n"
             "Logy nejsou šifrované. Ceny jsou odhad, nikoli vyúčtování poskytovatele.\n"
             "Kanonická specifikace: docs/SSOT.md v repozitáři.\n"
         )
@@ -2083,7 +2082,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._refresh_models_best_effort()
-        self._auto_probe_models_on_start()
+        self.on_model_changed(self.cb_model.currentText())
 
     def _set_env_api_key(self, value: str) -> bool:
         from ..core.secret_store import persist_api_key
@@ -2231,7 +2230,7 @@ class MainWindow(QMainWindow):
 
     def _format_caps_status(self, caps: Optional[ModelCapabilities]) -> str:
         if caps is None:
-            return "untested"
+            return "chybí v matici"
         def bool_flag(value: Optional[bool]) -> str:
             if value is None:
                 return "?"
@@ -2299,13 +2298,13 @@ class MainWindow(QMainWindow):
         caps = self.caps_cache.get(model_id)
         info = []
         if caps:
-            info.append(f"last tested {time.strftime('%Y-%m-%d', time.localtime(caps.tested_at or 0))}")
+            info.append(caps.notes)
             info.append(f"prev={int(caps.supports_previous_response_id)}")
             info.append(f"temp={int(caps.supports_temperature)}")
             info.append(f"fs={int(caps.supports_file_search)}")
             info.append(f"vs={int(caps.supports_vector_store)}")
         else:
-            info.append("untested")
+            info.append("chybí v matici")
         self.lbl_model_info.setText(f"{model_id} — {' | '.join(info)}")
 
     def _apply_selected_model(self):
@@ -2357,50 +2356,18 @@ class MainWindow(QMainWindow):
             f"<span style='color:{color(temp)};'>TEMPERATURE</span>"
         )
 
-    def _auto_probe_models_on_start(self):
-        # Placené ověřovací požadavky spouští pouze explicitní tlačítko Probe.
-        self.on_model_changed(self.cb_model.currentText())
-
-    def on_probe_models(self):
-        if not self.api_key:
-            msg_warning(self, "Probe", "Nejdřív nastav OPENAI_API_KEY.")
-            return
-        models = list(self.all_models) if self.all_models else [self.cb_model.itemText(i) for i in range(self.cb_model.count())]
-        self._start_probe(models, ttl_hours=0.0)  # Vynucené ověření všech modelů.
-
-    def _start_probe(self, models: List[str], ttl_hours: float):
-        if self.probe_worker is not None:
-            msg_info(self, "Probe", "Probe už běží.")
-            return
-        self.log(f"Starting model probe for {len(models)} model(s)...")
-        self._probe_busy = BusyPopup(self, "Probe models...").start()
-        self.probe_worker = ModelProbeWorker(self.s, self.api_key, self.caps_cache, models_to_probe=models, ttl_hours=ttl_hours)
-        from .cost_dialog import CostController
-        self._probe_cost_scope = "PROBE:" + new_run_id()
-        self.probe_worker.cost_control = CostController(self.db, self.price_table, self._probe_cost_scope, self,
-                                                        stopped=lambda: self.probe_worker is None or self.probe_worker._stop, mode="PROBE")
-        self.probe_worker.progress.connect(self.pb_sub.setValue)
-        self.probe_worker.logline.connect(self.log)
-        self.probe_worker.model_status.connect(lambda mid, st: self.log(f"Probe {mid}: {st}"))
-        self.probe_worker.finished.connect(self._probe_finished)
-        self.probe_worker.start()
-
-    def _probe_finished(self):
-        if getattr(self, "_probe_cost_scope", None):
-            from .cost_dialog import show_final_receipt
-            show_final_receipt(self, self.db, self._probe_cost_scope)
-        self.log("Model probe finished.")
-        if self.probe_worker:
-            self.probe_worker.deleteLater()
-        self.probe_worker = None
-        self.caps_cache.load()
-        self._apply_model_filter(preserve=self.cb_model.currentText())
+    def on_model_matrix(self):
+        from ..core.model_registry import matrix_version, model_spec
+        model = self.cb_model.currentText()
         try:
-            if hasattr(self, "_probe_busy") and self._probe_busy:
-                self._probe_busy.close()
-        except Exception:
-            pass
-        self._probe_busy = None
+            spec = model_spec(model)
+            msg_info(self, "Matice " + matrix_version(),
+                f"{model}\nLIVE Responses: {spec['responses']}\nBATCH: {spec['batch']}\n"
+                f"Reasoning: {', '.join(spec['reasoning']) or 'vynechat'}\n"
+                f"Sampling: {spec['sampling']}\nFile search: {'file_search' in spec['features']}\n"
+                f"Maximum výstupu: {spec['max_output_tokens']}\nZdroj: {spec['source']}")
+        except ValueError as exc:
+            msg_warning(self, "Matice", str(exc))
 
     # Spuštění běhu.
     def _validate_paths(self, mode: str, send_as_c: bool) -> bool:
@@ -2504,7 +2471,7 @@ class MainWindow(QMainWindow):
                 msg_critical(
                     self,
                     "Model",
-                    "Probe zjistil, že server explicitně odmítá previous_response_id pro tento model. "
+                    "Matice nepovoluje previous_response_id pro tento model. "
                     "Kaskádu nelze spustit s tímto modelem.",
                 )
                 return
@@ -2788,20 +2755,6 @@ class MainWindow(QMainWindow):
         for rk in list(self._run_contexts.keys()):
             self._dispose_run_context(rk, timeout_ms=timeout_ms)
 
-    def _dispose_probe_worker(self, timeout_ms: int = 3000):
-        if not self.probe_worker:
-            return
-        try:
-            if self.probe_worker.isRunning():
-                self.probe_worker.wait(timeout_ms)
-        except Exception:
-            pass
-        try:
-            self.probe_worker.deleteLater()
-        except Exception:
-            pass
-        self.probe_worker = None
-
 
     def closeEvent(self, event):
         if getattr(self.batch_panel, "_operation_task", None) is not None:
@@ -2811,7 +2764,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         workers = [ctx.get("worker") for ctx in self._run_contexts.values()]
-        workers.extend([self.probe_worker, getattr(self.pricing_panel, "audit_worker", None), getattr(self.pricing_panel, "refresh_worker", None),
+        workers.extend([getattr(self.pricing_panel, "audit_worker", None), getattr(self.pricing_panel, "refresh_worker", None),
                         getattr(self.files_panel, "_delete_worker", None)])
         workers.extend(getattr(self.vector_panel, name, None) for name in ("_upload_worker", "_delete_worker"))
         active = [worker for worker in workers if worker is not None and worker.isRunning()]
@@ -2823,7 +2776,6 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._dispose_worker()
-        self._dispose_probe_worker()
         if self.pricing_audit_timer:
             self.pricing_audit_timer.stop()
         super().closeEvent(event)

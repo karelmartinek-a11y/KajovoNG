@@ -42,6 +42,7 @@ namespaces = false
 
 [tool.setuptools.package-data]
 "kajovo.core.diagnostics" = ["*.ps1"]
+"kajovo.core" = ["openai_model_matrix.json"]
 
 [tool.setuptools.data-files]
 "resources" = ["resources/Kajovo_new.png", "resources/montserrat_regular.ttf", "resources/montserrat_bold.ttf"]

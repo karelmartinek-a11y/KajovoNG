@@ -61,7 +61,7 @@ def main():
             "instructions": "Vrať přesně dodaný příklad podle vynuceného schématu.",
             "input": json.dumps(expected, ensure_ascii=False)}
         client._policy.check_documented(payload)
-        response = client._policy.probe(payload)
+        response = client._policy.trial_live(payload)
         decoded = validate_output(response, payload)
         if decoded != expected:
             raise ValueError(f"{fmt['format']['name']}: obsah neodpovídá ověřovacímu zadání.")

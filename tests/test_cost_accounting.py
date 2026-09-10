@@ -125,9 +125,9 @@ def test_count_endpoint_uses_actual_supported_parameters(monkeypatch):
     seen = []
     monkeypatch.setattr(client, "validate_access", lambda payload: None)
     monkeypatch.setattr(client, "_req", lambda *a, **k: (seen.append((a, k)), {"input_tokens": 42})[1])
-    assert client.count_input_tokens({"model": "m", "input": "x", "previous_response_id": "r", "temperature": .2, "max_output_tokens": 100}) == 42
+    assert client.count_input_tokens({"model": "gpt-4.1", "input": "x", "previous_response_id": "r", "temperature": .2, "max_output_tokens": 100}) == 42
     assert seen[0][0] == ("POST", "/responses/input_tokens")
-    assert seen[0][1]["json_body"] == {"model": "m", "input": "x", "previous_response_id": "r", "text": __import__("kajovo.core.structured_output", fromlist=["text_format"]).text_format()}
+    assert seen[0][1]["json_body"] == {"model": "gpt-4.1", "input": "x", "previous_response_id": "r", "text": __import__("kajovo.core.structured_output", fromlist=["text_format"]).text_format()}
 
 
 def test_batch_settles_without_output_import_and_notifies_once(tmp_path):

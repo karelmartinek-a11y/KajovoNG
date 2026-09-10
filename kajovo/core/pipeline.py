@@ -26,15 +26,7 @@ from .receipt import Receipt, ReceiptDB
 from .retry import CircuitBreaker, with_retry
 from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root, atomic_write_text
 
-SUPPORTED_INPUT_FILE_EXTS = {
-    ".art", ".bat", ".brf", ".c", ".cls", ".css", ".csv", ".diff", ".doc", ".docx", ".dot", ".eml", ".es",
-    ".h", ".hs", ".htm", ".html", ".hwp", ".hwpx", ".ics", ".ifb", ".java", ".js", ".json", ".keynote",
-    ".ksh", ".ltx", ".mail", ".markdown", ".md", ".mht", ".mhtml", ".mjs", ".nws", ".odt", ".pages", ".patch",
-    ".pdf", ".pl", ".pm", ".pot", ".ppa", ".pps", ".ppt", ".pptx", ".pwz", ".py", ".rst", ".rtf", ".scala",
-    ".sh", ".shtml", ".srt", ".sty", ".tex", ".text", ".txt", ".vcf", ".vtt", ".wiz",
-    ".xla", ".xlb", ".xlc", ".xlm", ".xls", ".xlsx", ".xlt", ".xlw", ".xml", ".yaml", ".yml",
-}
-SUPPORTED_INPUT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+from .compat import SUPPORTED_INPUT_FILE_EXTS, SUPPORTED_INPUT_IMAGE_EXTS
 
 
 def split_text(text: str, max_chars: int) -> List[str]:
@@ -91,7 +83,7 @@ class UiRunConfig:
     ssh_pin: str = ""
     ssh_pin_required: bool = False
     caps_by_model: Optional[Dict[str, Any]] = None
-    # Aktuální katalog modelů z API; při jeho předání se vyžaduje úspěšný probe.
+    # Aktuální katalog modelů z API; při jeho předání se vyžaduje povolení v pevné matici.
     available_models: Optional[List[str]] = None
 
 

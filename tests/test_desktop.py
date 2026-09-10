@@ -1,5 +1,6 @@
 import importlib
 import pkgutil
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -69,8 +70,6 @@ def test_api_save_activates_key_only_after_verified_storage(window, monkeypatch)
 @pytest.mark.parametrize("inherited", ["", "dummy-stale-key"])
 def test_saved_key_and_probe_survive_window_restart(window, qtbot, monkeypatch, inherited):
     import os
-    import time
-    from kajovo.core.model_capabilities import ModelCapabilities
     stored = {}
     monkeypatch.setattr("kajovo.core.secret_store._read_persisted_api_key", lambda: stored.get("key"))
     monkeypatch.setattr("kajovo.ui.filepanel.FilesPanel.refresh", lambda self: None)
@@ -83,9 +82,6 @@ def test_saved_key_and_probe_survive_window_restart(window, qtbot, monkeypatch, 
         stored["key"] = value
         return True
     monkeypatch.setattr(window, "_set_env_api_key", persist)
-    window.caps_cache.upsert(ModelCapabilities("gpt-5.2", time.time(), True, True, False, False, False,
-        supports_structured_outputs=True))
-    window.caps_cache.save()
     window.ed_settings_apikey.setText("dummy-persistent-key")
     window._api_save()
     assert window.api_key == "dummy-persistent-key"
@@ -102,22 +98,15 @@ def test_saved_key_and_probe_survive_window_restart(window, qtbot, monkeypatch, 
     assert reopened.caps_cache.get("gpt-5.2").ok_basic
 
 
-def test_probe_completion_refreshes_model_list(window):
-    import time
-    from kajovo.core.model_capabilities import ModelCapabilities, ModelCapabilitiesCache
-    window.all_models = ["gpt-5.2"]
-    window.chk_model_include_untested.setChecked(True)
-    window._apply_model_filter()
-    assert "untested" in window.lst_models.item(0).text()
-    saved = ModelCapabilitiesCache(window.caps_cache.path)
-    saved.bind("dummy-key")
-    saved.upsert(ModelCapabilities("gpt-5.2", time.time(), True, True, False, False, False,
-        supports_structured_outputs=True))
-    saved.save()
-    window._probe_finished()
-    assert "untested" not in window.lst_models.item(0).text()
+def test_static_matrix_available_without_probe(window):
+    window.all_models = ["gpt-5.2", "unknown-model"]
     window.chk_model_include_untested.setChecked(False)
+    window._apply_model_filter()
     assert window.lst_models.count() == 1
+    assert "gpt-5.2" in window.lst_models.item(0).text()
+    assert window.caps_cache.get("gpt-5.2").ok_basic
+    assert window.cb_model.findText("unknown-model") == -1
+    assert not hasattr(window, "probe_worker")
 
 
 @pytest.mark.parametrize("action", ["_api_save", "_api_delete"])
@@ -293,13 +282,12 @@ def test_cascade_preserves_model_missing_from_catalog(window):
     panel.definition.steps[0].model = "private-model-snapshot"
     panel.on_step_selected(0)
     assert panel.cb_step_model.currentText() == "private-model-snapshot"
-    with patch("kajovo.ui.cascade_panel.msg_info"):
-        assert panel.save_current_step()
+    with patch("kajovo.ui.cascade_panel.msg_warning"):
+        assert not panel.save_current_step()
     assert panel.definition.steps[0].model == "private-model-snapshot"
 
 
 def test_batch_monitor_uses_settings_and_stops_at_deadline(window):
-    import time
     panel = window.batch_panel
     panel.api_key = "test"
     panel.s.batch_poll_interval_s = 7

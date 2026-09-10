@@ -8,20 +8,23 @@ from typing import Any
 
 
 def uses_reasoning_defaults(model: str) -> bool:
-    return bool(re.match(r"^(?:gpt-[56](?:[.-]|$)|o[134](?:-|$))", model))
+    from .model_registry import model_spec
+    try:
+        return model_spec(model)["sampling"] != "always"
+    except ValueError:
+        return True
 
 
 def is_non_response_model(model: str) -> bool:
-    return model.startswith(("dall-e", "gpt-image", "sora", "whisper", "tts-", "text-embedding", "omni-moderation")) or any(
-        marker in model for marker in ("realtime", "transcribe", "-audio", "-tts")
-    )
+    from .model_registry import selectable
+    return not selectable(model)
 
 
-def validate_response_payload(payload: dict[str, Any]) -> None:
+def validate_response_payload(payload: dict[str, Any], batch=False) -> None:
     allowed = {"model", "input", "instructions", "previous_response_id", "conversation", "text", "reasoning",
                "temperature", "top_p", "max_output_tokens", "tools", "tool_choice", "stream", "background",
                "store", "metadata", "service_tier", "truncation", "parallel_tool_calls", "include", "user",
-               "safety_identifier", "prompt_cache_key", "prompt_cache_retention", "max_tool_calls"}
+               "safety_identifier", "prompt_cache_key", "prompt_cache_retention", "prompt_cache_options", "max_tool_calls"}
     if not isinstance(payload, dict) or set(payload) - allowed:
         raise ValueError("Požadavek obsahuje neznámé parametry.")
     for key in ("stream", "background", "store", "parallel_tool_calls"):
@@ -30,7 +33,7 @@ def validate_response_payload(payload: dict[str, Any]) -> None:
     if "instructions" in payload and not isinstance(payload["instructions"], str):
         raise ValueError("instructions musí být text.")
     for key, values in (("service_tier", ("auto", "default", "flex", "priority")), ("truncation", ("auto", "disabled")),
-                        ("prompt_cache_retention", ("in-memory", "24h"))):
+                        ("prompt_cache_retention", ("in_memory", "24h"))):
         if key in payload and payload[key] not in values:
             raise ValueError(f"Neplatné nastavení {key}.")
     for key in ("previous_response_id", "user", "safety_identifier", "prompt_cache_key"):
@@ -42,6 +45,18 @@ def validate_response_payload(payload: dict[str, Any]) -> None:
             not isinstance(k, str) or len(k) > 64 or not isinstance(v, str) or len(v) > 512 for k, v in metadata.items()
         ):
             raise ValueError("Neplatná metadata požadavku.")
+    if "conversation" in payload:
+        raise ValueError("Aplikace používá previous_response_id; sdílené conversation není podporováno.")
+    if "max_tool_calls" in payload and (type(payload["max_tool_calls"]) is not int or payload["max_tool_calls"] < 1):
+        raise ValueError("max_tool_calls musí být kladné celé číslo.")
+    if "prompt_cache_options" in payload:
+        options = payload["prompt_cache_options"]
+        if not isinstance(options, dict) or set(options) - {"mode", "ttl"} or options.get("mode", "implicit") not in ("implicit", "explicit") or options.get("ttl", "30m") != "30m":
+            raise ValueError("prompt_cache_options vyžaduje mode=implicit/explicit a ttl=30m.")
+    if "include" in payload:
+        include = payload["include"]
+        if not isinstance(include, list) or any(v not in ("file_search_call.results", "message.input_image.image_url", "reasoning.encrypted_content") for v in include):
+            raise ValueError("include obsahuje nepodporovanou volbu aplikace.")
     if "text" in payload:
         from .structured_output import prepare_payload
         prepare_payload(payload)
@@ -65,8 +80,6 @@ def validate_response_payload(payload: dict[str, Any]) -> None:
     model = payload.get("model")
     if not isinstance(model, str) or not model.strip():
         raise ValueError("Požadavek vyžaduje model.")
-    if is_non_response_model(model):
-        raise ValueError("Vybraný model používá jiný endpoint než textové Responses.")
     if payload.get("previous_response_id") and payload.get("conversation"):
         raise ValueError("conversation a previous_response_id nelze kombinovat.")
     if payload.get("stream") or payload.get("background"):
@@ -76,28 +89,18 @@ def validate_response_payload(payload: dict[str, Any]) -> None:
         reasoning = {}
     if not isinstance(reasoning, dict):
         raise ValueError("reasoning musí být objekt.")
-    if set(reasoning) - {"effort", "summary"}:
+    if set(reasoning) - {"effort", "summary", "mode"}:
         raise ValueError("Neznámé nastavení reasoning.")
-    if "effort" in reasoning and reasoning["effort"] not in ("none", "minimal", "low", "medium", "high", "xhigh"):
+    if "effort" in reasoning and reasoning["effort"] not in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
         raise ValueError("Neplatné reasoning.effort.")
     if "summary" in reasoning and reasoning["summary"] not in ("auto", "concise", "detailed"):
         raise ValueError("Neplatné reasoning.summary.")
-    if reasoning and model.startswith(("gpt-4.1", "gpt-4o")):
-        raise ValueError("Tento model nepodporuje parametr reasoning.")
     for key, upper in (("temperature", 2), ("top_p", 1)):
         value = payload.get(key)
         if value is None:
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= upper:
             raise ValueError(f"{key} musí být konečné číslo od 0 do {upper}.")
-        if uses_reasoning_defaults(model):
-            supports_none_sampling = bool(re.match(r"^gpt-5\.(?:1|2|4)(?:-|$)", model)) and not any(
-                marker in model for marker in ("-pro", "-codex", "-chat")
-            )
-            if not supports_none_sampling or reasoning.get("effort") != "none":
-                raise ValueError(f"{model}: {key} není povoleno v tomto režimu reasoning.")
-    if model.startswith("gpt-6") and reasoning.get("effort") in ("none", "minimal"):
-        raise ValueError("GPT-6 nepodporuje reasoning none ani minimal.")
     tokens = payload.get("max_output_tokens")
     if tokens is not None and (type(tokens) is not int or tokens < 16):
         raise ValueError("max_output_tokens musí být celé číslo nejméně 16.")
@@ -110,6 +113,8 @@ def validate_response_payload(payload: dict[str, Any]) -> None:
                 raise ValueError("Vstupní položka musí být objekt.")
             if message.get("type", "message") != "message":
                 raise ValueError("Tento program přijímá pouze vstupní zprávy.")
+            if set(message) - {"type", "role", "content"}:
+                raise ValueError("Vstupní zpráva obsahuje neznámé parametry.")
             if message.get("role") not in ("user", "assistant", "system", "developer"):
                 raise ValueError("Neplatná role vstupní zprávy.")
             content = message.get("content")
@@ -119,6 +124,9 @@ def validate_response_payload(payload: dict[str, Any]) -> None:
                 raise ValueError("Obsah zprávy musí být text nebo seznam částí.")
             for part in content:
                 validate_input_part(part)
+
+    from .model_registry import validate_model_parameters
+    validate_model_parameters(payload, batch=batch)
 
 
 def validate_input_part(part):
@@ -130,13 +138,23 @@ def validate_input_part(part):
             raise ValueError("input_text vyžaduje text.")
     elif kind in ("input_file", "input_image"):
         sources = ("file_id", "file_data", "file_url") if kind == "input_file" else ("file_id", "image_url")
-        if set(part) - {"type", *sources, "filename" if kind == "input_file" else "detail"}:
+        if set(part) - {"type", *sources, "filename" if kind == "input_file" else "detail", "detail"}:
             raise ValueError("Neznámé parametry vstupní přílohy.")
         chosen = [key for key in sources if part.get(key) is not None]
         if len(chosen) != 1 or not isinstance(part[chosen[0]], str) or not part[chosen[0]].strip():
             raise ValueError(f"{kind} vyžaduje právě jeden neprázdný zdroj.")
         if "file_data" in chosen and not isinstance(part.get("filename"), str):
             raise ValueError("Vložený soubor vyžaduje filename.")
+        if "file_data" in chosen:
+            import base64
+            from .compat import MAX_INPUT_FILE_BYTES, SUPPORTED_INPUT_FILE_EXTS
+            from pathlib import Path
+            try:
+                size = len(base64.b64decode(part["file_data"].split(",")[-1], validate=True))
+            except ValueError as exc:
+                raise ValueError("input_file.file_data musí obsahovat platné Base64.") from exc
+            if size >= MAX_INPUT_FILE_BYTES or Path(part["filename"]).suffix.lower() not in SUPPORTED_INPUT_FILE_EXTS:
+                raise ValueError("input_file.file_data: nepodporovaný formát nebo velikost alespoň 50 MB.")
         if "file_id" in chosen and not re.fullmatch(r"[A-Za-z0-9_-]+", part["file_id"]):
             raise ValueError("Neplatný identifikátor vstupního souboru.")
         if "file_url" in chosen and not part["file_url"].startswith(("https://", "http://")):
@@ -145,6 +163,8 @@ def validate_input_part(part):
             raise ValueError("Obrázek vyžaduje HTTP(S) URL nebo data:image.")
         if "detail" in part and part["detail"] not in ("auto", "low", "high", "original"):
             raise ValueError("Neplatná podrobnost vstupního obrázku.")
+        if kind == "input_file" and part.get("detail") == "original":
+            raise ValueError("input_file.detail podporuje pouze auto, low a high.")
     else:
         raise ValueError("Nepodporovaný typ části vstupní zprávy.")
 
@@ -180,7 +200,7 @@ def validate_run_options(cfg, check_models=True) -> None:
         if model not in set(available_models):
             raise ValueError(f"{model}: model není v aktuálním katalogu API.")
         if caps.get("ok_basic") is not True:
-            raise ValueError(f"{model}: model nemá úspěšný aktuální probe.")
+            raise ValueError(f"{model}: model nemá povolenou konfiguraci v pevné matici.")
 
     validate_selected_model(cfg.model, cfg.model_caps or {})
     if cfg.mode == "GENERATE":

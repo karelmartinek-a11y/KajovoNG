@@ -26,7 +26,7 @@ def test_sdk_mutation_failure_does_not_repeat_via_rest():
     client.validate_access = Mock()
     with patch.object(client, "_req") as request:
         with pytest.raises(OpenAIError):
-            client._send_response({"model": "test", "input": "test"})
+            client._send_response({"model": "gpt-4.1", "input": "test"})
         request.assert_not_called()
 
 

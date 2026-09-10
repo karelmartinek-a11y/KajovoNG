@@ -21,7 +21,7 @@ $pyinstallerArgs = @(
     "--noconfirm"
     "--clean"
     "--windowed"
-    "--collect-data", "kajovo.core.diagnostics"
+    "--collect-data", "kajovo.core"
     "--name", $AppName
     "--icon", $iconPath
     "--add-data", "$runtimeIcon;resources"
