@@ -30,11 +30,10 @@ from ..core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
 from ..core.cascade_types import CascadeDefinition
 from ..core.openai_client import OpenAIClient
 from ..core.runlog import RunLogger, find_last_incomplete_run
-from ..core.pricing import PriceTable
-from ..core.receipt import ReceiptDB
 from ..core.progress import ProgressEvent
 from ..core.utils import new_run_id, safe_join_under_root, atomic_write_text, RUN_ID_RE
 from .recovery import recover_run
+from ..core.batch_completion import read_state, batch_ids
 from .design import (
     column,
     row,
@@ -60,11 +59,9 @@ from .dialogs import (
     dialog_select_dir,
     ProgressDialog,
 )
-from .finance import CostController, show_final_receipt, amount
 from .jobs import Jobs
 from .resources import FilesPanel, VectorStoresPanel
 from .cascades import CascadePanel
-from .costs import PricingPanel
 from .history import ResponseRequestPanel
 from .settings import SettingsPage
 from .batches import BatchPanel
@@ -91,9 +88,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.api_key = ""
             msg_warning(self, "API klíč nelze načíst", str(exc))
-        self.db = ReceiptDB(settings.db_path)
-        self.price_table = PriceTable(str(Path(settings.cache_dir) / "price_table.json"))
-        self.price_table.bootstrap()
         self.caps_cache = ModelCapabilitiesCache(
             str(Path(settings.cache_dir) / "model_capabilities.json")
         )
@@ -103,7 +97,7 @@ class MainWindow(QMainWindow):
         self._run_contexts = {}
         self._active_run_key = None
         self._resume_files = []
-        self._resume_prev_id = self._resume_cost_scope = None
+        self._resume_prev_id = None
         self.skip_paths_current = []
         self.skip_exts_default = [
             ".mp3",
@@ -150,7 +144,6 @@ class MainWindow(QMainWindow):
         self.vector_panel = VectorStoresPanel(settings, self.api_key)
         self.cascade_panel = CascadePanel(settings, self._current_model_list)
         self.batch_panel = BatchPanel(settings, self.api_key)
-        self.pricing_panel = PricingPanel(settings, self.price_table, self.db)
         self.git_panel = GitHubPanel(settings)
         self.history_panel = ResponseRequestPanel(settings.log_dir)
         self.settings_page = SettingsPage(settings, self.api_key)
@@ -169,7 +162,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(label("Jak pracovat", "Heading"))
         help_layout.addWidget(
             editor(
-                "1. Nastavte API klíč a obnovte katalog modelů.\n2. V Zadání vyberte cíl, model a vstupy.\n3. Před odesláním potvrďte cenu připraveného požadavku.\n4. Průběh lze skrýt a otevřít přes Aktivní běhy.\n5. BATCH sledujte v Dávkách a po dokončení stáhněte výsledky.\n\nGENERATE vytvoří plán, strukturu a soubory. MODIFY upravuje existující IN. QA vrací textovou odpověď. QFILE zapisuje souborový výstup. KASKADA spouští uloženou posloupnost kroků.\n\nCena se počítá ze skutečné spotřeby API. Zkoušky i práce mají vlastní položky; neznámá cena není nula. Offline kalkulačka je v Nákladech.\n\nReRun v Historii obnoví uložené zadání, naváže na poslední odpověď a přeskočí pouze doložené soubory, které skutečně existují v OUT.\n\nPevná matice ověřuje parametry podle modelu a LIVE/BATCH. Před pracovním voláním proběhne placená zkouška konkrétního požadavku. Chyba uvede odmítnutý parametr.",
+                "1. Nastavte API klíč a obnovte katalog modelů.\n2. V Zadání vyberte cíl, model a vstupy.\n3. Spusťte připravené zadání.\n4. Průběh lze skrýt a otevřít přes Aktivní běhy.\n5. Odeslaný BATCH převezměte tlačítkem Dokončit v Historii nebo Dávkách.\n\nGENERATE vytvoří plán, strukturu a soubory. MODIFY upravuje existující IN. QA vrací textovou odpověď. QFILE zapisuje souborový výstup. KASKADA spouští uloženou posloupnost kroků.\n\nVýchozí model nastavíte u volby modelu nebo v Nastavení. Použije se pro nové zadání; rozpracované zadání zachová svůj model.\n\nReRun v Historii obnoví uložené zadání, naváže na poslední odpověď a přeskočí pouze doložené soubory, které skutečně existují v OUT.\n\nPevná matice ověřuje parametry podle modelu a LIVE/BATCH. Před pracovním voláním proběhne placená zkouška konkrétního požadavku. Chyba uvede odmítnutý parametr.",
                 True,
             )
         )
@@ -177,7 +170,7 @@ class MainWindow(QMainWindow):
             (
                 "run",
                 "Zadání",
-                "Od zadání k výsledku. Cena se potvrzuje před odesláním.",
+                "Od zadání k výsledku.",
                 self.tab_run,
             ),
             (
@@ -196,14 +189,8 @@ class MainWindow(QMainWindow):
             (
                 "history",
                 "Historie",
-                "Požadavky, odpovědi, provozní log a pokračování ReRun.",
+                "Požadavky, odpovědi, dokončení BATCH a pokračování běhů.",
                 history,
-            ),
-            (
-                "costs",
-                "Náklady",
-                "Kalkulačka, sazby, účtenky a rozpočty na jednom místě.",
-                self.pricing_panel,
             ),
             (
                 "versions",
@@ -240,13 +227,20 @@ class MainWindow(QMainWindow):
         self.vector_panel.attached_changed.connect(self._update_attached_summary)
         self.ed_out.textChanged.connect(self.batch_panel.set_out_dir)
         self.history_panel.rerun.connect(self.rerun)
+        self.history_panel.complete_batch.connect(self.batch_panel.complete_run)
+        self.history_panel.continue_preflight.connect(self.batch_panel.continue_run)
+        self.batch_panel.continue_preflight.connect(self.rerun)
+        self.batch_panel.run_guard = self._guard_batch_run
+        self.batch_panel.runs_changed.connect(self.history_panel.refresh_runs)
+        self.batch_panel.operation_changed.connect(
+            lambda: self.history_panel.set_batch_busy(bool(self.batch_panel._operation_task))
+        )
         self.settings_page.key_changed.connect(self._apply_api_key_change)
         self.settings_page.saved.connect(self.on_settings_saved)
         for panel in (
             self.files_panel,
             self.vector_panel,
             self.batch_panel,
-            self.pricing_panel,
             self.git_panel,
         ):
             panel.logline.connect(self.log)
@@ -256,12 +250,14 @@ class MainWindow(QMainWindow):
         self.on_mode_changed()
         if settings.default_model:
             self._set_active_model(settings.default_model)
-        self._start_pricing_audit_loop()
+        self._update_model_info()
         if self.api_key:
             QTimer.singleShot(0, self._refresh_models_best_effort)
         incomplete = find_last_incomplete_run(settings.log_dir)
         if incomplete:
-            self.log("Nedokončený běh lze obnovit v Historii: " + incomplete)
+            state = read_state(Path(settings.log_dir) / incomplete)
+            self.log(("Dávku lze dokončit tlačítkem Dokončit v Historii: " if batch_ids(state)
+                      else "Nedokončený běh lze obnovit v Historii: ") + incomplete)
 
     def select_page(self, key):
         page, title, description = self.pages[key]
@@ -312,6 +308,9 @@ class MainWindow(QMainWindow):
         fields.addRow("Projekt", self.ed_project)
         fields.addRow("Cíl práce", row(self.cb_mode, self.chk_send_as_c))
         fields.addRow("Model", row(self.cb_model, button("Vybrat model…", self.choose_model)))
+        self.btn_default_model = button("Nastavit jako výchozí", self._set_current_default_model)
+        self.lbl_default_model = label("", "Hint")
+        fields.addRow("Nová zadání", row(self.btn_default_model, self.lbl_default_model))
         self.cb_run_cascade = combo()
         self.cb_run_cascade.setPlaceholderText("Vyberte uloženou kaskádu")
         self.row_cascade_selector = row(
@@ -328,13 +327,10 @@ class MainWindow(QMainWindow):
         pl.addWidget(main)
         summary, sl = card("Před spuštěním")
         self.attachment_summary = label()
-        self.price_summary = label("", "Metric")
         sl.addWidget(self.attachment_summary)
-        sl.addWidget(self.price_summary)
         sl.addWidget(
             row(
                 button("Spravovat zdroje", lambda: self.select_page("resources")),
-                button("Otevřít kalkulačku", lambda: self.select_page("costs")),
             )
         )
         pl.addWidget(summary)
@@ -474,7 +470,7 @@ class MainWindow(QMainWindow):
     def _refresh_models_best_effort(self):
         if not self.api_key:
             self.log(
-                "Katalog účtu vyžaduje API klíč. Pevná matice a kalkulačka jsou dostupné bez něj."
+                "Katalog účtu vyžaduje API klíč. Pevná matice je dostupná bez něj."
             )
             return
         key = self.api_key
@@ -490,6 +486,7 @@ class MainWindow(QMainWindow):
                 self._set_active_model(selected)
             self._refresh_generate_model_overrides()
             self.cascade_panel.refresh_models()
+            self.settings_page.refresh_models(self.all_models)
             self._refresh_model_tab()
 
         self.jobs.start(
@@ -523,6 +520,8 @@ class MainWindow(QMainWindow):
             self._set_generate_model_override(field, selected)
 
     def on_model_changed(self, *_):
+        if hasattr(self, "lbl_model_info"):
+            self._update_model_info()
         model = self.cb_model.currentText()
         caps = self.caps_cache.get(model)
         allowed = bool(caps and caps.supports_temperature and not uses_reasoning_defaults(model))
@@ -544,21 +543,6 @@ class MainWindow(QMainWindow):
             if caps
             else "Model není v pevné matici; spuštění bude zablokováno."
         )
-        row_price = self.price_table.get(model)
-        rates = row_price.rates(self.chk_send_as_c.isChecked()) if row_price else None
-        self.price_summary.setText(
-            (
-                "Sazby / 1M tokenů: "
-                + amount(rates.input)
-                + " vstup · "
-                + amount(rates.output)
-                + " výstup"
-            )
-            if rates
-            else "Cena modelu není doložena — otevřete Náklady"
-        )
-        if hasattr(self, "pricing_panel"):
-            self.pricing_panel.calc_model.setCurrentText(model)
 
     def on_mode_changed(self, *_):
         mode = self.cb_mode.currentText()
@@ -595,6 +579,8 @@ class MainWindow(QMainWindow):
         self.cb_run_cascade.setCurrentText(selected)
 
     def _refresh_model_tab(self):
+        selected = self.lst_models.currentItem()
+        selected_id = selected.data(Qt.UserRole) if selected else None
         self.lst_models.clear()
         for model in self.all_models:
             if self.ed_model_search_tab.text().lower() not in model.lower():
@@ -606,14 +592,21 @@ class MainWindow(QMainWindow):
             ):
                 continue
             item = QListWidgetItem(
-                model + ("" if selectable(model) else " · není určen pro tento program")
+                model + (" · výchozí" if model == self.s.default_model else "")
+                + ("" if selectable(model) else " · není určen pro tento program")
             )
             item.setData(Qt.UserRole, model)
             self.lst_models.addItem(item)
+            if model == selected_id:
+                self.lst_models.setCurrentItem(item)
+        self._update_model_info()
 
     def _update_model_info(self, *_):
         item = self.lst_models.currentItem()
         model = item.data(Qt.UserRole) if item else ""
+        self.lbl_default_model.setText("Výchozí: " + (self.s.default_model or "nenastaven"))
+        self.btn_default_model.setEnabled(self.cb_model.currentText() in self.all_models
+                                         and selectable(self.cb_model.currentText()))
         self.lbl_model_info.setText(
             f"Vybraný model: {model or 'žádný'} · Výchozí: {self.s.default_model or 'nenastaven'}"
         )
@@ -627,9 +620,10 @@ class MainWindow(QMainWindow):
     def _set_default_model(self):
         item = self.lst_models.currentItem()
         if item:
-            self.s.default_model = item.data(Qt.UserRole)
-            save_settings(self.s, DEFAULT_SETTINGS_FILE)
-            self._update_model_info()
+            self.settings_page.save_default_model(item.data(Qt.UserRole))
+
+    def _set_current_default_model(self):
+        self.settings_page.save_default_model(self.cb_model.currentText())
 
     def on_model_matrix(self):
         item = self.lst_models.currentItem()
@@ -702,25 +696,16 @@ class MainWindow(QMainWindow):
         os.environ["OPENAI_API_KEY"] = key
         self.caps_cache.bind(key)
         self.all_models = []
-        for panel in (self.files_panel, self.vector_panel, self.batch_panel, self.pricing_panel):
+        self.settings_page.refresh_models([])
+        self._refresh_model_tab()
+        for panel in (self.files_panel, self.vector_panel, self.batch_panel):
             panel.set_api_key(key)
         self._refresh_models_best_effort()
 
     def on_settings_saved(self):
         self.sp_temp.setValue(self.s.default_temperature)
-        if self.s.default_model:
-            self._set_active_model(self.s.default_model)
+        self._refresh_model_tab()
 
-    def _start_pricing_audit_loop(self):
-        self.pricing_audit_timer = QTimer(self)
-        self.pricing_audit_timer.timeout.connect(lambda: self.pricing_panel.start_audit(True))
-        self.pricing_audit_timer.start(15 * 60 * 1000)
-        if self.s.pricing.auto_refresh_on_start and self.price_table.is_stale(
-            self.s.pricing.cache_ttl_hours
-        ):
-            QTimer.singleShot(0, self.pricing_panel.on_refresh)
-        else:
-            QTimer.singleShot(0, lambda: self.pricing_panel.start_audit(True))
 
     def log(self, message):
         line = time.strftime("%H:%M:%S") + " · " + str(message)
@@ -793,6 +778,22 @@ class MainWindow(QMainWindow):
         if mode in ("GENERATE", "MODIFY", "QFILE") and not self.ed_out.text().strip():
             raise ValueError("Vyberte výstupní adresář OUT.")
 
+    @staticmethod
+    def _out_overlaps(target, other):
+        if not target or not other:
+            return False
+        paths = [os.path.normcase(os.path.realpath(value)) for value in (target, other)]
+        try:
+            return os.path.commonpath(paths) in paths
+        except ValueError:
+            return False
+
+    def _guard_batch_run(self, run_id, target):
+        for rid, context in self._run_contexts.items():
+            cfg = context["worker"].cfg
+            if rid == run_id or self._out_overlaps(target, cfg.out_dir):
+                raise ValueError("Běh nebo jeho OUT právě používá aktivní práce. Vyčkejte na dokončení.")
+
     def on_go(self):
         try:
             if len(self._run_contexts) >= 4:
@@ -802,6 +803,11 @@ class MainWindow(QMainWindow):
             cfg = self._config()
             self._validate_paths(cfg.mode, cfg.send_as_c)
             run_id = new_run_id()
+            resume = getattr(self, "_resume_batch_state", None)
+            if resume:
+                run_id = resume["run_id"]
+                if run_id in self._run_contexts:
+                    raise ValueError("Tento běh již pokračuje.")
             logger = None
             if cfg.mode == "KASKADA":
                 path = safe_join_under_root(
@@ -824,6 +830,11 @@ class MainWindow(QMainWindow):
             else:
                 validate_run_options(cfg)
             target = cfg.out_dir
+            busy = self.batch_panel.busy_run_id
+            if busy:
+                state = read_state(Path(self.s.log_dir) / busy)
+                if run_id == busy or self._out_overlaps(target, state.get("out_dir", "")):
+                    raise ValueError("V tomto OUT právě probíhá operace BATCH. Vyčkejte na dokončení.")
             writes = (
                 bool(target)
                 and getattr(cfg, "mode", "") != "QA"
@@ -847,32 +858,20 @@ class MainWindow(QMainWindow):
                     if overlap:
                         raise ValueError("Jiný běh již zapisuje do stejného nebo vnořeného OUT.")
             if isinstance(cfg, CascadeRunConfig):
-                worker = CascadeRunWorker(cfg, self.s, self.api_key, self.db, self.price_table)
+                worker = CascadeRunWorker(cfg, self.s, self.api_key)
             else:
-                logger = RunLogger(self.s.log_dir, run_id, project_name=cfg.project)
-                worker = RunWorker(cfg, self.s, self.api_key, logger, self.db, self.price_table)
-            scope = self._resume_cost_scope or run_id
-            control = CostController(
-                self.db,
-                self.price_table,
-                scope,
-                self,
-                stopped=lambda: worker._stop,
-                project=cfg.project,
-                mode=getattr(cfg, "mode", "KASKADA"),
-            )
-            worker.cost_control = control
-            if logger:
-                logger.update_state({"cost_scope": scope})
+                logger = RunLogger(self.s.log_dir, run_id, project_name=cfg.project, resume=bool(resume))
+                worker = RunWorker(cfg, self.s, self.api_key, logger)
+                if resume:
+                    worker.resume_generate_batch = resume["generate_batch"]
             dialog = ProgressDialog(self)
             dialog.setWindowTitle("Průběh · " + run_id)
             self._run_contexts[run_id] = dict(
-                worker=worker, dialog=dialog, run_logger=logger, run_id=run_id, scope=scope
+                worker=worker, dialog=dialog, run_logger=logger, run_id=run_id
             )
             self._active_run_key = run_id
             self.worker, self.progress_dialog, self.run_logger = worker, dialog, logger
             worker.progress_event.connect(dialog.on_progress_event)
-            control.progress_event.connect(dialog.on_progress_event)
             worker.status.connect(dialog.set_status)
             worker.logline.connect(dialog.add_log)
             worker.logline.connect(self.log)
@@ -883,8 +882,9 @@ class MainWindow(QMainWindow):
             dialog.show()
             self.runs_button.setText(f"Aktivní běhy: {len(self._run_contexts)} · otevřít průběh")
             self.btn_stop.setEnabled(True)
+            self._refresh_batch_links()
             worker.start()
-            self._resume_files, self._resume_prev_id, self._resume_cost_scope = [], None, None
+            self._resume_files, self._resume_prev_id = [], None
         except Exception as exc:
             msg_warning(self, "Běh nelze spustit", str(exc))
 
@@ -912,13 +912,26 @@ class MainWindow(QMainWindow):
         self.worker = self._run_contexts.get(self._active_run_key, {}).get("worker")
         self.runs_button.setText(f"Aktivní běhy: {len(self._run_contexts)}")
         self.btn_stop.setEnabled(bool(self._run_contexts))
+        self._refresh_batch_links()
+
+    def _refresh_batch_links(self):
+        from ..core.batch_completion import local_batches
+        busy = set(self._run_contexts)
+        for info in local_batches(self.s.log_dir).values():
+            linked = {link["run_id"] for link in info["runs"]}
+            if info["kind"] == "preflight" and linked & set(self._run_contexts):
+                busy.update(linked)
+        self.batch_panel.active_runs = busy
+        self.history_panel.active_runs = busy
+        self.history_panel.refresh_runs()
+        self.batch_panel.render_records()
 
     def show_runs(self):
         if not self._run_contexts:
             msg_info(
                 self,
                 "Aktivní běhy",
-                "Žádný běh právě neprobíhá. Dokončené výsledky jsou v Historii a Nákladech.",
+                "Žádný běh právě neprobíhá. Dokončené výsledky jsou v Historii.",
             )
         for context in self._run_contexts.values():
             context["dialog"].show()
@@ -927,6 +940,15 @@ class MainWindow(QMainWindow):
     def on_run_ok(self, key, result):
         context = self._run_contexts.get(key)
         if not context:
+            return
+        if result.get("status") == "preflight_pending":
+            context["dialog"].on_progress_event(
+                ProgressEvent("RUN", "preflight_pending", detail=result["detail"])
+            )
+            msg_info(self, "Ověření dávky probíhá", result["detail"],
+                     details=result.get("preflight_batches"))
+            self.history_panel.refresh_runs()
+            self.batch_panel.render_records()
             return
         cfg = context["worker"].cfg
         batch = bool(result.get("batch_id") or result.get("mode") == "C")
@@ -945,10 +967,9 @@ class MainWindow(QMainWindow):
             msg_info(
                 self,
                 "Dávka odeslána",
-                f"ID: {result.get('batch_id', 'viz historie')}\nSledujte Dávky a po dokončení stáhněte výstup.",
+                f"ID: {result.get('batch_id', 'viz historie')}\nDokončit ji můžete v Historii nebo Dávkách tlačítkem Dokončit.",
             )
         else:
-            show_final_receipt(self, self.db, context["scope"])
             for attr, remote in (("diag_windows_out", False), ("diag_ssh_out", True)):
                 if getattr(cfg, attr, False):
                     self._maybe_execute_repair(cfg.out_dir, cfg, remote)
@@ -971,8 +992,8 @@ class MainWindow(QMainWindow):
                 lambda result: self.log(result[1]),
                 popup=False,
             )
-        self.pricing_panel.load_receipts()
         self.history_panel.refresh_runs()
+        self.batch_panel.render_records()
 
     def on_run_err(self, key, error):
         context = self._run_contexts.get(key)
@@ -984,7 +1005,6 @@ class MainWindow(QMainWindow):
                     detail=error,
                 )
             )
-            show_final_receipt(self, self.db, context["scope"])
         msg_critical(self, "Běh skončil chybou", error)
 
     def _gather_state(self):
@@ -1068,7 +1088,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_replace():
             return
         self._apply_state({"model": self.s.default_model})
-        self._resume_files, self._resume_prev_id, self._resume_cost_scope = [], None, None
+        self._resume_files, self._resume_prev_id = [], None
         self.skip_paths_current = []
         self.txt_response_view.clear()
 
@@ -1118,16 +1138,30 @@ class MainWindow(QMainWindow):
         try:
             if not RUN_ID_RE.fullmatch(run_id):
                 raise ValueError("Neplatný RUN ID.")
-            ui, previous, structure, scope = recover_run(self.s.log_dir, run_id)
+            if run_id in self.batch_panel.active_runs:
+                raise ValueError("Běh nebo jeho sdílenou zkoušku právě zpracovává aktivní práce.")
+            from .recovery import read_record
+            state = read_record(Path(self.s.log_dir) / run_id / "run_state.json")
+            if batch_ids(state):
+                self.batch_panel.complete_run(run_id)
+                return
+            if self.batch_panel.busy_run_id == run_id:
+                raise ValueError("Tento běh již zpracovává dávku.")
+            if state.get("generate_batch"):
+                if run_id in self._run_contexts:
+                    raise ValueError("Tento běh již pokračuje.")
+                if state.get("submission_unknown"):
+                    raise ValueError("Výsledek odeslání není známý. Nejprve dohledávejte dávku v panelu Dávky.")
+            ui, previous, structure = recover_run(self.s.log_dir, run_id)
             self._apply_state(ui)
             self.skip_paths_current = self._gather_completed_paths(run_id, ui.get("out_dir", ""))
             self._resume_files, self._resume_prev_id = structure, previous
-            self._resume_cost_scope = scope
             self.ed_response_id.setText(previous or "")
+            self._resume_batch_state = state if state.get("generate_batch") else None
             try:
                 self.on_go()
             finally:
-                self._resume_cost_scope = None
+                self._resume_batch_state = None
         except Exception as exc:
             msg_warning(self, "ReRun", str(exc))
 
@@ -1215,6 +1249,4 @@ class MainWindow(QMainWindow):
             self.log("Čekám na dokončení aktivních operací. Poté okno zavřete znovu.")
             event.ignore()
             return
-        if hasattr(self, "pricing_audit_timer"):
-            self.pricing_audit_timer.stop()
         event.accept()

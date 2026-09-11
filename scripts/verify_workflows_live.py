@@ -15,8 +15,6 @@ from kajovo.core import pipeline, cascade_pipeline
 from kajovo.core.cascade_types import CascadeDefinition, CascadeStep
 from kajovo.core.config import AppSettings
 from kajovo.core.openai_client import OpenAIClient
-from kajovo.core.pricing import PriceTable
-from kajovo.core.receipt import ReceiptDB
 from kajovo.core.runlog import RunLogger
 from kajovo.core.utils import new_run_id
 
@@ -54,7 +52,6 @@ def main():
         with tempfile.TemporaryDirectory(prefix="kajovo-workflows-") as tmp:
             root = Path(tmp)
             settings = AppSettings(log_dir=str(root / "LOG"), cache_dir=str(root / "cache"))
-            db = ReceiptDB(str(root / "receipts.sqlite"))
             for mode in ("QA", "QFILE", "GENERATE", "MODIFY"):
                 values = {}
                 for field in fields(pipeline.UiRunConfig):
@@ -74,7 +71,7 @@ def main():
                               resume_files=None, resume_prev_id=None,
                               model_caps={"supports_temperature": True, "supports_previous_response_id": True})
                 worker = pipeline.RunWorker(pipeline.UiRunConfig(**values), settings, key,
-                                            RunLogger(settings.log_dir, new_run_id(), "verification"), db, PriceTable.builtin_fallback())
+                                            RunLogger(settings.log_dir, new_run_id(), "verification"))
                 errors, results = [], []
                 worker.finished_err.connect(errors.append)
                 worker.finished_ok.connect(results.append)
@@ -95,7 +92,7 @@ def main():
                             previous_response_id_expr="{{step.1.response_id}}"),
             ])
             worker = cascade_pipeline.CascadeRunWorker(cascade_pipeline.CascadeRunConfig(
-                "verification", definition, "", str(root / "cascade")), settings, key, db, PriceTable.builtin_fallback())
+                "verification", definition, "", str(root / "cascade")), settings, key)
             errors, results = [], []
             worker.finished_err.connect(errors.append)
             worker.finished_ok.connect(results.append)

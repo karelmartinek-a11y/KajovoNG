@@ -29,14 +29,8 @@ class ProgressClock:
         self.samples = deque(maxlen=5)
         self.unit_started = self.started
         self.finished = None
-        self.paused = None
 
     def update(self, event):
-        if event.state == "approval" and self.paused is None:
-            self.paused = event.timestamp
-        elif event.state != "approval" and self.paused is not None:
-            self.unit_started += event.timestamp - self.paused
-            self.paused = None
         if event.stage != self.stage:
             self.stage = event.stage
             self.samples.clear()
@@ -53,14 +47,14 @@ class ProgressClock:
             if event.completed != self.completed:
                 self.unit_started = event.timestamp
             self.completed = event.completed
-        if event.state in ("completed", "failed", "cancelled", "batch_pending") and event.stage == "RUN":
+        if event.state in ("completed", "failed", "cancelled", "batch_pending", "preflight_pending") and event.stage == "RUN":
             self.finished = event.timestamp
 
     def times(self, now=None):
         now = time.monotonic() if now is None else now
         elapsed = max(0, (self.finished if self.finished is not None else now) - self.started)
         eta = None
-        if self.finished is None and self.paused is None and self.total and len(self.samples) >= 3:
+        if self.finished is None and self.total and len(self.samples) >= 3:
             eta = max(
                 0, (self.total - self.completed) * median(self.samples) - (now - self.unit_started)
             )

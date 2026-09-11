@@ -24,15 +24,6 @@ def test_eta_requires_completed_samples_and_counts_down():
     assert clock.times(40)[2] is None
 
 
-def test_approval_does_not_inflate_unit_duration():
-    clock = ProgressClock(now=0)
-    clock.update(ProgressEvent("A3", completed=0, total=5, timestamp=0))
-    clock.update(ProgressEvent("A3", "approval", timestamp=5))
-    clock.update(ProgressEvent("A3", "active", timestamp=105))
-    clock.update(ProgressEvent("A3", completed=1, total=5, timestamp=110))
-    assert list(clock.samples) == [10]
-
-
 def test_repeated_poll_does_not_restart_unit_measurement():
     clock = ProgressClock(now=0)
     clock.update(ProgressEvent("Indexace", completed=0, total=5, timestamp=0))

@@ -17,8 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from kajovo.core import pipeline
 from kajovo.core.config import AppSettings
 from kajovo.core.generate_batch import process_saved_batch
-from kajovo.core.pricing import PriceTable
-from kajovo.core.receipt import ReceiptDB
 from kajovo.core.runlog import RunLogger
 from kajovo.core.utils import new_run_id
 from scripts.verify_workflows_live import TrackingClient
@@ -39,7 +37,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix="kajovo-generate-batch-") as tmp:
             root = Path(tmp)
-            settings = AppSettings(log_dir=str(root / "LOG"), cache_dir=str(root / "cache"), db_path=str(root / "db.sqlite"))
+            settings = AppSettings(log_dir=str(root / "LOG"), cache_dir=str(root / "cache"))
             values = {}
             for field in fields(pipeline.UiRunConfig):
                 annotation = str(field.type)
@@ -54,7 +52,7 @@ def main():
                           model_caps={"supports_temperature": True, "supports_previous_response_id": True})
             log = RunLogger(settings.log_dir, new_run_id(), "batch-integration")
             worker = pipeline.RunWorker(pipeline.UiRunConfig(**values), settings, key, log,
-                                        ReceiptDB(settings.db_path), PriceTable.builtin_fallback())
+                                        )
             errors, results = [], []
             worker.finished_err.connect(errors.append)
             worker.finished_ok.connect(results.append)

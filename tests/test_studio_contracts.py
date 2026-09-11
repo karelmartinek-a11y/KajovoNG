@@ -1,67 +1,17 @@
 """Regrese nových vazeb UI: skutečné Qt signály, soubory a účetní záznamy."""
 
 import json
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from PySide6.QtWidgets import QDialog
-from kajovo.desktop.finance import EstimateDialog
-from kajovo.desktop.jobs import Job
 from kajovo.desktop.windows import DetachedPageDialog
 import test_desktop
 
 window = test_desktop.window
-from test_cost_dialog import controller
 from test_output_chunks import raw
 from kajovo.desktop.batches import import_bundle
 
 
-def test_confirmation_crosses_gui_thread_before_request(qtbot, tmp_path, monkeypatch):
-    control = controller(tmp_path, monkeypatch)
-    gui = threading.get_ident()
-    approvals, calls, errors = [], [], []
-
-    def approve(dialog):
-        approvals.append(threading.get_ident())
-        return QDialog.Accepted
-
-    monkeypatch.setattr(EstimateDialog, "exec", approve)
-
-    class Client:
-        def validate_access(self, payload, batch=False):
-            from kajovo.core.request_rules import validate_response_payload
-
-            validate_response_payload(payload, batch)
-
-        def count_input_tokens(self, payload):
-            return 1000
-
-        def create_response(self, payload):
-            assert approvals == [gui]
-            calls.append(threading.get_ident())
-            return {
-                "id": "resp_gui",
-                "model": "gpt-4.1",
-                "status": "completed",
-                "output_text": '{"text":"OK"}',
-                "usage": {"input_tokens": 1000, "output_tokens": 10},
-            }
-
-    results = []
-    job = Job(
-        lambda job: control.execute(
-            Client(), {"model": "gpt-4.1", "input": "text", "max_output_tokens": 100}
-        )
-    )
-    job.result.connect(results.append)
-    job.error.connect(errors.append)
-    job.start()
-    qtbot.waitUntil(lambda: bool(results or errors), timeout=5000)
-    job.wait()
-    assert not errors
-    assert calls and calls[0] != gui
-    assert control.db.query()[0]["total_usd"] == "0.00102"
 
 
 def test_invalid_bundle_never_partially_overwrites_files(tmp_path):
@@ -184,11 +134,10 @@ def test_recovery_uses_events_and_related_structure(tmp_path):
     (related / "manifests" / "resume_structure.json").write_text(
         json.dumps({"resume_files": [{"path": "main.py"}], "resume_prev_id": "resp_old"})
     )
-    ui, previous, files, scope = recover_run(tmp_path, "run")
+    ui, previous, files = recover_run(tmp_path, "run")
     assert ui["project"] == "demo"
     assert previous == "resp_latest"
     assert files == [{"path": "main.py"}]
-    assert scope == "run"
 
 
 def test_recovery_saved_map_rejects_unsafe_paths(tmp_path):

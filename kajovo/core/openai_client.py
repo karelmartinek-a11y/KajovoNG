@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import json
-import hashlib
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -32,7 +31,6 @@ class OpenAIClient:
         self.backoff_cap_s = 8.0
         self._sdk = None
         self._known_responses = set()
-        self._token_counts = {}
         try:
             from openai import OpenAI  # type: ignore
             self._sdk = OpenAI(api_key=api_key, base_url=self.base_url, timeout=self.timeout_s, max_retries=0)
@@ -180,11 +178,9 @@ class OpenAIClient:
                 pass
         return self._req("GET", f"/files/{file_id}")
 
-    def configure_validation(self, settings, cost_control=None):
+    def configure_validation(self, settings):
         from .response_policy import ResponsePolicy
-        self.cost_control = cost_control
         self._policy = ResponsePolicy(self, settings.cache_dir, settings.log_dir)
-        self._policy.db_path = settings.db_path
 
     def validate_access(self, payload, batch=False):
         from .response_policy import ResponsePolicy
@@ -278,7 +274,6 @@ class OpenAIClient:
         from .contracts import ContractError
         try:
             self.validate_access(payload)
-            self.count_input_tokens(payload)
             self._policy.ensure(payload)
         except Exception as exc:
             exc.request_sent = False
@@ -334,26 +329,6 @@ class OpenAIClient:
                 self._policy.invalidate(payload["model"])
             raise
 
-    def count_input_tokens(self, payload: Dict[str, Any], _preflight=False) -> int:
-        from .cost_accounting import tokens
-        from .structured_output import prepare_payload
-        prepare_payload(payload)
-        validate_response_payload(payload)
-        supported = {"conversation", "input", "instructions", "model", "parallel_tool_calls", "personality",
-                     "previous_response_id", "reasoning", "text", "tool_choice", "tools", "truncation"}
-        body = {key: value for key, value in payload.items() if key in supported}
-        key = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
-        if key not in self._token_counts:
-            result = self._req("POST", "/responses/input_tokens", json_body=body)
-            self._token_counts[key] = tokens(result["input_tokens"])
-        count = self._token_counts[key]
-        if hasattr(self, "_policy"):
-            spec = self._policy.model_spec(payload["model"])
-            if count + payload.get("max_output_tokens", 16) > spec["context_window"]:
-                raise ValueError("Vstup a požadovaný výstup překračují kontext modelu.")
-            if spec.get("max_input_tokens") and count > spec["max_input_tokens"]:
-                raise ValueError("Vstup překračuje samostatný limit vstupních tokenů modelu.")
-        return count
 
     def list_vector_stores(self) -> List[Dict[str, Any]]:
         return self._list_all("/vector_stores")
@@ -470,7 +445,6 @@ class OpenAIClient:
             raise ValueError("Jeden dávkový soubor smí obsahovat pouze jediný model.")
         for row in rows:
             self.validate_access(row["body"], batch=True)
-            self.count_input_tokens(row["body"])
         self._policy.ensure_batch([row["body"] for row in rows])
         return rows
 

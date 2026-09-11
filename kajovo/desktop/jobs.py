@@ -45,6 +45,7 @@ class Jobs(QObject):
         popup=True,
         cancellable=False,
         upload=False,
+        on_finished=None,
     ):
         job = Job(operation, self)
         self.active.add(job)
@@ -81,8 +82,12 @@ class Jobs(QObject):
                 elif "result" in outcome:
                     receive(outcome["result"])
             finally:
-                self.busy_changed.emit(bool(self.active))
-                job.deleteLater()
+                try:
+                    if on_finished:
+                        on_finished()
+                finally:
+                    self.busy_changed.emit(bool(self.active))
+                    job.deleteLater()
 
         job.finished.connect(finished)
         job.start()

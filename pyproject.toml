@@ -14,7 +14,6 @@ dependencies = [
   "requests>=2.31.0",
   "paramiko>=3.4.0",
   "keyring>=24.0.0",
-  "beautifulsoup4>=4.12.0",
   "jsonschema>=4.23,<5",
 ]
 
@@ -42,7 +41,7 @@ namespaces = false
 
 [tool.setuptools.package-data]
 "kajovo.core.diagnostics" = ["*.ps1"]
-"kajovo.core" = ["openai_model_matrix.json", "openai_prices.json"]
+"kajovo.core" = ["openai_model_matrix.json"]
 
 [tool.setuptools.data-files]
 "resources" = ["resources/Kajovo_new.png", "resources/montserrat_regular.ttf", "resources/montserrat_bold.ttf"]

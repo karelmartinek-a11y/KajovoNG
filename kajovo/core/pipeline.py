@@ -16,13 +16,11 @@ from .request_rules import uses_reasoning_defaults, validate_run_options
 from .structured_output import prepare_payload, validate_output, user_text, builtin_format, text_format, OutputContractError
 from .compat import validate_input_file_sizes
 from .generate_batch import build_manifest as build_batch_manifest
-from .generate_batch import encode_requests, plan_format, structure_format, validate_structure
+from .generate_batch import encode_requests, plan_format, prepare_structure, structure_format, validate_structure
 from .contracts import validate_chunk_metadata
 from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths, structure_response_format, file_response_format
 from .filescan import build_manifest, scan_tree
 from .openai_client import OpenAIClient
-from .pricing import PriceTable, compute_cost, price_response
-from .receipt import Receipt, ReceiptDB
 from .retry import CircuitBreaker, with_retry
 from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root, atomic_write_text
 
@@ -102,8 +100,6 @@ class RunWorker(QThread):
         settings,
         api_key: str,
         run_logger,
-        receipt_db: ReceiptDB,
-        price_table: PriceTable,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -111,14 +107,8 @@ class RunWorker(QThread):
         self.settings = copy.deepcopy(settings)
         self.api_key = api_key
         self.log = run_logger
-        self.db = receipt_db
-        self.price_table = price_table
         self.breaker = CircuitBreaker(settings.retry.circuit_breaker_failures, settings.retry.circuit_breaker_cooldown_s)
         self._stop = False
-        self._has_receipt = False
-        self._total_input_tokens = 0
-        self._total_output_tokens = 0
-        self._used_file_search = False
         self._last_prev_id_error: Optional[str] = None
         self._final_response_id: Optional[str] = None
         self._in_dir_info: Optional[Dict[str, Any]] = None
@@ -319,7 +309,7 @@ class RunWorker(QThread):
                 validate_paths(self.cfg.resume_files)
             self.log.update_state(
                 {
-                    "status": "running",
+                    "status": "running", "error": None, "failed_at": None,
                     "started_at": time.time(),
                     "mode": self.cfg.mode,
                     "send_as_c": self.cfg.send_as_c,
@@ -328,7 +318,13 @@ class RunWorker(QThread):
                 }
             )
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
-            client.configure_validation(self.settings, getattr(self, "cost_control", None))
+            client.on_preflight_batch = self.log.record_preflight_batch
+            client.configure_validation(self.settings)
+            client.stopped = lambda: self._stop
+            if getattr(self, "resume_generate_batch", None):
+                result = self._submit_generate_batch(client, copy.deepcopy(self.resume_generate_batch))
+                self.finished_ok.emit(result)
+                return
             client.preflight_run(self.cfg)
             validate_run_options(self.cfg)
 
@@ -389,7 +385,6 @@ class RunWorker(QThread):
             except Exception:
                 pass
 
-            pricing_updated = False
 
             # Zpracování dlouhého zadání.
             # GENERATE/MODIFY zavádí zadání přes A0 s previous_response_id.
@@ -417,20 +412,25 @@ class RunWorker(QThread):
                     raise RuntimeError(f"Unknown mode: {self.cfg.mode}")
             if self._final_response_id and not result.get("response_id"):
                 result["response_id"] = self._final_response_id
-            result["pricing_snapshot"] = pricing_updated
 
             self.log.update_state({"status": "batch_pending" if result.get("batch_id") else "completed", "completed_at": time.time()})
             self.finished_ok.emit(result)
         except BaseException as e:
+            from .response_policy import PreflightPending
+            if isinstance(e, PreflightPending):
+                for record in e.batches:
+                    self.log.record_preflight_batch(record)
+                self.log.update_state({"status": "preflight_pending",
+                                       "error": None, "failed_at": None})
+                self._log_debug(str(e))
+                self.finished_ok.emit({"status": "preflight_pending", "detail": str(e),
+                                       "preflight_batches": e.batches})
+                return
             msg = str(e)
             if self._last_prev_id_error:
                 msg = self._last_prev_id_error
             if str(e) == "STOP_REQUESTED":
                 self.log.update_state({"status": "stopped", "stopped_at": time.time()})
-                try:
-                    self._ensure_receipt_on_failure("stopped_by_user", flow_type="RUN_STOPPED")
-                except Exception:
-                    pass
                 self.finished_err.emit("STOPPED")
             else:
                 try:
@@ -438,11 +438,8 @@ class RunWorker(QThread):
                 except Exception:
                     pass
                 self.log.update_state({"status": "failed", "failed_at": time.time(), "error": str(e)})
-                try:
-                    self._ensure_receipt_on_failure(f"failed: {msg}", flow_type="RUN_FAILED")
-                except Exception:
-                    pass
                 self.finished_err.emit(msg)
+
 
     # Sestavení požadavků.
     def _input_parts(self, text: str, file_ids: List[str], image_file_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -999,101 +996,25 @@ class RunWorker(QThread):
         self._log_debug(f"A3: wrote missing files report -> {report_path} ({len(skipped_files)} entries)")
         return report_path
 
-    # Účtenky.
-    def _usage_from_resp(self, resp: Dict[str, Any]) -> Tuple[int, int, Dict[str, Any]]:
-        usage = resp.get("usage") or {}
-        if not isinstance(usage, dict):
-            return 0, 0, {}
-        inp = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
-        out = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
-        return inp, out, usage
 
-    def _record_receipt(self, resp: Dict[str, Any], mode: str, flow_type: str, response_id: Optional[str] = None, batch_id: Optional[str] = None, is_batch: bool = False):
-        inp, out, usage = self._usage_from_resp(resp or {})
-        model = resp.get("model") or self.cfg.model
-        row = self.price_table.get(model) or PriceTable.builtin_fallback().get(model)
-        verified = self.price_table.is_verified(model)
-        total, tool_cost, rates, reason = price_response(row, resp, batch=is_batch)
-        total = float(total) if total is not None else None
-        tool_cost = float(tool_cost) if tool_cost is not None else None
-        storage_cost = 0.0
-        usage.update(_pricing_reason=reason, _service_tier=resp.get("service_tier"),
-            _file_search_calls=sum(o.get("type") == "file_search_call" for o in resp.get("output", [])))
-        r = Receipt(
-            run_id=self.log.run_id,
-            created_at=time.time(),
-            project=self.cfg.project,
-            model=model,
-            mode=mode,
-            flow_type=flow_type,
-            response_id=response_id,
-            batch_id=batch_id,
-            input_tokens=inp,
-            output_tokens=out,
-            tool_cost=tool_cost,
-            storage_cost=storage_cost,
-            total_cost=total,
-            pricing_verified=verified,
-            notes=(self.cfg.prompt or "")[:4000],
-            log_paths={"run_dir": self.log.paths.run_dir},
-            usage=usage,
-            pricing_snapshot=rates.snapshot() if rates else {},
-        )
-        self.db.insert(r)
-        self._has_receipt = True
-        self._total_input_tokens += inp
-        self._total_output_tokens += out
 
     def _create_response(self, client, payload):
         prepare_payload(payload)
-        controller = getattr(self, "cost_control", None)
-        stage = (payload.get("text") or {}).get("format", {}).get("name") or "RESPONSE"
         self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
         self.progress_event.emit(ProgressEvent(self._progress_stage, "waiting", detail="Čekám na odpověď API."))
         try:
-            response = controller.execute(client, payload, stage=stage) if controller else client.create_response(payload)
+            response = client.create_response(payload)
         except ContractError as exc:
             response = getattr(exc, "response", None)
             if not isinstance(response, dict):
                 raise
         self.progress_event.emit(ProgressEvent(self._progress_stage, detail="Odpověď přijata; ověřuji výsledek."))
-        if isinstance(response.get("usage"), dict):
-            response["usage"].update(_reasoning=payload.get("reasoning"), _completed=response.get("status") == "completed")
-        self._record_receipt({**response, "model": response.get("model") or payload.get("model")},
-                             self.cfg.mode, "RESPONSE", response_id=response.get("id"))
         self.log.save_json("responses", f"received_{response.get('id', 'NOID')}", response)
         if response.get("status") not in (None, "completed") or response.get("error"):
             raise ContractError("API nedokončilo odpověď; běh nemůže pokračovat s částečnými daty.")
         validate_output(response, payload)
         return response
 
-    def _ensure_receipt_on_failure(self, reason: str, flow_type: str):
-        if self._has_receipt:
-            return
-        row = self.price_table.get(self.cfg.model) or PriceTable.builtin_fallback().get(self.cfg.model)
-        verified = self.price_table.is_verified(self.cfg.model)
-        total, tool_cost, storage_cost = compute_cost(row, self._total_input_tokens, self._total_output_tokens, is_batch=self.cfg.send_as_c, use_file_search=self._used_file_search)
-        r = Receipt(
-            run_id=self.log.run_id,
-            created_at=time.time(),
-            project=self.cfg.project,
-            model=self.cfg.model,
-            mode=self.cfg.mode,
-            flow_type=flow_type,
-            response_id=None,
-            batch_id=None,
-            input_tokens=self._total_input_tokens,
-            output_tokens=self._total_output_tokens,
-            tool_cost=tool_cost,
-            storage_cost=storage_cost,
-            total_cost=total,
-            pricing_verified=verified,
-            notes=f"Fallback receipt ({reason})",
-            log_paths={"run_dir": self.log.paths.run_dir},
-            usage={"reason": reason},
-        )
-        self.db.insert(r)
-        self._has_receipt = True
 
     # Režim GENERATE.
     def _run_a_generate(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
@@ -1181,7 +1102,6 @@ class RunWorker(QThread):
             payload["text"] = plan_format()
             if self._fs_tools:
                 payload["tools"] = self._fs_tools
-                self._used_file_search = True
             self._log_request_attachments("A1", a1_ref_files, a1_input_files, a1_input_images, self._vector_store_ids, self._fs_tools)
             self._log_api_action(
                 "A1",
@@ -1218,7 +1138,12 @@ class RunWorker(QThread):
             a2_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
             # GENERATE přikládá uživatelské soubory pouze v A1.
             a2_input_files, a2_input_images = [], []
-            a2_text = "Vygeneruj strukturu souborů podle A1 plánu."
+            a2_text = (
+                "Vygeneruj strukturu souborů podle A1 plánu. Pro každé rozhraní v requires "
+                "uveď v dependencies cestu alespoň jednoho souboru, který toto id poskytuje "
+                "v provides; vlastní rozhraní nevyžaduje závislost souboru na sobě. "
+                "dependencies vyjadřují vazby mezi soubory, nejen přímé importy knihoven."
+            )
             if self.cfg.send_as_c:
                 a2_text += (" Vytvoř samostatnou závaznou specifikaci verze 2 pro nezávislé generování souborů. "
                             "Zahrň všechny podstatné závěry z příloh, vyhledávání a diagnostiky; další úlohy neuvidí historii. "
@@ -1239,7 +1164,6 @@ class RunWorker(QThread):
             )
             if self._fs_tools:
                 payload2["tools"] = self._fs_tools
-                self._used_file_search = True
             payload2["text"] = structure_format()
             self._log_request_attachments("A2", a2_ref_files, a2_input_files, a2_input_images, self._vector_store_ids, self._fs_tools)
             self._log_api_action(
@@ -1269,7 +1193,16 @@ class RunWorker(QThread):
             if struct.get("version") == 2 or self.cfg.send_as_c:
                 for attempt in range(3):
                     try:
+                        struct, additions = prepare_structure(struct)
+                        self.log.save_json("manifests", f"A2_prepared_candidate_{attempt}", {
+                            "response_id": resp2_id, "structure": struct,
+                            "added_dependencies": additions,
+                        })
                         validate_structure(struct)
+                        self.log.save_json("manifests", "A2_validated_structure", {
+                            "response_id": resp2_id, "structure": struct,
+                            "added_dependencies": additions,
+                        })
                         break
                     except ContractError as exc:
                         if attempt == 2:
@@ -1278,8 +1211,11 @@ class RunWorker(QThread):
                         repair = copy.deepcopy(payload2)
                         repair["previous_response_id"] = resp2_id
                         repair["input"] = self._input_parts(
-                            f"Oprav celý A2 manifest: {exc}. Pole provides a requires obsahují pouze přesná id "
-                            "z interfaces, dependencies pouze přesné cesty z files. Zachovej původní zadání.", [], [])
+                            f"Oprav všechny uvedené problémy celého A2 manifestu najednou:\n{exc}\n"
+                            "Pole provides a requires obsahují pouze přesná id z interfaces, "
+                            "dependencies pouze přesné cesty z files včetně poskytovatelů requires. "
+                            "Zachovej původní zadání i platné vazby. Aktuální manifest:\n"
+                            + json.dumps(struct, ensure_ascii=False), [], [])
                         self.log.save_json("requests", f"A2_validation_{attempt}", {"payload": repair})
                         resp2 = self._create_response(client, repair)
                         resp2_id = str(resp2.get("id") or "")
@@ -1365,6 +1301,8 @@ class RunWorker(QThread):
 
     # Odeslání souborových úloh po živé přípravě.
     def _submit_generate_batch(self, client, manifest):
+        from .response_policy import PreflightPending
+        encode_requests(manifest)
         for row in manifest["requests"]:
             client.validate_access(row["body"], batch=True)
         data = encode_requests(manifest)
@@ -1373,27 +1311,19 @@ class RunWorker(QThread):
             stream.write(data)
         self.log.update_state({"generate_batch": manifest, "status": "batch_prepared"})
         self._check_stop()
-        controller = getattr(self, "cost_control", None)
-        operation = None
-        if controller:
-            operation, quotes = controller.prepare(client, [r["body"] for r in manifest["requests"]], batch=True, stage="A3_FILE",
-                                                   custom_ids=[r["custom_id"] for r in manifest["requests"]])
-            with open(path, "wb") as stream:
-                stream.write(encode_requests(manifest))
-            self.log.update_state({"generate_batch": manifest, "cost_operation": operation,
-                                   "cost_quotes": dict(zip((r["custom_id"] for r in manifest["requests"]), quotes, strict=True))})
         uploaded = with_retry(lambda: client.upload_file(path, purpose="batch"), self.settings.retry, self.breaker)
         self.log.update_state({"batch_input_file_id": uploaded["id"]})
         # Vytvoření není automaticky opakováno: timeout mohl nastat až po přijetí služby.
         try:
+            self.log.update_state({"submission_unknown": True})
             batch = client.create_batch(input_file_id=uploaded["id"], endpoint="/v1/responses")
-        except Exception:
-            if controller:
-                controller.ledger.mark(operation, "unknown")
+        except PreflightPending:
+            self.log.update_state({"submission_unknown": False})
             raise
-        if controller:
-            controller.ledger.mark(operation, "pending", batch["id"])
-        self.log.update_state({"batch_id": batch["id"], "status": "batch_pending"})
+        except Exception:
+            raise
+        self.log.update_state({"batch_id": batch["id"], "status": "batch_pending", "submission_unknown": False,
+                               "batch_records": {batch["id"]: batch}})
         self.log.save_json("manifests", "generate_batch_created", batch)
         self._set(100, 0, "A1/A2 hotovo; A3 čeká na zpracování dávky.")
         return {"mode": "GENERATE", "batch_id": batch["id"], "input_file_id": uploaded["id"],
@@ -1500,7 +1430,6 @@ class RunWorker(QThread):
                     seen.add(vid)
             tools = [{"type": "file_search", "vector_store_ids": uniq_ids}]
             if tools:
-                self._used_file_search = True
                 self._fs_tools = tools
 
         self._set(24, 0, "B1: PLAN (modify)...", stage="B1")
@@ -1537,7 +1466,6 @@ class RunWorker(QThread):
         )
         if supports_fs and tools:
             payload1["tools"] = tools
-            self._used_file_search = True
         self._log_request_attachments("B1", b1_ref_files, b1_input_files, b1_input_images, vs_ids, tools)
 
         self.log.save_json(
@@ -1585,7 +1513,6 @@ class RunWorker(QThread):
         )
         if supports_fs and tools:
             payload2["tools"] = tools
-            self._used_file_search = True
         self._log_request_attachments("B2", b2_ref_files, b2_input_files, b2_input_images, vs_ids, tools)
 
         self.log.save_json(
@@ -1680,7 +1607,6 @@ class RunWorker(QThread):
         )
         if self._fs_tools:
             payload["tools"] = self._fs_tools
-            self._used_file_search = True
         self._log_request_attachments("QA", ref_file_ids, input_file_ids, input_image_ids, self._vector_store_ids, self._fs_tools)
         self._log_api_action(
             "QA",
@@ -1750,7 +1676,6 @@ class RunWorker(QThread):
             payload["temperature"] = 0.0
         if self._fs_tools:
             payload["tools"] = self._fs_tools
-            self._used_file_search = True
         self._log_request_attachments("QFILE", qfile_ref_files, qfile_input_files, qfile_input_images, self._vector_store_ids, self._fs_tools)
 
         self.log.save_json(
@@ -1846,11 +1771,6 @@ class RunWorker(QThread):
             "body": body,
         }
 
-        controller = getattr(self, "cost_control", None)
-        operation = None
-        if controller:
-            operation, quotes = controller.prepare(client, [body], batch=True, stage="C_FILES_ALL", custom_ids=[req_line["custom_id"]])
-            self.log.update_state({"cost_operation": operation, "cost_quotes": {req_line["custom_id"]: quotes[0]}})
 
         jsonl_path = os.path.join(self.log.paths.requests_dir, f"C_batch_{ts_code()}.jsonl")
         with open(jsonl_path, "w", encoding="utf-8") as f:
@@ -1869,16 +1789,9 @@ class RunWorker(QThread):
 
         self._set(25, 0, "C: create batch...")
         self._log_debug("C: creating batch")
-        try:
-            batch = client.create_batch(input_file_id=input_file_id, endpoint="/v1/responses")
-        except Exception:
-            if controller:
-                controller.ledger.mark(operation, "unknown")
-            raise
-        if controller:
-            controller.ledger.mark(operation, "pending", batch["id"])
+        batch = client.create_batch(input_file_id=input_file_id, endpoint="/v1/responses")
         batch_id = str(batch.get("id") or "")
-        self.log.update_state({"batch_id": batch_id})
+        self.log.update_state({"batch_id": batch_id, "batch_records": {batch_id: batch}})
         self.log.save_json("responses", f"C_batch_created_{batch_id}_{ts_code()}", batch)
         self._log_api_action("C", "create", {"batch_id": batch_id, "status": batch.get("status")})
 

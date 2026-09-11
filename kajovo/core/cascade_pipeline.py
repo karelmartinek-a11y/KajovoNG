@@ -19,8 +19,6 @@ from .request_rules import validate_response_payload
 from .structured_output import resolve_schema, response_format, text_format, validate_output, restore_optional_fields
 from .openai_client import OpenAIClient
 from .retry import CircuitBreaker, with_retry
-from .receipt import Receipt
-from .pricing import price_response, PriceTable
 from .utils import ensure_dir, new_run_id, safe_join_under_root, validate_relative_path, atomic_write_text
 
 
@@ -216,8 +214,6 @@ class CascadeRunWorker(QThread):
         cfg: CascadeRunConfig,
         settings,
         api_key: str,
-        receipt_db=None,
-        price_table=None,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -226,8 +222,6 @@ class CascadeRunWorker(QThread):
             self.cfg.out_dir = self.cfg.cascade.default_out_dir.strip()
         self.settings = copy.deepcopy(settings)
         self.api_key = api_key
-        self.db = receipt_db
-        self.price_table = price_table
         self.breaker = CircuitBreaker(settings.retry.circuit_breaker_failures, settings.retry.circuit_breaker_cooldown_s)
         self._stop = False
         self.logger: Optional[CascadeLogger] = None
@@ -497,7 +491,8 @@ class CascadeRunWorker(QThread):
             )
             self._emit_status(1, 0, f"KASKÁDA start: {self.cfg.cascade.name}")
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
-            client.configure_validation(self.settings, getattr(self, "cost_control", None))
+            client.configure_validation(self.settings)
+            client.stopped = lambda: self._stop
             prepared_schemas = {}
             per_step_text = {}
             for idx, step in enumerate(self.cfg.cascade.steps, 1):
@@ -515,7 +510,7 @@ class CascadeRunWorker(QThread):
                         for field in ("input_content_json", "output_schema_custom"):
                             props[field] = {"type": ["string", "null"], "description": "JSON serializovaný do textu, nebo null."}
                     prepared_schemas[idx] = resolve_schema(client, step.model, step.instructions + "\n" + step.input_text,
-                        original, [s.to_dict() for s in self.cfg.cascade.steps[idx:]], getattr(self, "cost_control", None))
+                        original, [s.to_dict() for s in self.cfg.cascade.steps[idx:]])
                     self.logger.save_json("misc", f"schema_{idx}", prepared_schemas[idx])
             context: Dict[str, Any] = {}
             per_step_response_ids: Dict[str, str] = {}
@@ -606,33 +601,8 @@ class CascadeRunWorker(QThread):
                 self.logger.save_json("requests", f"cascade_step_{idx:02d}", payload)
                 self._emit_status(base_p, 55, f"OpenAI request krok {idx}")
                 self.progress_event.emit(ProgressEvent("KASKÁDA", "waiting", detail=f"Krok {idx}: čekám na API."))
-                controller = getattr(self, "cost_control", None)
-                response = controller.execute(client, payload, stage=f"STEP_{idx}") if controller else client.create_response(payload)
-                if isinstance(response.get("usage"), dict):
-                    response["usage"].update(_reasoning=payload.get("reasoning"), _completed=response.get("status") == "completed")
+                response = client.create_response(payload)
                 self.logger.save_json("responses", f"cascade_step_{idx:02d}", response)
-                if self.db is not None:
-                    usage = response.get("usage") or {}
-                    model = response.get("model") or step.model
-                    prices = self.price_table or PriceTable.builtin_fallback()
-                    row = prices.get(model)
-                    inp, out = int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
-                    total_cost, tool_cost, rates, reason = price_response(row, response)
-                    total_cost = float(total_cost) if total_cost is not None else None
-                    tool_cost = float(tool_cost) if tool_cost is not None else None
-                    storage_cost = 0.0
-                    usage.update(_pricing_reason=reason, _service_tier=response.get("service_tier"),
-                        _file_search_calls=sum(o.get("type") == "file_search_call" for o in response.get("output", [])))
-                    self.db.insert(Receipt(
-                        run_id=run_id, created_at=time.time(), project=self.cfg.project,
-                        model=model, mode="KASKADA", flow_type=f"STEP_{idx}",
-                        response_id=response.get("id"), batch_id=None,
-                        input_tokens=inp, output_tokens=out, tool_cost=tool_cost,
-                        storage_cost=storage_cost, total_cost=total_cost,
-                        pricing_verified=prices.is_verified(model), notes=step_label,
-                        log_paths={"run_dir": self.logger.paths.run_dir}, usage=usage,
-                        pricing_snapshot=rates.snapshot() if rates else {},
-                    ))
 
                 response_id = str(response.get("id") or "").strip()
                 if response_id:

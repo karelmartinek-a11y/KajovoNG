@@ -18,6 +18,10 @@ from .utils import atomic_write_text
 class PreflightPending(RuntimeError):
     """Dávka dosud neskončila; další spuštění naváže na stejné vzdálené ID."""
 
+    def __init__(self, message, batch_id=None, status=None):
+        super().__init__(message)
+        self.batches = [{"id": batch_id, "status": status}] if batch_id else []
+
 
 class PreflightTransport:
     def __init__(self, client, expected_payload=None):
@@ -28,13 +32,11 @@ class PreflightTransport:
         prepare_payload(payload)
         validate_response_payload(payload, batch=batch)
 
-    def count_input_tokens(self, payload):
-        return self.client.count_input_tokens(payload, _preflight=True)
 
     def create_response(self, payload):
         self.validate_access(payload)
         if self.expected_payload is not None and payload != self.expected_payload:
-            error = ValueError("Rozpočet změnil parametry zkoušky; připravte nový odhad pracovního požadavku.")
+            error = ValueError("Parametry zkoušky se liší od pracovního požadavku.")
             error.request_sent = False
             raise error
         return self.client._send_response(payload)
@@ -132,10 +134,8 @@ class ResponsePolicy:
         log.save_json("requests", "preflight", payload)
         try:
             adapter = PreflightTransport(self.client, expected_payload)
-            controller = getattr(self.client, "cost_control", None)
-            result = controller.execute(adapter, payload, stage="PREFLIGHT") if controller else adapter.create_response(payload)
+            result = adapter.create_response(payload)
             log.save_json("responses", "preflight", result)
-            self.record_usage(result, payload, log.run_id, False)
             validate_output(result, payload)
             log.update_state({"status": "completed", "model": payload["model"], "response_id": result.get("id")})
             return result
@@ -143,22 +143,11 @@ class ResponsePolicy:
             log.update_state({"status": "failed", "model": payload["model"], "error": str(exc)})
             raise
 
-    def record_usage(self, result, payload, run_id, batch):
-        if not getattr(self, "db_path", None) or (not batch and getattr(self.client, "cost_control", None)):
-            return
-        from .receipt import Receipt, ReceiptDB
-        from .pricing import PriceTable, price_response
-        usage = result.get("usage") or {}
-        prices = PriceTable.builtin_fallback()
-        model = result.get("model") or payload["model"]
-        total, tool, rates, reason = price_response(prices.get(model), result, batch=batch)
-        usage = {**usage, "_pricing_reason": reason, "_service_tier": result.get("service_tier"),
-            "_file_search_calls": sum(o.get("type") == "file_search_call" for o in result.get("output", []))}
-        ReceiptDB(self.db_path).insert(Receipt(run_id, time.time(), "Zkušební volání", model,
-            "PREFLIGHT", "PREFLIGHT_BATCH" if batch else "PREFLIGHT", result.get("id"), None,
-            usage.get("input_tokens", 0), usage.get("output_tokens", 0), float(tool) if tool is not None else None,
-            0.0, float(total) if total is not None else None, bool(rates and rates.verified_at),
-            "Spotřeba zkušebního volání", {}, usage, pricing_snapshot=rates.snapshot() if rates else {}))
+
+    def _observe_batch(self, record):
+        observer = getattr(self.client, "on_preflight_batch", None)
+        if callable(observer):
+            observer({**record, "checked_at": time.time()})
 
     def ensure_batch(self, payloads):
         """Jedna skutečná zkušební dávka pro všechny dosud neověřené řádky."""
@@ -174,67 +163,60 @@ class ResponsePolicy:
         missing = {key: body for key, body in by_key.items() if key not in self.proofs}
         if missing:
             trial_id = uuid.uuid4().hex
-            controller = getattr(self.client, "cost_control", None)
-            operation = None
-            if controller is not None:
-                copies = copy.deepcopy(list(missing.values()))
-                operation, _ = controller.prepare(PreflightTransport(self.client), copies,
-                    batch=True, stage="PREFLIGHT_BATCH", custom_ids=list(missing))
-                if copies != list(missing.values()):
-                    controller.ledger.mark(operation, "released")
-                    raise ValueError("Limit výstupu zkušební dávky se změnil; připravte pracovní JSONL se stejným limitem.")
             rows = [{"custom_id": key, "method": "POST", "url": "/v1/responses", "body": body} for key, body in missing.items()]
             data = ("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n").encode()
             if len(data) > 200_000_000:
-                if operation is not None:
-                    controller.ledger.mark(operation, "released")
                 raise ValueError("Zkušební JSONL překračuje 200 MB; rozdělte dávku.")
             trial_dir = self.log_dir / ("PREFLIGHT_BATCH_" + trial_id)
             trial_dir.mkdir(parents=True, exist_ok=True)
             atomic_write_text(str(trial_dir / "input.jsonl"), data.decode("utf-8"))
             # Soubory byly plně validovány před vstupem do transportu.
-            try:
-                uploaded = self.client._req("POST", "/files", json_body={"purpose": "batch"},
-                    files={"file": (f"preflight-{trial_id}.jsonl", io.BytesIO(data), "application/jsonl")})
-            except Exception:
-                if operation is not None:
-                    controller.ledger.mark(operation, "released")
-                raise
+            uploaded = self.client._req("POST", "/files", json_body={"purpose": "batch"},
+                files={"file": (f"preflight-{trial_id}.jsonl", io.BytesIO(data), "application/jsonl")})
             file_id = uploaded["id"]
             try:
                 job = self.client._req("POST", "/batches", json_body={"input_file_id": file_id,
                     "endpoint": "/v1/responses", "completion_window": "24h", "metadata": {"purpose": "kajovong_preflight", "matrix": matrix_version()}})
             except Exception as exc:
                 definitive = getattr(exc, "status_code", None) in (400, 401, 403, 404, 422)
-                if operation is not None:
-                    controller.ledger.mark(operation, "released" if definitive else "unknown")
-                # Neurčitý transportní výsledek nelze automaticky opakovat a účtovat znovu.
+                # Neurčitý transportní výsledek nelze automaticky opakovat .
                 for key, body in missing.items():
                     self.proofs[key] = {"model": body["model"], "state": "failed" if definitive else "submission_unknown",
                         "input_file_id": file_id, "error": str(exc), "status_code": getattr(exc, "status_code", None),
                         "param": getattr(exc, "param", None), "code": getattr(exc, "code", None)}
                 self.save()
                 raise rejection(rows[0]["body"]["model"], exc, True) from exc
-            if operation is not None:
-                controller.ledger.mark(operation, "pending", job["id"])
             for key, body in missing.items():
                 self.proofs[key] = {"model": body["model"], "state": "pending", "batch_id": job["id"],
-                    "input_file_id": file_id, "tested_at": time.time(), "cost_operation": operation}
+                    "input_file_id": file_id, "tested_at": time.time(), "batch_record": job}
             self.save()
+            self._observe_batch(job)
+        for key in by_key:
+            proof = self.proofs[key]
+            if proof.get("batch_id"):
+                self._observe_batch(proof.get("batch_record") or {"id": proof["batch_id"]})
         batch_ids = {self.proofs[key]["batch_id"] for key in by_key if self.proofs[key]["state"] == "pending"}
         deadline = time.monotonic() + min(self.client.timeout_s, 60)
         for batch_id in batch_ids:
             while True:
-                controller = getattr(self.client, "cost_control", None)
-                if controller is not None and (controller.cancelled or controller.stopped()):
-                    raise PreflightPending(f"Zkušební Batch {batch_id} zůstává uložený. Pracovní dávka nebyla odeslána.")
+                if getattr(self.client, "stopped", lambda: False)():
+                    raise RuntimeError("STOP_REQUESTED")
                 job = self.client.retrieve_batch(batch_id)
+                self._observe_batch(job)
+                for proof in self.proofs.values():
+                    if proof.get("batch_id") == batch_id:
+                        proof["batch_record"] = job
                 if job.get("status") in ("completed", "failed", "expired", "cancelled"):
                     self.finish_batch(job, by_key)
                     break
                 if time.monotonic() >= deadline:
-                    raise PreflightPending(f"Zkušební Batch {batch_id}: {job.get('status')}. Pracovní dávka nebyla odeslána; "
-                        "spusťte odeslání znovu pro převzetí výsledku. OpenAI má okno až 24 hodin.")
+                    raise PreflightPending(
+                        "OpenAI právě ověřuje zkušební dávku. Jde o běžné čekání na zpracování.\n\n"
+                        "Pracovní dávka čeká na úspěšné dokončení tohoto ověření. "
+                        "Zpracování u OpenAI může trvat až 24 hodin.\n\n"
+                        "Později otevřete Historii nebo Dávky a u tohoto běhu zvolte Pokračovat. "
+                        "Program naváže na stejné ověření a po jeho úspěšném dokončení odešle pracovní dávku.",
+                        batch_id, job.get("status"))
                 time.sleep(min(2, max(0, deadline - time.monotonic())))
         for key in by_key:
             proof = self.proofs[key]
@@ -271,8 +253,6 @@ class ResponsePolicy:
                 error=error.get("message") or str(job.get("errors") or f"Batch {job['status']}: chybí úspěšný řádek"),
                 param=error.get("param"), code=error.get("code"))
             if job["status"] == "completed" and response.get("status_code") == 200 and not error:
-                if not proof.get("cost_operation"):
-                    self.record_usage(body, payloads[key], "PREFLIGHT_BATCH_" + key, True)
                 try:
                     validate_output(body, payloads[key])
                 except Exception as exc:
@@ -280,10 +260,7 @@ class ResponsePolicy:
                 else:
                     proof.update(state="verified", response_id=body.get("id"), tested_at=time.time())
         self.save()
-        if any(proof.get("batch_id") == job["id"] and proof.get("cost_operation") for proof in self.proofs.values()):
-            from .batch_costs import finalize_batches
-            finalize_batches(self.client, self.db_path)
-        # Úklid pouze vlastních souborů až po převzetí všech odpovědí a vyúčtování.
+        # Úklid pouze vlastních souborů až po převzetí všech odpovědí .
         related = [p for p in self.proofs.values() if p.get("batch_id") == job["id"]]
         if all(p["state"] != "pending" for p in related):
             owned = {job.get("output_file_id"), job.get("error_file_id"), *(p.get("input_file_id") for p in related)} - {None}

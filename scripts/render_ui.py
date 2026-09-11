@@ -25,8 +25,6 @@ from PySide6.QtWidgets import QApplication, QTabWidget, QDialog, QFileDialog, QS
 from kajovo.app.main import _load_fonts
 from kajovo.core.config import AppSettings
 from kajovo.core.progress import ProgressEvent
-from kajovo.core.receipt import Receipt
-from kajovo.core.cost_accounting import quote, CostLedger
 from kajovo.desktop.application import MainWindow
 from kajovo.desktop.dialogs import (
     DetailDialog,
@@ -36,7 +34,6 @@ from kajovo.desktop.dialogs import (
     FilePicker,
     TextInputDialog,
 )
-from kajovo.desktop.finance import EstimateDialog, show_final_receipt
 from kajovo.desktop.windows import ModelPicker, SplashScreen
 
 QCoreApplication.setAttribute(Qt.AA_DontUseNativeDialogs, True)
@@ -47,13 +44,10 @@ os.chdir(workspace)
 settings = AppSettings(
     log_dir=str(workspace / "LOG"),
     cache_dir=str(workspace / "cache"),
-    db_path=str(workspace / "fixture.sqlite"),
 )
-settings.pricing.auto_refresh_on_start = False
 patches = [
     patch("kajovo.desktop.application.load_api_key", return_value=""),
     patch("kajovo.desktop.application.get_secret", return_value=None),
-    patch.object(MainWindow, "_start_pricing_audit_loop"),
     patch(
         "requests.sessions.Session.request",
         side_effect=AssertionError("Síť je při snímkování zakázána."),
@@ -98,30 +92,6 @@ window.batch_panel._on_refreshed(
         ],
     }
 )
-window.pricing_panel.calc_model.setCurrentText("gpt-5.2")
-rates = window.price_table.get("gpt-5.2").rates()
-receipt = Receipt(
-    "RUN_100920261200_DEMO",
-    1789041600,
-    "Ukázková data",
-    "gpt-5.2",
-    "QA",
-    "RESPONSE",
-    "resp_demo",
-    None,
-    1000,
-    100,
-    0,
-    0,
-    0.00315,
-    True,
-    "Ukázková účetní data",
-    {},
-    {"input_tokens": 1000, "output_tokens": 100},
-    pricing_snapshot=rates.snapshot(),
-)
-window.db.insert(receipt)
-window.pricing_panel.load_receipts()
 manifest = []
 
 
@@ -181,13 +151,13 @@ for key in window.pages:
     for bar, position in positions:
         bar.setValue(position)
 
-for state in ("active", "waiting", "approval", "batch_pending", "completed", "failed"):
+for state in ("active", "waiting", "preflight_pending", "batch_pending", "completed", "failed"):
     dialog = ProgressDialog(window)
     dialog.set_status("Ukázkový běh · vytvářím soubory projektu")
     dialog.add_log("A3 · Soubor 8 z 12 byl uložen a ověřen.")
     dialog.on_progress_event(
         ProgressEvent(
-            "A3" if state in ("active", "waiting", "approval") else "RUN",
+            "A3" if state in ("active", "waiting") else "RUN",
             state,
             completed=8,
             total=12,
@@ -212,19 +182,7 @@ for kind in ("task", "upload"):
     dialog.mark_done()
     dialog.close()
 
-estimate = {
-    "items": [
-        quote({"model": "gpt-5.2", "input": "Ukázka", "max_output_tokens": 8000}, 1000, rates)
-    ],
-    "maximum_usd": ".11375",
-    "spent_usd": ".00315",
-    "stage": "A3",
-    "batch": False,
-    "includes_trial": True,
-    "fx": {"date": "10.09.2026", "czk_per_usd": "21"},
-}
 for name, dialog in (
-    ("estimate", EstimateDialog(estimate, "5", 8000, window)),
     (
         "message",
         DetailDialog(
@@ -241,25 +199,6 @@ for name, dialog in (
     capture(dialog, "dialog_" + name)
     dialog.hide()
 
-ledger = CostLedger(window.db.db_path)
-ledger.set_limit("RUN_100920261200_DEMO", "5")
-operation = ledger.reserve("RUN_100920261200_DEMO", estimate)
-ledger.settle(
-    operation, ".00315", "resp_demo", {"input_tokens": 1000, "output_tokens": 100}, rates.snapshot()
-)
-with patch.object(
-    QDialog, "exec", lambda dialog: (capture(dialog, "dialog_final_receipt"), dialog.hide(), 0)[-1]
-):
-    show_final_receipt(window, window.db, "RUN_100920261200_DEMO")
-with patch.object(
-    QDialog, "exec", lambda dialog: (capture(dialog, "dialog_budgets"), dialog.hide(), 0)[-1]
-):
-    window.pricing_panel.show_budgets()
-window.pricing_panel.tbl_receipts.selectRow(0)
-with patch.object(
-    QDialog, "exec", lambda dialog: (capture(dialog, "dialog_receipt_detail"), dialog.hide(), 0)[-1]
-):
-    window.pricing_panel.show_detail()
 for key in ("settings", "batch"):
     window.open_section(key)
     dialog = window.findChildren(QDialog)[-1]

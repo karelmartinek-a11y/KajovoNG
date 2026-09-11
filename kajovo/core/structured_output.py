@@ -186,7 +186,7 @@ def builtin_format(contract):
     return response_format(contract, schema)
 
 
-def resolve_schema(client, model, instructions, original=None, context=None, controller=None):
+def resolve_schema(client, model, instructions, original=None, context=None):
     """Příprava neurčitého kontraktu s omezeným počtem oprav."""
     if original:
         try:
@@ -201,7 +201,7 @@ def resolve_schema(client, model, instructions, original=None, context=None, con
                 "Každé pole má konkrétní typ, pole items. Používej jen type, properties, required, additionalProperties, "
                 "items, enum, description, anyOf a lokální $defs/$ref. Zachovej požadované názvy a návaznosti.",
             "input": json.dumps({"instructions": instructions, "original_schema": original, "downstream": context, "validation_error": error}, ensure_ascii=False)}
-        response = controller.execute(client, payload, stage="SCHEMA_PREPARATION") if controller else client.create_response(payload)
+        response = client.create_response(payload)
         try:
             proposal = validate_output(response, payload)
             schema = _load_json(proposal["schema_json"])

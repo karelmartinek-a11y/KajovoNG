@@ -35,7 +35,7 @@ class RunPaths:
 
 
 class RunLogger:
-    def __init__(self, base_log_dir: str, run_id: str, project_name: str = ""):
+    def __init__(self, base_log_dir: str, run_id: str, project_name: str = "", *, resume=False):
         root_dir = os.path.abspath(os.curdir)
         if not base_log_dir:
             base_log_dir = os.path.join(root_dir, "LOG")
@@ -49,7 +49,13 @@ class RunLogger:
         ensure_dir(self.base_log_dir)
 
         run_dir = os.path.join(self.base_log_dir, run_id)
-        os.makedirs(run_dir, exist_ok=False)
+        if resume:
+            with open(os.path.join(run_dir, "run_state.json"), encoding="utf-8") as source:
+                state = json.load(source)
+            if not state.get("generate_batch") or state.get("batch_id") or state.get("submission_unknown"):
+                raise ValueError("Běh nemá dávku bezpečně připravenou k pokračování.")
+        else:
+            os.makedirs(run_dir, exist_ok=False)
         self.paths = RunPaths(
             run_id=run_id,
             run_dir=run_dir,
@@ -65,8 +71,9 @@ class RunLogger:
 
         self.events_path = os.path.join(self.paths.run_dir, "events.jsonl")
         self.state_path = os.path.join(self.paths.run_dir, "run_state.json")
-        self._write_state({"status": "created", "run_id": run_id, "project": self.project_name, "created_at": time.time()})
-        self.event("run.created", {"project": self.project_name})
+        if not resume:
+            self._write_state({"status": "created", "run_id": run_id, "project": self.project_name, "created_at": time.time()})
+        self.event("run.resumed" if resume else "run.created", {"project": self.project_name})
 
     def _atomic_write_json(self, path: str, payload: Any) -> None:
         ensure_dir(os.path.dirname(path) or ".")
@@ -112,6 +119,15 @@ class RunLogger:
             state = {"status": "corrupt_state"}
         state.update(self._redact(patch))
         self._write_state(state)
+
+    def record_preflight_batch(self, record):
+        """Zachová vazbu ověřovací dávky i při okamžitém dokončení nebo chybě."""
+        with open(self.state_path, encoding="utf-8") as source:
+            state = json.load(source)
+        trials = {item["id"]: item for item in state.get("preflight_batches", [])
+                  if isinstance(item, dict) and item.get("id")}
+        trials[record["id"]] = {**trials.get(record["id"], {}), **record}
+        self.update_state({"preflight_batches": list(trials.values())})
 
     def event(self, typ: str, data: Dict[str, Any]) -> None:
         rec = {"ts": time.time(), "type": typ, "data": self._redact(data)}

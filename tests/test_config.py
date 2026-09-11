@@ -24,6 +24,20 @@ def test_optional_security_lists_accept_null(tmp_path):
         assert load_settings(str(path)).security.deny_extensions_in is None
 
 
+def test_legacy_financial_settings_are_ignored_without_touching_database(tmp_path):
+    from dataclasses import asdict
+    database = tmp_path / "existing.sqlite"
+    database.write_bytes(b"puvodni obsah")
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"db_path": str(database), "pricing": {"source_url": "invalid"},
+                                "default_model": "gpt-4.1"}), encoding="utf-8")
+    with patch("kajovo.core.config.get_secret", return_value=None):
+        settings = load_settings(str(path))
+    assert settings.default_model == "gpt-4.1"
+    assert "pricing" not in asdict(settings) and "db_path" not in asdict(settings)
+    assert database.read_bytes() == b"puvodni obsah"
+
+
 def test_clearing_secret_removes_environment_fallback(monkeypatch):
     monkeypatch.setenv("KAJOVO_SECRET_SMTP_PASSWORD", "obsolete")
     with patch("keyring.delete_password"), patch("keyring.get_password", return_value=None):

@@ -3,10 +3,11 @@
 import copy
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget, QTabWidget, QCheckBox, QLineEdit
+from ..core.model_registry import selectable
 from ..core.config import save_settings, DEFAULT_SETTINGS_FILE
 from ..core.secret_store import persist_api_key, APIKeyStoreError
 from ..core.notifications import send_smtp_notification
-from .design import column, row, label, button, form, text, number, editor, scroll
+from .design import column, row, label, button, form, text, number, editor, scroll, combo
 from .dialogs import msg_info, msg_warning
 from .jobs import Jobs
 
@@ -46,26 +47,23 @@ class SettingsPage(QWidget):
         general = QWidget()
         gl = column(general, 18)
         fields = form(gl)
-        self.default_model = text(settings.default_model)
+        self.available_models = []
+        self.default_model = combo()
+        self.refresh_models([])
         self.default_temperature = number(settings.default_temperature, maximum=2, decimal=True)
         self.batch_poll = number(settings.batch_poll_interval_s, 0.5, 60, True)
         self.batch_timeout = number(settings.batch_timeout_s, 60, 86400, True)
         self.response_timeout = number(settings.response_timeout_s, 1, 86400, True)
-        self.price_url = text(settings.pricing.source_url)
-        self.price_refresh = QCheckBox("Obnovovat ceník při spuštění")
-        self.price_refresh.setChecked(settings.pricing.auto_refresh_on_start)
         for name, field in (
             ("Výchozí model", self.default_model),
             ("Výchozí teplota", self.default_temperature),
             ("Kontrola dávky každých (s)", self.batch_poll),
             ("Limit sledování dávky (s)", self.batch_timeout),
             ("Čekání na API (s)", self.response_timeout),
-            ("URL ceníku", self.price_url),
-            ("Obnova cen", self.price_refresh),
         ):
             fields.addRow(name, field)
         gl.addStretch()
-        tabs.addTab(scroll(general), "Provoz a ceny")
+        tabs.addTab(scroll(general), "Provoz")
         security = QWidget()
         sl = column(security, 18)
         self.allow_sensitive = QCheckBox("Povolit nahrávání citlivých souborů")
@@ -118,6 +116,49 @@ class SettingsPage(QWidget):
         tabs.addTab(scroll(smtp), "Upozornění e-mailem")
         layout.addWidget(button("Uložit nastavení", self.save, "Primary"))
 
+    def set_model_selection(self, model):
+        index = self.default_model.findData(model)
+        if index < 0:
+            self.default_model.addItem(model + " · není v katalogu účtu", model)
+            index = self.default_model.count() - 1
+            self.default_model.model().item(index).setEnabled(False)
+        self.default_model.setCurrentIndex(index)
+
+    def refresh_models(self, models):
+        selected = self.default_model.currentData()
+        selected = self.s.default_model if selected is None else selected
+        self.available_models = list(models)
+        self.default_model.clear()
+        self.default_model.addItem("Bez výchozího modelu", "")
+        for model in models:
+            if selectable(model):
+                self.default_model.addItem(model, model)
+        self.set_model_selection(selected)
+
+    def _valid_default(self, model):
+        if model and model != self.s.default_model and (
+            model not in self.available_models or not selectable(model)
+        ):
+            msg_warning(self, "Výchozí model", "Vyberte podporovaný model z katalogu účtu.")
+            return False
+        return True
+
+    def save_default_model(self, model):
+        if not self._valid_default(model):
+            return False
+        candidate = copy.deepcopy(self.s)
+        candidate.default_model = model
+        try:
+            save_settings(candidate, DEFAULT_SETTINGS_FILE)
+        except Exception as exc:
+            msg_warning(self, "Výchozí model není uložen", str(exc))
+            return False
+        self.s.default_model = model
+        self.set_model_selection(model)
+        self.saved.emit()
+        msg_info(self, "Výchozí model", "Uloženo pro nová zadání: " + model)
+        return True
+
     def toggle_key(self):
         self.api_key.setEchoMode(
             QLineEdit.Normal
@@ -165,13 +206,13 @@ class SettingsPage(QWidget):
 
     def save(self):
         candidate = copy.deepcopy(self.s)
-        candidate.default_model = self.default_model.text().strip()
+        candidate.default_model = self.default_model.currentData() or ""
+        if not self._valid_default(candidate.default_model):
+            return
         candidate.default_temperature = self.default_temperature.value()
         candidate.batch_poll_interval_s = self.batch_poll.value()
         candidate.batch_timeout_s = self.batch_timeout.value()
         candidate.response_timeout_s = self.response_timeout.value()
-        candidate.pricing.source_url = self.price_url.text().strip()
-        candidate.pricing.auto_refresh_on_start = self.price_refresh.isChecked()
         candidate.security.allow_upload_sensitive = self.allow_sensitive.isChecked()
         candidate.security.deny_extensions_in = [
             line.strip() for line in self.deny_ext.toPlainText().splitlines() if line.strip()
@@ -210,7 +251,7 @@ class SettingsPage(QWidget):
         )
 
     def get_state(self):
-        values = {name: getattr(self, name).text() for name in ("default_model", "price_url")}
+        values = {"default_model": self.default_model.currentData() or ""}
         values.update(
             {
                 name: getattr(self, name).value()
@@ -223,7 +264,7 @@ class SettingsPage(QWidget):
             }
         )
         values.update(
-            {name: getattr(self, name).isChecked() for name in ("price_refresh", "allow_sensitive")}
+            {name: getattr(self, name).isChecked() for name in ("allow_sensitive",)}
         )
         values.update(
             {name: getattr(self, name).toPlainText() for name in ("deny_ext", "deny_glob")}
@@ -237,11 +278,11 @@ class SettingsPage(QWidget):
     def apply_state(self, values):
         if not isinstance(values, dict):
             raise ValueError("Nastavení v zadání musí být objekt.")
-        aliases = {"temperature": "default_temperature", "auto_price": "price_refresh"}
+        aliases = {"temperature": "default_temperature"}
         for key, value in values.items():
             name = aliases.get(key, key)
-            if name in ("default_model", "price_url") and isinstance(value, str):
-                getattr(self, name).setText(value)
+            if name in ("default_model",) and isinstance(value, str):
+                self.set_model_selection(value)
             elif name in (
                 "default_temperature",
                 "batch_poll",
@@ -249,7 +290,7 @@ class SettingsPage(QWidget):
                 "response_timeout",
             ) and type(value) in (int, float):
                 getattr(self, name).setValue(value)
-            elif name in ("price_refresh", "allow_sensitive") and type(value) is bool:
+            elif name in ("allow_sensitive",) and type(value) is bool:
                 getattr(self, name).setChecked(value)
             elif name in ("deny_ext", "deny_glob") and isinstance(value, str):
                 getattr(self, name).setPlainText(value)

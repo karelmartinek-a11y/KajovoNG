@@ -24,6 +24,76 @@ def manifest():
     return build_manifest("run_test", "test", {"contract": "A1_PLAN"}, specification(), "gpt-4.1-nano", 0)
 
 
+def test_pending_batch_resumes_saved_manifest_without_live_preparation(tmp_path):
+    from kajovo.core.response_policy import PreflightPending
+    from kajovo.core.runlog import RunLogger
+    worker = make_worker(tmp_path, "GENERATE")
+    worker.cfg.send_as_c = True
+    worker.resume_generate_batch = manifest()
+    client = Mock()
+    client.upload_file.side_effect = PreflightPending("Čeká", "batch_trial", "validating")
+    results, errors = [], []
+    worker.finished_ok.connect(results.append)
+    worker.finished_err.connect(errors.append)
+    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+        worker.run()
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    assert state["status"] == "preflight_pending"
+    assert state["preflight_batches"] == [{"id": "batch_trial", "status": "validating"}]
+    assert not errors and results[-1]["status"] == "preflight_pending"
+    client.create_response.assert_not_called()
+    client.create_batch.assert_not_called()
+    from kajovo.core.pipeline import RunWorker
+    logger = RunLogger(worker.settings.log_dir, worker.log.run_id, resume=True)
+    logger.update_state({"status": "failed", "error": "Starý čekající běh", "failed_at": 1})
+    worker = RunWorker(worker.cfg, worker.settings, "test", logger)
+    worker.finished_ok.connect(results.append)
+    worker.finished_err.connect(errors.append)
+    worker.resume_generate_batch = state["generate_batch"]
+    client.upload_file.side_effect = None
+    client.upload_file.return_value = {"id": "file_work"}
+    client.create_batch.return_value = {"id": "batch_work"}
+    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+        worker.run()
+    client.create_response.assert_not_called()
+    client.create_batch.assert_called_once()
+    assert Path(client.upload_file.call_args.args[0]).read_bytes() == encode_requests(manifest())
+    assert results[-1]["batch_id"] == "batch_work"
+    completed = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    assert completed["error"] is None and completed["failed_at"] is None
+    assert completed["preflight_batches"] == state["preflight_batches"]
+    with pytest.raises(ValueError):
+        RunLogger(worker.settings.log_dir, worker.log.run_id, resume=True)
+
+
+
+
+def test_unknown_work_submission_blocks_resume(tmp_path):
+    from kajovo.core.runlog import RunLogger
+    worker = make_worker(tmp_path, "GENERATE")
+    client = Mock()
+    client.upload_file.return_value = {"id": "file_work"}
+    client.create_batch.side_effect = TimeoutError("Neznámý výsledek")
+    with pytest.raises(TimeoutError):
+        worker._submit_generate_batch(client, manifest())
+    with pytest.raises(ValueError):
+        RunLogger(worker.settings.log_dir, worker.log.run_id, resume=True)
+
+
+
+
+def test_second_validation_pending_is_safe_to_resume(tmp_path):
+    from kajovo.core.response_policy import PreflightPending
+    from kajovo.core.runlog import RunLogger
+    worker = make_worker(tmp_path, "GENERATE")
+    client = Mock()
+    client.upload_file.return_value = {"id": "file_work"}
+    client.create_batch.side_effect = PreflightPending("Čeká", "batch_trial", "in_progress")
+    with pytest.raises(PreflightPending):
+        worker._submit_generate_batch(client, manifest())
+    RunLogger(worker.settings.log_dir, worker.log.run_id, resume=True)
+
+
 def outputs(m):
     return [{"custom_id": cid, "response": {"status_code": 200, "body": {
         **response(i, {"contract": "A3_FILE", "path": path, "content": "content\n",
@@ -49,7 +119,6 @@ def test_live_preparation_then_one_request_per_file(tmp_path):
         worker.run()
     assert not errors
     assert client.create_response.call_count == 2
-    assert len(worker.db.query()) == 2
     rows = [json.loads(line) for line in Path(client.upload_file.call_args.args[0]).read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 2
     assert all("previous_response_id" not in row["body"] for row in rows)
@@ -196,18 +265,16 @@ def test_output_change_after_repair_submission_is_preserved(tmp_path):
     assert path.read_text() == "new user edit"
 
 
-def test_restart_import_receipts_and_selective_retry(tmp_path):
+def test_restart_import_responses_and_selective_retry(tmp_path):
     worker = make_worker(tmp_path, "GENERATE")
     m = manifest()
     worker.log.update_state({"generate_batch": m, "batch_id": "batch_test", "out_dir": str(tmp_path / "out")})
     client = Mock()
     client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_output"}
     client.file_content.return_value = raw(outputs(m))
-    worker.settings.db_path = worker.db.db_path
     for _ in range(2):
         result = process_saved_batch(client, worker.log.paths.run_dir, "batch_test", worker.settings)
         assert result["status"] == "files_complete_unverified"
-    assert len(worker.db.query()) == 2
     client.upload_file.return_value = {"id": "file_retry"}
     client.create_batch.return_value = {"id": "batch_retry"}
     repeat_saved_batch(client, worker.log.paths.run_dir, "batch_test", ["maths.py"], "Fix sum")

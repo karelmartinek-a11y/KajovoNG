@@ -2,13 +2,13 @@
 
 ## Účel a rozsah
 
-KájovoNG je desktopový klient OpenAI Responses API pro vytváření a úpravy textových souborů, dotazy, uživatelské kaskády a dávkové požadavky. Zahrnuje správu vzdálených souborů a vector stores, evidenci běhů a nákladů, Git, SMTP a diagnostiku Windows a SSH. Součástí projektu je samostatný převodník textů `utf8nobom`.
+KájovoNG je desktopový klient OpenAI Responses API pro vytváření a úpravy textových souborů, dotazy, uživatelské kaskády a dávkové požadavky. Zahrnuje správu vzdálených souborů a vector stores, evidenci běhů, Git, SMTP a diagnostiku Windows a SSH. Součástí projektu je samostatný převodník textů `utf8nobom`.
 
 Tento dokument je kanonickou technickou specifikací. [README](../README.md) popisuje spuštění a [návod sestavení](../Build/README.md) distribuci. Chování ověřují zdrojový kód a automatické testy. Změny kontraktů se promítají do specifikace i odpovídajících testů.
 
 ## Prostředí a spuštění
 
-Projekt vyžaduje Python 3.12 nebo novější. Závislosti a jejich povolené verze určuje [pyproject.toml](../pyproject.toml): PySide6, OpenAI SDK, requests, paramiko, keyring, beautifulsoup4 a jsonschema. Vývojové nástroje jsou v extra `dev`. `requirements.txt` instaluje projekt, `requirements-dev.txt` projekt s vývojovými závislostmi.
+Projekt vyžaduje Python 3.12 nebo novější. Závislosti a jejich povolené verze určuje [pyproject.toml](../pyproject.toml): PySide6, OpenAI SDK, requests, paramiko, keyring a jsonschema. Vývojové nástroje jsou v extra `dev`. `requirements.txt` instaluje projekt, `requirements-dev.txt` projekt s vývojovými závislostmi.
 
 Vstupní body `kajovong`, `python -m kajovong` a `python -m kajovo.app.main` volají společný spouštěč. Ten vytvoří QApplication, načte písma, ikonu a nastavení a zobrazí maximalizované hlavní okno. Chybějící generovanou ikonu nahrazuje vložená ikona. Prostředky se vyhledávají ve zdrojovém stromu, instalaci nebo balíčku PyInstaller.
 
@@ -27,7 +27,7 @@ Před každým spuštěním ověří pip (chybějící doplní přes `ensurepip`
 | Vlastní kaskády | `cascade_types.py`, `cascade_pipeline.py`, `cascade_log.py` | Kroky, substituce, schémata, soubory a evidence |
 | API | `openai_client.py`, `retry.py`, `compat.py`, `model_capabilities.py` | SDK/REST, chyby, stránkování, opakování a schopnosti modelů |
 | Souborové hranice | `contracts.py`, `filescan.py`, `utils.py` | Kontrakty, sken vstupu, validace cest, hashe a zápisy |
-| Evidence a ceny | `runlog.py`, `receipt.py`, `pricing.py`, `cost_accounting.py`, `price_sources.py`, `batch_costs.py`, `pricing_audit.py` | Logy, SQLite účtenky, ceník a doplnění evidence |
+| Evidence | `runlog.py` | Logy, požadavky, odpovědi a stavy běhů |
 | Nastavení | `config.py`, `secret_store.py`, `resources.py` | Konfigurace, hesla a prostředky |
 | Diagnostika | `diagnostics/windows.py`, `diagnostics/ssh.py`, `notifications.py` | Sběr diagnostiky a SMTP |
 | Desktop | `kajovo/ui` | Hlavní okno, panely, dialogy a workery Qt |
@@ -37,17 +37,17 @@ Názvy modulů bez adresáře označují soubory pod `kajovo/core`.
 
 ## Uživatelské rozhraní
 
-Hlavní okno má deset sekcí v levé navigaci: Zadání, Kaskády, Zdroje, Dávky, Historie, Náklady, Verze projektu, Modely, Nastavení a Nápověda. Zadání odděluje prompt, parametry a adresáře, diagnostiku a výsledek. Spustit, Zastavit a přístup k aktivním běhům zůstávají mimo posuvný obsah. Teplota běhu a výchozí teplota mají samostatné ovladače. Nastavení a Dávky lze otevřít i v samostatném okně se stejným obsahem a stavem. [Inventář a návrh UI](UI_DESIGN.md) popisuje pokrytí původních funkcí a odkazy na validační matice.
+Hlavní okno má devět sekcí v levé navigaci: Zadání, Kaskády, Zdroje, Dávky, Historie, Verze projektu, Modely, Nastavení a Nápověda. Zadání odděluje prompt, parametry a adresáře, diagnostiku a výsledek. Spustit, Zastavit a přístup k aktivním běhům zůstávají mimo posuvný obsah. Teplota běhu a výchozí teplota mají samostatné ovladače. Nastavení a Dávky lze otevřít i v samostatném okně se stejným obsahem a stavem. [Inventář a návrh UI](UI_DESIGN.md) popisuje pokrytí původních funkcí a odkazy na validační matice.
 
 Rozhraní v `kajovo/desktop` používá světlou pracovní plochu, tmavou navigaci a Montserrat 10 bodů. Formuláře a navigace dovolují posouvání i na malé logické ploše při zvýšeném DPI; hlavní akce Zadání zůstávají dosažitelné. Dialogy přizpůsobují velikost dostupnému oknu, podrobnosti mají posuv a společný přepínač technických podkladů. Tabulky mají čitelné jednotky, kopírování výběru a vodorovný posuv. Nové rozhraní je samostatná implementace; balík `kajovo/ui` se nedistribuuje.
 
-`ProgressEvent` přenáší etapu, stav, dokončený počet, celkový počet, jednotku, detail a monotónní čas události. Text logu ani pevně vážená procenta neurčují dokončení. A3/B3 započítávají soubor po získání a ověření celého obsahu; zápis na disk je samostatná etapa. Kaskáda započítává dokončené kroky. API bez měřitelného postupu používá neurčitý indikátor. Trvání a stáří poslední události se obnovují každou sekundu; tato obnova nedokazuje aktivitu poskytovatele. ETA vzniká po třech dokončených srovnatelných jednotkách z mediánu posledních pěti dob, pouze pro aktuální etapu. Čekání na potvrzení ceny nezvyšuje měřenou dobu jednotky. Změna etapy vzorky resetuje. Ukončení, chyba, zrušení a předání do Batch mají odlišné stavy; koncové indikátory již neanimují práci.
+`ProgressEvent` přenáší etapu, stav, dokončený počet, celkový počet, jednotku, detail a monotónní čas události. Text logu ani pevně vážená procenta neurčují dokončení. A3/B3 započítávají soubor po získání a ověření celého obsahu; zápis na disk je samostatná etapa. Kaskáda započítává dokončené kroky. API bez měřitelného postupu používá neurčitý indikátor. Trvání a stáří poslední události se obnovují každou sekundu; tato obnova nedokazuje aktivitu poskytovatele. ETA vzniká po třech dokončených srovnatelných jednotkách z mediánu posledních pěti dob, pouze pro aktuální etapu. Změna etapy vzorky resetuje. Ukončení, chyba, zrušení a předání do Batch mají odlišné stavy; koncové indikátory již neanimují práci.
 
 BATCH zobrazuje počet zpracovaných úloh včetně chyb a čas posledního úspěšného ověření i další naplánované kontroly. ETA vzdálené fronty není odhadována. Dokončení API není potvrzením zápisu do OUT. Uploadový dialog povolí zavření po zrušení až po potvrzení konce workerem.
 
 Síťové operace panelů, Git příkazy a SMTP test běží v asynchronních workerech. Správce Jobs drží worker do signálu finished; teprve poté předá výsledek UI a případně zahájí navazující obnovu. Správa zdrojů a Git blokuje konfliktní akce po dobu operace. Průběžné textové logy mají limit 2000 bloků; uložená evidence tím není omezena.
 
-Zdroje obsahují soubory API a vector stores. Odpojení souboru od úložiště a odstranění z Files API jsou odlišné operace. Modely filtrují katalog podle pevné matice a zobrazují pravidla. Historie zobrazuje uložené požadavky a odpovědi; Náklady spravují kalkulaci, ceník, účtenky a rozpočty.
+Zdroje obsahují soubory API a vector stores. Odpojení souboru od úložiště a odstranění z Files API jsou odlišné operace. Modely filtrují katalog podle pevné matice a zobrazují pravidla. Historie zobrazuje uložené požadavky a odpovědi.
 
 GITHUB pracuje s lokálním repozitářem a příkazy Git. Obnovení stavu nepřepisuje remote. Zápis, commit, synchronizaci a změnu remote vyvolávají příslušné uživatelské akce. Pull používá aktuální větev a fast-forward. Příkazy mají časový limit a nepovolují interaktivní terminálový prompt. Editor dovoluje uložit pouze úspěšně načtený UTF-8 soubor.
 
@@ -56,16 +56,14 @@ GITHUB pracuje s lokálním repozitářem a příkazy Git. Obnovení stavu nepř
 | Výchozí umístění | Obsah |
 | --- | --- |
 | `kajovo_settings.json` | Nastavení; vzor je `kajovo_settings.example.json` |
-| `kajovo.sqlite` | Databáze účtenek |
 | `LOG/RUN_DDMMYYYYHHMM_XXXX` | Data běhu; poslední čtyři znaky jsou náhodné |
 | `LOG/ui_session.log` | Zprávy desktopového rozhraní |
-| `cache/price_table.json` | Ceník |
 | `kajovo/core/openai_model_matrix.json` | Pevná verzovaná pravidla všech doložených modelů |
 | `cache/cascades` | Definice vlastních kaskád |
 
 `AppSettings` umožňuje změnit umístění databáze, LOG a cache. Načítání vyžaduje JSON objekt, kontroluje typy, konečnost čísel a rozsahy; neznámé klíče ignoruje. Seznamy allow/deny mohou být `null`. Výchozí teplota je 0,2, povolený rozsah 0 až 2. Port SMTP musí být 1 až 65535.
 
-Výchozí retry má šest pokusů, počáteční prodlevu 0,8 s, strop 20 s, jitter do 0,25 s a circuit breaker po šesti chybách s prodlevou 20 s. Ceník má výchozí TTL 72 hodin a zapnuté automatické obnovení. SMTP má port 587 a STARTTLS.
+Výchozí retry má šest pokusů, počáteční prodlevu 0,8 s, strop 20 s, jitter do 0,25 s a circuit breaker po šesti chybách s prodlevou 20 s. SMTP má port 587 a STARTTLS.
 
 `logging.max_total_mb` a `logging.max_runs` se ukládají a validují, ale implementace podle nich automaticky nemaže logy. Panel BATCH načítá seznam na pracovním vlákně a při nedokončených dávkách opakuje načtení podle `batch_poll_interval_s`. Po `batch_timeout_s` sledování skončí, aniž by zrušilo vzdálenou dávku; ruční obnovení zahájí nové sledování. `security.allow_upload_sensitive` výslovně povoluje soubory zachycené heuristikou citlivých názvů a obsahu. Ostatní filtry skenu zůstávají účinné.
 
@@ -107,11 +105,15 @@ GENERATE BATCH dovoluje návaznost, připojená úložiště a diagnostiku IN v 
 
 A2 verze 2 obsahuje společná pravidla, balíčky s verzemi, rozhraní s jedinečnými ID a přesnými definicemi a soubory s poli `path`, `purpose`, `language`, `kind`, `dependencies`, `provides`, `requires`, `behavior`. Souborové závislosti odkazují jen na jiné položky manifestu; rozhraní jen na definovaná ID. Chybějící poskytovatel nebo neznámý odkaz blokuje A3. Neplatný A2 může vyvolat nejvýše dvě opravná živá volání. Binární a vynechané soubory jsou evidovány jako nedodané.
 
+Před validací každé nové odpovědi A2 v LIVE i BATCH probíhá `prepare_structure`: na kopii specifikace doplní chybějící `dependencies`, pokud vyžadované rozhraní deklaruje v `provides` právě jeden soubor. Zachovává existující vazby a jejich pořadí, nevytváří duplicity ani vlastní závislost. Vlastní poskytované rozhraní nebo již uvedený poskytovatel další vazbu nepotřebuje. Při více poskytovatelích bez existující volby se žádný nevybírá odhadem. Příprava nemění neznámé odkazy ani nevymýšlí chybějící rozhraní či poskytovatele.
+
+`validate_structure` zůstává přísný a původní manifest neopravuje. Po ověření tvaru a jednoznačnosti identifikátorů hlásí vztahové chyby souhrnně, s cestami souborů, identifikátory rozhraní a dostupnými poskytovateli. Opravné volání dostává všechny zjištěné problémy i aktuální připravený manifest; dvě opravná volání jsou horní mez, nikoli počet opravovaných vazeb. Jednoznačné doplnění nevyžaduje další API volání. Původní odpovědi zůstávají zachované, kandidáti `A2_prepared_candidate_*` a úspěšně ověřený `A2_validated_structure` se ukládají samostatně s evidencí doplněných vazeb. Následující BATCH používá připravenou strukturu ve společném snímku. Již uložené dávkové manifesty, požadavky a jejich hashe se zpětně nenormalizují.
+
 `generate_batch` v evidenci běhu obsahuje neměnný snímek se SHA-256, požadavky a mapování ID na cesty. Jedna dávka má jediný model A3, 1 až 50 000 položek a nejvýše 200 MB JSONL. Přístup a definitivní podporu konkrétního modelu ověřuje služba; lokální pravidlo připouští známé textové rodiny. Každý A3_FILE musí mít index 0, počet částí 1, `has_more: false` a `next_chunk_index: null`. Neúplný výstup se neukládá jako hotový soubor.
 
 Hybridní import běží na pracovním vlákně a stáhne výstupní i chybové JSONL do evidence běhu. Nejprve kontroluje ID celé dávky; neznámé ID zastaví import, duplicita zneplatní daný soubor. Cestu porovnává s uloženým manifestem. Úspěšné položky zapisuje atomicky, existující změněný obsah zachovává. Stav je `partial` nebo `files_complete_unverified`; druhý stav nepotvrzuje sestavení ani funkčnost. Hash souborů chrání opakovaný import i následné uživatelské změny.
 
-Ruční opakování a oprava vybraných cest vytvářejí novou dávku bez A1/A2 se stejným snímkem. Oprava přidává připomínku a aktuální obsah. `generate_batches` a `batch_imports` zachovávají vztahy a výsledky přes restart. Starý ReRun bez společné specifikace není podkladem hybridní dávky. Živé přípravné odpovědi mají standardní sazbu, souborové odpovědi dávkovou sazbu; účtenky se deduplikují podle response ID.
+Ruční opakování a oprava vybraných cest vytvářejí novou dávku bez A1/A2 se stejným snímkem. Oprava přidává připomínku a aktuální obsah. `generate_batches` a `batch_imports` zachovávají vztahy a výsledky přes restart. Starý ReRun bez společné specifikace není podkladem hybridní dávky.
 
 Stažení preferuje OUT uložené u souvisejícího běhu, poté OUT panelu nebo adresář vybraný uživatelem. Uchovává nezpracovaný `batch_<id>_output.jsonl`, zpracovává souborové kontrakty a eviduje jednotlivá response ID. Neúplné nebo duplicitní části souboru hlásí jako chybu. Chyba jedné položky nevrací zpět již uložené položky. Stažení dávky není vícesouborovou transakcí.
 
@@ -135,7 +137,7 @@ Sken IN aplikuje allow/deny seznamy přípon a masek. Vynechává Git, prostřed
 
 Balíček IN je textový soubor s JSONL položkami `path` a `content`, nikoli ZIP. Načtený obsah musí odpovídat SHA-256 ze skenu a být dekódovatelný jako UTF-8. Celkový limit balíčku je 40 MiB. Podle schopností modelu může aplikace vytvořit i vector store a čekat na indexaci. Ručně vybrané přílohy nepodléhají stejnému skenu. Podporované dokumenty se připojují jako `input_file`, obrázky jako `input_image`. Nepodporovaná příloha nebo neověřitelná metadata běh zastaví. Kontrola velikosti zahrnuje součet příloh; pravidla jsou v [matici požadavků](REQUEST_MATRIX.md).
 
-Běžné běhy mohou vytvářet vzdálené soubory a úložiště pro IN a diagnostiku. Dokončení je automaticky neodstraňuje; spravují se v příslušných panelech. Totéž platí pro přílohy a výstupy kaskád. Zkušební volání používají skutečné vybrané prostředky a nevytvářejí pomocná úložiště. Vlastní dávkové soubory se po převzetí výsledků a vyúčtování odstraňují; neúspěšný úklid je zaznamenaný.
+Běžné běhy mohou vytvářet vzdálené soubory a úložiště pro IN a diagnostiku. Dokončení je automaticky neodstraňuje; spravují se v příslušných panelech. Totéž platí pro přílohy a výstupy kaskád. Zkušební volání používají skutečné vybrané prostředky a nevytvářejí pomocná úložiště. Vlastní dávkové soubory se po převzetí výsledků odstraňují; neúspěšný úklid je zaznamenaný.
 
 ## Komunikace a opakování
 
@@ -148,6 +150,10 @@ SDK má vypnuté vlastní retry. REST vrstva má nejvýše čtyři pokusy, poč�
 `response_policy` před každým pracovním LIVE odesláním provede zkušební volání s celým skutečným payloadem a ověří jeho výstup. Automaticky nemění teplotu, tool_choice, schéma, přílohy ani limit výstupu. Identita obsahuje celý payload a režim; změna kterékoliv volby vyžaduje novou zkoušku. Výsledek není odhadem schopností modelu. Přístup ke skutečným file_id, předchozí odpovědi a stav vector store se ověřují odděleně. Příprava se zástupnými ID provádí jen statickou kontrolu; zástupná ID se neodesílají.
 
 BATCH nejprve kontroluje všechny řádky včetně jednotného modelu a poté vytváří skutečnou zkušební dávku pro neověřené payloady. Pracovní upload/odeslání je podmíněné completed a úspěšným platným výsledkem každého řádku. Čekání trvá nejvýše 60 sekund; nedokončená zkouška pracovní odeslání zastaví a vrátí ID/stav. Příští spuštění přebere tutéž dávku. Okno OpenAI je 24 hodin. Jedna kombinace se nemůže prokázat výsledkem jiného endpointu. Úspěšné dávkové výsledky platí do pracovního odeslání, nejvýše hodinu od převzetí. Neurčité vytvoření bez ID se automaticky neopakuje.
+
+Čekající zkouška se eviduje jako `preflight_pending`, nikoli chyba běhu. Informační okno vysvětluje běžné čekání na ověření a další postup tlačítkem Pokračovat v Historii nebo Dávkách; vzdálené ID a stav jsou v technických podkladech. Okno průběhu po ukončení místního běhu (včetně čekání na vzdálenou dávku) nabízí tlačítko **OK**, které okno zavře bez zastavení vzdáleného zpracování; ovládání zastavení a upozornění skryje. Pokračovat (a kompatibilní ReRun) u GENERATE BATCH obnovuje celý uložený manifest ve stejném běhu bez opakování A1/A2, včetně starších záznamů označených `failed`. Požadavky i jejich ID zůstávají stejné. Kontext účtu a platnost důkazů se nadále ověřují běžnou validační politikou. UI nepovolí souběžné pokračování stejného běhu. Již odeslanou pracovní dávku předá společnému dokončení bez opakování A1/A2 nebo pracovního odeslání; uložené neurčité odeslání vyžaduje nejprve dohledání výsledku.
+
+Vazby dávka–běh zahrnují pracovní ID i `preflight_batches`, včetně starších uložených záznamů. Zkouška může patřit více běhům a vazba zůstává zachována po pracovním odeslání. Pozorovatel validační politiky zapisuje ID, dostupné serverové údaje a čas ověření zkoušky do běhu i při okamžitém úspěchu nebo selhání. Přehledy sdílejí poslední známé serverové stavy v `LOG/batch_status.json` (v nastaveném adresáři logů); obnovení je ukládá odděleně od run_state.json a nezasahuje do stavů pracovníka ani importu. Novější pozorování má přednost, neúplná odpověď zachová dostupné datum a výpadek sítě zachová poslední známý stav. Historie odděluje místní stav běhu od serverového stavu dávky. Serverové completed zkoušky znamená čekání na převzetí ověření, nikoli oprávnění odeslat pracovní dávku bez validace výsledků. Zkušební dávky nabízejí Pokračovat, pracovní Dokončit; zkoušky nepovolují import do OUT ani opakování souborů. Aktivní pokračování blokuje i ostatní běhy sdílející zkoušku. Obnovení přehledu nikdy samo neodesílá pracovní požadavky.
 
 Cache důkazů je oddělená podle SHA-256 kontextu klíče, endpointu a verze matice; klíč se neukládá. Staré důkazy se nemigrují. HTTP chyba obsahuje model, transport, param/code/request_id podle údajů API. Nepodporovaný parametr je hlášen jako rozpor s maticí; chyby účtu, prostředku, obsahu a sítě se za chybu statické podpory nevydávají. Matice zůstává neměnná i po odmítnutí API.
 
@@ -171,31 +177,27 @@ SSH OUT spouští schválený obsah `.sh` přes stdin vzdáleného `sh -s` na ho
 
 Textový kontrakt odmítá nedokončené a chybové odpovědi, odmítnutí modelu a odpověď bez textu. JSON objekt nesmí obsahovat duplicitní klíče ani nestandardní číselné konstanty. Kaskáda kontroluje modely, teploty, schémata a odkazy na předchozí kroky před první síťovou operací. Chybějící hodnotu odkazu nenahrazuje prázdným textem.
 
-## Logy, účtenky a ceny
+## Logy a evidence
 
-Adresář běhu obsahuje `files`, `requests`, `responses`, `manifests`, `misc`, `events.jsonl` a `run_state.json`. Vytvoření odmítá existující adresář téhož běhu. Názvy uložených JSON kombinují bezpečný zkrácený název a hash. Stav běžného běhu rozlišuje vytvoření, běh, dokončení, zastavení a selhání.
+Adresář běhu obsahuje `files`, `requests`, `responses`, `manifests`, `misc`, `events.jsonl` a `run_state.json`. Vytvoření odmítá existující adresář téhož běhu; výslovné pokračování připravené GENERATE dávky znovu otevře její evidenci. Názvy uložených JSON kombinují bezpečný zkrácený název a hash. Stav běžného běhu rozlišuje vytvoření, běh, dokončení, zastavení a selhání.
 
 Logy obsahují zadání, odpovědi a případně zdrojový kód. Známá tajná pole a řetězce s Bearer hodnotami se redigují, ale volný text může obsahovat další citlivá data. Logy nejsou šifrované a ovladač šifrování je neaktivní. Správa přístupu a uchování provozních dat je odpovědností provozovatele.
 
-SQLite používá WAL. Migrace `user_version=1` před změnou existující evidence vytváří zálohu `.before-cost-v1.bak`. Tabulka `receipts` zachovává původní údaje, přesnou částku `total_usd` jako desetinný řetězec a `pricing_snapshot_json`. Starší záznam bez doloženého snímku nemá dodatečně vymyšlenou přesnou cenu. Vložení deduplikuje response ID v rámci `provider_profile`; více odpovědí jedné dávky jsou samostatné účtenky. Archivace nemění náklady. Doplnění dosud nevyčíslené účtenky ukládá celý původní řádek do `receipt_revisions` a aktualizuje aktivní záznam o cenu, sazby a skutečnou spotřebu. Již vyčíslená cena se automaticky nepřepisuje; doplňující poznámky mají tabulku `receipt_notes`.
+Aplikace neprovádí cenění, předběžné počítání tokenů, finanční kalkulace, potvrzování rozpočtů ani cenové audity. Odpovědi API včetně původních metadat se ukládají do LOG bez finančního vyhodnocení. Existující provozní databáze a cache se nemažou ani nemigrují; neznámé položky starého nastavení se při načtení ignorují.
 
-`cost_accounting.py` počítá v Decimal, kanonicky v USD za milion tokenů. Běžný vstup = celkový vstup − cache read − cache write. Zápis cache nahrazuje běžnou vstupní sazbu. Reasoning je podmnožina výstupních tokenů a nepřičítá se podruhé. Neplatná nebo chybějící spotřeba a chybějící sazba mají neznámou cenu, nikoli nulu. Batch vyžaduje vlastní sazbu. Prahy dlouhého kontextu musí být doloženy pro daný model. Krátký i dlouhý kontext mají explicitní sazbu každé kategorie zvlášť pro Standard, Batch, Flex a Priority/Fast; zaokrouhlená sazba cache není důvodem k vyřazení celého modelu. Chybějící dlouhá sazba se nepřebírá z jiného režimu. Poplatky file search používají skutečný počet volání. Úložiště je samostatná průběžná služba; globální bezplatný limit účtu se neodečítá po jednotlivých bězích.
 
-`price_sources.py` čte oficiální Markdown tabulky Standard, Batch, Flex a Fast a kontroluje sloupce a jednotky. `openai_prices.json` obsahuje distribuované oficiální sazby, jejich zdroje, časy ověření a SHA-256 zdrojů; díky tomu funguje první start bez sítě. Bootstrap doplní chybějící modely a novější oficiální podklady do cache, zachová ruční importy. Obnova závisí na stáří ceníku, nikoli pouze na jeho prázdnosti. Známé prahy a limity vycházejí z verzovaných podkladů; modelové stránky se při obnově stahují jen pro nové modely. Distribuovaný snímek vytváří `scripts/update_price_snapshot.py --docs-directory <adresář Markdown zdrojů>`. Nedoložené kategorie zůstávají neznámé. JSON import je ruční neověřený zdroj; sazby v cache `schema_version=2` zachovávají kompatibilní názvy `*_per_1k`. Síťová chyba zachovává poslední ceník. Snímek účtenky obsahuje zdroj a čas ověření a nezmění se při aktualizaci cache. Přesné známé snapshoty a aliasy se mapují výhradně podle pevné modelové matice; budoucí nebo neznámé ID se neodhadují odstraněním přípony. Samostatný cenový řádek snapshotu má přednost. Tvrdý limit nepoužívá neověřené sazby ani sazbu modelu či ceník starší 72 hodin. Číselné orientační scénáře lze zobrazit i ze starší sazby s uvedeným datem. Nestandardní service tier bez příslušných sazeb nemá doloženou cenu; odpověď `fast` používá sazbu Priority. Doložený regionální příplatek se násobí samostatně; bez doložené regionální sazby je regionální cena neznámá.
+## Dokončení uložených dávek a výchozí model
 
-Před první generující operací worker sestaví skutečný payload a přes `POST /v1/responses/input_tokens` získá počet vstupních tokenů. Posílá pouze parametry podporované počítacím endpointem včetně předchozí odpovědi a příloh. Odhad je vázán hashem na payload a snímek sazeb. Změna maxima výstupu vyžaduje nový odhad a potvrzení. Bez alespoň deseti dokončených srovnatelných vzorků modelu, fáze a reasoning používá výslovné scénáře 2k/8k/32k; jinak P10, medián a P90. Scénáře respektují nastavené a známé modelové maximum. Není možné přesně předpovědět dosud nevytvořené vstupy dalších kroků.
+Po úspěšném odeslání pracovní dávky uživatel pokračuje akcí **Dokončit** v Historii nebo Dávkách. Obě místa používají stejnou operaci na pracovním vlákně. Probíhající vzdálená dávka vrátí informaci o čekání; ukončená dávka se převezme do původního OUT bez A1/A2, preflightu nebo nového generování. Čekající preflight zůstává samostatným pokračováním před odesláním pracovní dávky.
 
-`cost_scopes` uchovává volitelný limit USD; `cost_operations` podklady odhadu, rezervaci, spotřebu, výsledek a stav oznámení. Rezervace probíhá v `BEGIN IMMEDIATE` před odesláním. Pro celou připravenou dávku se rezervuje součet maxim. Strop používá nejdražší možnou kategorii vstupu včetně zápisu cache a skutečné `max_output_tokens`. Není-li limit výstupu uveden v požadavku, strop může použít doložené modelové maximum. Dynamické nástroje nemají doložený celkový strop. Při nedostatku rozpočtu UI umožní zvýšení limitu nebo zastavení. Nejistý výsledek přijetí požadavku ponechá rezervaci nevyřešenou. Generující požadavky a vytvoření dávek nemají skryté automatické opakování po timeoutu. Lokální chyba evidence nevyvolá nové placené volání.
+`run_state.json` zachovává `batch_records` podle ID dávky včetně dostupného serverového `created_at`. Přehled páruje `batch_id` a `generate_batches` s místními běhy a jejich projektem; serverový čas zobrazuje v místním pásmu jako `DD.MM.YYYY HH:mm:ss`. Chybějící čas není odvozován z času vzniku běhu. Cizí dávka bez místních podkladů nemá akci dokončení běhu. Starší stav bez `batch_records` zůstává čitelný.
 
-Evidence rozlišuje `_outcome` (výsledek služby nebo nejistý transport) a `_pricing_status` (vyčíslená nebo neznámá cena). Dokončená odpověď bez doložené ceny není timeout. Sazba vráceného snapshotu může být použita jen s doloženým zdrojem; shoda veškerých metadat s aliasem se nevyžaduje. Seznam modelových dokumentů pro ceník vychází z cenových tabulek. Zkušební volání ukládají vlastní požadavky a odpovědi do LOG; při samostatném spuštění bez cenového dialogu vyčíslí skutečnou spotřebu podle distribuovaných sazeb a uloží jejich snímek.
+Serverový stav a uložení do OUT jsou oddělené. `batch_imports[batch_id].import_status` eviduje výsledek konkrétního importu, zatímco `status` běhu zohledňuje úplnost výstupu i dosud nepřevzaté opravné dávky. `files_complete_unverified` označuje úplné uložení souborů, nikoli ověření funkčnosti. Částečný import zůstává opakovatelný. MODIFY ověřuje ID jediného požadavku C1, kontrakt C_FILES_ALL a eviduje hashe importovaných souborů; již změněné nebo cizí soubory nepřepisuje. GENERATE používá uložený manifest a ochranu hashů. Dokončení nesmí běžet současně s další operací stejného běhu nebo s aktivním během používajícím překrývající se OUT. Výsledek obnoví Historii i Dávky.
 
-`desktop/finance.py` spojuje worker s potvrzovacím oknem přes queued Qt signál a událost. Síť, odhad a kurz ČNB běží mimo vlákno UI. Zavření nebo zrušení dialogu neodešle generování. GENERATE BATCH po A2 vždy potvrzuje konkrétní A3 dávku a ukazuje dosavadní vyčíslenou přípravu. Vybrané opakování a opravy souborů používají stejný rozpočtový scope. Zkušební LIVE i BATCH rovněž používají odhad a evidenci nákladů; nejde o bezplatný dry-run. Po živém dokončení nebo chybě se otevře výsledná účtenka s nevyřešenými položkami. Vynucené ukončení procesu může zanechat rezervaci bez výsledku; její stav zůstává v databázi.
+Zrušení zpracování je dostupné pro `validating`, `in_progress` a `finalizing` a vyžaduje potvrzení. Aplikace nemaže serverové soubory ani nenabízí smazání záznamu dávky, které Batch API nepodporuje.
 
-`batch_costs.py` načítá terminální výstup i chybový JSONL a účtuje položky podle uložených custom ID a sazeb. Nezapisuje do OUT. Neúplná či duplicitní data zůstanou nevyřešená. Oznámení výsledné účtenky má trvalý příznak zobrazení; restart je neztratí. Import souborů je samostatná operace. BATCH sleduje dávky po omezenou dobu podle nastavení; ruční obnovení pokračuje v načítání a vyúčtování.
+`default_model` je jediná trvalá předvolba modelu. Výběr v Nastavení a akce **Nastavit jako výchozí** u hlavního modelu i v Modely používají stejné ukládání. Změna se projeví v paměti a ovladačích až po úspěšném zápisu. Předvolba platí pro čisté zadání při spuštění aplikace a akci Nové; rozpracované a načtené zadání, explicitní modely A1/A2/A3, ReRun i odeslaná dávka zachovávají vlastní model. Nová volba vyžaduje podporovaný model z katalogu účtu. Uložená nedostupná předvolba zůstane viditelná bez tichého nahrazení.
 
-Audit nejprve načte skutečné odpovědi z LOG a doplní jejich ceny, pak zpracuje nevyčíslené databázové účtenky i bez dostupného LOG. Doplnění ze současných sazeb je označeno datem; nejde o tvrzení o historické faktuře. Opakování je idempotentní a zachovává původní řádky v revizích. Chybějící usage nelze nahradit nulou. Již vyčíslená historie se automaticky nepřeceňuje. Náklady nabízí okamžitou kalkulaci vstupu/výstupu bez API; zobrazuje cenu jednoho volání i cenu se stejně dlouhou zkouškou. Sazby jsou čitelně v USD za milion tokenů, cache v samostatných sloupcích. Výchozí sekce Nákladů je offline kalkulačka s číselnou cenou. Odhad před odesláním zvýrazní číselný střední scénář, výsledná účtenka rozliší zkoušku/práci, LIVE/Batch, známé ceny a neuzavřené operace; surové podklady se zobrazí až po rozbalení. Panel stránkuje po 100 záznamech, filtruje projekt/běh/model a archiv, zobrazuje úplný součet doložených cen a počet nevyčíslených položek. Export JSON/CSV zahrnuje celý filtr. Výsledné ceny jsou výpočtem aplikace podle usage, nikoli účetní fakturou OpenAI nebo úplným přehledem jiných aplikací v účtu. Uložený kurz ČNB a datum slouží pouze k orientačnímu přepočtu CZK; nemění limit USD.
-
-Oficiální kontrakty: [počítání tokenů](https://developers.openai.com/api/docs/guides/token-counting), [ceník](https://developers.openai.com/api/docs/pricing), [cache](https://developers.openai.com/api/docs/guides/prompt-caching).
 
 ## Převodník UTF-8
 
@@ -209,12 +211,12 @@ Wheel obsahuje balíčky `kajovo`, `kajovong`, `utf8nobom`, diagnostický skript
 
 | Testy | Ověřované chování |
 | --- | --- |
-| `test_workflows.py` | Offline režimy, batch, účtenky, snímky konfigurace a validace výstupu |
+| `test_batch_completion.py`, `test_batch_completion_ui.py` | Převzetí dávek, historie, ochrana souborů, souběh a výchozí model |
+| `test_workflows.py` | Offline režimy, batch, snímky konfigurace a validace výstupu |
 | `test_contracts.py`, `test_cascade.py` | JSON, cesty, souborové výstupy, schémata a kaskády |
 | `test_filesystem_boundaries.py`, `test_security_regressions.py` | Souborové hranice, citlivé vstupy, hashe a bezpečnost zápisu |
 | `test_api_client.py`, `test_retry.py`, `test_text_chunks.py` | HTTP, SDK, stránkování, opakování a dělení textu |
 | `test_config.py`, `test_diagnostics.py` | Nastavení, hesla a SSH pin |
-| `test_pricing.py`, `test_receipts.py`, `test_runlog.py` | Cenové jednotky, cache, databáze a logy |
 | `test_desktop.py`, `test_repository_contract.py` | Importy, Qt, ovládání, prostředky a kódování |
 | `test_utf8nobom.py` | Zálohy, deduplikace vstupů a převod ZIP |
 

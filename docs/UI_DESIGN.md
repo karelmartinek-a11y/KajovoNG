@@ -1,21 +1,20 @@
 # Návrh a smlouva desktopového rozhraní
 
-## Inventura před přepisem
+## Inventura rozhraní
 
-[Úplný inventář](UI_INVENTORY.json) vzniká průchodem AST všech 25 modulů UI proti uvedenému commitu. Obsahuje 40 tříd, 552 konstrukcí prvků, 222 nastavení rozsahů a stavů, 236 propojení signálů a 181 volání dialogů. Počty zahrnují pomocné i neaktivní konstrukce; nejde o počet současně viditelných polí. Každá položka uvádí původní soubor, identifikátor a řádek. Inventář slouží ke kontrole pokrytí, nikoli jako implementace nového rozhraní.
+[Úplný inventář](UI_INVENTORY.json) zachycuje AST aktuálních modulů `kajovo/desktop`: třídy, metody, konstrukce ovládacích prvků a propojení signálů s odkazy do zdrojových souborů. Zahrnuje i pomocné konstrukce; nejde o počet současně viditelných polí.
 
 ## Informační architektura
 
 | Sekce | Obsah a akce |
 |---|---|
-| Zadání | Projekt, GENERATE/MODIFY/QA/QFILE/KASKADA, LIVE/BATCH, model, prompt a výsledek, cena, připojené zdroje, IN/OUT, návaznost response_id, teplota, modely A1/A2/A3, snapshot, diagnostika Windows/SSH, Nový/Uložit/Načíst/Spustit/Zastavit/ReRun |
+| Zadání | Projekt, GENERATE/MODIFY/QA/QFILE/KASKADA, LIVE/BATCH, model, prompt a výsledek, připojené zdroje, IN/OUT, návaznost response_id, teplota, modely A1/A2/A3, snapshot, diagnostika Windows/SSH, Nový/Uložit/Načíst/Spustit/Zastavit/ReRun |
 | Kaskády | Knihovna definic, vytvoření/uložení/uložení pod jiným názvem/načtení, přidání/duplikace/odstranění/přesun kroků, model, teplota, instrukce, text/JSON vstup, soubory API i lokální, proměnné předchozích kroků, návaznost, text/JSON výstup, manifest/prompts/vlastní schéma, očekávané cesty a OUT |
 | Zdroje | Soubory API: obnovit, nahrát, smazat vybrané/vše, připojit/odpojit; úložiště: vytvořit/smazat vybrané/vše, seznam souborů, přidání podle ID/z API, odebrání, podrobnosti a atributy JSON, připojit/odpojit |
-| Dávky | Seznam/stav/počty/poslední a příští kontrola, interval a konec sledování, stažení raw i souborového výstupu, částečné chyby, zrušení, opakování vybraných cest a oprava s připomínkou, oddělená účtenka |
-| Historie | Běhy, request/response, filtry běh/odpověď/datum/fulltext, detail, TXT/tisk, pokračování ReRun; provozní log |
-| Náklady | Okamžitá offline kalkulačka model/LIVE/BATCH/Flex/Priority, tokeny a vysvětlení ceny; sazby a zdroj; účtenky, přesné filtry, stránkování, archiv, detail, export CSV/JSON, doplnění cen ze spotřeby/LOG, rozpočty a rezervace, ruční import ceníku |
+| Dávky | Projekt, místní datum odeslání, oddělený stav API a uložení do OUT, Dokončit, seznam/počty/poslední a příští kontrola, interval a konec sledování, stažení raw i souborového výstupu, částečné chyby, zrušení, opakování vybraných cest a oprava s připomínkou |
+| Historie | Běhy, request/response, filtry běh/odpověď/datum/fulltext, detail, TXT/tisk, Dokončit u nepřevzatých BATCH, pokračování ReRun ostatních běhů; provozní log |
 | Verze | Lokální adresář a Git, založení, stav, remote/push/pull, milníky vytvořit/obnovit/odstranit, odstranění repozitáře, strom, editor, porovnání s milníkem |
-| Nastavení | Klíč zobrazit/uložit/smazat, výchozí model a teplota, bezpečnost vstupů, deny přípony/globy, timeouty API/BATCH, cenový zdroj/obnova, SMTP host/port/login/heslo/TLS/SSL/odesílatel/příjemce/uložit/test, SSH |
+| Nastavení | Klíč zobrazit/uložit/smazat, výchozí model a teplota, bezpečnost vstupů, deny přípony/globy, timeouty API/BATCH, SMTP host/port/login/heslo/TLS/SSL/odesílatel/příjemce/uložit/test, SSH |
 | Modely a nápověda | Katalog účtu, hledání a filtry schopností, výchozí a aktivní model, pevná matice, návody a vysvětlení režimů |
 
 ## Validační matice
@@ -34,8 +33,6 @@ API pravidla zůstávají centrálně v `core/request_rules.py`, `core/model_reg
 | IN = OUT | OUT sleduje IN; snapshot a bezpečné cesty platí i při přepisu |
 | Diagnostika | Dostupnost podle režimu; SSH vyžaduje spojení a případný pin; spuštění oprav vždy s existujícím potvrzením obsahu/cíle/hash |
 | Kaskáda | Neprázdné kroky, přesné modely, JSON objekt/seznam vstupu, validní schéma, JSON výstup při schématu, bezpečné relativní očekávané cesty, proměnné pouze známých kroků |
-| Náklady | Konečné nezáporné USD, výstup 0 nebo ≥16 a nejvýše maximum modelu; změna limitu výstupu vyvolá nový odhad; nedoložená cena není nula |
-| Účtenky | Oddělit zkoušku/práci a LIVE/BATCH; filtrovaný souhrn i export zahrnují celý filtr; archivace zachovává účetní doklad |
 | Síť / průběh | Operace ve workeru, neznámá doba jako neurčitý průběh; procenta jen z doložených jednotek; zavření nesmí zahodit běžící worker |
 | Nastavení | Rozsahy podle `core/config.py`; SMTP TLS a SSL se vylučují; hesla nepatří do uloženého JSON |
 | Git a zápis | Bezpečné cesty, ochrana vyloučených adresářů/tajemství, potvrzení destruktivních operací |
@@ -49,7 +46,6 @@ Klidná světlá pracovní plocha s trvalou tmavou navigací. Jedna hlavní akce
 ## Oponentura z pohledu uživatele a zapracované požadavky
 
 1. „Nevím, co nastavit jako první.“ Zadání začíná projektem, cílem, modelem a promptem. Pokročilé parametry jsou označené a neblokují čtení zadání.
-2. „Nevím, kolik zaplatím.“ Offline kalkulace je dostupná bez klíče; odhad skutečně připraveného požadavku se potvrzuje zvlášť. Neznámá cena má vysvětlení, nikoli prázdnou buňku.
 3. „Nevím, co posílám.“ Připojené soubory a úložiště mají souhrn přímo u zadání a odkaz na správu zdrojů.
 4. „Zavřel jsem průběh a nevím, zda běží.“ Aktivní běhy mají trvalý seznam a tlačítko znovu otevřít. Skrytí neznamená zastavení.
 5. „V malém okně se nevejdou tlačítka.“ Hlavní akce zůstávají dostupné; formuláře mají posuv a žádné rozložení se po sestavení nepřestavuje přemísťováním starých prvků.
@@ -59,7 +55,7 @@ Klidná světlá pracovní plocha s trvalou tmavou navigací. Jedna hlavní akce
 
 ## Dialogový kontrakt
 
-Nové dialogy zachovají titul, účel, všechny informační položky, potvrzení/zrušení a technické podrobnosti zaznamenané v inventáři. Průběh běhu obsahuje stav/fázi, čas, ETA nebo její nedostupnost, stáří poslední aktivity, dvě úrovně průběhu, log, Stop, upozornění po dokončení a Skrytí. Hromadná operace obsahuje stav, počty, log a dostupné zavření až po dokončení. Upload obsahuje aktuální soubor, počet/průběh, log a kooperativní zrušení; ESC/X neruší životnost workeru. Cenové potvrzení obsahuje model, sazby a zdroj, scénáře, maximum, již vyčíslenou částku, měnu/kurz, rozpočet, limit výstupu a důvod neznámé ceny. Účtenka obsahuje všechny operace včetně zkoušek a neuzavřených položek.
+Nové dialogy zachovají titul, účel, všechny informační položky, potvrzení/zrušení a technické podrobnosti zaznamenané v inventáři. Průběh běhu obsahuje stav/fázi, čas, ETA nebo její nedostupnost, stáří poslední aktivity, dvě úrovně průběhu, log, Stop, upozornění po dokončení a Skrytí. Hromadná operace obsahuje stav, počty, log a dostupné zavření až po dokončení. Upload obsahuje aktuální soubor, počet/průběh, log a kooperativní zrušení; ESC/X neruší životnost workeru.
 
 ## Ověření implementace
 
@@ -74,24 +70,20 @@ Funkční inventář se porovná s novými akcemi a testy. Skript `scripts/rende
 | Kaskády | `desktop/cascades.py` |
 | Dávky a bezpečný import | `desktop/batches.py` |
 | Request/response historie | `desktop/history.py` |
-| Ceník, kalkulace, účtenky, rozpočty | `desktop/costs.py` |
-| Cenové potvrzení, účtování, výsledná účtenka | `desktop/finance.py` |
 | Git a editor | `desktop/versions.py` |
 | API klíč, provoz, bezpečnost, SMTP | `desktop/settings.py` |
 | Průběhy, potvrzení, souborové a textové dialogy | `desktop/dialogs.py` |
 | Samostatná okna, výběr modelu, splash | `desktop/windows.py` |
 | Vizuální prvky a asynchronní úlohy | `desktop/design.py`, `desktop/jobs.py` |
 
-Původní moduly nejsou importovány ani zachovány jako záložní cesta. Backendové kontrakty API, účtování, souborů a běhů zůstávají společné. Snímkovací skript pokrývá také aktivní, dokončený, zastavený a chybový průběh, cenové potvrzení, účtenku, rozpočty, detail, samostatné sekce a výběr souboru. Vizuální kontrola se zaměřuje na dostupnost patiček při 150% škálování; navigace a dlouhé formuláře používají posuv. Nativní systémové dialogy vyžadují ověření na Windows.
+Původní moduly nejsou importovány ani zachovány jako záložní cesta. Backendové kontrakty API, souborů a běhů zůstávají společné. Snímkovací skript pokrývá také aktivní, dokončený, zastavený a chybový průběh, detail, samostatné sekce a výběr souboru. Vizuální kontrola se zaměřuje na dostupnost patiček při 150% škálování; navigace a dlouhé formuláře používají posuv. Nativní systémové dialogy vyžadují ověření na Windows.
 
 ## Snímky rozhraní
 
-Skutečně vykreslené Qt rozhraní s izolovanými ukázkovými daty. Částky na snímcích jsou kalkulace a testovací evidence, nikoli uskutečněná placená volání. Zadání a Náklady jsou z plochy 1366 × 900; dialogy z logické plochy 911 × 480 při 150% škálování.
+Skutečně vykreslené Qt rozhraní s izolovanými ukázkovými daty. Zadání je z plochy 1366 × 900; dialogy z logické plochy 911 × 480 při 150% škálování.
 
 ![Zadání](ui/zadani.png)
 
-![Náklady s okamžitou kalkulací](ui/naklady.png)
 
-![Potvrzení ceny](ui/potvrzeni-ceny.png)
 
 ![Průběh na malé ploše](ui/prubeh.png)

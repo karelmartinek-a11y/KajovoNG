@@ -6,8 +6,6 @@ import pytest
 
 from kajovo.core.config import AppSettings
 from kajovo.core.pipeline import UiRunConfig, RunWorker
-from kajovo.core.pricing import PriceTable
-from kajovo.core.receipt import ReceiptDB
 from kajovo.core.runlog import RunLogger
 
 
@@ -25,8 +23,7 @@ def make_worker(tmp_path, mode):
     cfg.model_caps = {"ok_basic": True, "supports_temperature": True, "supports_previous_response_id": True}
     settings = AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache"))
     logger = RunLogger(settings.log_dir, "RUN_090920261200_TEST", "test")
-    db = ReceiptDB(str(tmp_path / "data.sqlite"))
-    return RunWorker(cfg, settings, "test", logger, db, PriceTable.builtin_fallback())
+    return RunWorker(cfg, settings, "test", logger)
 
 
 def response(index, payload):
@@ -79,31 +76,29 @@ def test_complete_offline_workflow(tmp_path, mode):
         worker.run()
     assert not errors
     assert len(results) == 1
-    assert len(worker.db.query()) == len(payloads)
     assert client.create_response.call_count == len(payloads)
     if mode != "QA":
         assert (tmp_path / "out" / "hello.txt").read_text(encoding="utf-8") == "hello\n"
     assert json.loads((tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text())["status"] == "completed"
 
 
-def test_receipt_disk_error_does_not_repeat_api(tmp_path):
+def test_log_disk_error_does_not_repeat_api(tmp_path):
     worker = make_worker(tmp_path, "QA")
     client = Mock()
     client.create_response.return_value = response(1, "answer")
-    with patch.object(worker.db, "insert", side_effect=OSError("disk failure")):
+    with patch.object(worker.log, "save_json", side_effect=OSError("disk failure")):
         with pytest.raises(OSError):
             worker._create_response(client, {"model": "gpt-4o-mini", "input": "test"})
     assert client.create_response.call_count == 1
 
 
-def test_incomplete_response_records_usage_but_stops_workflow(tmp_path):
+def test_incomplete_response_stops_workflow(tmp_path):
     worker = make_worker(tmp_path, "QA")
     client = Mock()
     client.create_response.return_value = {**response(1, "partial"), "status": "incomplete"}
     from kajovo.core.contracts import ContractError
     with pytest.raises(ContractError):
         worker._create_response(client, {"model": "gpt-4o-mini", "input": "test"})
-    assert len(worker.db.query()) == 1
     assert client.create_response.call_count == 1
 
 
@@ -130,7 +125,7 @@ def test_premature_file_termination_preserves_output(tmp_path):
 def test_worker_keeps_independent_settings_snapshot(tmp_path):
     worker = make_worker(tmp_path, "QA")
     settings = AppSettings()
-    other = RunWorker(worker.cfg, settings, "test", worker.log, worker.db, worker.price_table)
+    other = RunWorker(worker.cfg, settings, "test", worker.log)
     settings.security.allow_upload_sensitive = True
     settings.retry.max_attempts = 1
     assert not other.settings.security.allow_upload_sensitive
@@ -163,7 +158,7 @@ def test_output_manifest_accepts_explicit_empty_text(tmp_path):
 
 def test_worker_keeps_independent_run_configuration(tmp_path):
     worker = make_worker(tmp_path, "QA")
-    other = RunWorker(worker.cfg, AppSettings(), "test", worker.log, worker.db, worker.price_table)
+    other = RunWorker(worker.cfg, AppSettings(), "test", worker.log)
     worker.cfg.out_dir = "jiný-výstup"
     worker.cfg.model_caps["supports_previous_response_id"] = False
     worker.cfg.attached_file_ids.append("file_changed")
@@ -176,10 +171,9 @@ def test_custom_cascade_records_each_step(tmp_path):
     from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
     from kajovo.core.cascade_types import CascadeDefinition, CascadeStep
     settings = AppSettings(log_dir=str(tmp_path / "LOG"))
-    db = ReceiptDB(str(tmp_path / "receipts.sqlite"))
     definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-4o-mini", input_text="test")])
     cfg = CascadeRunConfig("project", definition, "", str(tmp_path / "out"), run_id="RUN_090920261200_TEST")
-    worker = CascadeRunWorker(cfg, settings, "test", db, PriceTable.builtin_fallback())
+    worker = CascadeRunWorker(cfg, settings, "test")
     client = Mock()
     client.create_response.return_value = response(1, "answer")
     results, errors = [], []
@@ -189,7 +183,7 @@ def test_custom_cascade_records_each_step(tmp_path):
         worker.run()
     assert not errors
     assert results[0]["run_id"] == cfg.run_id
-    assert len(db.query()) == 1
+    assert list((tmp_path / "LOG" / cfg.run_id / "responses").glob("*.json"))
 
 
 def test_batch_uses_only_supported_jsonl_fields(tmp_path):
@@ -210,16 +204,3 @@ def test_batch_uses_only_supported_jsonl_fields(tmp_path):
         request = json.loads(handle.readline())
     assert set(request) == {"custom_id", "method", "url", "body"}
     client.create_response.assert_not_called()
-
-
-def test_batch_receipts_count_distinct_responses_once(tmp_path, qtbot):
-    from kajovo.desktop.batches import BatchPanel
-    settings = AppSettings(db_path=str(tmp_path / "data.sqlite"), cache_dir=str(tmp_path / "cache"))
-    panel = BatchPanel(settings, "")
-    qtbot.addWidget(panel)
-    for index in [1, 1, 2]:
-        panel._record_batch_receipt("batch_test", response(index, "answer"), None, "output.jsonl")
-    rows = ReceiptDB(settings.db_path).query()
-    assert len(rows) == 2
-    assert all(row["batch_id"] == "batch_test" for row in rows)
-    assert rows[0]["total_cost"] == pytest.approx(0.00000675)

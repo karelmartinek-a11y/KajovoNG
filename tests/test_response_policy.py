@@ -15,7 +15,7 @@ from kajovo.core.contracts import ContractError
 @pytest.fixture
 def client(tmp_path):
     result = OpenAIClient("test-account")
-    result.configure_validation(AppSettings(cache_dir=str(tmp_path / "cache"), log_dir=str(tmp_path / "LOG"), db_path=str(tmp_path / "db.sqlite")))
+    result.configure_validation(AppSettings(cache_dir=str(tmp_path / "cache"), log_dir=str(tmp_path / "LOG")))
     result._policy.catalog = {"gpt-5.2"}
     result._send_response = Mock(return_value={"id": "resp_probe", "status": "completed", "output_text": '{"text":"OK"}', "output": []})
     result._req = Mock(return_value={"status": "completed", "input_tokens": 12})
@@ -24,6 +24,15 @@ def client(tmp_path):
 
 def request(**extra):
     return {"model": "gpt-5.2", "input": "test", "text": text_format(), **extra}
+
+
+def test_live_request_needs_no_price_or_token_count_endpoint(client):
+    client.validate_resources = Mock()
+    client._req.side_effect = AssertionError("Pomocný HTTP požadavek není potřeba.")
+    result = client.create_response(request())
+    assert result["status"] == "completed"
+    assert client._send_response.call_count == 2
+    client._req.assert_not_called()
 
 
 @pytest.mark.parametrize("change", [

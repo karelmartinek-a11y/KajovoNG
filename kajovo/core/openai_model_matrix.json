@@ -41,10 +41,6 @@
     "guide-gpt-5.4": {
       "url": "https://developers.openai.com/api/docs/guides/latest-model/gpt-5.4",
       "sha256": "bbf8fc52c2fd49a6a367f4e1a04491b281f706c5c1b608e99868136bbc73e71a"
-    },
-    "pricing": {
-      "url": "https://developers.openai.com/api/docs/pricing",
-      "sha256": "8c9b760861c1c760cc82f6ccf3037bd9d3a49518a1303f56ba63a2eb0b4158ad"
     }
   },
   "models": {
@@ -4223,7 +4219,7 @@
         "default"
       ],
       "notes": [
-        "Ceník uvádí Batch, modelová stránka jej nepotvrzuje a nepotvrzuje strict Structured Outputs; aplikace model nepovoluje.",
+        "Modelová stránka nepotvrzuje Batch ani strict Structured Outputs; aplikace model nepovoluje.",
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
       ]
     },
@@ -4277,7 +4273,7 @@
         "default"
       ],
       "notes": [
-        "Ceník uvádí Batch, modelová stránka jej nepotvrzuje a nepotvrzuje strict Structured Outputs; aplikace model nepovoluje.",
+        "Modelová stránka nepotvrzuje Batch ani strict Structured Outputs; aplikace model nepovoluje.",
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
       ]
     },
@@ -4889,7 +4885,7 @@
         "flex"
       ],
       "notes": [
-        "Ceník uvádí Batch, modelová stránka jej nepotvrzuje a nepotvrzuje strict Structured Outputs; aplikace model nepovoluje.",
+        "Modelová stránka nepotvrzuje Batch ani strict Structured Outputs; aplikace model nepovoluje.",
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
       ]
     },
@@ -4947,7 +4943,7 @@
         "flex"
       ],
       "notes": [
-        "Ceník uvádí Batch, modelová stránka jej nepotvrzuje a nepotvrzuje strict Structured Outputs; aplikace model nepovoluje.",
+        "Modelová stránka nepotvrzuje Batch ani strict Structured Outputs; aplikace model nepovoluje.",
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
       ]
     },

@@ -23,9 +23,8 @@ def data(bodies):
 @pytest.fixture
 def client(tmp_path):
     c = OpenAIClient("test", timeout_s=0)
-    c.configure_validation(AppSettings(cache_dir=str(tmp_path / "cache"), log_dir=str(tmp_path / "LOG"), db_path=str(tmp_path / "db.sqlite")))
+    c.configure_validation(AppSettings(cache_dir=str(tmp_path / "cache"), log_dir=str(tmp_path / "LOG")))
     c._policy.catalog = {"gpt-5.2", "gpt-4.1", "gpt-5.1-codex"}
-    c.count_input_tokens = Mock(return_value=12)
     c.validate_resources = Mock()
     c._send_response = Mock(side_effect=AssertionError("Batch se nesmí ověřovat přes live Responses"))
     c.delete_file = Mock()
@@ -79,8 +78,11 @@ def test_no_batch_codex_rejected_before_upload(client):
 
 def test_pending_trial_blocks_and_resumes_without_duplicate_submission(client):
     client.retrieve_batch.return_value = {"id": "batch_trial", "status": "validating"}
-    with pytest.raises(PreflightPending, match="nebyla odeslána"):
+    with pytest.raises(PreflightPending, match="běžné čekání") as pending:
         client.validate_batch_data(data([payload()]))
+    assert pending.value.batches == [{"id": "batch_trial", "status": "validating"}]
+    assert "Historii" in str(pending.value)
+    assert "batch_trial" not in str(pending.value)
     first = client._req.call_count
     old = client._policy
     client._policy = ResponsePolicy(client, str(old.path.parent.parent), str(old.log_dir))
@@ -88,6 +90,33 @@ def test_pending_trial_blocks_and_resumes_without_duplicate_submission(client):
     client.retrieve_batch.return_value = {"id": "batch_trial", "status": "completed", "output_file_id": "file_output"}
     client.validate_batch_data(data([payload()]))
     assert client._req.call_count == first
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "expired"])
+def test_trial_observer_records_terminal_status_without_authorizing_bad_results(client, status):
+    observed = []
+    client.on_preflight_batch = observed.append
+    client.retrieve_batch.return_value = {"id": "batch_trial", "status": status}
+    # I serverově dokončená dávka bez úspěšných výsledků musí blokovat odeslání.
+    with pytest.raises(OpenAIError):
+        client.validate_batch_data(data([payload()]))
+    assert observed[-1]["id"] == "batch_trial"
+    assert observed[-1]["status"] == status
+    assert observed[-1]["checked_at"] > 0
+    assert all(proof["state"] == "failed" for proof in client._policy.proofs.values())
+
+
+def test_observer_write_failure_does_not_duplicate_trial(client):
+    client.on_preflight_batch = Mock(side_effect=OSError("Nelze uložit vazbu běhu"))
+    with pytest.raises(OSError):
+        client.validate_batch_data(data([payload()]))
+    count = client._req.call_count
+    old = client._policy
+    client._policy = ResponsePolicy(client, str(old.path.parent.parent), str(old.log_dir))
+    client._policy.catalog = old.catalog
+    client.on_preflight_batch = None
+    client.validate_batch_data(data([payload()]))
+    assert client._req.call_count == count
 
 
 def test_batch_parameter_error_has_exact_param_and_blocks_working_batch(client):

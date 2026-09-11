@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import os
-import time
 import uuid
 from pathlib import Path
 
@@ -32,9 +31,9 @@ def structure_format():
         "files": {"type": "array", "items": object_schema({
             "path": text, "purpose": text, "language": text,
             "kind": {"type": "string", "enum": ["text", "binary"]},
-            "dependencies": {**strings, "description": "Pouze přesné cesty jiných souborů tohoto projektu z files[].path. Žádné externí ani standardní knihovny."},
+            "dependencies": {**strings, "description": "Pouze přesné cesty jiných souborů tohoto projektu z files[].path. Pro každé requires musí obsahovat cestu alespoň jednoho souboru, který dané id uvádí v provides, pokud rozhraní neposkytuje sám tento soubor. Žádné externí ani standardní knihovny."},
             "provides": {**strings, "description": "Pouze identifikátory z interfaces[].id poskytované tímto souborem."},
-            "requires": {**strings, "description": "Pouze identifikátory z interfaces[].id využívané tímto souborem. Žádné importy standardní knihovny."},
+            "requires": {**strings, "description": "Pouze identifikátory z interfaces[].id využívané tímto souborem. Poskytovatel musí být uveden v dependencies, pokud nejde o vlastní provides. Žádné importy standardní knihovny."},
             "behavior": text,
         })},
     })
@@ -58,14 +57,14 @@ def plan_format():
     return {"format": {"type": "json_schema", "name": "A1_PLAN", "strict": True, "schema": schema}}
 
 
-def validate_structure(struct):
+def _validate_structure_base(struct):
+    """Ověří tvar a jednoznačnost identifikátorů před zpracováním vazeb."""
     import jsonschema
     try:
         jsonschema.validate(struct, structure_format()["format"]["schema"])
     except jsonschema.ValidationError as exc:
         raise ContractError(f"Neúplná specifikace A2: {exc.message}") from exc
     validate_paths(struct["files"])
-    paths = {f["path"] for f in struct["files"]}
     ids = [i["id"] for i in struct["interfaces"]]
     if len(set(ids)) != len(ids) or any(not i.strip() for i in ids):
         raise ContractError("Rozhraní A2 musí mít jedinečné neprázdné identifikátory.")
@@ -73,21 +72,66 @@ def validate_structure(struct):
         raise ContractError("Rozhraní A2 vyžaduje přesnou definici.")
     if any(not p["name"].strip() or not p["version"].strip() for p in struct["packages"]):
         raise ContractError("Závislosti vyžadují jméno a verzi.")
-    provided = {i for f in struct["files"] for i in f["provides"]}
+
+
+def _interface_providers(struct):
+    providers = {interface["id"]: set() for interface in struct["interfaces"]}
+    for file in struct["files"]:
+        for interface in file["provides"]:
+            if interface in providers:
+                providers[interface].add(file["path"])
+    return providers
+
+
+def prepare_structure(struct):
+    """Vrátí kopii A2 a evidenci pouze jednoznačně odvoditelných závislostí.
+
+    Neopravitelné vztahy ponechá přísnému validátoru. Uložené dávkové manifesty
+    se touto přípravou nemění; patří pouze novým odpovědím A2.
+    """
+    _validate_structure_base(struct)
+    prepared = copy.deepcopy(struct)
+    providers = _interface_providers(prepared)
+    additions = []
+    for file in prepared["files"]:
+        available_paths = {file["path"], *file["dependencies"]}
+        for interface in file["requires"]:
+            candidates = providers.get(interface, set())
+            if candidates & available_paths or len(candidates) != 1:
+                continue
+            dependency = next(iter(candidates))
+            file["dependencies"].append(dependency)
+            available_paths.add(dependency)
+            additions.append({"path": file["path"], "interface": interface, "dependency": dependency})
+    return prepared, additions
+
+
+def validate_structure(struct):
+    """Odmítne neplatné A2 a oznámí všechny zjistitelné vztahové chyby najednou."""
+    _validate_structure_base(struct)
+    paths = {f["path"] for f in struct["files"]}
+    providers = _interface_providers(struct)
+    ids = set(providers)
+    errors = []
     for file in struct["files"]:
         if not file["purpose"].strip() or not file["behavior"].strip():
-            raise ContractError("Soubor A2 vyžaduje účel a požadované chování.")
+            errors.append(f"Soubor {file['path']} vyžaduje účel a požadované chování.")
         if not set(file["dependencies"]) <= paths:
-            raise ContractError(f"Soubor {file['path']}: neznámé závislosti {sorted(set(file['dependencies']) - paths)}; povolené cesty {sorted(paths)}. Standardní a externí knihovny sem nepatří.")
-        if not set(file["provides"] + file["requires"]) <= set(ids):
-            raise ContractError(f"Soubor {file['path']}: povolené identifikátory rozhraní jsou {ids}, provides/requires musí používat právě tato id.")
-        if not set(file["requires"]) <= provided:
-            raise ContractError(f"Chybí poskytovatel rozhraní: {file['path']}")
-        available = {i for f in struct["files"] if f["path"] in file["dependencies"] or f["path"] == file["path"] for i in f["provides"]}
-        if not set(file["requires"]) <= available:
-            raise ContractError(f"Soubor {file['path']} musí uvést poskytovatele vyžadovaného rozhraní mezi dependencies.")
+            errors.append(f"Soubor {file['path']}: neznámé závislosti {sorted(set(file['dependencies']) - paths)}; povolené cesty {sorted(paths)}. Standardní a externí knihovny sem nepatří.")
+        unknown_ids = set(file["provides"] + file["requires"]) - ids
+        if unknown_ids:
+            errors.append(f"Soubor {file['path']}: neznámá rozhraní v provides/requires {sorted(unknown_ids)}; povolené identifikátory jsou {sorted(ids)}.")
+        available_paths = {file["path"], *file["dependencies"]}
+        for interface in sorted(set(file["requires"]) & ids):
+            candidates = providers[interface]
+            if not candidates:
+                errors.append(f"Soubor {file['path']}: chybí poskytovatel vyžadovaného rozhraní {interface}; žádný soubor je neuvádí v provides.")
+            elif not candidates & available_paths:
+                errors.append(f"Soubor {file['path']}: rozhraní {interface} vyžaduje v dependencies alespoň jednoho z poskytovatelů {sorted(candidates)}.")
         if file["kind"] == "text" and Path(file["path"]).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".exe", ".dll", ".woff", ".woff2", ".ttf"}:
-            raise ContractError(f"Binární prostředek musí mít kind=binary: {file['path']}")
+            errors.append(f"Binární prostředek musí mít kind=binary: {file['path']}")
+    if errors:
+        raise ContractError("Neplatná specifikace A2:\n" + "\n".join(errors))
 
 
 def digest(value):
@@ -166,7 +210,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
     expected = manifest["expected"]
     request_bodies = {row["custom_id"]: row["body"] for row in manifest["requests"]}
     validate_paths([{"path": p} for p in expected.values()])
-    entries, errors, receipts = {}, {}, []
+    entries, errors, responses = {}, {}, []
     for raw in raw_files:
         for line in raw.decode("utf-8").splitlines():
             if not line.strip():
@@ -191,7 +235,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
         body = response.get("body")
         body = body if isinstance(body, dict) else {}
         if isinstance(body, dict) and body.get("id"):
-            receipts.append(body)
+            responses.append(body)
         try:
             if item.get("error") or response.get("status_code") != 200 or body.get("status") != "completed":
                 raise ContractError("Požadavek selhal nebo nebyl dokončen.")
@@ -223,22 +267,20 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             written.append(path)
         except (OSError, ValueError, ContractError) as exc:
             errors[cid] = str(exc)
-    return {"written": written, "errors": errors, "hashes": hashes, "receipts": receipts,
+    return {"written": written, "errors": errors, "hashes": hashes, "responses": responses,
             "file_errors": {expected[cid]: message for cid, message in errors.items()},
             "omitted": manifest.get("omitted", []),
             "status": "partial" if errors or manifest.get("omitted") else "files_complete_unverified"}
 
 
-def process_saved_batch(client, run_dir, batch_id, settings):
+def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None):
     """Stáhne a vyhodnotí vlastní dávku; neprovádí žádný vygenerovaný kód."""
-    from .pricing import PriceTable, compute_cost
-    from .receipt import Receipt, ReceiptDB
     state_path = Path(run_dir) / "run_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     if batch_id != state.get("batch_id") and batch_id not in state.get("generate_batches", {}):
         raise ContractError("Dávka nepatří k tomuto běhu.")
     manifest = (state.get("generate_batches") or {}).get(batch_id, state["generate_batch"])
-    batch = client.retrieve_batch(batch_id)
+    batch = batch if batch is not None else client.retrieve_batch(batch_id)
     if batch.get("status") not in ("completed", "failed", "expired", "cancelled"):
         raise ContractError("Dávka ještě není v konečném stavu.")
     raw_files = []
@@ -256,23 +298,12 @@ def process_saved_batch(client, run_dir, batch_id, settings):
     previous_import = state.get("batch_imports", {}).get(batch_id, {})
     allowed = {**manifest.get("base_hashes", {}), **previous_import.get("hashes", {})}
     result = import_results(manifest, raw_files, target, state.get("generated_hashes"), allowed)
-    prices = PriceTable(os.path.join(settings.cache_dir, "price_table.json"))
-    prices.load_cache()
-    db = ReceiptDB(settings.db_path)
-    for body in result.pop("receipts"):
-        receipt_path = safe_join_under_root(str(response_dir), f"A3_batch_{body['id']}.json")
-        atomic_write_text(receipt_path, json.dumps({**body, "batch_id": batch_id}, ensure_ascii=False))
-        usage = body.get("usage") or {}
-        inp, out = int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
-        model = body.get("model") or manifest["requests"][0]["body"]["model"]
-        row = prices.get(model) or PriceTable.builtin_fallback().get(model)
-        total, tool, storage = compute_cost(row, inp, out, is_batch=True, usage=usage)
-        db.insert(Receipt(run_id=state["run_id"], created_at=time.time(), project=state.get("project", ""),
-                          model=model, mode="GENERATE", flow_type="A3_FILE", response_id=body["id"], batch_id=batch_id,
-                          input_tokens=inp, output_tokens=out, tool_cost=tool, storage_cost=storage, total_cost=total,
-                          pricing_verified=prices.is_verified(model), notes="GENERATE A3 Batch",
-                          log_paths={"run_dir": str(run_dir)}, usage=usage))
+    result["import_status"] = result["status"]
+    for body in result.pop("responses"):
+        response_path = safe_join_under_root(str(response_dir), f"A3_batch_{body['id']}.json")
+        atomic_write_text(response_path, json.dumps({**body, "batch_id": batch_id}, ensure_ascii=False))
     state["generated_hashes"] = result["hashes"]
+    state.setdefault("batch_records", {})[batch_id] = batch
     state.setdefault("batch_imports", {})[batch_id] = result
     expected_paths = set(state["generate_batch"]["expected"].values())
     missing = []
@@ -281,6 +312,9 @@ def process_saved_batch(client, run_dir, batch_id, settings):
         if not os.path.isfile(dest) or hashlib.sha256(Path(dest).read_bytes()).hexdigest() != result["hashes"].get(path):
             missing.append(path)
     state["status"] = "partial" if missing or result["errors"] or state["generate_batch"].get("omitted") else "files_complete_unverified"
+    known_batches = {state.get("batch_id"), *state.get("generate_batches", {})} - {None}
+    if known_batches - state["batch_imports"].keys():
+        state["status"] = "batch_pending"
     result["omitted"] = state["generate_batch"].get("omitted", [])
     result["status"] = state["status"]
     result["missing"] = missing
@@ -288,7 +322,7 @@ def process_saved_batch(client, run_dir, batch_id, settings):
     return result
 
 
-def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback="", cost_control=None):
+def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
     state_path = Path(run_dir) / "run_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     if source_batch_id != state.get("batch_id") and source_batch_id not in state.get("generate_batches", {}):
@@ -306,7 +340,6 @@ def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback="", cos
         path = source["expected"][row["custom_id"]]
         if path not in selected:
             continue
-        row = copy.deepcopy(row)
         row["custom_id"] = f"{prefix}_A3_{len(rows):05d}"
         if feedback:
             dest = safe_join_under_root(state["out_dir"], path)
@@ -327,22 +360,11 @@ def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback="", cos
     data = encode_requests(manifest)
     path = Path(run_dir) / "requests" / f"repeat_{prefix}.jsonl"
     path.write_bytes(data)
-    operation = None
-    if cost_control:
-        operation, _ = cost_control.prepare(client, [r["body"] for r in rows], batch=True, stage="A3_FILE",
-                                            custom_ids=[r["custom_id"] for r in rows])
-        path.write_bytes(encode_requests(manifest))
     uploaded = client.upload_file(str(path), purpose="batch")
     state["pending_batch_submission"] = {"input_file_id": uploaded["id"], "manifest": manifest}
     atomic_write_text(str(state_path), json.dumps(state, ensure_ascii=False, indent=2))
-    try:
-        batch = client.create_batch(input_file_id=uploaded["id"], endpoint="/v1/responses")
-    except Exception:
-        if cost_control:
-            cost_control.ledger.mark(operation, "unknown")
-        raise
-    if cost_control:
-        cost_control.ledger.mark(operation, "pending", batch["id"])
+    batch = client.create_batch(input_file_id=uploaded["id"], endpoint="/v1/responses")
+    state.setdefault("batch_records", {})[batch["id"]] = batch
     state.setdefault("generate_batches", {})[batch["id"]] = manifest
     state.pop("pending_batch_submission", None)
     state["status"] = "batch_pending"

@@ -49,12 +49,6 @@ class LoggingPolicy:
     encrypt_logs: bool = False
     mask_secrets: bool = False
 
-@dataclass
-class PricingPolicy:
-    # Adresa zdroje ceníku pro ruční i automatické načtení.
-    source_url: str = "https://openai.com/api/pricing/"
-    cache_ttl_hours: int = 72
-    auto_refresh_on_start: bool = True
 
 @dataclass
 class SecurityPolicy:
@@ -92,12 +86,10 @@ class SSHSettings:
 
 @dataclass
 class AppSettings:
-    db_path: str = "kajovo.sqlite"
     log_dir: str = "LOG"
     cache_dir: str = "cache"
     retry: RetryPolicy = field(default_factory=RetryPolicy)
     logging: LoggingPolicy = field(default_factory=LoggingPolicy)
-    pricing: PricingPolicy = field(default_factory=PricingPolicy)
     security: SecurityPolicy = field(default_factory=SecurityPolicy)
     smtp: SMTPSettings = field(default_factory=SMTPSettings)
     ssh: SSHSettings = field(default_factory=SSHSettings)
@@ -141,7 +133,7 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
                         s.batch_poll_interval_s, s.batch_timeout_s, s.response_timeout_s, s.smtp.port,
                         s.logging.max_total_mb, s.logging.max_runs]
     numeric_nonnegative = [s.retry.base_delay_s, s.retry.max_delay_s, s.retry.jitter_s,
-                           s.retry.circuit_breaker_cooldown_s, s.pricing.cache_ttl_hours]
+                           s.retry.circuit_breaker_cooldown_s]
     if any(not math.isfinite(v) or v <= 0 for v in numeric_positive) or any(
         not math.isfinite(v) or v < 0 for v in numeric_nonnegative
     ) or not 0 <= s.default_temperature <= 2 or s.smtp.port > 65535:

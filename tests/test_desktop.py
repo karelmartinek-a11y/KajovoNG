@@ -20,11 +20,8 @@ def window(qtbot, tmp_path, monkeypatch):
     settings = AppSettings(
         log_dir=str(tmp_path / "LOG"),
         cache_dir=str(tmp_path / "cache"),
-        db_path=str(tmp_path / "data.sqlite"),
     )
-    settings.pricing.auto_refresh_on_start = False
     with (
-        patch.object(MainWindow, "_start_pricing_audit_loop"),
         patch("kajovo.desktop.application.get_secret", return_value=None),
     ):
         widget = MainWindow(settings)
@@ -44,7 +41,9 @@ def test_all_package_modules_import():
 
 
 def test_main_window_controls_and_state(window):
-    assert window.stack.count() == 10
+    assert window.stack.count() == 9
+    assert not hasattr(window, "pricing_panel")
+    assert not hasattr(window, "db")
     assert window.sp_temp is not window.settings_page.default_temperature
     window._set_active_model("gpt-4.1")
     window.sp_temp.setValue(0.7)
@@ -96,7 +95,6 @@ def test_saved_key_and_matrix_survive_window_restart(window, qtbot, monkeypatch,
         "kajovo.core.secret_store._read_persisted_api_key", lambda: stored.get("key")
     )
     monkeypatch.setattr(MainWindow, "_refresh_models_best_effort", lambda self: None)
-    monkeypatch.setattr(MainWindow, "_start_pricing_audit_loop", lambda self: None)
     monkeypatch.setattr("kajovo.desktop.settings.msg_info", lambda *args: None)
 
     def persist(value):
@@ -159,8 +157,8 @@ def test_window_fits_small_screen_and_selects_pages(window, qtbot):
     window.show()
     qtbot.wait(20)
     assert window.height() <= 700
-    window.select_page("costs")
-    assert window.stack.currentWidget() is window.pages["costs"][0]
+    window.select_page("history")
+    assert window.stack.currentWidget() is window.pages["history"][0]
     window.select_page("run")
     assert window.stack.currentWidget() is window.tab_run
 
@@ -207,7 +205,7 @@ def test_long_modal_content_has_scrollable_full_text(window, qtbot):
 
 def test_pages_restore_visible_content_after_resize(window, qtbot):
     window.show()
-    for key in ("cascade", "resources", "costs"):
+    for key in ("cascade", "resources", "history"):
         window.select_page(key)
         for width in (911, 1920, 911, 1920):
             window.resize(width, 800)
@@ -231,6 +229,88 @@ def test_rerun_does_not_skip_response_without_written_file(window, tmp_path):
         encoding="utf-8",
     )
     assert window._gather_completed_paths(run.name, str(tmp_path)) == []
+
+
+def test_pending_result_is_information_and_stops_progress(window, qtbot):
+    from kajovo.core.progress import ProgressEvent
+    dialog = ProgressDialog(window)
+    qtbot.addWidget(dialog)
+    window._run_contexts["test"] = {"dialog": dialog}
+    try:
+        with patch("kajovo.desktop.application.msg_info") as info, patch(
+            "kajovo.desktop.application.msg_critical"
+        ) as critical:
+            window.on_run_ok("test", {
+                "status": "preflight_pending", "detail": "Ověření probíhá.",
+                "preflight_batches": [{"id": "batch_trial", "status": "validating"}],
+            })
+        info.assert_called_once_with(
+            window, "Ověření dávky probíhá", "Ověření probíhá.",
+            details=[{"id": "batch_trial", "status": "validating"}],
+        )
+        critical.assert_not_called()
+        assert dialog.clock.finished is not None
+        assert not dialog.btn_stop.isEnabled()
+        assert "Čeká na ověření" in dialog.lbl_stage.text()
+        dialog.on_progress_event(ProgressEvent("RUN", "preflight_pending"))
+    finally:
+        window._run_contexts.clear()
+
+
+@pytest.mark.parametrize("status", ["preflight_pending", "batch_pending", "completed", "failed", "cancelled"])
+def test_finished_progress_offers_only_ok(qtbot, status):
+    from kajovo.core.progress import ProgressEvent
+    from PySide6.QtCore import Qt
+
+    dialog = ProgressDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog.btn_stop.isVisible()
+    assert dialog.btn_close.text() == "Skrýt průběh"
+    stopped = Mock()
+    dialog.btn_stop.clicked.connect(stopped)
+    dialog.on_progress_event(ProgressEvent("RUN", status))
+    assert not dialog.btn_stop.isVisible()
+    assert not dialog.chk_bzz.isVisible()
+    assert dialog.btn_close.text() == "OK"
+    assert dialog.btn_close.isEnabled()
+    qtbot.mouseClick(dialog.btn_close, Qt.LeftButton)
+    assert not dialog.isVisible()
+    stopped.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["failed", "preflight_pending"])
+def test_rerun_passes_full_saved_batch(window, monkeypatch, status):
+    import json
+    from test_generate_batch import manifest
+    run_id = "RUN_090920261200_ABCD"
+    directory = Path(window.s.log_dir) / run_id
+    directory.mkdir()
+    state = {"run_id": run_id, "status": status, "generate_batch": manifest(),
+             "ui_state": {"mode": "GENERATE", "send_as_c": True}}
+    (directory / "run_state.json").write_text(json.dumps(state), encoding="utf-8")
+    observed = []
+    monkeypatch.setattr(window, "_apply_state", lambda ui: None)
+    monkeypatch.setattr(window, "on_go", lambda: observed.append(window._resume_batch_state))
+    window.rerun(run_id)
+    assert observed == [state]
+    assert window._resume_batch_state is None
+
+
+def test_rerun_of_sent_batch_does_not_start_worker(window, monkeypatch):
+    import json
+    run_id = "RUN_090920261200_ABCD"
+    directory = Path(window.s.log_dir) / run_id
+    directory.mkdir()
+    (directory / "run_state.json").write_text(
+        json.dumps({"generate_batch": {"version": 1}, "batch_id": "batch_sent"}), encoding="utf-8"
+    )
+    start = Mock()
+    monkeypatch.setattr(window, "on_go", start)
+    with patch.object(window.batch_panel, "complete_run") as complete:
+        window.rerun(run_id)
+    start.assert_not_called()
+    complete.assert_called_once_with(run_id)
 
 
 def test_git_refresh_does_not_change_remote(window, qtbot):
@@ -353,6 +433,8 @@ def test_hybrid_import_runs_off_ui_thread(window, qtbot):
     import threading
 
     panel = window.batch_panel
+    panel._on_refreshed({"key": panel.api_key, "batches": [{"id": "batch_external", "status": "completed"}]})
+    panel.tbl.selectRow(0)
     threads = []
 
     def operation(client):

@@ -116,6 +116,5 @@ def recover_run(log_dir, run_id):
                 ui,
                 previous or structure_id,
                 structure,
-                state.get("cost_scope") or ui.get("cost_scope") or run_id,
             )
-    return ui, previous, [], state.get("cost_scope") or ui.get("cost_scope") or run_id
+    return ui, previous, []

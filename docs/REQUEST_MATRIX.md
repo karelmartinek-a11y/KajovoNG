@@ -69,7 +69,7 @@ Zdroje pravidel: [Responses](https://developers.openai.com/api/reference/resourc
 
 ## Zkušební volání před odesláním
 
-Zkušební LIVE volání zachová celý skutečný payload včetně souborů, nástrojů, schématu, historie, výstupního limitu a ostatních voleb. Výstup se ověří stejným kontraktem, ale nezapisuje pracovní soubory. Teprve poté se odešle pracovní požadavek; každé další pracovní odeslání vyžaduje novou zkoušku. Zkouška je skutečné placené volání, tedy může mít náklady a délku srovnatelnou s pracovním požadavkem. V běžném UI je zahrnuta v rozpočtu a účtence pod PREFLIGHT.
+Zkušební LIVE volání zachová celý skutečný payload včetně souborů, nástrojů, schématu, historie, výstupního limitu a ostatních voleb. Výstup se ověří stejným kontraktem, ale nezapisuje pracovní soubory. Teprve poté se odešle pracovní požadavek; každé další pracovní odeslání vyžaduje novou zkoušku. Zkouška je skutečné placené volání, tedy může mít náklady a délku srovnatelnou s pracovním požadavkem.
 
 BATCH se ověřuje skutečnou samostatnou dávkou `/v1/responses`, se všemi dosud neověřenými přesnými payloady. Lokální kontrola všech řádků předchází prvnímu uploadu. Aplikace čeká nejvýše 60 sekund; pokud zkouška ještě běží, pracovní dávku neodešle, oznámí ID a stav a uloží podklady pro další spuštění. Opakované odeslání stejného zadání převezme dokončený výsledek stejné zkušební dávky; nevytváří znovu již běžící zkoušku. Úspěch vyžaduje completed, HTTP 200 a platný obsah každého řádku. Výsledek live nikdy nenahrazuje důkaz Batch.
 
@@ -105,7 +105,6 @@ Podmínky odpovídají [vstupním souborům](https://developers.openai.com/api/d
 | MODELS | seznam API a pevná matice → dostupné pracovní modely; bez ručního probe |
 | BATCH | seznam na pracovním vlákně, časované sledování, stažení souborů a cancel |
 | GITHUB | Git subprocess → stav, diff, commit, remote a synchronizace repozitáře |
-| CENY A SPOTŘEBA | PriceTable / ReceiptDB → načtení sazeb, přepočet, zobrazení a export evidence |
 | REQUEST/RESPONSE | RunLogger a uložené požadavky → filtrování, zobrazení a výběr podkladů ReRun |
 | HELP | Dokumentace a odkazy aplikace |
 

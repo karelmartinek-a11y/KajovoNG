@@ -38,15 +38,19 @@ Samostatné placené ověření lze spustit příkazy `.venv\Scripts\python.exe 
 
 ## Práce s aplikací
 
-V levé navigaci jsou **Zadání, Kaskády, Zdroje, Dávky, Historie, Náklady, Verze projektu, Modely, Nastavení a Nápověda**. [Úplný inventář a návrh](docs/UI_DESIGN.md) obsahuje mapu funkcí, parametrů a validačních pravidel.
+V levé navigaci jsou **Zadání, Kaskády, Zdroje, Dávky, Historie, Verze projektu, Modely, Nastavení a Nápověda**. [Úplný inventář a návrh](docs/UI_DESIGN.md) obsahuje mapu funkcí, parametrů a validačních pravidel.
 
 V **Zadání** vyplňte projekt, režim, model a prompt. GENERATE vytváří soubory, MODIFY upravuje existující IN, QA vrací text a QFILE jeden úplný soubor. Adresáře a pokročilé volby mají vlastní kartu; diagnostika a výsledek také. Připojené zdroje jsou vidět v souhrnu zadání. **Spustit**, **Zastavit** a **Aktivní běhy** zůstávají pod pracovní plochou.
 
-Vlastní postup sestavte v **Kaskádách**. Soubory API a vector stores spravujte ve **Zdrojích**. **Modely** ukazují dostupnost a pevnou validační matici. **Dávky** oddělují stav API od stažení a ověření souborů. **Historie** umožňuje hledání, detail, export, tisk a ReRun. **Verze projektu** obsahují Git, milníky a editor s porovnáním. Nastavení a Dávky lze otevřít také samostatně.
+Vlastní postup sestavte v **Kaskádách**. Soubory API a vector stores spravujte ve **Zdrojích**. **Modely** ukazují dostupnost a pevnou validační matici. **Dávky** oddělují stav API od stažení a ověření souborů. **Historie** umožňuje hledání, detail, export, tisk, dokončení BATCH a ReRun ostatních běhů. **Verze projektu** obsahují Git, milníky a editor s porovnáním. Nastavení a Dávky lze otevřít také samostatně.
 
-Průběh ukazuje dokončené jednotky, fázi, trvání, ETA a stáří poslední události. U čekání na API může být ETA neznámá. Skrytý průběh znovu otevřete přes Aktivní běhy. Zavření okna nezničí běžící worker; Stop čeká na bezpečné přerušení mezi operacemi. Potvrzení ceny, výsledná účtenka, průběh uploadu a potvrzení mazání mají samostatná nová okna.
+Po odeslání **GENERATE BATCH** jsou A1/A2 hotové a soubory zpracovává OpenAI. V **Historii** klikněte u běhu na **Dokončit**, případně použijte stejné tlačítko v **Dávkách**. Aplikace ověří stav a převezme dostupné výsledky do původního OUT bez opakování generování. Pokud dávka stále běží, dokončete ji později. Přehled ukazuje projekt, datum odeslání a zvlášť stav uložení souborů. Částečný výsledek lze znovu převzít; ručně změněné soubory zůstanou zachované. Stejná akce dokončí také MODIFY BATCH. Akce **Zrušit zpracování** zastaví aktivní dávku; samotný záznam na OpenAI smazat nelze.
 
-**Náklady** začínají offline kalkulačkou. Další karty obsahují sazby a účtenky, přístup k rozpočtům a podrobným podkladům. Vybrané buňky tabulek zkopírujete pomocí Ctrl+C nebo místní nabídky.
+Před pracovní dávkou může čekat **zkušební dávka**. V Historii i Dávkách u ní použijte **Pokračovat**: program převezme ověření a při úspěchu odešle pracovní dávku; u uloženého GENERATE BATCH neopakuje A1/A2. Dokončení zkoušky na serveru ještě nepotvrzuje platnost jejích výsledků. Zkušební dávka se neimportuje do OUT. Dávky ukazují také typ a navázané běhy; pokud zkoušku sdílí více běhů, tlačítko nabídne jejich výběr. **Obnovit stav** aktualizuje poslední známý stav také v Historii, bez automatického pokračování. Po restartu jsou dostupné uložené stavy; aktuální stav ověřte obnovením.
+
+U hlavní volby modelu nebo v **Modelech** použijte **Nastavit jako výchozí**. Model lze také vybrat v **Nastavení → Provoz** a uložit nastavení. Předvolba platí pro nová zadání včetně dalšího spuštění aplikace; model rozpracovaného nebo načteného zadání se nezmění.
+
+Průběh ukazuje dokončené jednotky, fázi, trvání, ETA a stáří poslední události. U čekání na API může být ETA neznámá. Skrytý průběh znovu otevřete přes Aktivní běhy. Zavření okna nezničí běžící worker; Stop čeká na bezpečné přerušení mezi operacemi. Průběh uploadu a potvrzení mazání mají samostatná nová okna.
 
 Izolované snímky pořídí `.venv\Scripts\python.exe scripts/render_ui.py --output C:\Temp\kajovo-ui --size 1366,900 --scale 1`. Pro malou logickou plochu použijte `--size 911,480 --scale 1.5`. Skript vykresluje skutečné Qt rozhraní s označenými ukázkovými daty v dočasném pracovním adresáři, bez API volání. Parametr `--native` volí vykreslování Windows; systémový tiskový dialog vyžaduje samostatnou kontrolu na Windows.
 
@@ -58,21 +62,9 @@ Samostatný test `.venv\Scripts\python.exe scripts/verify_generate_batch_live.py
 
 IN se odesílá jako filtrovaný textový balíček. Ruční přílohy a očekávané soubory kaskády se také nahrávají do API. Vzdálené soubory a úložiště spravujte v sekci Zdroje; dokončení běhu je automaticky nemaže.
 
-Zastavit přerušuje běh mezi operacemi a může čekat na dokončení právě probíhajícího požadavku. Snapshot vytváří snapshot v OUT. Nastavení je v `kajovo_settings.json`, účtenky ve výchozím `kajovo.sqlite` a běhy v LOG; relativní cesty se vztahují k pracovnímu adresáři aplikace.
-
-V **Náklady** je cena vidět i bez API klíče a bez předchozího běhu. V rychlé kalkulaci vyberte model, LIVE nebo Batch a počty vstupních/výstupních tokenů. Uvidíte cenu jednoho volání i cenu se stejně dlouhou placenou zkouškou. Ceník se dodává s aplikací a automaticky obnovuje při zastarání; při výpadku sítě zůstávají částky dostupné s datem zdroje.
+Zastavit přerušuje běh mezi operacemi a může čekat na dokončení právě probíhajícího požadavku. Snapshot vytváří snapshot v OUT. Nastavení je v `kajovo_settings.json` a běhy v LOG; relativní cesty se vztahují k pracovnímu adresáři aplikace.
 
 Cena tokenů = (běžný vstup × vstupní sazba + cache × její sazba + výstup × výstupní sazba) / 1 000 000. Reasoning se nepřičítá podruhé. Skutečný file search přidá poplatek za volání; průběžné úložiště je oddělené. Přesné sazby se liší podle modelu, režimu a délky kontextu.
-
-Pokud staré účtenky nemají cenu, použijte **Doplnit ceny ze spotřeby a LOG**. Stejná kontrola běží i při startu: doplní dostupné výpočty, ponechá původní podklady v historii a nevytvoří duplicitní účtenky. Bez skutečné spotřeby nebo sazby uvede důvod, nikoli nulu. Již vyčíslené účtenky se novým ceníkem nepřepisují.
-
-Před první generující operací se otevře **Odhad nákladů**. Obsahuje počet vstupních tokenů konkrétního požadavku, sazby, scénáře výstupu a dostupné maximum ceny. Budoucí kroky závislé na odpovědi zatím nemají známou cenu. Můžete nastavit tvrdý limit USD a maximum výstupních tokenů; změna výstupu vyvolá nový odhad a potvrzení. Příliš nízké maximum může přerušit generovaný soubor. Zrušení nebo zavření okna požadavek neodešle.
-
-GENERATE BATCH vyžaduje další potvrzení po živých A1/A2 před odesláním A3. Při nedostatečném rozpočtu se další odesílání pozastaví. Limit nelze bezpečně použít s nedoloženými sazbami nebo dynamickými nástroji. Bez vlastního limitu výstupu se použije doložené maximum modelu. Rozpočty a nevyřešené rezervace jsou dostupné v Náklady → Rozpočty a rezervace. Opakování souborů sdílí rozpočet původního běhu.
-
-Po živém běhu se zobrazí samostatná **Výsledná účtenka**. U dávky se zobrazí po dokončení a načtení spotřeby na pozadí, nezávisle na importu do OUT. Jde o výpočet podle spotřeby API, nikoli fakturu poskytovatele. USD je rozhodující; CZK používá uložený orientační kurz ČNB s datem. Neznámé poplatky se nevydávají za nulu. Průběžné úložiště se do limitu jednorázových požadavků nezapočítává.
-
-Náklady nabízí oficiální obnovení ceníku, neověřený ruční import JSON, filtry projektu/běhu/modelu, stránkování, detail a úplný export filtrovaných účtenek do JSON nebo CSV. Archivace uchovává finanční historii. Ceník při neúspěšném obnovení zůstává zachován. Samostatný placený test cen spustíte `.venv\Scripts\python.exe scripts/verify_costs_live.py --live`.
 
 Logy obsahují zadání, odpovědi a případně zdrojový kód. Redakce známých tajných polí není šifrování ani úplná anonymizace. Adresář LOG, databázi a výstupy chraňte před nepovolaným přístupem.
 
@@ -80,4 +72,4 @@ Licence projektu: [MIT](LICENSE). Licence závislostí a prostředků: [oznámen
 
 ### Kompatibilita OpenAI
 
-Volby modelů omezuje [pevná matice](docs/MODEL_MATRIX.md); [kompletní parametry a pracovní kombinace](docs/REQUEST_MATRIX.md) rozlišují LIVE a BATCH. Před pracovním požadavkem proběhne skutečné zkušební volání se stejnými parametry. Zkušební Batch může čekat až 24 hodin: aplikace po minutě zobrazí ID a pracovní dávku neodešle. Opakované spuštění stejného zadání převezme výsledek již vytvořené zkoušky. Chyba ukáže odmítnutý parametr, pokud jej OpenAI uvede. Zkoušky jsou placené a zahrnuté v evidenci nákladů.
+Volby modelů omezuje [pevná matice](docs/MODEL_MATRIX.md); [kompletní parametry a pracovní kombinace](docs/REQUEST_MATRIX.md) rozlišují LIVE a BATCH. Před pracovním požadavkem proběhne skutečné zkušební volání se stejnými parametry. Zkušební Batch může čekat až 24 hodin: aplikace po minutě zobrazí ID a pracovní dávku neodešle. Opakované spuštění stejného zadání převezme výsledek již vytvořené zkoušky. Chyba ukáže odmítnutý parametr, pokud jej OpenAI uvede. Zkoušky jsou placené.

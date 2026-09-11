@@ -7,7 +7,6 @@ import pytest
 from kajovo.core.config import AppSettings
 from kajovo.core.contracts import ContractError, parse_json_strict, validate_paths
 from kajovo.core.pipeline import RunWorker
-from kajovo.core.pricing import PriceTable
 
 
 @pytest.mark.parametrize("text", ['{"x":1,"x":2}', '{"x":NaN}', '{"x":Infinity}', 'prefix {"x":NaN} suffix', '{"x":1e999}'])
@@ -49,7 +48,7 @@ def test_manifest_path_conflicts(paths):
 def test_invalid_generated_json_fails_instead_of_returning_empty_file():
     cfg = SimpleNamespace(attached_file_ids=[], model="test", model_caps={}, temperature=0.0,
                           use_file_search=False, mode="GENERATE", project="test", prompt="test")
-    worker = RunWorker(cfg, AppSettings(), "test", Mock(), Mock(), PriceTable.builtin_fallback())
+    worker = RunWorker(cfg, AppSettings(), "test", Mock())
     client = Mock()
     client.create_response.return_value = {"id": "response", "status": "completed", "output_text": "invalid"}
     with pytest.raises(ContractError):

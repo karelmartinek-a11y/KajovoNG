@@ -160,11 +160,18 @@ def dialog_input_text(parent, title, message, value=""):
 STATES = {
     "active": "Probíhá",
     "waiting": "Čekání na API",
-    "approval": "Čeká na potvrzení",
     "completed": "Dokončeno",
     "failed": "Chyba",
     "cancelled": "Zastaveno",
     "batch_pending": "Odesláno do fronty BATCH",
+    "files_complete_unverified": "Soubory uloženy · funkčnost neověřena",
+    "partial": "Částečné výsledky · vyžadují kontrolu",
+    "validating": "Ověřování dávky",
+    "in_progress": "Zpracovává se",
+    "finalizing": "Dokončuje se",
+    "cancelling": "Ruší se zpracování",
+    "expired": "Vypršel čas dávky",
+    "preflight_pending": "Čeká na ověření dávky",
 }
 
 
@@ -231,6 +238,10 @@ class ProgressDialog(FitDialog):
             self.pb_sub.setRange(0, max(1, self.clock.total or 1))
             self.pb_sub.setValue(self.clock.completed)
             self.btn_stop.setEnabled(False)
+            self.btn_stop.hide()
+            self.chk_bzz.hide()
+            self.btn_close.setText("OK")
+            self.btn_close.setDefault(True)
             self.timer.stop()
         self._update_eta()
 

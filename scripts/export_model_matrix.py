@@ -47,7 +47,7 @@ def export(root):
         "Sampling: `always` = temperature 0–2 a top_p 0–1; `explicit_none` = stejné rozsahy pouze s explicitním reasoning.effort=none; "
         "`omit` = aplikace parametr nepovoluje. U variant bez jednoznačné dokumentace jde o konzervativní omezení aplikace, nikoli důkaz, že OpenAI odmítá každou hodnotu. "
         "Prázdný seznam effort znamená parametr vynechat. Dostupnost pro konkrétní účet, region a aktuální stav prostředků ověřuje API.", "",
-        "Modelová stránka GPT-5.2 Pro a GPT-5.4 Pro nepotvrzuje Batch ani strict Structured Outputs, přestože ceník obsahuje dávkové sazby. "
+        "Modelová stránka GPT-5.2 Pro a GPT-5.4 Pro nepotvrzuje Batch ani strict Structured Outputs. "
         "Tyto modely aplikace konzervativně blokuje. Přímé soubory vycházejí také z [File inputs](https://developers.openai.com/api/docs/guides/file-inputs); PDF vyžaduje vision. "
         "Ostatní nástroje a endpointy OpenAI uvádí CSV informativně; aplikace implementuje generování pouze přes Responses a nástroj file_search.", "",
         "| Model | LIVE | BATCH | Effort | Sampling | Soubor / obrázek / file search | Maximum výstupu |",
