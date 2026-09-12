@@ -958,8 +958,19 @@ class MainWindow(QMainWindow):
             return
         cfg = context["worker"].cfg
         batch = bool(result.get("batch_id") or result.get("mode") == "C")
+        terminal_status = "batch_pending" if batch else str(result.get("status") or "completed")
+        if terminal_status not in ("completed", "partial", "batch_pending"):
+            terminal_status = "completed"
+        terminal_detail = ""
+        if terminal_status == "partial":
+            missing = [str(path) for path in result.get("missing_deliverables", []) if path]
+            terminal_detail = "Běh skončil s částečným výstupem."
+            if missing:
+                terminal_detail += " Nedodané soubory: " + ", ".join(missing[:20])
+                if len(missing) > 20:
+                    terminal_detail += f" … a dalších {len(missing) - 20}."
         context["dialog"].on_progress_event(
-            ProgressEvent("RUN", "batch_pending" if batch else "completed")
+            ProgressEvent("RUN", terminal_status, detail=terminal_detail)
         )
         self.txt_response_view.setPlainText(
             str(
@@ -977,9 +988,18 @@ class MainWindow(QMainWindow):
                 f"ID: {result.get('batch_id', 'viz historie')}\nV Dávkách použijte Obnovit stav; tím zahájíte periodické sledování. Po dokončení použijte Dokončit.",
             )
         else:
-            for attr, remote in (("diag_windows_out", False), ("diag_ssh_out", True)):
-                if getattr(cfg, attr, False):
-                    self._maybe_execute_repair(cfg.out_dir, cfg, remote)
+            if terminal_status == "partial":
+                missing = [str(path) for path in result.get("missing_deliverables", []) if path]
+                text = "GENERATE skončil s částečným výstupem. Nedodané položky jsou evidovány v MISSINGFILES.md."
+                if missing:
+                    text += "\nNedodáno: " + ", ".join(missing[:20])
+                    if len(missing) > 20:
+                        text += f" … a dalších {len(missing) - 20}."
+                msg_info(self, "Částečný výstup", text, details=result)
+            if terminal_status == "completed":
+                for attr, remote in (("diag_windows_out", False), ("diag_ssh_out", True)):
+                    if getattr(cfg, attr, False):
+                        self._maybe_execute_repair(cfg.out_dir, cfg, remote)
             if (
                 cfg.out_dir
                 and Path(cfg.out_dir).is_dir()
@@ -997,11 +1017,19 @@ class MainWindow(QMainWindow):
                 title = "Oznámení o odeslání dávky"
             else:
                 repair_requested = bool(getattr(cfg, "diag_windows_out", False) or getattr(cfg, "diag_ssh_out", False))
-                subject = "Kájovo NG · generování dokončeno" if repair_requested else "Kájovo NG · dokončeno"
-                body = f"Běh {key}\nProjekt {cfg.project}\nOUT {cfg.out_dir}"
-                if repair_requested:
-                    body += "\nGenerování skončilo; zvolená opravná operace je samostatný potvrzovaný child Job a má vlastní výsledek/log."
-                title = "Oznámení o dokončení"
+                if terminal_status == "partial":
+                    missing = [str(path) for path in result.get("missing_deliverables", []) if path]
+                    subject = "Kájovo NG · částečný výstup"
+                    body = f"Běh {key}\nProjekt {cfg.project}\nOUT {cfg.out_dir}\nVýstup není úplný."
+                    if missing:
+                        body += "\nNedodáno: " + ", ".join(missing[:20])
+                    title = "Oznámení o částečném výstupu"
+                else:
+                    subject = "Kájovo NG · generování dokončeno" if repair_requested else "Kájovo NG · dokončeno"
+                    body = f"Běh {key}\nProjekt {cfg.project}\nOUT {cfg.out_dir}"
+                    if repair_requested:
+                        body += "\nGenerování skončilo; zvolená opravná operace je samostatný potvrzovaný child Job a má vlastní výsledek/log."
+                    title = "Oznámení o dokončení"
             self.jobs.start(
                 title,
                 lambda job: send_smtp_notification(self.s.smtp, subject, body),

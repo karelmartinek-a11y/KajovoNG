@@ -47,7 +47,7 @@ class ProgressClock:
             if event.completed != self.completed:
                 self.unit_started = event.timestamp
             self.completed = event.completed
-        if event.state in ("completed", "failed", "cancelled", "batch_pending", "preflight_pending") and event.stage == "RUN":
+        if event.state in ("completed", "partial", "failed", "cancelled", "batch_pending", "preflight_pending") and event.stage == "RUN":
             self.finished = event.timestamp
 
     def times(self, now=None):

@@ -339,6 +339,7 @@ class RunWorker(QThread):
                 result = self._submit_generate_batch(client, copy.deepcopy(self.resume_generate_batch))
                 self.finished_ok.emit(result)
                 return
+            self._set(1, 0, "Ověřuji model, účet a parametry běhu…", stage="Předběžné ověření")
             client.preflight_run(self.cfg)
             validate_run_options(self.cfg)
 
@@ -349,6 +350,8 @@ class RunWorker(QThread):
             if not self.cfg.send_as_c and self.cfg.mode == "MODIFY" and self.cfg.model_caps.get("supports_previous_response_id") is False:
                 raise RuntimeError("Selected model explicitly rejects previous_response_id (required for cascades).")
 
+            if self._input_file_ids():
+                self._set(2, 0, "Ověřuji vstupní přílohy…", stage="Přílohy")
             input_files, input_images = self._build_input_attachments(client, self._input_file_ids())
             if input_files or input_images:
                 for model in self.cfg.caps_by_model:
@@ -429,8 +432,10 @@ class RunWorker(QThread):
                 if not result.get("response_id"):
                     result["response_id"] = self._final_response_id
 
-            final_status = "batch_pending" if result.get("batch_id") else "completed"
-            if final_status == "completed":
+            final_status = "batch_pending" if result.get("batch_id") else str(result.get("status") or "completed")
+            if final_status not in ("completed", "partial", "batch_pending"):
+                raise ContractError(f"Neplatný terminální stav běhu: {final_status}")
+            if final_status in ("completed", "partial"):
                 self.log.update_state({"status": final_status, "completed_at": time.time()})
             else:
                 self.log.clear_state_keys("completed_at")
@@ -918,7 +923,7 @@ class RunWorker(QThread):
         if self._model_caps(ingest_model).get("supports_previous_response_id") is False:
             raise RuntimeError("Long prompt ingest requires previous_response_id (model flagged as unsupported).")
 
-        self._set(4, 0, f"A0: ingest long prompt ({len(prompt)} chars) ...")
+        self._set(4, 0, f"A0: načítám dlouhé zadání ({len(prompt)} znaků)…", stage="A0")
         chunks = split_text(prompt, max_chars=20_000)
         part_count = len(chunks)
 
@@ -951,7 +956,7 @@ class RunWorker(QThread):
             self.subprogress.emit(int((i + 1) * 100 / max(1, part_count)))
             self.progress_event.emit(ProgressEvent("A0", completed=i + 1, total=part_count, unit="částí zadání"))
 
-        self._set(6, 100, f"A0: ingest done, base_prev_id={last_id}")
+        self._set(6, 100, f"A0: zadání načteno; navazuji odpovědí {last_id}.", stage="A0")
         return last_id
 
     # Snapshoty a zápis souborů.
@@ -988,7 +993,7 @@ class RunWorker(QThread):
         ensure_dir(out_dir)
 
         if self.cfg.versing and files:
-            self._set(80, 0, "VERSING: snapshot before write...")
+            self._set(80, 0, "Vytvářím snapshot před zápisem…", stage="VERSING")
             self._create_snapshot(out_dir)
 
         saved: List[Dict[str, Any]] = []
@@ -1029,7 +1034,7 @@ class RunWorker(QThread):
         lines: List[str] = [
             "# MISSINGFILES",
             "",
-            "Tyto soubory byly součástí A2 manifestu, ale v A3 se negenerují automaticky (image extensions: png/jpg/jpeg).",
+            "Tyto soubory byly součástí výstupní struktury, ale Kájovo NG je v A3 automaticky nedodává.",
             "",
         ]
         for item in skipped_files:
@@ -1037,8 +1042,10 @@ class RunWorker(QThread):
             if not path:
                 continue
             purpose = str(item.get("purpose") or "").strip() or "N/A"
+            reason = str(item.get("reason") or "typ výstupu není automaticky generován").strip()
             lines.append(f"- path: `{path}`")
             lines.append(f"  - expected_content: {purpose}")
+            lines.append(f"  - důvod: {reason}")
         with open(report_path, "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(lines).rstrip() + "\n")
         self._log_debug(f"A3: wrote missing files report -> {report_path} ({len(skipped_files)} entries)")
@@ -1073,12 +1080,12 @@ class RunWorker(QThread):
         a2_model = self._generate_model("A2")
         a3_model = self._generate_model("A3")
         files: List[Dict[str, Any]] = []
-        skipped_a3_images: List[Dict[str, Any]] = []
+        skipped_a3_deliverables: List[Dict[str, Any]] = []
         auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
         if self.cfg.resume_files:
             if self.cfg.send_as_c:
                 raise ContractError("Starý ReRun neobsahuje společnou specifikaci. Opakujte dávku v panelu BATCH nebo spusťte nový A1/A2.")
-            self._set(10, 0, "ReRun: using existing A2 structure, skipping A1/A2")
+            self._set(10, 0, "ReRun: používám uloženou strukturu A2; A1/A2 se neopakují.", stage="ReRun")
             struct = {"contract": "A2_STRUCTURE", "files": self.cfg.resume_files}
             resp2_id = self.cfg.resume_prev_id or self.cfg.response_id or None
             try:
@@ -1101,17 +1108,23 @@ class RunWorker(QThread):
                 if not isinstance(path, str) or not path:
                     continue
                 ext = os.path.splitext(path)[1].lower()
-                if ext in auto_skip_image_exts:
-                    skipped_a3_images.append(
+                if f.get("kind") == "binary" or ext in auto_skip_image_exts:
+                    skipped_a3_deliverables.append(
                         {
                             "path": path,
                             "purpose": f.get("purpose", ""),
                             "language": f.get("language", ""),
+                            "reason": "binární nebo automaticky negenerovaný typ výstupu",
                         }
                     )
                     self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
                     continue
                 if ext in (self.cfg.skip_exts or []):
+                    skipped_a3_deliverables.append({
+                        "path": path, "purpose": f.get("purpose", ""),
+                        "language": f.get("language", ""),
+                        "reason": f"typ {ext or 'bez přípony'} je vyloučen z automatického generování",
+                    })
                     self._log_debug(f"A3: skipping due to extension {ext} ({path})")
                     continue
                 if path in (self.cfg.skip_paths or []):
@@ -1119,7 +1132,7 @@ class RunWorker(QThread):
                     continue
                 files.append(f)
         else:
-            self._set(10, 0, "A1: PLAN request...", stage="A1")
+            self._set(10, 0, "A1: připravuji plán…", stage="A1")
             a1_schema = (
                 '{"contract":"A1_PLAN","project":{"name":"string","one_liner":"string","target_os":"string","language":"string","runtime":"string"},'
                 '"assumptions":["string"],"requirements":{"functional":["string"],"non_functional":["string"],"constraints":["string"]},'
@@ -1179,7 +1192,7 @@ class RunWorker(QThread):
             if plan.get("contract") != "A1_PLAN":
                 raise ContractError("A1_PLAN contract mismatch")
 
-            self._set(20, 0, "A2: STRUCTURE request...", stage="A2")
+            self._set(20, 0, "A2: připravuji strukturu souborů…", stage="A2")
             a2_schema = json.dumps(structure_format()["format"]["schema"], ensure_ascii=False)
             instructions2 = (
                 "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
@@ -1298,17 +1311,23 @@ class RunWorker(QThread):
                 if not isinstance(path, str) or not path:
                     continue
                 ext = os.path.splitext(path)[1].lower()
-                if ext in auto_skip_image_exts:
-                    skipped_a3_images.append(
+                if f.get("kind") == "binary" or ext in auto_skip_image_exts:
+                    skipped_a3_deliverables.append(
                         {
                             "path": path,
                             "purpose": f.get("purpose", ""),
                             "language": f.get("language", ""),
+                            "reason": "binární nebo automaticky negenerovaný typ výstupu",
                         }
                     )
                     self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
                     continue
                 if ext in (self.cfg.skip_exts or []):
+                    skipped_a3_deliverables.append({
+                        "path": path, "purpose": f.get("purpose", ""),
+                        "language": f.get("language", ""),
+                        "reason": f"typ {ext or 'bez přípony'} je vyloučen z automatického generování",
+                    })
                     self._log_debug(f"A3: skipping due to extension {ext} ({path})")
                     continue
                 if path in (self.cfg.skip_paths or []):
@@ -1325,7 +1344,7 @@ class RunWorker(QThread):
             # Průběh podle počtu zpracovaných souborů.
             self._progress_stage = "A3"
             self.progress_event.emit(ProgressEvent("A3", completed=idx - 1, total=total_files, unit="souborů", detail=str(path)))
-            self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: FILE {path} ({idx}/{total_files})")
+            self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: generuji soubor {path} ({idx}/{total_files})")
             content, _last_resp_id = self._gen_file_chunks(
                 client,
                 prev_id=base_a3_prev_id,
@@ -1341,16 +1360,24 @@ class RunWorker(QThread):
             self.progress_event.emit(ProgressEvent("A3", completed=idx, total=total_files, unit="souborů", detail=str(path)))
 
         saved_map = self._save_out_files(out_files)
-        missing_report = self._write_missing_files_report(skipped_a3_images)
+        missing_report = self._write_missing_files_report(skipped_a3_deliverables)
+        missing_deliverables = [item.get("path") for item in skipped_a3_deliverables if item.get("path")]
+        no_changes = not out_files and not missing_deliverables
+        if missing_deliverables:
+            self.log.update_state({"missing_deliverables": missing_deliverables})
+        elif no_changes:
+            self.log.update_state({"no_changes": True, "written_files": []})
         return {
             "mode": "GENERATE",
             "plan": plan,
             "structure": struct,
             "saved": saved_map,
+            "status": "partial" if missing_deliverables else "completed",
+            "no_changes": no_changes,
             "response_id": resp2_id,
             "last_response_id": self._final_response_id or resp2_id,
             "missing_files_report": missing_report,
-            "missing_deliverables": [item.get("path") for item in skipped_a3_images],
+            "missing_deliverables": missing_deliverables,
         }
 
     # Odeslání souborových úloh po živé přípravě.
@@ -1388,7 +1415,7 @@ class RunWorker(QThread):
 
     # Režim MODIFY.
     def _run_b_modify(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
-        self._set(8, 0, "IN mirror: scan + manifest + upload...")
+        self._set(8, 0, "Skenuji a nahrávám vstupní projekt IN…", stage="Vstupní data")
         root = self.cfg.in_dir
         root_name = os.path.basename(os.path.abspath(root))
 
@@ -1438,7 +1465,7 @@ class RunWorker(QThread):
 
         if supports_fs:
             try:
-                self._set(18, 0, "Vector store: create + attach (file_search)...")
+                self._set(18, 0, "Vytvářím a indexuji vector store pro file_search…", stage="Indexace")
                 vs = with_retry(lambda: client.create_vector_store(f"{(self.cfg.project or root_name)}{ts_code()}"), self.settings.retry, self.breaker)
                 vs_id = vs.get("id")
                 if vs_id:
@@ -1497,7 +1524,7 @@ class RunWorker(QThread):
             if tools:
                 self._fs_tools = tools
 
-        self._set(24, 0, "B1: PLAN (modify)...", stage="B1")
+        self._set(24, 0, "B1: připravuji plán změn…", stage="B1")
         b1_schema = (
             '{"contract":"B1_PLAN","diagnosis":{"summary":"string","evidence":[{"path":"string","reason":"string"}],"likely_root_causes":["string"]},'
             '"change_plan":{"goals":["string"],"files_to_modify":[{"path":"string","intent":"string"}],"files_to_add":[{"path":"string","intent":"string"}],"verification_steps":["string"]},'
@@ -1553,7 +1580,7 @@ class RunWorker(QThread):
         if plan.get("contract") != "B1_PLAN":
             raise ContractError("B1_PLAN contract mismatch")
 
-        self._set(36, 0, "B2: STRUCTURE (touched files)...", stage="B2")
+        self._set(36, 0, "B2: určuji soubory ke změně…", stage="B2")
         b2_schema = '{"contract":"B2_STRUCTURE","touched_files":[{"path":"string","action":"modify|add","intent":"string"}],"invariants":["string"]}'
         instructions2 = (
             "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
@@ -1634,7 +1661,7 @@ class RunWorker(QThread):
             # Průběh podle počtu zpracovaných souborů.
             self._progress_stage = "B3"
             self.progress_event.emit(ProgressEvent("B3", completed=i - 1, total=total_files, unit="souborů", detail=str(path)))
-            self._set(50 + int(35 * (i - 1) / max(1, len(touched))), 0, f"B3: {action} {path} ({i}/{total_files})")
+            self._set(50 + int(35 * (i - 1) / max(1, len(touched))), 0, f"B3: {'upravuji' if action == 'modify' else 'přidávám'} {path} ({i}/{total_files})")
             content, last_resp_id = self._gen_file_chunks(
                 client,
                 prev_id=chain_prev_id,
@@ -1655,7 +1682,7 @@ class RunWorker(QThread):
 
     # Režim QA.
     def _run_qa(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
-        self._set(10, 0, "QA: request...", stage="QA")
+        self._set(10, 0, "QA: odesílám dotaz…", stage="QA")
         note = self._in_dir_fallback_note()
         input_text = self.cfg.prompt or ""
         if note:
@@ -1705,7 +1732,7 @@ class RunWorker(QThread):
 
     # Režim QFILE.
     def _run_qfile(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
-        self._set(10, 0, "QFILE: request...", stage="QFILE")
+        self._set(10, 0, "QFILE: generuji soubor…", stage="QFILE")
         self._check_stop()
         prompt = (self.cfg.prompt or "").strip()
         if not prompt:
@@ -1794,7 +1821,7 @@ class RunWorker(QThread):
 
     # Dávkové požadavky.
     def _run_c_batch(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
-        self._set(10, 0, "C: building batch JSONL...")
+        self._set(10, 0, "Připravuji dávkový požadavek C_FILES_ALL…", stage="Příprava BATCH")
         c_schema = (
             '{"contract":"C_FILES_ALL","project":{"name":"string","target_os":"Windows 10/11","runtime":"string","language":"string"},'
             '"root":"string","files":[{"path":"relative/path/file.ext","purpose":"string","content":"string"}],'

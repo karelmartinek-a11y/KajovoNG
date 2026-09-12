@@ -87,7 +87,7 @@ Parser vyžaduje JSON objekt; dovoluje jeho extrakci z okolního textu. JSON pol
 
 A3_FILE a B3_FILE obsahují označení `contract`, požadovanou `path`, textový `content` a objekt `chunking`. Části začínají indexem 0. `has_more` je boolean; pokračování vyžaduje celočíselný `next_chunk_index` rovný aktuálnímu indexu plus jedna. Obsah částí se spojuje bez vloženého oddělovače. Smyčka odmítne index nad 5000. Neplatný JSON nebo jiné označení kontraktu se zkouší nejvýše třikrát; neúspěch vyvolá chybu. QFILE vyžaduje `chunk_index: 0` a `has_more: false`; SEND AS BATCH pro něj není dostupné.
 
-GENERATE negeneruje obsah položek PNG/JPG/JPEG; seznam zapisuje do `MISSINGFILES.md`. MODIFY přijímá akce `add` a `modify`, jiné akce odmítá. Při dry-run změny OUT neprovádí.
+GENERATE v A3 automaticky nedodává položky označené `kind=binary`, PNG/JPG/JPEG ani typy explicitně vyloučené z automatického generování; všechny takové očekávané položky zapisuje do `MISSINGFILES.md`. Pokud po běhu zůstává alespoň jeden takový nedodaný očekávaný soubor, terminální stav LIVE GENERATE je `partial`; `completed` neznamená úplný výstup, pokud evidence obsahuje `missing_deliverables`. ReRun, který díky doloženým již existujícím zápisům nemusí vytvářet nový soubor, eviduje `no_changes`. MODIFY přijímá akce `add` a `modify`, jiné akce odmítá. Při dry-run změny OUT neprovádí.
 
 ### Cesty a zápisy
 
