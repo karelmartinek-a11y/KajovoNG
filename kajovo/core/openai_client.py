@@ -9,12 +9,14 @@ import requests
 from .request_rules import validate_response_payload, validate_vector_attributes
 from .compat import is_compatible_path
 
+
 class OpenAIError(Exception):
     def __init__(self, message: str, status_code: Optional[int] = None, *, param=None, code=None):
         super().__init__(message)
         self.status_code = status_code
         self.param = param
         self.code = code
+
 
 class OpenAIClient:
     @staticmethod
@@ -91,8 +93,12 @@ class OpenAIClient:
                             detail = detail if isinstance(detail, dict) else {}
                         except (ValueError, AttributeError):
                             detail = {}
-                        error = OpenAIError(f"{method} {path} -> {r.status_code}: {excerpt}", status_code=r.status_code,
-                            param=detail.get("param"), code=detail.get("code"))
+                        error = OpenAIError(
+                            f"{method} {path} -> {r.status_code}: {excerpt}",
+                            status_code=r.status_code,
+                            param=detail.get("param"),
+                            code=detail.get("code"),
+                        )
                         error.request_id = r.headers.get("x-request-id")
                         raise error
                     delay = self._retry_delay(attempt, str(r.headers.get("retry-after", "")))
@@ -110,9 +116,13 @@ class OpenAIClient:
                 err = ex
                 last_error = str(ex)
                 if not self._should_retry(None, err) or attempt >= attempts:
-                    raise OpenAIError(f"{method} {path} failed: {self._safe_err_excerpt(last_error or '')}") from ex
+                    raise OpenAIError(
+                        f"{method} {path} failed: {self._safe_err_excerpt(last_error or '')}"
+                    ) from ex
                 time.sleep(self._retry_delay(attempt, ""))
-        raise OpenAIError(f"{method} {path} failed: {self._safe_err_excerpt(last_error or 'unknown error')}")
+        raise OpenAIError(
+            f"{method} {path} failed: {self._safe_err_excerpt(last_error or 'unknown error')}"
+        )
 
     def list_models(self) -> List[Dict[str, Any]]:
         if self._sdk is not None:
@@ -180,16 +190,21 @@ class OpenAIClient:
 
     def configure_validation(self, settings):
         from .response_policy import ResponsePolicy
+
         self._policy = ResponsePolicy(self, settings.cache_dir, settings.log_dir)
 
     def validate_access(self, payload, batch=False):
+        """Provede lokální kontrolu payloadu bez generativního požadavku."""
         from .response_policy import ResponsePolicy
+
         if not hasattr(self, "_policy"):
             self._policy = ResponsePolicy(self)
         self._policy.ensure(payload, batch, preparing=True)
 
-    def preflight_response(self, payload, batch=False):
+    def validate_prepared_payload(self, payload, batch=False):
+        """Lokálně ověří připravený payload; nikdy neodesílá zkušební Response."""
         from .response_policy import ResponsePolicy
+
         if not hasattr(self, "_policy"):
             self._policy = ResponsePolicy(self)
         self._policy.ensure(payload, batch, preparing=True)
@@ -204,9 +219,14 @@ class OpenAIClient:
         self._known_responses.add(response_id)
 
     def validate_resources(self, payload):
-        """Ověří skutečné reference před pokusem, i po změně přístupového klíče."""
-        from .compat import validate_input_file_sizes, SUPPORTED_INPUT_FILE_EXTS, SUPPORTED_INPUT_IMAGE_EXTS
+        """Ověří skutečné reference ne-generativními čteními, i po změně klíče."""
+        from .compat import (
+            validate_input_file_sizes,
+            SUPPORTED_INPUT_FILE_EXTS,
+            SUPPORTED_INPUT_IMAGE_EXTS,
+        )
         from .model_registry import model_spec
+
         if payload.get("previous_response_id"):
             self.validate_previous_response(payload["previous_response_id"])
         metadata = []
@@ -218,14 +238,35 @@ class OpenAIClient:
                     item = self.retrieve_file(part["file_id"])
                     metadata.append(item)
                     extension = os.path.splitext(str(item.get("filename", "")))[1].lower()
-                    allowed = SUPPORTED_INPUT_IMAGE_EXTS if part["type"] == "input_image" else SUPPORTED_INPUT_FILE_EXTS
+                    allowed = (
+                        SUPPORTED_INPUT_IMAGE_EXTS
+                        if part["type"] == "input_image"
+                        else SUPPORTED_INPUT_FILE_EXTS
+                    )
                     if extension not in allowed:
-                        raise ValueError(f"{part['type']}.file_id: nepodporovaný formát {extension or '(bez přípony)'}.")
-                    if part["type"] == "input_file" and str(item.get("filename", "")).lower().endswith(".pdf") and "image_input" not in spec["features"]:
-                        raise ValueError(f"{payload['model']}: PDF file_id vyžaduje model s podporou obrázků.")
+                        raise ValueError(
+                            f"{part['type']}.file_id: nepodporovaný formát {extension or '(bez přípony)'} ."
+                        )
+                    if (
+                        part["type"] == "input_file"
+                        and str(item.get("filename", "")).lower().endswith(".pdf")
+                        and "image_input" not in spec["features"]
+                    ):
+                        raise ValueError(
+                            f"{payload['model']}: PDF file_id vyžaduje model s podporou obrázků."
+                        )
                 elif part.get("file_data"):
                     import base64
-                    metadata.append({"bytes": len(base64.b64decode(part["file_data"].split(",")[-1], validate=True))})
+
+                    metadata.append(
+                        {
+                            "bytes": len(
+                                base64.b64decode(
+                                    part["file_data"].split(",")[-1], validate=True
+                                )
+                            )
+                        }
+                    )
         if metadata:
             validate_input_file_sizes(metadata)
         for tool in payload.get("tools", []):
@@ -233,55 +274,82 @@ class OpenAIClient:
                 self._validate_resource_id(vs_id)
                 store = self._req("GET", f"/vector_stores/{vs_id}")
                 counts = store.get("file_counts") or {}
-                if store.get("status") != "completed" or counts.get("in_progress", 0) or counts.get("failed", 0) or counts.get("cancelled", 0):
-                    raise ValueError(f"file_search.vector_store_ids: {vs_id} není kompletně zpracované úložiště.")
+                if (
+                    store.get("status") != "completed"
+                    or counts.get("in_progress", 0)
+                    or counts.get("failed", 0)
+                    or counts.get("cancelled", 0)
+                ):
+                    raise ValueError(
+                        f"file_search.vector_store_ids: {vs_id} není kompletně zpracované úložiště."
+                    )
 
-    def preflight_run(self, cfg):
+    def prepare_run_validation(self, cfg):
+        """Připraví lokální modelové capability snímky bez placeného probe volání."""
         from .structured_output import text_format
         from .request_rules import uses_reasoning_defaults
+
         models = [cfg.model]
         if cfg.mode == "GENERATE":
-            models += [getattr(cfg, field, "") or cfg.model for field in ("model_a1", "model_a2", "model_a3")]
+            models += [
+                getattr(cfg, field, "") or cfg.model
+                for field in ("model_a1", "model_a2", "model_a3")
+            ]
         preparation_models = set(models)
         if cfg.mode == "GENERATE" and cfg.send_as_c:
-            preparation_models = {getattr(cfg, field, "") or cfg.model for field in ("model_a1", "model_a2")}
+            preparation_models = {
+                getattr(cfg, field, "") or cfg.model for field in ("model_a1", "model_a2")
+            }
         caps_by_model = {}
         for model in dict.fromkeys(models):
-            payload = {"model": model, "input": "kontrola", "text": text_format()}
+            payload = {"model": model, "input": "lokální kontrola", "text": text_format()}
             if not uses_reasoning_defaults(model):
                 payload["temperature"] = cfg.temperature
-            if cfg.mode in ("GENERATE", "MODIFY") and not (cfg.send_as_c and cfg.mode == "MODIFY"):
-                payload["previous_response_id"] = "resp_preflight"
+            if cfg.mode in ("GENERATE", "MODIFY") and not (
+                cfg.send_as_c and cfg.mode == "MODIFY"
+            ):
+                # Placeholder je pouze pro lokální kontrolu tvaru payloadu;
+                # nikdy se neodesílá na /responses.
+                payload["previous_response_id"] = "resp_local_validation"
             if cfg.attached_vector_store_ids and model in preparation_models:
-                payload["tools"] = [{"type": "file_search", "vector_store_ids": cfg.attached_vector_store_ids}]
-            # Jeden model může současně obsluhovat živé A1/A2 i dávkové A3.
-            self.preflight_response(payload)
+                payload["tools"] = [
+                    {"type": "file_search", "vector_store_ids": cfg.attached_vector_store_ids}
+                ]
+            self.validate_prepared_payload(payload)
             spec = self._policy.model_spec(model)
-            caps_by_model[model] = {"ok_basic": True, "supports_structured_outputs": True,
+            caps_by_model[model] = {
+                "ok_basic": True,
+                "supports_structured_outputs": True,
                 "supports_previous_response_id": bool(payload.get("previous_response_id")),
                 "supports_temperature": not uses_reasoning_defaults(model),
                 "supports_file_search": "file_search" in spec["features"],
-                "supports_input_file": "file_uploads" in spec["features"]}
+                "supports_input_file": "file_uploads" in spec["features"],
+            }
         cfg.available_models = list(self._policy.catalog)
         cfg.caps_by_model = caps_by_model
         cfg.model_caps = caps_by_model[cfg.model]
         if cfg.send_as_c:
-            batch_model = (getattr(cfg, "model_a3", "") or cfg.model) if cfg.mode == "GENERATE" else cfg.model
-            self.preflight_response({"model": batch_model, "input": "kontrola", "text": text_format()}, batch=True)
+            batch_model = (
+                (getattr(cfg, "model_a3", "") or cfg.model)
+                if cfg.mode == "GENERATE"
+                else cfg.model
+            )
+            self.validate_prepared_payload(
+                {"model": batch_model, "input": "lokální kontrola", "text": text_format()},
+                batch=True,
+            )
 
     def create_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         from .structured_output import validate_output
         from .contracts import ContractError
+
         try:
             self.validate_access(payload)
             self._policy.ensure(payload)
         except Exception as exc:
             exc.request_sent = False
             raise
-        try:
-            response = self._send_response(payload)
-        finally:
-            self._policy.consume_live(payload)
+        response = self._send_response(payload)
         try:
             validate_output(response, payload)
         except ContractError as exc:
@@ -291,6 +359,7 @@ class OpenAIClient:
 
     def _send_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         from .structured_output import prepare_payload
+
         prepare_payload(payload)
         validate_response_payload(payload)
         started = time.monotonic()
@@ -312,7 +381,12 @@ class OpenAIClient:
                 if isinstance(detail, dict):
                     detail = detail.get("error", detail)
                 detail = detail if isinstance(detail, dict) else {}
-                error = OpenAIError(str(exc), status_code=status, param=detail.get("param"), code=detail.get("code"))
+                error = OpenAIError(
+                    str(exc),
+                    status_code=status,
+                    param=detail.get("param"),
+                    code=detail.get("code"),
+                )
                 error.request_id = getattr(exc, "request_id", None)
                 error.elapsed_s = time.monotonic() - started
                 error.phase = "response"
@@ -329,12 +403,12 @@ class OpenAIClient:
                 self._policy.invalidate(payload["model"])
             raise
 
-
     def list_vector_stores(self) -> List[Dict[str, Any]]:
         return self._list_all("/vector_stores")
 
     def _list_all(self, path: str) -> List[Dict[str, Any]]:
         from urllib.parse import urlencode
+
         rows = []
         cursor = None
         seen = set()
@@ -371,8 +445,6 @@ class OpenAIClient:
             body["attributes"] = attributes
         return self._req("POST", f"/vector_stores/{vs_id}/files", json_body=body, timeout=120.0)
 
-    
-
     def retrieve_vector_store(self, vs_id: str) -> Dict[str, Any]:
         self._validate_resource_id(vs_id)
         return self._req("GET", f"/vector_stores/{vs_id}")
@@ -402,17 +474,22 @@ class OpenAIClient:
         body = {"attributes": attributes}
         return self._req("POST", f"/vector_stores/{vs_id}/files/{vector_store_file_id}", json_body=body)
 
-
     def list_batches(self) -> List[Dict[str, Any]]:
         return self._list_all("/batches")
 
-    def create_batch(self, input_file_id: str, endpoint: str = "/v1/responses", completion_window: str = "24h", *, _prevalidated_rows=None) -> Dict[str, Any]:
-        """Vytvoří BATCH. `_prevalidated_rows` je interní cesta pouze pro již ověřený work submit.
+    def create_batch(
+        self,
+        input_file_id: str,
+        endpoint: str = "/v1/responses",
+        completion_window: str = "24h",
+        *,
+        _prevalidated_rows=None,
+    ) -> Dict[str, Any]:
+        """Vytvoří jedinou skutečnou pracovní dávku.
 
-        Běžné volání vždy znovu načte a kanonicky ověří vzdálený JSONL. Interní
-        work-submit cesta naopak nesmí před jediným POST /batches provést žádnou
-        další síťovou operaci, protože submission_unknown už v tom okamžiku chrání
-        právě transportní neurčitost tohoto POSTu.
+        Běžné volání znovu načte a lokálně ověří vzdálený JSONL. Interní
+        work-submit cesta dostane již ověřené řádky a před jediným POST /batches
+        neprovádí žádnou další síťovou operaci.
         """
         self._validate_resource_id(input_file_id)
         if endpoint != "/v1/responses" or completion_window != "24h":
@@ -421,35 +498,53 @@ class OpenAIClient:
             rows = self.validate_batch_data(self.file_content(input_file_id))
         else:
             rows = list(_prevalidated_rows)
-            if not rows or not all(isinstance(row, dict) and isinstance(row.get("body"), dict) for row in rows):
+            if not rows or not all(
+                isinstance(row, dict) and isinstance(row.get("body"), dict) for row in rows
+            ):
                 raise ValueError("Interní work submit vyžaduje již ověřené řádky dávky.")
-        body = {"input_file_id": input_file_id, "endpoint": endpoint, "completion_window": completion_window}
-        result = self._req("POST", "/batches", json_body=body)
-        for row in rows:
-            self._policy.proofs.pop(self._policy.key(row["body"], True), None)
-        self._policy.save()
-        return result
+        body = {
+            "input_file_id": input_file_id,
+            "endpoint": endpoint,
+            "completion_window": completion_window,
+        }
+        return self._req("POST", "/batches", json_body=body)
 
     def validate_batch_data(self, data):
         from .structured_output import prepare_payload
+
         if not isinstance(data, bytes) or not data or len(data) > 200_000_000:
             raise ValueError("Neplatná velikost dávky.")
-        rows = [json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()]
+        rows = [
+            json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()
+        ]
         if not 1 <= len(rows) <= 50000:
             raise ValueError("Dávka vyžaduje 1 až 50000 požadavků.")
         seen = set()
         models = set()
         for row in rows:
-            if not isinstance(row, dict) or set(row) != {"custom_id", "method", "url", "body"}:
+            if not isinstance(row, dict) or set(row) != {
+                "custom_id",
+                "method",
+                "url",
+                "body",
+            }:
                 raise ValueError("Neplatný řádek dávky.")
             cid = row["custom_id"]
-            if not isinstance(cid, str) or not cid or cid in seen or row["method"] != "POST" or row["url"] != "/v1/responses":
+            if (
+                not isinstance(cid, str)
+                or not cid
+                or cid in seen
+                or row["method"] != "POST"
+                or row["url"] != "/v1/responses"
+            ):
                 raise ValueError("Neplatné nebo duplicitní ID či endpoint dávky.")
             seen.add(cid)
             if not isinstance(row["body"], dict) or "text" not in row["body"]:
                 raise ValueError("Dávkový požadavek postrádá povinné JSON Schema.")
             if row["body"].get("previous_response_id") or row["body"].get("conversation"):
-                raise ValueError("Dávkové soubory musí obsahovat samostatné zadání bez návaznosti.")
+                raise ValueError(
+                    "Dávkové soubory musí obsahovat samostatné zadání bez návaznosti."
+                )
             prepare_payload(row["body"])
             validate_response_payload(row["body"], batch=True)
             models.add(row["body"]["model"])
