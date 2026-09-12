@@ -1,0 +1,147 @@
+name: final-process-audit-fixes
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply final process fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(text, old, new, expected=1, label="replacement"):
+              count = text.count(old)
+              if count != expected:
+                  raise RuntimeError(f"{label}: expected {expected}, got {count}")
+              return text.replace(old, new, expected)
+
+          pipeline_path = Path("kajovo/core/pipeline.py")
+          p = pipeline_path.read_text(encoding="utf-8")
+
+          p = replace(p,
+              '            client.preflight_run(self.cfg)\n            validate_run_options(self.cfg)',
+              '            self._set(1, 0, "Ověřuji model, účet a parametry běhu…", stage="Předběžné ověření")\n            client.preflight_run(self.cfg)\n            validate_run_options(self.cfg)',
+              label="preflight stage")
+          p = replace(p,
+              '            input_files, input_images = self._build_input_attachments(client, self._input_file_ids())',
+              '            if self._input_file_ids():\n                self._set(2, 0, "Ověřuji vstupní přílohy…", stage="Přílohy")\n            input_files, input_images = self._build_input_attachments(client, self._input_file_ids())',
+              label="attachment stage")
+          p = replace(p,
+              '            final_status = "batch_pending" if result.get("batch_id") else "completed"\n            if final_status == "completed":\n                self.log.update_state({"status": final_status, "completed_at": time.time()})',
+              '            final_status = "batch_pending" if result.get("batch_id") else str(result.get("status") or "completed")\n            if final_status not in ("completed", "partial", "batch_pending"):\n                raise ContractError(f"Neplatný terminální stav běhu: {final_status}")\n            if final_status in ("completed", "partial"):\n                self.log.update_state({"status": final_status, "completed_at": time.time()})',
+              label="terminal state")
+
+          replacements = [
+              ('self._set(4, 0, f"A0: ingest long prompt ({len(prompt)} chars) ...")', 'self._set(4, 0, f"A0: načítám dlouhé zadání ({len(prompt)} znaků)…", stage="A0")', "A0 start"),
+              ('self._set(6, 100, f"A0: ingest done, base_prev_id={last_id}")', 'self._set(6, 100, f"A0: zadání načteno; navazuji odpovědí {last_id}.", stage="A0")', "A0 done"),
+              ('self._set(80, 0, "VERSING: snapshot before write...")', 'self._set(80, 0, "Vytvářím snapshot před zápisem…", stage="VERSING")', "versing"),
+              ('self._set(10, 0, "ReRun: using existing A2 structure, skipping A1/A2")', 'self._set(10, 0, "ReRun: používám uloženou strukturu A2; A1/A2 se neopakují.", stage="ReRun")', "rerun"),
+              ('self._set(10, 0, "A1: PLAN request...", stage="A1")', 'self._set(10, 0, "A1: připravuji plán…", stage="A1")', "A1"),
+              ('self._set(20, 0, "A2: STRUCTURE request...", stage="A2")', 'self._set(20, 0, "A2: připravuji strukturu souborů…", stage="A2")', "A2"),
+              ('f"A3: FILE {path} ({idx}/{total_files})"', 'f"A3: generuji soubor {path} ({idx}/{total_files})"', "A3"),
+              ('self._set(8, 0, "IN mirror: scan + manifest + upload...")', 'self._set(8, 0, "Skenuji a nahrávám vstupní projekt IN…", stage="Vstupní data")', "modify input"),
+              ('self._set(18, 0, "Vector store: create + attach (file_search)...")', 'self._set(18, 0, "Vytvářím a indexuji vector store pro file_search…", stage="Indexace")', "modify index"),
+              ('self._set(24, 0, "B1: PLAN (modify)...", stage="B1")', 'self._set(24, 0, "B1: připravuji plán změn…", stage="B1")', "B1"),
+              ('self._set(36, 0, "B2: STRUCTURE (touched files)...", stage="B2")', 'self._set(36, 0, "B2: určuji soubory ke změně…", stage="B2")', "B2"),
+              ('f"B3: {action} {path} ({i}/{total_files})"', 'f"B3: {\'upravuji\' if action == \'modify\' else \'přidávám\'} {path} ({i}/{total_files})"', "B3"),
+              ('self._set(10, 0, "QA: request...", stage="QA")', 'self._set(10, 0, "QA: odesílám dotaz…", stage="QA")', "QA"),
+              ('self._set(10, 0, "QFILE: request...", stage="QFILE")', 'self._set(10, 0, "QFILE: generuji soubor…", stage="QFILE")', "QFILE"),
+              ('self._set(10, 0, "C: building batch JSONL...")', 'self._set(10, 0, "Připravuji dávkový požadavek C_FILES_ALL…", stage="Příprava BATCH")', "C batch"),
+          ]
+          for old, new, label in replacements:
+              p = replace(p, old, new, label=label)
+
+          old_name = "skipped_a3_images"
+          count = p.count(old_name)
+          if count != 5:
+              raise RuntimeError(f"skipped deliverables rename: expected 5, got {count}")
+          p = p.replace(old_name, "skipped_a3_deliverables")
+          p = replace(p, 'if ext in auto_skip_image_exts:', 'if f.get("kind") == "binary" or ext in auto_skip_image_exts:', expected=2, label="binary skip")
+          p = replace(p,
+              '                    skipped_a3_deliverables.append(\n                        {\n                            "path": path,\n                            "purpose": f.get("purpose", ""),\n                            "language": f.get("language", ""),\n                        }\n                    )',
+              '                    skipped_a3_deliverables.append(\n                        {\n                            "path": path,\n                            "purpose": f.get("purpose", ""),\n                            "language": f.get("language", ""),\n                            "reason": "binární nebo automaticky negenerovaný typ výstupu",\n                        }\n                    )',
+              expected=2, label="binary reason")
+          p = replace(p,
+              '                if ext in (self.cfg.skip_exts or []):\n                    self._log_debug(f"A3: skipping due to extension {ext} ({path})")\n                    continue',
+              '                if ext in (self.cfg.skip_exts or []):\n                    skipped_a3_deliverables.append({\n                        "path": path, "purpose": f.get("purpose", ""),\n                        "language": f.get("language", ""),\n                        "reason": f"typ {ext or \'bez přípony\'} je vyloučen z automatického generování",\n                    })\n                    self._log_debug(f"A3: skipping due to extension {ext} ({path})")\n                    continue',
+              expected=2, label="policy skip evidence")
+          p = replace(p,
+              '            "Tyto soubory byly součástí A2 manifestu, ale v A3 se negenerují automaticky (image extensions: png/jpg/jpeg).",',
+              '            "Tyto soubory byly součástí výstupní struktury, ale Kájovo NG je v A3 automaticky nedodává.",',
+              label="missing report header")
+          p = replace(p,
+              '            purpose = str(item.get("purpose") or "").strip() or "N/A"\n            lines.append(f"- path: `{path}`")\n            lines.append(f"  - expected_content: {purpose}")',
+              '            purpose = str(item.get("purpose") or "").strip() or "N/A"\n            reason = str(item.get("reason") or "typ výstupu není automaticky generován").strip()\n            lines.append(f"- path: `{path}`")\n            lines.append(f"  - expected_content: {purpose}")\n            lines.append(f"  - důvod: {reason}")',
+              label="missing report reason")
+          p = replace(p,
+              '        saved_map = self._save_out_files(out_files)\n        missing_report = self._write_missing_files_report(skipped_a3_deliverables)\n        return {\n            "mode": "GENERATE",\n            "plan": plan,\n            "structure": struct,\n            "saved": saved_map,\n            "response_id": resp2_id,\n            "last_response_id": self._final_response_id or resp2_id,\n            "missing_files_report": missing_report,\n            "missing_deliverables": [item.get("path") for item in skipped_a3_deliverables],\n        }',
+              '        saved_map = self._save_out_files(out_files)\n        missing_report = self._write_missing_files_report(skipped_a3_deliverables)\n        missing_deliverables = [item.get("path") for item in skipped_a3_deliverables if item.get("path")]\n        no_changes = not out_files and not missing_deliverables\n        if missing_deliverables:\n            self.log.update_state({"missing_deliverables": missing_deliverables})\n        elif no_changes:\n            self.log.update_state({"no_changes": True, "written_files": []})\n        return {\n            "mode": "GENERATE",\n            "plan": plan,\n            "structure": struct,\n            "saved": saved_map,\n            "status": "partial" if missing_deliverables else "completed",\n            "no_changes": no_changes,\n            "response_id": resp2_id,\n            "last_response_id": self._final_response_id or resp2_id,\n            "missing_files_report": missing_report,\n            "missing_deliverables": missing_deliverables,\n        }',
+              label="generate terminal semantics")
+          pipeline_path.write_text(p, encoding="utf-8")
+
+          progress_path = Path("kajovo/core/progress.py")
+          progress = progress_path.read_text(encoding="utf-8")
+          progress = replace(progress,
+              'if event.state in ("completed", "failed", "cancelled", "batch_pending", "preflight_pending") and event.stage == "RUN":',
+              'if event.state in ("completed", "partial", "failed", "cancelled", "batch_pending", "preflight_pending") and event.stage == "RUN":',
+              label="partial terminal progress")
+          progress_path.write_text(progress, encoding="utf-8")
+
+          app_path = Path("kajovo/desktop/application.py")
+          app = app_path.read_text(encoding="utf-8")
+          app = replace(app,
+              '        batch = bool(result.get("batch_id") or result.get("mode") == "C")\n        context["dialog"].on_progress_event(\n            ProgressEvent("RUN", "batch_pending" if batch else "completed")\n        )',
+              '        batch = bool(result.get("batch_id") or result.get("mode") == "C")\n        terminal_status = "batch_pending" if batch else str(result.get("status") or "completed")\n        if terminal_status not in ("completed", "partial", "batch_pending"):\n            terminal_status = "completed"\n        terminal_detail = ""\n        if terminal_status == "partial":\n            missing = [str(path) for path in result.get("missing_deliverables", []) if path]\n            terminal_detail = "Běh skončil s částečným výstupem."\n            if missing:\n                terminal_detail += " Nedodané soubory: " + ", ".join(missing[:20])\n                if len(missing) > 20:\n                    terminal_detail += f" … a dalších {len(missing) - 20}."\n        context["dialog"].on_progress_event(\n            ProgressEvent("RUN", terminal_status, detail=terminal_detail)\n        )',
+              label="desktop partial terminal")
+          app = replace(app,
+              '        else:\n            for attr, remote in (("diag_windows_out", False), ("diag_ssh_out", True)):\n                if getattr(cfg, attr, False):\n                    self._maybe_execute_repair(cfg.out_dir, cfg, remote)\n            if (',
+              '        else:\n            if terminal_status == "partial":\n                missing = [str(path) for path in result.get("missing_deliverables", []) if path]\n                text = "GENERATE skončil s částečným výstupem. Nedodané položky jsou evidovány v MISSINGFILES.md."\n                if missing:\n                    text += "\\nNedodáno: " + ", ".join(missing[:20])\n                    if len(missing) > 20:\n                        text += f" … a dalších {len(missing) - 20}."\n                msg_info(self, "Částečný výstup", text, details=result)\n            if terminal_status == "completed":\n                for attr, remote in (("diag_windows_out", False), ("diag_ssh_out", True)):\n                    if getattr(cfg, attr, False):\n                        self._maybe_execute_repair(cfg.out_dir, cfg, remote)\n            if (',
+              label="partial result UI")
+          app = replace(app,
+              '            else:\n                repair_requested = bool(getattr(cfg, "diag_windows_out", False) or getattr(cfg, "diag_ssh_out", False))\n                subject = "Kájovo NG · generování dokončeno" if repair_requested else "Kájovo NG · dokončeno"\n                body = f"Běh {key}\\nProjekt {cfg.project}\\nOUT {cfg.out_dir}"\n                if repair_requested:\n                    body += "\\nGenerování skončilo; zvolená opravná operace je samostatný potvrzovaný child Job a má vlastní výsledek/log."\n                title = "Oznámení o dokončení"',
+              '            else:\n                repair_requested = bool(getattr(cfg, "diag_windows_out", False) or getattr(cfg, "diag_ssh_out", False))\n                if terminal_status == "partial":\n                    missing = [str(path) for path in result.get("missing_deliverables", []) if path]\n                    subject = "Kájovo NG · částečný výstup"\n                    body = f"Běh {key}\\nProjekt {cfg.project}\\nOUT {cfg.out_dir}\\nVýstup není úplný."\n                    if missing:\n                        body += "\\nNedodáno: " + ", ".join(missing[:20])\n                    title = "Oznámení o částečném výstupu"\n                else:\n                    subject = "Kájovo NG · generování dokončeno" if repair_requested else "Kájovo NG · dokončeno"\n                    body = f"Běh {key}\\nProjekt {cfg.project}\\nOUT {cfg.out_dir}"\n                    if repair_requested:\n                        body += "\\nGenerování skončilo; zvolená opravná operace je samostatný potvrzovaný child Job a má vlastní výsledek/log."\n                    title = "Oznámení o dokončení"',
+              label="partial notification")
+          app_path.write_text(app, encoding="utf-8")
+
+          ssot_path = Path("docs/SSOT.md")
+          ssot = ssot_path.read_text(encoding="utf-8")
+          ssot = replace(ssot,
+              'GENERATE negeneruje obsah položek PNG/JPG/JPEG; seznam zapisuje do `MISSINGFILES.md`. MODIFY přijímá akce `add` a `modify`, jiné akce odmítá. Při dry-run změny OUT neprovádí.',
+              'GENERATE v A3 automaticky nedodává položky označené `kind=binary`, PNG/JPG/JPEG ani typy explicitně vyloučené z automatického generování; všechny takové očekávané položky zapisuje do `MISSINGFILES.md`. Pokud po běhu zůstává alespoň jeden takový nedodaný očekávaný soubor, terminální stav LIVE GENERATE je `partial`; `completed` neznamená úplný výstup, pokud evidence obsahuje `missing_deliverables`. ReRun, který díky doloženým již existujícím zápisům nemusí vytvářet nový soubor, eviduje `no_changes`. MODIFY přijímá akce `add` a `modify`, jiné akce odmítá. Při dry-run změny OUT neprovádí.',
+              label="SSOT partial semantics")
+          ssot_path.write_text(ssot, encoding="utf-8")
+          PY
+      - name: Verify generated source
+        shell: bash
+        run: |
+          python -m compileall -q kajovo kajovong utf8nobom tests Build
+          git diff --check
+          grep -q '"status": "partial" if missing_deliverables else "completed"' kajovo/core/pipeline.py
+          grep -q 'Připravuji dávkový požadavek C_FILES_ALL' kajovo/core/pipeline.py
+          ! grep -q 'C: building batch JSONL' kajovo/core/pipeline.py
+      - name: Remove one-time workflow and commit
+        shell: bash
+        run: |
+          rm .github/workflows/final-process-audit-fixes.yml
+          git config user.name 'Kájovo NG SSOT fixer'
+          git config user.email 'kajovo-ng-ssot-fixer@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'No changes'; exit 1; }
+          git commit -m 'Dokončit terminální stavy a průběh procesů'
+          git push origin HEAD:main
