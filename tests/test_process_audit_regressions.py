@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from kajovo.core.batch_submit import exact_batch_matches
 from kajovo.core.batch_completion import recover_unknown_submission
+from kajovo.core.pipeline import RunWorker
+from kajovo.core.progress import ProgressClock, ProgressEvent
 from kajovo.core.runlog import RunLogger, verified_output_evidence
 
 
@@ -78,3 +81,51 @@ def test_batch_submit_instruction_remains_manual_refresh():
     source = Path("kajovo/desktop/application.py").read_text(encoding="utf-8")
     assert "Obnovit stav; tím zahájíte periodické sledování" in source
     assert "start_monitoring(" not in source
+
+
+def test_partial_run_is_a_real_terminal_progress_state():
+    clock = ProgressClock(now=10.0)
+    event = ProgressEvent("RUN", "partial", detail="Částečný výstup", timestamp=12.5)
+    clock.update(event)
+    assert clock.state == "partial"
+    assert clock.finished == 12.5
+    elapsed, _age, eta = clock.times(now=20.0)
+    assert elapsed == 2.5
+    assert eta is None
+
+
+def test_missing_deliverables_report_records_reason(tmp_path):
+    worker = RunWorker.__new__(RunWorker)
+    worker.cfg = SimpleNamespace(out_dir=str(tmp_path))
+    worker._log_debug = lambda _message: None
+    report = worker._write_missing_files_report([
+        {"path": "assets/logo.png", "purpose": "logo", "reason": "binární výstup"}
+    ])
+    assert report is not None
+    text = Path(report).read_text(encoding="utf-8")
+    assert "assets/logo.png" in text
+    assert "binární výstup" in text
+    assert "automaticky nedodává" in text
+
+
+def test_live_generate_partial_semantics_are_wired_end_to_end():
+    pipeline = Path("kajovo/core/pipeline.py").read_text(encoding="utf-8")
+    desktop = Path("kajovo/desktop/application.py").read_text(encoding="utf-8")
+    assert '"status": "partial" if missing_deliverables else "completed"' in pipeline
+    assert 'final_status in ("completed", "partial")' in pipeline
+    assert 'terminal_status == "partial"' in desktop
+    assert "Kájovo NG · částečný výstup" in desktop
+
+
+def test_user_progress_no_longer_exposes_obsolete_english_stage_messages():
+    source = Path("kajovo/core/pipeline.py").read_text(encoding="utf-8")
+    obsolete = (
+        "C: building batch JSONL...",
+        "IN mirror: scan + manifest + upload...",
+        "A1: PLAN request...",
+        "A2: STRUCTURE request...",
+        "QFILE: request...",
+    )
+    assert not any(message in source for message in obsolete)
+    assert 'stage="Předběžné ověření"' in source
+    assert 'stage="Příprava BATCH"' in source
