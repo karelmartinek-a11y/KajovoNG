@@ -217,8 +217,6 @@ def validate_run_options(cfg, check_models=True) -> None:
         if cfg.send_as_c:
             from .generate_batch import validate_batch_model
             validate_batch_model(getattr(cfg, "model_a3", "") or cfg.model)
-            if getattr(cfg, "resume_files", None):
-                raise ValueError("Pro hybridní Batch použijte nový A1/A2 nebo opakování v panelu BATCH.")
     if cfg.send_as_c:
         if cfg.mode not in ("GENERATE", "MODIFY"):
             raise ValueError("Batch souborového kontraktu podporuje pouze GENERATE a MODIFY.")
