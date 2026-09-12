@@ -75,7 +75,7 @@ class UiRunConfig:
     skip_paths: List[str]
     skip_exts: List[str]
 
-    # Snímek schopností vybraného modelu z uloženého ověření.
+    # Snímek schopností vybraného modelu z lokální validace a pevné matice.
     model_caps: Dict[str, Any]
     # Podklady ReRun: seznam souborů a ID předchozí odpovědi.
     resume_files: List[Dict[str, Any]] = None  # type: ignore
@@ -320,27 +320,14 @@ class RunWorker(QThread):
                 }
             )
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
-
-            def observe_preflight(record):
-                self.log.record_preflight_batch(record)
-                status = str(record.get("status") or "unknown")
-                terminal = status in ("completed", "failed", "expired", "cancelled")
-                self.progress_event.emit(ProgressEvent(
-                    "Ověření BATCH",
-                    state="active" if terminal else "waiting",
-                    detail=f"Zkušební dávka má na OpenAI stav {status}.",
-                ))
-
-            client.on_preflight_batch = observe_preflight
-            client.on_preflight_progress = self.progress_event.emit
             client.configure_validation(self.settings)
             client.stopped = lambda: self._stop
             if getattr(self, "resume_generate_batch", None):
                 result = self._submit_generate_batch(client, copy.deepcopy(self.resume_generate_batch))
                 self.finished_ok.emit(result)
                 return
-            self._set(1, 0, "Ověřuji model, účet a parametry běhu…", stage="Předběžné ověření")
-            client.preflight_run(self.cfg)
+            self._set(1, 0, "Lokálně ověřuji model, účet a parametry běhu…", stage="Lokální validace")
+            client.prepare_run_validation(self.cfg)
             validate_run_options(self.cfg)
 
             if self.cfg.mode == "QFILE" and self.cfg.send_as_c:
@@ -402,7 +389,6 @@ class RunWorker(QThread):
             except Exception:
                 pass
 
-
             # Zpracování dlouhého zadání.
             # GENERATE/MODIFY zavádí zadání přes A0 s previous_response_id.
             # QA/BATCH odesílá zadání v textových částech zprávy.
@@ -412,7 +398,6 @@ class RunWorker(QThread):
                 base_prev_id = self._ingest_prompt_if_needed(client, prev_id=self.cfg.response_id or None)
             else:
                 base_prev_id = self.cfg.response_id or None
-
 
             if self.cfg.send_as_c and self.cfg.mode != "GENERATE":
                 result = self._run_c_batch(client, diag_file_ids, base_prev_id)
@@ -442,17 +427,6 @@ class RunWorker(QThread):
                 self.log.update_state({"status": final_status})
             self.finished_ok.emit(result)
         except BaseException as e:
-            from .response_policy import PreflightPending
-            if isinstance(e, PreflightPending):
-                for record in e.batches:
-                    self.log.record_preflight_batch(record)
-                self.log.clear_state_keys("completed_at")
-                self.log.update_state({"status": "preflight_pending",
-                                       "error": None, "failed_at": None})
-                self._log_debug(str(e))
-                self.finished_ok.emit({"status": "preflight_pending", "detail": str(e),
-                                       "preflight_batches": e.batches})
-                return
             msg = str(e)
             if self._last_prev_id_error:
                 msg = self._last_prev_id_error
@@ -466,7 +440,6 @@ class RunWorker(QThread):
                     pass
                 self.log.update_state({"status": "failed", "failed_at": time.time(), "error": str(e)})
                 self.finished_err.emit(msg)
-
 
     # Sestavení požadavků.
     def _input_parts(self, text: str, file_ids: List[str], image_file_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -902,7 +875,6 @@ class RunWorker(QThread):
             if pending:
                 time.sleep(2.0)
 
-
     def _in_dir_fallback_note(self) -> str:
         if not self._in_dir_info or not self._in_dir_info.get("file_id"):
             return ""
@@ -1051,8 +1023,6 @@ class RunWorker(QThread):
         self._log_debug(f"A3: wrote missing files report -> {report_path} ({len(skipped_files)} entries)")
         return report_path
 
-
-
     def _create_response(self, client, payload):
         prepare_payload(payload)
         self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
@@ -1069,7 +1039,6 @@ class RunWorker(QThread):
             raise ContractError("API nedokončilo odpověď; běh nemůže pokračovat s částečnými daty.")
         validate_output(response, payload)
         return response
-
 
     # Režim GENERATE.
     def _run_a_generate(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
@@ -1089,7 +1058,6 @@ class RunWorker(QThread):
             struct = {"contract": "A2_STRUCTURE", "files": self.cfg.resume_files}
             resp2_id = self.cfg.resume_prev_id or self.cfg.response_id or None
             try:
-                # Uložení podkladů pro navazující ReRun.
                 self.log.save_json(
                     "manifests",
                     f"resume_structure_{ts_code()}",
@@ -1145,7 +1113,6 @@ class RunWorker(QThread):
                 f"KONTRAKT A1_PLAN: {a1_schema}"
             )
 
-            # Zadání zavedené přes A0 se předává odkazem na odpověď.
             a1_text = (self.cfg.prompt or "") if len(self.cfg.prompt or "") <= 150_000 else "Použij ingested Zadání (A0) a přiložené soubory, a vrať A1 plan dle kontraktu."
             note = self._in_dir_fallback_note()
             if note:
@@ -1199,7 +1166,6 @@ class RunWorker(QThread):
                 f"KONTRAKT A2_STRUCTURE: {a2_schema}"
             )
             a2_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-            # GENERATE přikládá uživatelské soubory pouze v A1.
             a2_input_files, a2_input_images = [], []
             a2_text = (
                 "Vygeneruj strukturu souborů podle A1 plánu. Pro každé rozhraní v requires "
@@ -1293,7 +1259,6 @@ class RunWorker(QThread):
                                           self.cfg.temperature if self._model_caps(a3_model).get("supports_temperature", False) else None, selected)
                 return self._submit_generate_batch(client, manifest)
             try:
-                # Uložení struktury umožní ReRun i po přerušení běhu.
                 self.log.save_json(
                     "manifests",
                     f"resume_structure_{ts_code()}",
@@ -1341,7 +1306,6 @@ class RunWorker(QThread):
         for idx, f in enumerate(files, start=1):
             self._check_stop()
             path = f.get("path")
-            # Průběh podle počtu zpracovaných souborů.
             self._progress_stage = "A3"
             self.progress_event.emit(ProgressEvent("A3", completed=idx - 1, total=total_files, unit="souborů", detail=str(path)))
             self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: generuji soubor {path} ({idx}/{total_files})")
@@ -1391,9 +1355,9 @@ class RunWorker(QThread):
             stream.write(data)
         self.log.update_state({"generate_batch": manifest, "status": "batch_prepared"})
         self._check_stop()
-        self._set(45, 0, "Ověřuji kompatibilitu BATCH…", stage="Ověření BATCH")
-        # upload_file(purpose=batch) provede kanonický zkušební BATCH ještě před
-        # pracovním uploadem. PreflightPending tedy zde vznikne před work submission guardem.
+        self._set(45, 0, "Lokálně kontroluji a nahrávám pracovní BATCH…", stage="Příprava BATCH")
+        # Nahrává se přímo skutečný pracovní JSONL. upload_file provede pouze
+        # lokální validaci obsahu a nevytváří žádnou zkušební dávku.
         uploaded = with_retry(lambda: client.upload_file(path, purpose="batch"), self.settings.retry, self.breaker)
         evidence = {
             "batch_input_file_id": uploaded["id"],
@@ -1403,13 +1367,12 @@ class RunWorker(QThread):
         }
         self.log.update_state(evidence)
         self._set(55, 0, "Odesílám pracovní dávku…", stage="BATCH SUBMIT")
-        # Od tohoto okamžiku může ztracená síťová odpověď znamenat server accept.
         self.log.update_state({"submission_unknown": True})
         batch = submit_verified_batch(client, uploaded["id"], manifest["requests"])
         self.log.update_state({"batch_id": batch["id"], "status": "batch_pending", "submission_unknown": False,
                                "batch_records": {batch["id"]: batch}})
         self.log.save_json("manifests", "generate_batch_created", batch)
-        self._set(100, 0, "A1/A2 hotovo; A3 čeká na zpracování dávky.")
+        self._set(100, 0, "A1/A2 hotovo; A3 čeká na zpracování pracovní dávky.")
         return {"mode": "GENERATE", "batch_id": batch["id"], "input_file_id": uploaded["id"],
                 "status": "batch_pending", "files": len(manifest["expected"])}
 
@@ -1495,8 +1458,6 @@ class RunWorker(QThread):
                     vs_ids.append(vs_id)
                     self._vector_store_ids.append(vs_id)
             except Exception as e:
-                # Aktuální IN je současně připojen přímo jako input_file; již připojené
-                # stores mohou navíc zachovat file_search. Žádný nový fallback se nevymýšlí.
                 supports_fs = bool(vs_ids)
                 tools = None
                 vs_id = None
@@ -1513,7 +1474,6 @@ class RunWorker(QThread):
                 ))
 
         if supports_fs and vs_ids:
-            # Odstranění duplicit se zachováním pořadí.
             seen = set()
             uniq_ids: List[str] = []
             for vid in vs_ids:
@@ -1658,7 +1618,6 @@ class RunWorker(QThread):
             self._check_stop()
             path = tf.get("path", "")
             action = tf.get("action", "modify")
-            # Průběh podle počtu zpracovaných souborů.
             self._progress_stage = "B3"
             self.progress_event.emit(ProgressEvent("B3", completed=i - 1, total=total_files, unit="souborů", detail=str(path)))
             self._set(50 + int(35 * (i - 1) / max(1, len(touched))), 0, f"B3: {'upravuji' if action == 'modify' else 'přidávám'} {path} ({i}/{total_files})")
@@ -1687,7 +1646,6 @@ class RunWorker(QThread):
         input_text = self.cfg.prompt or ""
         if note:
             input_text = f"{input_text}\n\n{note}"
-        # QA požaduje prostý text bez souborového manifestu a Markdownu.
         qa_note = "Pozn.: Vrat pouze cisty text (bez markdownu) a neposilej zadne soubory."
         if qa_note not in input_text:
             input_text = f"{input_text}\n\n{qa_note}"
@@ -1863,14 +1821,12 @@ class RunWorker(QThread):
         )
         body["text"] = builtin_format("C_FILES_ALL")
         client.validate_access(body, batch=True)
-        # Batch vynechává previous_response_id i při vyplnění v rozhraní.
         req_line = {
             "custom_id": f"{self.log.run_id}_C1",
             "method": "POST",
             "url": "/v1/responses",
             "body": body,
         }
-
 
         jsonl_path = os.path.join(self.log.paths.requests_dir, f"C_batch_{ts_code()}.jsonl")
         with open(jsonl_path, "w", encoding="utf-8") as f:
@@ -1881,8 +1837,8 @@ class RunWorker(QThread):
             size = None
         self._log_api_action("C", "jsonl", {"path": jsonl_path, "size": size})
 
-        self._set(20, 0, "Ověřuji kompatibilitu BATCH a nahrávám dávkový soubor…", stage="Ověření BATCH")
-        self._log_debug("C: uploading batch JSONL")
+        self._set(20, 0, "Lokálně kontroluji a nahrávám pracovní dávkový soubor…", stage="Příprava BATCH")
+        self._log_debug("C: uploading work batch JSONL")
         up = with_retry(lambda: client.upload_file(jsonl_path, purpose="batch"), self.settings.retry, self.breaker)
         input_file_id = up["id"]
         self._log_api_action("C", "upload", {"input_file_id": input_file_id, "retry": self.settings.retry.max_attempts if hasattr(self.settings.retry, 'max_attempts') else None})
@@ -1902,7 +1858,6 @@ class RunWorker(QThread):
         self.log.save_json("responses", f"C_batch_created_{batch_id}_{ts_code()}", batch)
         self._log_api_action("C", "create", {"batch_id": batch_id, "status": batch.get("status")})
 
-        # Po vytvoření dávky přebírá sledování panel BATCH.
         self._set(100, 0, f"Pracovní dávka byla odeslána ({batch_id}).", stage="BATCH SUBMIT")
         self.log.event("batch.created", {"batch_id": batch_id, "input_file_id": input_file_id})
         return {"mode": "C", "batch_id": batch_id, "status": batch.get("status"), "input_file_id": input_file_id}
@@ -1930,7 +1885,6 @@ class RunWorker(QThread):
         )
         gen_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
         if contract == "A3_FILE":
-            # GENERATE přikládá uživatelské soubory pouze v A1.
             gen_input_files, gen_input_images = [], []
         else:
             gen_input_files, gen_input_images = self._build_input_attachments(client, self._input_file_ids())
@@ -1959,7 +1913,6 @@ class RunWorker(QThread):
                 supports_temperature=(step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
             )
 
-            # Pro souborový výstup se používá nulová teplota, pokud je podporovaná.
             payload["text"] = file_response_format(contract, path, chunk_index, action)
             if step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True) and not uses_reasoning_defaults(step_model):
                 payload["temperature"] = 0.0
@@ -2001,7 +1954,6 @@ class RunWorker(QThread):
                     continue
                 resp_id = str(resp.get("id") or "")
                 if resp_id:
-                    # Uložení posledního ID zahrnuje i odpovědi s neplatným kontraktem.
                     latest_response_id = resp_id
                 self.log.save_json("responses", f"{contract}_{resp.get('id','NOID')}_{path.replace('/','_')}_{chunk_index}_{ts_code()}", resp)
                 self._log_api_action(
@@ -2023,12 +1975,10 @@ class RunWorker(QThread):
                     last_err = e
                     parsed = None
                     attempt += 1
-                    # Chyba odkazující na previous_response_id ukončí zpracování.
                     if "previous_response_id" in str(e).lower():
                         self._last_prev_id_error = "Response ID je neplatné nebo expirované (API odmítlo previous_response_id). Ukončuji RUN."
                         raise
                     if attempt >= max_attempts:
-                        # Po vyčerpání pokusů se zaznamená chyba a níže se vyvolá ContractError.
                         self._log_debug(f"{contract} {path} chunk {chunk_index}: invalid/mismatched response after {attempt} attempts: {e}")
                         try:
                             self.log.event("contract.mismatch", {"contract": contract, "path": path, "chunk": chunk_index, "error": str(e)})
