@@ -1,4 +1,4 @@
-"""Sledování dávek, přenos výsledků a opakování vybraných souborů."""
+"""Sledování pracovních dávek, přenos výsledků a opakování vybraných souborů."""
 
 import inspect
 import json
@@ -6,12 +6,19 @@ import time
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtCore import QTimer, Signal, Qt
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QMessageBox, QMenu
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QMessageBox
 from ..core.openai_client import OpenAIClient
 from ..core.generate_batch import repeat_saved_batch
 from ..core.batch_completion import (
-    import_bundle, complete_saved_batch, local_batches, pending_batch_ids, read_state, CANCELLABLE,
-    can_continue_preflight, read_batch_statuses, save_batch_statuses, recover_unknown_submission,
+    import_bundle,
+    complete_saved_batch,
+    local_batches,
+    pending_batch_ids,
+    read_state,
+    CANCELLABLE,
+    read_batch_statuses,
+    save_batch_statuses,
+    recover_unknown_submission,
 )
 from .batch_view import project_name, saved_record, server_label
 from ..core.utils import safe_join_under_root
@@ -22,6 +29,8 @@ from .jobs import Jobs
 
 
 class BatchPanel(QWidget):
+    # Kompatibilita se starším wiringem MainWindow. Aktuální panel tento signál
+    # nikdy neemituje; historické preflight záznamy jsou výhradně read-only.
     continue_preflight = Signal(str)
     logline = Signal(str)
     runs_changed = Signal()
@@ -92,7 +101,9 @@ class BatchPanel(QWidget):
         self.clock = QTimer(self)
         self.clock.timeout.connect(self._update_poll_label)
         self.clock.start(1000)
-        self.btn_cancel.setToolTip("Zruší zpracování. OpenAI neumožňuje smazat samotný záznam dávky.")
+        self.btn_cancel.setToolTip(
+            "Zruší zpracování pracovní dávky. OpenAI neumožňuje smazat samotný záznam dávky."
+        )
         self._update_actions()
         self.render_records()
 
@@ -110,16 +121,28 @@ class BatchPanel(QWidget):
         self._update_actions()
 
     def _update_poll_label(self):
-        age = f"před {int(time.monotonic() - self._last_poll)} s" if self._last_poll is not None else "dosud neproběhlo"
-        next_poll = (f"za {max(0, self._poll_timer.remainingTime()) // 1000} s" if self._poll_timer.isActive() else "není naplánována")
+        age = (
+            f"před {int(time.monotonic() - self._last_poll)} s"
+            if self._last_poll is not None
+            else "dosud neproběhlo"
+        )
+        next_poll = (
+            f"za {max(0, self._poll_timer.remainingTime()) // 1000} s"
+            if self._poll_timer.isActive()
+            else "není naplánována"
+        )
         reason = ""
         if self._monitor_paused_reason == "timeout":
-            reason = " Automatické sledování bylo pozastaveno po dosažení časového limitu; vzdálená dávka pokračuje u OpenAI."
+            reason = (
+                " Automatické sledování bylo pozastaveno po dosažení časového limitu;"
+                " vzdálená dávka pokračuje u OpenAI."
+            )
         elif self._monitor_paused_reason == "no_active_batches":
             reason = " Žádná známá dávka nyní nevyžaduje automatické sledování."
         self.lbl_poll.setText(
             f"Poslední ověření: {age} · Další kontrola: {next_poll}\nETA fronty nelze určit."
-            + reason + (" Ověřuji stav…" if self._refresh_task else "")
+            + reason
+            + (" Ověřuji stav…" if self._refresh_task else "")
         )
 
     def load(self, checked=False, *, automatic=False):
@@ -148,10 +171,7 @@ class BatchPanel(QWidget):
 
         def execute(job):
             client = self.client or OpenAIClient(key)
-            return {
-                "key": key,
-                "batches": client.list_batches(),
-            }
+            return {"key": key, "batches": client.list_batches()}
 
         def finished():
             self._refresh_task = None
@@ -166,13 +186,15 @@ class BatchPanel(QWidget):
             return
         self._last_poll = time.monotonic()
         records = result["batches"]
-        # Ruční/periodický refresh může bezpečně dohledat neurčitý pracovní submit,
-        # ale nikdy sám neodesílá novou pracovní dávku.
+        # Refresh smí dohledat pouze neurčitý submit skutečné pracovní dávky;
+        # nikdy sám nevytváří novou dávku ani validační probe.
         for run_dir in Path(self.s.log_dir).glob("RUN_*"):
             try:
                 recover_unknown_submission(str(run_dir), records)
             except Exception as exc:
-                self.logline.emit(f"Recovery neurčitého BATCH submitu: {run_dir.name}: {exc}")
+                self.logline.emit(
+                    f"Recovery neurčitého BATCH submitu: {run_dir.name}: {exc}"
+                )
         save_batch_statuses(self.s.log_dir, records)
         snapshots = read_batch_statuses(self.s.log_dir)
         self._records = [snapshots.get(record["id"], record) for record in records]
@@ -201,13 +223,17 @@ class BatchPanel(QWidget):
 
     def render_records(self):
         from .dialogs import STATES
+
         item = self.tbl.item(self.tbl.currentRow(), 0)
         selected_id = item.data(Qt.UserRole).get("id") if item else None
         local = local_batches(self.s.log_dir)
         snapshots = read_batch_statuses(self.s.log_dir)
         records_by_id = {record["id"]: record for record in self._records}
         for bid, info in local.items():
-            records_by_id[bid] = {**records_by_id.get(bid, {}), **saved_record(info["state"], bid, snapshots)}
+            records_by_id[bid] = {
+                **records_by_id.get(bid, {}),
+                **saved_record(info["state"], bid, snapshots),
+            }
         records = list(records_by_id.values())
         self.tbl.setRowCount(0)
         self.tbl.setRowCount(len(records))
@@ -230,49 +256,59 @@ class BatchPanel(QWidget):
             )
             info = local.get(record.get("id"))
             state = info["state"] if info else {}
-            trial = bool(info and info["kind"] == "preflight")
+            historical_preflight = bool(info and info["kind"] == "preflight")
             links = info["runs"] if info else []
             saved = (state.get("batch_records") or {}).get(record.get("id"), {})
             stamp = record.get("created_at")
-            values[2] = self.format_sent_at(stamp if stamp is not None else saved.get("created_at"))
+            values[2] = self.format_sent_at(
+                stamp if stamp is not None else saved.get("created_at")
+            )
             values[1] = STATES.get(record.get("status"), record.get("status", ""))
-            project = ", ".join(dict.fromkeys(project_name(link["state"]) for link in links)) if info else "Bez místního běhu"
+            project = (
+                ", ".join(dict.fromkeys(project_name(link["state"]) for link in links))
+                if info
+                else "Bez místního běhu"
+            )
             imported = (state.get("batch_imports") or {}).get(record.get("id"), {})
             status = imported.get("import_status", imported.get("status", ""))
-            values.extend([project, "Nevytváří soubory" if trial else
-                           (STATES.get(status, status) if status else
-                            ("Čeká na převzetí" if info else "—")), "",
-                           "Zkušební" if trial else ("Pracovní" if info else "Externí"),
-                           ", ".join(link["run_id"] for link in links)])
+            values.extend(
+                [
+                    project,
+                    "Historický záznam · neaktivní"
+                    if historical_preflight
+                    else (
+                        STATES.get(status, status)
+                        if status
+                        else ("Čeká na převzetí" if info else "—")
+                    ),
+                    "",
+                    "Historický preflight"
+                    if historical_preflight
+                    else ("Pracovní" if info else "Externí"),
+                    ", ".join(link["run_id"] for link in links),
+                ]
+            )
             for col, value in enumerate(values):
-                item = QTableWidgetItem(str(value or ""))
-                item.setToolTip(str(value or ""))
-                item.setData(Qt.UserRole, record)
-                self.tbl.setItem(index, col, item)
-            if trial:
-                self.tbl.item(index, 1).setToolTip(server_label(record, any(can_continue_preflight(link["state"]) for link in links)) + "\n" +
-                    json.dumps(record.get("errors") or {}, ensure_ascii=False))
-                eligible = [link for link in links if can_continue_preflight(link["state"])]
-                if eligible:
-                    action = button("Pokračovat", role="Primary")
-                    action.setToolTip("Převzít ověření a při úspěchu odeslat pracovní dávku.")
-                    if len(eligible) == 1:
-                        action.clicked.connect(lambda checked=False, rid=eligible[0]["run_id"]:
-                                               self.continue_run(rid))
-                        action.setEnabled(not self._operation_task and eligible[0]["run_id"] not in self.active_runs)
-                    else:
-                        menu = QMenu(action)
-                        for link in eligible:
-                            entry = menu.addAction(project_name(link["state"]) + " · " + link["run_id"])
-                            entry.triggered.connect(lambda checked=False, rid=link["run_id"]: self.continue_run(rid))
-                            entry.setEnabled(link["run_id"] not in self.active_runs)
-                        action.setMenu(menu)
-                        action.setEnabled(not self._operation_task)
-                    self.tbl.setCellWidget(index, 10, action)
+                table_item = QTableWidgetItem(str(value or ""))
+                table_item.setToolTip(str(value or ""))
+                table_item.setData(Qt.UserRole, record)
+                self.tbl.setItem(index, col, table_item)
+            if historical_preflight:
+                self.tbl.item(index, 1).setToolTip(
+                    server_label(record, historical_preflight=True)
+                    + "\nTento záznam je pouze historický. Preflight workflow bylo odstraněno a nelze v něm pokračovat."
+                )
             elif info and record["id"] in pending_batch_ids(state):
-                action = button("Dokončit", lambda checked=False, rid=info["run_id"], bid=record["id"]:
-                                self.complete_run(rid, bid), "Primary")
-                action.setEnabled(not self._operation_task and info["run_id"] not in self.active_runs)
+                action = button(
+                    "Dokončit",
+                    lambda checked=False, rid=info["run_id"], bid=record["id"]: self.complete_run(
+                        rid, bid
+                    ),
+                    "Primary",
+                )
+                action.setEnabled(
+                    not self._operation_task and info["run_id"] not in self.active_runs
+                )
                 self.tbl.setCellWidget(index, 10, action)
             if record.get("id") == selected_id:
                 self.tbl.selectRow(index)
@@ -282,12 +318,21 @@ class BatchPanel(QWidget):
         item = self.tbl.item(self.tbl.currentRow(), 0)
         record = item.data(Qt.UserRole) if item else {}
         info = self._batch_run_info(record.get("id")) if record else None
-        trial = bool(info and info["kind"] == "preflight")
-        busy = bool(self._operation_task or (info and any(link["run_id"] in self.active_runs for link in info["runs"])))
-        self.btn_cancel.setEnabled(not busy and record.get("status") in CANCELLABLE)
-        self.btn_download.setEnabled(bool(record) and not busy and not trial)
+        historical_preflight = bool(info and info["kind"] == "preflight")
+        busy = bool(
+            self._operation_task
+            or (info and any(link["run_id"] in self.active_runs for link in info["runs"]))
+        )
+        self.btn_cancel.setEnabled(
+            not busy and not historical_preflight and record.get("status") in CANCELLABLE
+        )
+        self.btn_download.setEnabled(bool(record) and not busy and not historical_preflight)
         for action in (self.btn_repeat, self.btn_repair):
-            action.setEnabled(bool(info and info["state"].get("generate_batch")) and not busy and not trial)
+            action.setEnabled(
+                bool(info and info["state"].get("generate_batch"))
+                and not busy
+                and not historical_preflight
+            )
 
     def selected(self):
         item = self.tbl.item(self.tbl.currentRow(), 0)
@@ -300,24 +345,20 @@ class BatchPanel(QWidget):
         return local_batches(self.s.log_dir).get(batch_id)
 
     def continue_run(self, run_id):
-        if self._operation_task:
-            msg_info(self, "Pokračování BATCH", "Již probíhá operace s dávkou. Vyčkejte na její dokončení.")
-            return
-        try:
-            if run_id in self.active_runs:
-                raise ValueError("Běh nebo jeho sdílenou zkoušku právě zpracovává aktivní práce.")
-            state = read_state(safe_join_under_root(self.s.log_dir, run_id))
-            self.run_guard(run_id, state.get("out_dir", ""))
-            if not can_continue_preflight(state):
-                raise ValueError("Běh již nemá zkušební dávku čekající na pokračování.")
-        except ValueError as exc:
-            msg_warning(self, "Pokračování BATCH", str(exc))
-            return
-        self.continue_preflight.emit(run_id)
+        """Legacy vstup z dřívějšího UI; nikdy nic neodesílá."""
+        msg_info(
+            self,
+            "Historický preflight",
+            "Placení preflight workflow bylo odstraněno. Historický záznam je pouze ke čtení a nelze v něm pokračovat.",
+        )
 
     def complete_run(self, run_id, batch_id=""):
         if self._operation_task:
-            msg_info(self, "Dokončení BATCH", "Již probíhá operace s dávkou. Vyčkejte na její dokončení.")
+            msg_info(
+                self,
+                "Dokončení BATCH",
+                "Již probíhá operace s dávkou. Vyčkejte na její dokončení.",
+            )
             return
         if not self.api_key:
             msg_info(self, "Dokončení BATCH", "Nejdříve uložte API klíč.")
@@ -327,7 +368,7 @@ class BatchPanel(QWidget):
             state = read_state(run_dir)
             bids = [batch_id] if batch_id else pending_batch_ids(state)
             if not bids:
-                msg_info(self, "Dokončení BATCH", "Běh nemá dávku čekající na převzetí.")
+                msg_info(self, "Dokončení BATCH", "Běh nemá pracovní dávku čekající na převzetí.")
                 return
             self.run_guard(run_id, state.get("out_dir", ""))
         except ValueError as exc:
@@ -335,12 +376,23 @@ class BatchPanel(QWidget):
             return
 
         def execute(client, job):
-            results = [complete_saved_batch(client, run_dir, bid, self.s, progress=job.progress_event.emit) for bid in bids]
+            results = [
+                complete_saved_batch(
+                    client, run_dir, bid, self.s, progress=job.progress_event.emit
+                )
+                for bid in bids
+            ]
             if len(results) == 1:
                 return results[0]
-            return {"written": [path for result in results for path in result.get("written", [])],
-                    "status": "batch_pending" if any(result["status"] == "batch_pending" for result in results)
-                    else read_state(run_dir).get("status", "partial"), "batches": results}
+            return {
+                "written": [
+                    path for result in results for path in result.get("written", [])
+                ],
+                "status": "batch_pending"
+                if any(result["status"] == "batch_pending" for result in results)
+                else read_state(run_dir).get("status", "partial"),
+                "batches": results,
+            }
 
         self._start_operation("Dokončení a import BATCH", execute, run_id=run_id)
 
@@ -358,7 +410,11 @@ class BatchPanel(QWidget):
         except (TypeError, ValueError):
             return operation(client, job)
         params = list(signature.parameters.values())
-        positional = [p for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        positional = [
+            p
+            for p in params
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
         if any(p.kind == p.VAR_POSITIONAL for p in params) or len(positional) >= 2:
             return operation(client, job)
         return operation(client)
@@ -386,10 +442,16 @@ class BatchPanel(QWidget):
                 return
             if result.get("id"):
                 save_batch_statuses(self.s.log_dir, [result])
-                self._records = [({**record, **result} if record.get("id") == result["id"] else record) for record in self._records]
+                self._records = [
+                    ({**record, **result} if record.get("id") == result["id"] else record)
+                    for record in self._records
+                ]
             from .dialogs import STATES
+
             status = result.get("status", "")
-            message = result.get("detail") or f"Stav: {STATES.get(status, status or result.get('batch_id', 'dokončeno'))}"
+            message = result.get("detail") or (
+                f"Stav: {STATES.get(status, status or result.get('batch_id', 'dokončeno'))}"
+            )
             if "written" in result:
                 message += f"\nZapsáno souborů: {len(result['written'])}"
             if result.get("written"):
@@ -406,11 +468,18 @@ class BatchPanel(QWidget):
             self.runs_changed.emit()
             self.operation_changed.emit()
 
-        for action in (self.btn_download, self.btn_repeat, self.btn_repair, self.btn_cancel):
+        for action in (
+            self.btn_download,
+            self.btn_repeat,
+            self.btn_repair,
+            self.btn_cancel,
+        ):
             action.setEnabled(False)
         self._operation_task = self.jobs.start(
             title,
-            lambda job: self._invoke_operation(operation, self._validated_client(key), job),
+            lambda job: self._invoke_operation(
+                operation, self._validated_client(key), job
+            ),
             receive,
             on_finished=finished,
         )
@@ -424,7 +493,11 @@ class BatchPanel(QWidget):
         bid = record["id"]
         info = self._batch_run_info(bid)
         if info and info["kind"] == "preflight":
-            msg_info(self, "Zkušební dávka", "Výsledek ověření převezměte tlačítkem Pokračovat u běhu.")
+            msg_info(
+                self,
+                "Historický preflight",
+                "Tento záznam pochází ze starší verze. Je pouze ke čtení a nelze jej stáhnout ani v něm pokračovat.",
+            )
             return
         if info:
             self.complete_run(info["run_id"], bid)
@@ -447,16 +520,31 @@ class BatchPanel(QWidget):
             Path(target).mkdir(parents=True, exist_ok=True)
             raw_path = safe_join_under_root(target, f"batch_{bid}_output.jsonl")
             Path(raw_path).write_bytes(raw)
-            return dict(import_bundle(raw, target, progress=job.progress_event.emit), raw_path=raw_path)
+            return dict(
+                import_bundle(raw, target, progress=job.progress_event.emit),
+                raw_path=raw_path,
+            )
 
         self._start_operation("Stažení a import výsledků BATCH", execute)
-
 
     def cancel(self):
         record = self.selected()
         info = self._batch_run_info(record["id"]) if record else None
-        if self._operation_task or (info and any(link["run_id"] in self.active_runs for link in info["runs"])):
-            msg_info(self, "Zrušení dávky", "Dávku právě používá aktivní práce. Vyčkejte na její dokončení.")
+        if info and info["kind"] == "preflight":
+            msg_info(
+                self,
+                "Historický preflight",
+                "Tento starý preflight záznam je neaktivní a program s ním neprovádí žádnou vzdálenou operaci.",
+            )
+            return
+        if self._operation_task or (
+            info and any(link["run_id"] in self.active_runs for link in info["runs"])
+        ):
+            msg_info(
+                self,
+                "Zrušení dávky",
+                "Dávku právě používá aktivní práce. Vyčkejte na její dokončení.",
+            )
             return
         if (
             record
@@ -470,7 +558,12 @@ class BatchPanel(QWidget):
         ):
             self._start_operation(
                 "Ruším vzdálenou dávku",
-                lambda client, job: (job.status.emit(f"Odesílám požadavek na zrušení {record['id']}…") or client.cancel_batch(record["id"])),
+                lambda client, job: (
+                    job.status.emit(
+                        f"Odesílám požadavek na zrušení {record['id']}…"
+                    )
+                    or client.cancel_batch(record["id"])
+                ),
                 run_id=info["run_id"] if info else None,
             )
 
@@ -478,10 +571,13 @@ class BatchPanel(QWidget):
         record = self.selected()
         info = self._batch_run_info(record["id"]) if record else None
         if not info or info["kind"] == "preflight" or not info["state"].get("generate_batch"):
-            msg_info(self, "Opakování dávky", "Vyberte dávku vytvořenou režimem GENERATE.")
+            msg_info(self, "Opakování dávky", "Vyberte pracovní dávku vytvořenou režimem GENERATE.")
             return
         raw, ok = dialog_input_text(
-            self, "Výběr souborů", "JSON pole relativních cest. Odešle novou placenou dávku.", "[]"
+            self,
+            "Výběr souborů",
+            "JSON pole relativních cest. Odešle přímo novou pracovní placenou dávku; žádná zkušební dávka se nevytváří.",
+            "[]",
         )
         if not ok:
             return
@@ -499,13 +595,21 @@ class BatchPanel(QWidget):
         feedback = ""
         if repair:
             feedback, ok = dialog_input_text(
-                self, "Připomínka k opravě", "Popište problém nebo vložte výsledek testů."
+                self,
+                "Připomínka k opravě",
+                "Popište problém nebo vložte výsledek testů.",
             )
             if not ok or not feedback.strip():
                 return
-        title = "Oprava souborů – odesílám novou dávku" if repair else "Opakování souborů – odesílám novou dávku"
+        title = (
+            "Oprava souborů – odesílám novou pracovní dávku"
+            if repair
+            else "Opakování souborů – odesílám novou pracovní dávku"
+        )
         self._start_operation(
             title,
-            lambda client, job: repeat_saved_batch(client, info["run_dir"], record["id"], paths, feedback),
+            lambda client, job: repeat_saved_batch(
+                client, info["run_dir"], record["id"], paths, feedback
+            ),
             run_id=info["run_id"],
         )
