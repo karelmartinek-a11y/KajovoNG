@@ -10,7 +10,7 @@ from ..core.openai_client import OpenAIClient
 from ..core.generate_batch import repeat_saved_batch
 from ..core.batch_completion import (
     import_bundle, complete_saved_batch, local_batches, pending_batch_ids, read_state, CANCELLABLE,
-    can_continue_preflight, read_batch_statuses, save_batch_statuses,
+    can_continue_preflight, read_batch_statuses, save_batch_statuses, recover_unknown_submission,
 )
 from .batch_view import project_name, saved_record, server_label
 from ..core.utils import safe_join_under_root
@@ -38,6 +38,7 @@ class BatchPanel(QWidget):
         self.jobs = Jobs(self)
         self._refresh_task = self._operation_task = None
         self._monitor_started = self._last_poll = None
+        self._monitor_paused_reason = None
         layout = column(self)
         self.lbl_poll = label("Stav dávky dosud nebyl ověřen.", "Hint")
         layout.addWidget(self.lbl_poll)
@@ -102,24 +103,22 @@ class BatchPanel(QWidget):
         self.client = None
         self._poll_timer.stop()
         self._monitor_started = self._last_poll = None
+        self._monitor_paused_reason = None
         self._records = []
         self.tbl.setRowCount(0)
         self._update_actions()
 
     def _update_poll_label(self):
-        age = (
-            f"před {int(time.monotonic() - self._last_poll)} s"
-            if self._last_poll is not None
-            else "dosud neproběhlo"
-        )
-        next_poll = (
-            f"za {max(0, self._poll_timer.remainingTime()) // 1000} s"
-            if self._poll_timer.isActive()
-            else "není naplánována"
-        )
+        age = f"před {int(time.monotonic() - self._last_poll)} s" if self._last_poll is not None else "dosud neproběhlo"
+        next_poll = (f"za {max(0, self._poll_timer.remainingTime()) // 1000} s" if self._poll_timer.isActive() else "není naplánována")
+        reason = ""
+        if self._monitor_paused_reason == "timeout":
+            reason = " Automatické sledování bylo pozastaveno po dosažení časového limitu; vzdálená dávka pokračuje u OpenAI."
+        elif self._monitor_paused_reason == "no_active_batches":
+            reason = " Žádná známá dávka nyní nevyžaduje automatické sledování."
         self.lbl_poll.setText(
             f"Poslední ověření: {age} · Další kontrola: {next_poll}\nETA fronty nelze určit."
-            + (" Ověřuji stav…" if self._refresh_task else "")
+            + reason + (" Ověřuji stav…" if self._refresh_task else "")
         )
 
     def load(self, checked=False, *, automatic=False):
@@ -137,7 +136,11 @@ class BatchPanel(QWidget):
             and time.monotonic() - self._monitor_started >= self.s.batch_timeout_s
         ):
             self._poll_timer.stop()
+            self._monitor_paused_reason = "timeout"
+            self._update_poll_label()
             return
+        if not automatic:
+            self._monitor_paused_reason = None
         key = self.api_key
         self._poll_timer.stop()
         self.btn_refresh.setEnabled(False)
@@ -162,6 +165,13 @@ class BatchPanel(QWidget):
             return
         self._last_poll = time.monotonic()
         records = result["batches"]
+        # Ruční/periodický refresh může bezpečně dohledat neurčitý pracovní submit,
+        # ale nikdy sám neodesílá novou pracovní dávku.
+        for run_dir in Path(self.s.log_dir).glob("RUN_*"):
+            try:
+                recover_unknown_submission(str(run_dir), records)
+            except Exception as exc:
+                self.logline.emit(f"Recovery neurčitého BATCH submitu: {run_dir.name}: {exc}")
         save_batch_statuses(self.s.log_dir, records)
         snapshots = read_batch_statuses(self.s.log_dir)
         self._records = [snapshots.get(record["id"], record) for record in records]
@@ -171,6 +181,7 @@ class BatchPanel(QWidget):
             record.get("status") not in ("completed", "failed", "cancelled", "expired")
             for record in records
         )
+        self._monitor_paused_reason = None if active else "no_active_batches"
         if (
             active
             and self._monitor_started is not None
@@ -322,17 +333,23 @@ class BatchPanel(QWidget):
             msg_warning(self, "Dokončení BATCH", str(exc))
             return
 
-        def execute(client):
-            results = [complete_saved_batch(client, run_dir, bid, self.s) for bid in bids]
+        def execute(client, job):
+            results = [complete_saved_batch(client, run_dir, bid, self.s, progress=job.progress_event.emit) for bid in bids]
             if len(results) == 1:
                 return results[0]
             return {"written": [path for result in results for path in result.get("written", [])],
                     "status": "batch_pending" if any(result["status"] == "batch_pending" for result in results)
                     else read_state(run_dir).get("status", "partial"), "batches": results}
 
-        self._start_operation(execute, run_id=run_id)
+        self._start_operation("Dokončení a import BATCH", execute, run_id=run_id)
 
-    def _start_operation(self, operation, *, run_id=None):
+    def _validated_client(self, key):
+        client = self.client or OpenAIClient(key, timeout_s=self.s.response_timeout_s)
+        if not hasattr(client, "_policy"):
+            client.configure_validation(self.s)
+        return client
+
+    def _start_operation(self, title, operation, *, run_id=None):
         if self._operation_task:
             return
         if run_id:
@@ -340,7 +357,7 @@ class BatchPanel(QWidget):
                 state = read_state(safe_join_under_root(self.s.log_dir, run_id))
                 self.run_guard(run_id, state.get("out_dir", ""))
             except ValueError as exc:
-                msg_warning(self, "Operace BATCH", str(exc))
+                msg_warning(self, title, str(exc))
                 return
         key = self.api_key
         self.busy_run_id = run_id
@@ -350,13 +367,10 @@ class BatchPanel(QWidget):
                 return
             if result.get("id"):
                 save_batch_statuses(self.s.log_dir, [result])
-                self._records = [({**record, **result} if record.get("id") == result["id"] else record)
-                                 for record in self._records]
+                self._records = [({**record, **result} if record.get("id") == result["id"] else record) for record in self._records]
             from .dialogs import STATES
             status = result.get("status", "")
-            message = result.get("detail") or (
-                f"Stav: {STATES.get(status, status or result.get('batch_id', 'dokončeno'))}"
-            )
+            message = result.get("detail") or f"Stav: {STATES.get(status, status or result.get('batch_id', 'dokončeno'))}"
             if "written" in result:
                 message += f"\nZapsáno souborů: {len(result['written'])}"
             if result.get("written"):
@@ -376,8 +390,8 @@ class BatchPanel(QWidget):
         for action in (self.btn_download, self.btn_repeat, self.btn_repair, self.btn_cancel):
             action.setEnabled(False)
         self._operation_task = self.jobs.start(
-            "Zpracování výsledků BATCH",
-            lambda job: operation(self.client or OpenAIClient(key)),
+            title,
+            lambda job: operation(self._validated_client(key), job),
             receive,
             on_finished=finished,
         )
@@ -408,14 +422,15 @@ class BatchPanel(QWidget):
         if not target:
             return
 
-        def execute(client):
+        def execute(client, job):
+            job.status.emit("Stahuji výstupní JSONL.")
             raw = client.file_content(file_id)
             Path(target).mkdir(parents=True, exist_ok=True)
             raw_path = safe_join_under_root(target, f"batch_{bid}_output.jsonl")
             Path(raw_path).write_bytes(raw)
-            return dict(import_bundle(raw, target), raw_path=raw_path)
+            return dict(import_bundle(raw, target, progress=job.progress_event.emit), raw_path=raw_path)
 
-        self._start_operation(execute)
+        self._start_operation("Stažení a import výsledků BATCH", execute)
 
 
     def cancel(self):
@@ -434,8 +449,11 @@ class BatchPanel(QWidget):
             )
             == QMessageBox.Yes
         ):
-            self._start_operation(lambda client: client.cancel_batch(record["id"]),
-                                  run_id=info["run_id"] if info else None)
+            self._start_operation(
+                "Ruším vzdálenou dávku",
+                lambda client, job: (job.status.emit(f"Odesílám požadavek na zrušení {record['id']}…") or client.cancel_batch(record["id"])),
+                run_id=info["run_id"] if info else None,
+            )
 
     def repeat_selected(self, repair=False):
         record = self.selected()
@@ -466,9 +484,9 @@ class BatchPanel(QWidget):
             )
             if not ok or not feedback.strip():
                 return
+        title = "Oprava souborů – odesílám novou dávku" if repair else "Opakování souborů – odesílám novou dávku"
         self._start_operation(
-            lambda client: repeat_saved_batch(
-                client, info["run_dir"], record["id"], paths, feedback
-            ),
+            title,
+            lambda client, job: repeat_saved_batch(client, info["run_dir"], record["id"], paths, feedback),
             run_id=info["run_id"],
         )

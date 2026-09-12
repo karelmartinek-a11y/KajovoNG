@@ -29,7 +29,7 @@ from ..core.pipeline import UiRunConfig, RunWorker
 from ..core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
 from ..core.cascade_types import CascadeDefinition
 from ..core.openai_client import OpenAIClient
-from ..core.runlog import RunLogger, find_last_incomplete_run
+from ..core.runlog import RunLogger, find_last_incomplete_run, verified_output_evidence
 from ..core.progress import ProgressEvent
 from ..core.utils import new_run_id, safe_join_under_root, atomic_write_text, RUN_ID_RE
 from .recovery import recover_run
@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         self.all_models = []
         self.jobs = Jobs(self)
         self._run_contexts = {}
+        self._pending_replacement = None
         self._active_run_key = None
         self._resume_files = []
         self._resume_prev_id = None
@@ -866,6 +867,8 @@ class MainWindow(QMainWindow):
                     worker.resume_generate_batch = resume["generate_batch"]
             dialog = ProgressDialog(self)
             dialog.setWindowTitle("Průběh · " + run_id)
+            if getattr(cfg, "send_as_c", False):
+                dialog.chk_bzz.setText("Upozornit po odeslání dávky")
             self._run_contexts[run_id] = dict(
                 worker=worker, dialog=dialog, run_logger=logger, run_id=run_id
             )
@@ -913,6 +916,9 @@ class MainWindow(QMainWindow):
         self.runs_button.setText(f"Aktivní běhy: {len(self._run_contexts)}")
         self.btn_stop.setEnabled(bool(self._run_contexts))
         self._refresh_batch_links()
+        if not self._run_contexts and self._pending_replacement is not None:
+            action, self._pending_replacement = self._pending_replacement, None
+            action()
 
     def _refresh_batch_links(self):
         from ..core.batch_completion import local_batches
@@ -961,13 +967,14 @@ class MainWindow(QMainWindow):
                 or json.dumps(result.get("contract", result), ensure_ascii=False, indent=2)
             )
         )
-        if result.get("response_id"):
-            self.ed_response_id.setText(result["response_id"])
+        continuation_id = result.get("last_response_id") or result.get("response_id")
+        if continuation_id:
+            self.ed_response_id.setText(continuation_id)
         if batch:
             msg_info(
                 self,
                 "Dávka odeslána",
-                f"ID: {result.get('batch_id', 'viz historie')}\nDokončit ji můžete v Historii nebo Dávkách tlačítkem Dokončit.",
+                f"ID: {result.get('batch_id', 'viz historie')}\nV Dávkách použijte Obnovit stav; tím zahájíte periodické sledování. Po dokončení použijte Dokončit.",
             )
         else:
             for attr, remote in (("diag_windows_out", False), ("diag_ssh_out", True)):
@@ -981,14 +988,23 @@ class MainWindow(QMainWindow):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(cfg.out_dir))
         if context["dialog"].chk_bzz.isChecked():
             from ..core.notifications import send_smtp_notification
-
+            if batch:
+                subject = "Kájovo NG · dávka odeslána"
+                body = (
+                    f"Běh {key}\nProjekt {cfg.project}\nDávka {result.get('batch_id', '')} byla odeslána. "
+                    "Vzdálené zpracování ani import do OUT tím nejsou dokončeny."
+                )
+                title = "Oznámení o odeslání dávky"
+            else:
+                repair_requested = bool(getattr(cfg, "diag_windows_out", False) or getattr(cfg, "diag_ssh_out", False))
+                subject = "Kájovo NG · generování dokončeno" if repair_requested else "Kájovo NG · dokončeno"
+                body = f"Běh {key}\nProjekt {cfg.project}\nOUT {cfg.out_dir}"
+                if repair_requested:
+                    body += "\nGenerování skončilo; zvolená opravná operace je samostatný potvrzovaný child Job a má vlastní výsledek/log."
+                title = "Oznámení o dokončení"
             self.jobs.start(
-                "Oznámení o dokončení",
-                lambda job: send_smtp_notification(
-                    self.s.smtp,
-                    "Kájovo NG · dokončeno",
-                    f"Běh {key}\nProjekt {cfg.project}\nOUT {cfg.out_dir}",
-                ),
+                title,
+                lambda job: send_smtp_notification(self.s.smtp, subject, body),
                 lambda result: self.log(result[1]),
                 popup=False,
             )
@@ -1075,34 +1091,51 @@ class MainWindow(QMainWindow):
                 msg_warning(self, "Uložení zadání", str(exc))
 
     def on_load_state(self):
-        if not self._confirm_replace():
-            return
         path, _ = dialog_open_file(self, "Načíst zadání", filters="JSON (*.json)")
-        if path:
+        if not path:
+            return
+        try:
+            state = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception as exc:
+            msg_warning(self, "Načtení zadání", str(exc))
+            return
+        def apply_loaded():
             try:
-                self._apply_state(json.loads(Path(path).read_text(encoding="utf-8")))
+                self._apply_state(state)
             except Exception as exc:
                 msg_warning(self, "Načtení zadání", str(exc))
+        if self._queue_replacement(apply_loaded):
+            return
+        apply_loaded()
 
     def on_new(self):
-        if not self._confirm_replace():
+        def apply_new():
+            self._apply_state({"model": self.s.default_model})
+            self._resume_files, self._resume_prev_id = [], None
+            self.skip_paths_current = []
+            self.txt_response_view.clear()
+        if self._queue_replacement(apply_new):
             return
-        self._apply_state({"model": self.s.default_model})
-        self._resume_files, self._resume_prev_id = [], None
-        self.skip_paths_current = []
-        self.txt_response_view.clear()
+        apply_new()
 
     def _confirm_replace(self):
-        if self._run_contexts:
-            if (
-                msg_question(
-                    self, "Nahradit zadání?", "Probíhá běh. Zastavit běžící práci a změnit zadání?"
-                )
-                != QMessageBox.Yes
-            ):
-                return False
-            for key in list(self._run_contexts):
-                self.on_stop(force=True, run_key=key)
+        """Kompatibilní dotaz; vlastní odloženou náhradu řeší _queue_replacement."""
+        if not self._run_contexts:
+            return True
+        return msg_question(
+            self, "Nahradit zadání?",
+            "Probíhá běh. Nejprve požádám všechny běhy o zastavení a zadání změním až po jejich skutečném ukončení."
+        ) == QMessageBox.Yes
+
+    def _queue_replacement(self, action):
+        if not self._run_contexts:
+            return False
+        if not self._confirm_replace():
+            return True
+        self._pending_replacement = action
+        for key in list(self._run_contexts):
+            self.on_stop(force=True, run_key=key)
+        self.log(f"Čekám na zastavení {len(self._run_contexts)} běhů před změnou zadání.")
         return True
 
     def on_exit(self):
@@ -1117,19 +1150,8 @@ class MainWindow(QMainWindow):
             self.close()
 
     def _gather_completed_paths(self, run_id, out_dir):
-        completed = []
-        for path in (Path(self.s.log_dir) / run_id / "manifests").glob("*_out_saved_map.json"):
-            try:
-                records = json.loads(path.read_text(encoding="utf-8")).get("saved", [])
-                if isinstance(records, dict):
-                    records = [{"path": key} for key in records]
-                for record in records:
-                    name = record.get("path") or record.get("dst_rel") or record.get("dst")
-                    if name and Path(safe_join_under_root(out_dir, name)).is_file():
-                        completed.append(name)
-            except (ValueError, OSError):
-                continue
-        return sorted(set(completed))
+        run_dir = Path(self.s.log_dir) / run_id
+        return sorted({entry["path"] for entry in verified_output_evidence(run_dir, out_dir)})
 
     def on_rerun(self):
         self.rerun(self.ed_rerun.text().strip())

@@ -79,10 +79,11 @@ def main():
     app_icon = _load_app_icon()
     app.setWindowIcon(app_icon)
 
-    settings = load_settings()
     from kajovo.desktop.windows import SplashScreen
     splash = SplashScreen()
     splash.show()
+    app.processEvents()
+    settings = load_settings()
     app.processEvents()
     w = MainWindow(settings)
     w.setWindowIcon(app_icon)

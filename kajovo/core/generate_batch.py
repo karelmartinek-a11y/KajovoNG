@@ -13,6 +13,8 @@ from .contracts import ContractError, file_response_format, parse_json_strict, v
 from .request_rules import uses_reasoning_defaults, validate_response_payload
 from .structured_output import validate_output
 from .utils import atomic_write_text, safe_join_under_root
+from .batch_submit import submit_verified_batch
+from .progress import ProgressEvent
 
 
 def object_schema(properties):
@@ -204,7 +206,7 @@ def encode_requests(manifest):
     return data
 
 
-def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_hashes=None):
+def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_hashes=None, progress=None):
     """Nejdříve ověří celou dávku, potom bezpečně zapíše samostatné výsledky."""
     encode_requests(manifest)
     expected = manifest["expected"]
@@ -251,7 +253,10 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             errors[cid] = str(exc)
     hashes, written = dict(previous_hashes or {}), []
     allowed = hashes if overwrite_hashes is None else overwrite_hashes
-    for cid, content in contents.items():
+    items = list(contents.items())
+    if progress:
+        progress(ProgressEvent("Ukládání souborů", completed=0, total=len(items), unit="souborů"))
+    for write_index, (cid, content) in enumerate(items, start=1):
         path = expected[cid]
         try:
             dest = safe_join_under_root(target, path)
@@ -267,13 +272,15 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             written.append(path)
         except (OSError, ValueError, ContractError) as exc:
             errors[cid] = str(exc)
+        if progress:
+            progress(ProgressEvent("Ukládání souborů", completed=write_index, total=len(items), unit="souborů", detail=path))
     return {"written": written, "errors": errors, "hashes": hashes, "responses": responses,
             "file_errors": {expected[cid]: message for cid, message in errors.items()},
             "omitted": manifest.get("omitted", []),
             "status": "partial" if errors or manifest.get("omitted") else "files_complete_unverified"}
 
 
-def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None):
+def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, progress=None):
     """Stáhne a vyhodnotí vlastní dávku; neprovádí žádný vygenerovaný kód."""
     state_path = Path(run_dir) / "run_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -284,6 +291,8 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None):
     if batch.get("status") not in ("completed", "failed", "expired", "cancelled"):
         raise ContractError("Dávka ještě není v konečném stavu.")
     raw_files = []
+    if progress:
+        progress(ProgressEvent("Stahování výsledků", detail="Stahuji výstupní a chybové JSONL."))
     response_dir = Path(run_dir) / "responses"
     response_dir.mkdir(exist_ok=True)
     for key in ("output_file_id", "error_file_id"):
@@ -297,7 +306,9 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None):
         raise ContractError("Běh nemá cílový adresář OUT.")
     previous_import = state.get("batch_imports", {}).get(batch_id, {})
     allowed = {**manifest.get("base_hashes", {}), **previous_import.get("hashes", {})}
-    result = import_results(manifest, raw_files, target, state.get("generated_hashes"), allowed)
+    if progress:
+        progress(ProgressEvent("Validace kontraktů", detail="Ověřuji výsledky proti uloženému manifestu."))
+    result = import_results(manifest, raw_files, target, state.get("generated_hashes"), allowed, progress=progress)
     result["import_status"] = result["status"]
     for body in result.pop("responses"):
         response_path = safe_join_under_root(str(response_dir), f"A3_batch_{body['id']}.json")
@@ -318,6 +329,8 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None):
     result["omitted"] = state["generate_batch"].get("omitted", [])
     result["status"] = state["status"]
     result["missing"] = missing
+    if progress:
+        progress(ProgressEvent("Aktualizace evidence", detail="Ukládám stav importu."))
     atomic_write_text(str(state_path), json.dumps(state, ensure_ascii=False, indent=2))
     return result
 
@@ -362,11 +375,16 @@ def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
     path.write_bytes(data)
     uploaded = client.upload_file(str(path), purpose="batch")
     state["pending_batch_submission"] = {"input_file_id": uploaded["id"], "manifest": manifest}
+    state["submission_input_file_id"] = uploaded["id"]
+    state["submission_endpoint"] = "/v1/responses"
+    state["submission_jsonl_sha256"] = hashlib.sha256(data).hexdigest()
+    state["submission_unknown"] = True
     atomic_write_text(str(state_path), json.dumps(state, ensure_ascii=False, indent=2))
-    batch = client.create_batch(input_file_id=uploaded["id"], endpoint="/v1/responses")
+    batch = submit_verified_batch(client, uploaded["id"], manifest["requests"])
     state.setdefault("batch_records", {})[batch["id"]] = batch
     state.setdefault("generate_batches", {})[batch["id"]] = manifest
     state.pop("pending_batch_submission", None)
+    state["submission_unknown"] = False
     state["status"] = "batch_pending"
     atomic_write_text(str(state_path), json.dumps(state, ensure_ascii=False, indent=2))
     return {"batch_id": batch["id"], "files": len(rows)}

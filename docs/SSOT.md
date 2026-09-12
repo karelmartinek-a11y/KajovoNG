@@ -65,7 +65,7 @@ GITHUB pracuje s lokálním repozitářem a příkazy Git. Obnovení stavu nepř
 
 Výchozí retry má šest pokusů, počáteční prodlevu 0,8 s, strop 20 s, jitter do 0,25 s a circuit breaker po šesti chybách s prodlevou 20 s. SMTP má port 587 a STARTTLS.
 
-`logging.max_total_mb` a `logging.max_runs` se ukládají a validují, ale implementace podle nich automaticky nemaže logy. Panel BATCH načítá seznam na pracovním vlákně a při nedokončených dávkách opakuje načtení podle `batch_poll_interval_s`. Po `batch_timeout_s` sledování skončí, aniž by zrušilo vzdálenou dávku; ruční obnovení zahájí nové sledování. `security.allow_upload_sensitive` výslovně povoluje soubory zachycené heuristikou citlivých názvů a obsahu. Ostatní filtry skenu zůstávají účinné.
+`logging.max_total_mb` a `logging.max_runs` se ukládají a validují, ale implementace podle nich automaticky nemaže logy. Panel BATCH načítá seznam na pracovním vlákně a při nedokončených dávkách opakuje načtení podle `batch_poll_interval_s`. Po `batch_timeout_s` sledování skončí, aniž by zrušilo vzdálenou dávku; UI uvede, že vypršel pouze lokální monitorovací limit, a ruční obnovení zahájí nové sledování. `security.allow_upload_sensitive` výslovně povoluje soubory zachycené heuristikou citlivých názvů a obsahu. Ostatní filtry skenu zůstávají účinné.
 
 ## Běhy a souborové kontrakty
 
@@ -179,7 +179,7 @@ Textový kontrakt odmítá nedokončené a chybové odpovědi, odmítnutí model
 
 ## Logy a evidence
 
-Adresář běhu obsahuje `files`, `requests`, `responses`, `manifests`, `misc`, `events.jsonl` a `run_state.json`. Vytvoření odmítá existující adresář téhož běhu; výslovné pokračování připravené GENERATE dávky znovu otevře její evidenci. Názvy uložených JSON kombinují bezpečný zkrácený název a hash. Stav běžného běhu rozlišuje vytvoření, běh, dokončení, zastavení a selhání.
+Adresář běhu obsahuje `files`, `requests`, `responses`, `manifests`, `misc`, `events.jsonl` a `run_state.json`. Vytvoření odmítá existující adresář téhož běhu; výslovné pokračování připravené GENERATE dávky znovu otevře její evidenci. Názvy uložených JSON kombinují bezpečný zkrácený název a hash. Recovery používá stejnou kanonickou naming logiku a význam artefaktu neodvozuje pouze ze suffixu názvu. Stav běžného běhu rozlišuje vytvoření, běh, dokončení, zastavení a selhání.
 
 Logy obsahují zadání, odpovědi a případně zdrojový kód. Známá tajná pole a řetězce s Bearer hodnotami se redigují, ale volný text může obsahovat další citlivá data. Logy nejsou šifrované a ovladač šifrování je neaktivní. Správa přístupu a uchování provozních dat je odpovědností provozovatele.
 

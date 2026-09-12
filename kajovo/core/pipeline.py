@@ -2,6 +2,7 @@ from __future__ import annotations
 import copy
 
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -21,6 +22,7 @@ from .contracts import validate_chunk_metadata
 from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths, structure_response_format, file_response_format
 from .filescan import build_manifest, scan_tree
 from .openai_client import OpenAIClient
+from .batch_submit import submit_verified_batch
 from .retry import CircuitBreaker, with_retry
 from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root, atomic_write_text
 
@@ -318,7 +320,19 @@ class RunWorker(QThread):
                 }
             )
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
-            client.on_preflight_batch = self.log.record_preflight_batch
+
+            def observe_preflight(record):
+                self.log.record_preflight_batch(record)
+                status = str(record.get("status") or "unknown")
+                terminal = status in ("completed", "failed", "expired", "cancelled")
+                self.progress_event.emit(ProgressEvent(
+                    "Ověření BATCH",
+                    state="active" if terminal else "waiting",
+                    detail=f"Zkušební dávka má na OpenAI stav {status}.",
+                ))
+
+            client.on_preflight_batch = observe_preflight
+            client.on_preflight_progress = self.progress_event.emit
             client.configure_validation(self.settings)
             client.stopped = lambda: self._stop
             if getattr(self, "resume_generate_batch", None):
@@ -410,16 +424,24 @@ class RunWorker(QThread):
                     result = self._run_qfile(client, diag_file_ids, base_prev_id)
                 else:
                     raise RuntimeError(f"Unknown mode: {self.cfg.mode}")
-            if self._final_response_id and not result.get("response_id"):
-                result["response_id"] = self._final_response_id
+            if self._final_response_id:
+                result["last_response_id"] = self._final_response_id
+                if not result.get("response_id"):
+                    result["response_id"] = self._final_response_id
 
-            self.log.update_state({"status": "batch_pending" if result.get("batch_id") else "completed", "completed_at": time.time()})
+            final_status = "batch_pending" if result.get("batch_id") else "completed"
+            if final_status == "completed":
+                self.log.update_state({"status": final_status, "completed_at": time.time()})
+            else:
+                self.log.clear_state_keys("completed_at")
+                self.log.update_state({"status": final_status})
             self.finished_ok.emit(result)
         except BaseException as e:
             from .response_policy import PreflightPending
             if isinstance(e, PreflightPending):
                 for record in e.batches:
                     self.log.record_preflight_batch(record)
+                self.log.clear_state_keys("completed_at")
                 self.log.update_state({"status": "preflight_pending",
                                        "error": None, "failed_at": None})
                 self._log_debug(str(e))
@@ -573,7 +595,7 @@ class RunWorker(QThread):
         if not (self.cfg.diag_windows_in or self.cfg.diag_ssh_in):
             return diag_file_ids, diag_text
 
-        self._set(2, 0, "Diagnostics IN: collecting...")
+        self._set(2, 0, "Sbírám diagnostická data…", stage="Diagnostika")
         diag_root = os.path.join(self.log.paths.manifests_dir, "diagnostics")
         ensure_dir(diag_root)
         diag_files: List[str] = []
@@ -639,8 +661,20 @@ class RunWorker(QThread):
             except Exception as e:
                 try:
                     self.log.exception("upload.diagnostics", e)
+                    self.log.update_state({"diagnostics_delivery": {
+                        "requested": True, "delivered": False, "error": str(e)
+                    }})
                 except Exception:
                     pass
+                raise RuntimeError(f"Diagnostická data se nepodařilo doručit do Files API: {e}") from e
+        if not diag_file_ids:
+            self.log.update_state({"diagnostics_delivery": {
+                "requested": True, "delivered": False, "error": "Nevznikl diagnostický JSON bundle."
+            }})
+            raise RuntimeError("Požadovaná diagnostika nebyla doručena; pracovní požadavek nebyl odeslán.")
+        self.log.update_state({"diagnostics_delivery": {
+            "requested": True, "delivered": True, "file_ids": list(diag_file_ids)
+        }})
         return diag_file_ids, diag_text
 
     def _zip_in_dir(self, root: str) -> str:
@@ -671,7 +705,7 @@ class RunWorker(QThread):
         in_dir = (self.cfg.in_dir or "").strip()
         if not in_dir or not os.path.isdir(in_dir):
             return None
-        self._set(4, 0, "IN: kontrola souborů a upload textového balíčku...")
+        self._set(4, 0, "Kontroluji a nahrávám vstupní data…", stage="Vstupní data")
         zip_path = self._zip_in_dir(in_dir)
         up = with_retry(lambda: client.upload_file(zip_path, purpose="user_data"), self.settings.retry, self.breaker)
         file_id = up["id"]
@@ -684,7 +718,7 @@ class RunWorker(QThread):
 
         if (not self.cfg.send_as_c or self.cfg.mode == "GENERATE") and self._preparation_cap("supports_vector_store"):
             try:
-                self._set(6, 0, "IN: vytvářím vector store z textového balíčku...")
+                self._set(6, 0, "Indexuji vstupní data pro file_search…", stage="Indexace")
                 vs = with_retry(lambda: client.create_vector_store(f"IN_{ts_code()}"), self.settings.retry, self.breaker)
                 vs_id = vs.get("id")
                 if vs_id:
@@ -700,8 +734,14 @@ class RunWorker(QThread):
             except Exception as e:
                 try:
                     self.log.exception("vector_store.in_dir", e)
+                    self.log.update_state({"in_context_delivery": {
+                        "vector_store": "failed", "direct_input_file": True, "file_id": file_id, "error": str(e)
+                    }})
                 except Exception:
                     pass
+                self.progress_event.emit(ProgressEvent(
+                    "Indexace", detail="Indexace vstupu selhala; pokračuji přes kanonickou přímou textovou přílohu."
+                ))
         return info
 
     def _files_with_in_dir(self, file_ids: List[str]) -> List[str]:
@@ -966,7 +1006,15 @@ class RunWorker(QThread):
             after_size = os.path.getsize(dst)
             after = sha256_file(dst)
             self.log.record_fs_change("write", src=rel, dst=dst, before=before, after=after, before_size=before_size, after_size=after_size)
-            saved.append({"path": rel, "dst": dst, "bytes": after_size})
+            entry = {
+                "path": rel, "dst": dst, "bytes": after_size, "sha256": after,
+                "written_at": time.time(), "run_id": self.log.run_id,
+                "purpose": f.get("purpose", ""),
+            }
+            saved.append(entry)
+            # SSOT: multi-file zápis není transakce. Durable evidence vzniká po každém
+            # jednotlivém atomickém write ještě před zahájením dalšího souboru.
+            self.log.save_json("manifests", "out_write_journal", {"saved": saved, "out_dir": out_dir})
             self.progress_event.emit(ProgressEvent("Ukládání", completed=i + 1, total=len(files), unit="souborů", detail=rel))
             self.subprogress.emit(int((i + 1) * 100 / max(1, len(files))))
         self.log.save_json("manifests", "out_saved_map", {"saved": saved, "out_dir": out_dir})
@@ -1044,6 +1092,8 @@ class RunWorker(QThread):
                 pass
 
             files_raw = struct.get("files", []) or []
+            if not files_raw:
+                raise ContractError("GENERATE ReRun: uložená struktura neobsahuje žádný výstupní soubor.")
             validate_paths(files_raw)
             for f in files_raw:
                 self._check_stop()
@@ -1240,6 +1290,8 @@ class RunWorker(QThread):
                 pass
 
             files_raw = struct.get("files", []) or []
+            if not files_raw:
+                raise ContractError("GENERATE: A2_STRUCTURE neobsahuje žádný výstupní soubor.")
             for f in files_raw:
                 self._check_stop()
                 path = f.get("path")
@@ -1296,12 +1348,13 @@ class RunWorker(QThread):
             "structure": struct,
             "saved": saved_map,
             "response_id": resp2_id,
+            "last_response_id": self._final_response_id or resp2_id,
             "missing_files_report": missing_report,
+            "missing_deliverables": [item.get("path") for item in skipped_a3_images],
         }
 
     # Odeslání souborových úloh po živé přípravě.
     def _submit_generate_batch(self, client, manifest):
-        from .response_policy import PreflightPending
         encode_requests(manifest)
         for row in manifest["requests"]:
             client.validate_access(row["body"], batch=True)
@@ -1311,17 +1364,21 @@ class RunWorker(QThread):
             stream.write(data)
         self.log.update_state({"generate_batch": manifest, "status": "batch_prepared"})
         self._check_stop()
+        self._set(45, 0, "Ověřuji kompatibilitu BATCH…", stage="Ověření BATCH")
+        # upload_file(purpose=batch) provede kanonický zkušební BATCH ještě před
+        # pracovním uploadem. PreflightPending tedy zde vznikne před work submission guardem.
         uploaded = with_retry(lambda: client.upload_file(path, purpose="batch"), self.settings.retry, self.breaker)
-        self.log.update_state({"batch_input_file_id": uploaded["id"]})
-        # Vytvoření není automaticky opakováno: timeout mohl nastat až po přijetí služby.
-        try:
-            self.log.update_state({"submission_unknown": True})
-            batch = client.create_batch(input_file_id=uploaded["id"], endpoint="/v1/responses")
-        except PreflightPending:
-            self.log.update_state({"submission_unknown": False})
-            raise
-        except Exception:
-            raise
+        evidence = {
+            "batch_input_file_id": uploaded["id"],
+            "submission_input_file_id": uploaded["id"],
+            "submission_endpoint": "/v1/responses",
+            "submission_jsonl_sha256": hashlib.sha256(data).hexdigest(),
+        }
+        self.log.update_state(evidence)
+        self._set(55, 0, "Odesílám pracovní dávku…", stage="BATCH SUBMIT")
+        # Od tohoto okamžiku může ztracená síťová odpověď znamenat server accept.
+        self.log.update_state({"submission_unknown": True})
+        batch = submit_verified_batch(client, uploaded["id"], manifest["requests"])
         self.log.update_state({"batch_id": batch["id"], "status": "batch_pending", "submission_unknown": False,
                                "batch_records": {batch["id"]: batch}})
         self.log.save_json("manifests", "generate_batch_created", batch)
@@ -1411,14 +1468,22 @@ class RunWorker(QThread):
                     vs_ids.append(vs_id)
                     self._vector_store_ids.append(vs_id)
             except Exception as e:
-                # Lze použít také již připojená úložiště.
+                # Aktuální IN je současně připojen přímo jako input_file; již připojené
+                # stores mohou navíc zachovat file_search. Žádný nový fallback se nevymýšlí.
                 supports_fs = bool(vs_ids)
                 tools = None
                 vs_id = None
                 try:
                     self.log.exception("vector_store", e)
+                    self.log.update_state({"modify_context": {
+                        "new_vector_store": "failed", "direct_inputs": True,
+                        "existing_vector_stores": list(vs_ids), "error": str(e),
+                    }})
                 except Exception:
                     pass
+                self.progress_event.emit(ProgressEvent(
+                    "Indexace", detail="Nová indexace selhala; aktuální IN zůstává připojen přímo jako vstupní soubory."
+                ))
 
         if supports_fs and vs_ids:
             # Odstranění duplicit se zachováním pořadí.
@@ -1537,6 +1602,14 @@ class RunWorker(QThread):
         validate_paths(touched_raw)
         if any(item.get("action") not in ("add", "modify") for item in touched_raw):
             raise ContractError("B2: action musí být add nebo modify.")
+        if not touched_raw:
+            self.log.update_state({"no_changes": True, "written_files": []})
+            self.progress_event.emit(ProgressEvent("B2", detail="Nebyla navržena žádná změna; do OUT se nebude zapisovat."))
+            return {
+                "mode": "MODIFY", "plan": plan, "structure": struct,
+                "saved": {"saved": []}, "written_files": [], "no_changes": True,
+                "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
+            }
         touched = []
         for tf in touched_raw:
             path = tf.get("path", "")
@@ -1781,22 +1854,29 @@ class RunWorker(QThread):
             size = None
         self._log_api_action("C", "jsonl", {"path": jsonl_path, "size": size})
 
-        self._set(20, 0, "C: upload JSONL...")
+        self._set(20, 0, "Ověřuji kompatibilitu BATCH a nahrávám dávkový soubor…", stage="Ověření BATCH")
         self._log_debug("C: uploading batch JSONL")
         up = with_retry(lambda: client.upload_file(jsonl_path, purpose="batch"), self.settings.retry, self.breaker)
         input_file_id = up["id"]
         self._log_api_action("C", "upload", {"input_file_id": input_file_id, "retry": self.settings.retry.max_attempts if hasattr(self.settings.retry, 'max_attempts') else None})
 
-        self._set(25, 0, "C: create batch...")
-        self._log_debug("C: creating batch")
-        batch = client.create_batch(input_file_id=input_file_id, endpoint="/v1/responses")
+        self._set(25, 0, "Odesílám pracovní dávku…", stage="BATCH SUBMIT")
+        self._log_debug("C: creating work batch")
+        jsonl_digest = hashlib.sha256(open(jsonl_path, 'rb').read()).hexdigest()
+        self.log.update_state({
+            "submission_input_file_id": input_file_id,
+            "submission_endpoint": "/v1/responses",
+            "submission_jsonl_sha256": jsonl_digest,
+            "submission_unknown": True,
+        })
+        batch = submit_verified_batch(client, input_file_id, [req_line])
         batch_id = str(batch.get("id") or "")
-        self.log.update_state({"batch_id": batch_id, "batch_records": {batch_id: batch}})
+        self.log.update_state({"batch_id": batch_id, "batch_records": {batch_id: batch}, "submission_unknown": False})
         self.log.save_json("responses", f"C_batch_created_{batch_id}_{ts_code()}", batch)
         self._log_api_action("C", "create", {"batch_id": batch_id, "status": batch.get("status")})
 
         # Po vytvoření dávky přebírá sledování panel BATCH.
-        self._set(100, 0, f"C: batch created ({batch_id})")
+        self._set(100, 0, f"Pracovní dávka byla odeslána ({batch_id}).", stage="BATCH SUBMIT")
         self.log.event("batch.created", {"batch_id": batch_id, "input_file_id": input_file_id})
         return {"mode": "C", "batch_id": batch_id, "status": batch.get("status"), "input_file_id": input_file_id}
 
@@ -1947,6 +2027,13 @@ class RunWorker(QThread):
             if declared_chunk_count and count and count != declared_chunk_count:
                 raise ContractError("Počet částí souboru se mezi odpověďmi změnil.")
             declared_chunk_count = count or declared_chunk_count
+            chunk_label = (
+                f"{path} · část {chunk_index + 1}/{declared_chunk_count}"
+                if declared_chunk_count else f"{path} · část {chunk_index + 1}"
+            )
+            self.progress_event.emit(ProgressEvent(
+                getattr(self, "_progress_stage", contract), detail=chunk_label
+            ))
             if declared_chunk_count and not ch["has_more"] and chunk_index + 1 != declared_chunk_count:
                 raise ContractError("Soubor skončil před deklarovaným počtem částí.")
             if not isinstance(ch, dict) or type(ch.get("chunk_index")) is not int or ch.get("chunk_index") != chunk_index:

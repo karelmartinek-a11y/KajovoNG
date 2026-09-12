@@ -352,18 +352,28 @@ class GitHubPanel(QWidget):
 
     def restore_milestone(self):
         tag = self._selected_tag()
-        if (
-            tag
-            and msg_question(
-                self,
-                "Obnovit milník?",
-                f"Přepnout projekt na {tag}? Operace může změnit pracovní soubory.",
-            )
-            == QMessageBox.Yes
-        ):
-            self._operation(
-                "Obnova milníku", lambda root: self._git(["checkout", "refs/tags/" + tag], root)
-            )
+        if not tag:
+            return
+        if msg_question(
+            self, "Obnovit milník?",
+            f"Obnovit tracked soubory a index z {tag} při zachování aktuální větve? Necommitované změny musí být nejprve uloženy nebo commitnuty."
+        ) != QMessageBox.Yes:
+            return
+
+        def execute(root):
+            branch = self._run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], root)
+            if branch.returncode or not branch.stdout.strip():
+                raise RuntimeError("Repozitář je v detached HEAD. Nejprve explicitně přepněte nebo vytvořte větev.")
+            branch_name = branch.stdout.strip()
+            if self._git(["status", "--porcelain"], root).strip():
+                raise RuntimeError("Pracovní strom není čistý. Před obnovou milníku změny commitněte nebo jinak bezpečně uložte.")
+            self._git(["restore", "--source", "refs/tags/" + tag, "--staged", "--worktree", "--", "."], root)
+            after = self._git(["symbolic-ref", "--quiet", "--short", "HEAD"], root).strip()
+            if after != branch_name:
+                raise RuntimeError("Obnova změnila aktivní větev; operace nesplnila bezpečnostní postcondition.")
+            return {"branch": branch_name, "tag": tag}
+
+        self._operation("Obnova milníku", execute)
 
     def delete_milestone(self):
         tag = self._selected_tag()
@@ -411,7 +421,10 @@ class GitHubPanel(QWidget):
         def execute(root):
             self._ensure_safe_tracking(root)
             self._configure_origin(root, remote)
-            branch = self._git(["symbolic-ref", "--short", "HEAD"], root).strip()
+            probe = self._run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], root)
+            if probe.returncode or not probe.stdout.strip():
+                raise RuntimeError("Repozitář je v detached HEAD. Před odesláním explicitně přepněte nebo vytvořte větev.")
+            branch = probe.stdout.strip()
             self._git(["push", "-u", "origin", branch], root)
 
         self._operation("Odeslání projektu", execute)
@@ -421,7 +434,10 @@ class GitHubPanel(QWidget):
 
         def execute(root):
             self._configure_origin(root, remote)
-            branch = self._git(["symbolic-ref", "--quiet", "--short", "HEAD"], root).strip()
+            probe = self._run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], root)
+            if probe.returncode or not probe.stdout.strip():
+                raise RuntimeError("Repozitář je v detached HEAD. Před stažením explicitně přepněte nebo vytvořte větev.")
+            branch = probe.stdout.strip()
             self._git(["pull", "--ff-only", "origin", branch], root)
 
         self._operation("Stažení projektu", execute)
