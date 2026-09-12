@@ -10,6 +10,7 @@ import time
 import uuid
 
 from .model_registry import matrix_version, model_spec
+from .progress import ProgressEvent
 from .request_rules import validate_response_payload
 from .structured_output import prepare_payload, validate_output
 from .utils import atomic_write_text
@@ -31,7 +32,6 @@ class PreflightTransport:
     def validate_access(self, payload, batch=False):
         prepare_payload(payload)
         validate_response_payload(payload, batch=batch)
-
 
     def create_response(self, payload):
         self.validate_access(payload)
@@ -104,7 +104,6 @@ class ResponsePolicy:
 
     def ensure(self, payload, batch=False, preparing=False):
         self.check_documented(payload, batch)
-        # Příprava může ještě obsahovat zástupná ID. Zkušební volání patří až hotovému payloadu.
         if preparing or batch:
             return
         self.client.validate_resources(payload)
@@ -143,14 +142,19 @@ class ResponsePolicy:
             log.update_state({"status": "failed", "model": payload["model"], "error": str(exc)})
             raise
 
-
     def _observe_batch(self, record):
         observer = getattr(self.client, "on_preflight_batch", None)
         if callable(observer):
             observer({**record, "checked_at": time.time()})
 
+    def _progress(self, detail: str, state: str = "active") -> None:
+        observer = getattr(self.client, "on_preflight_progress", None)
+        if callable(observer):
+            observer(ProgressEvent("Ověření BATCH", state=state, detail=detail))
+
     def ensure_batch(self, payloads):
         """Jedna skutečná zkušební dávka pro všechny dosud neověřené řádky."""
+        self._progress("Ověřuji dávkové požadavky a dostupnost použitých prostředků.")
         by_key = {}
         for payload in payloads:
             self.check_documented(payload, batch=True)
@@ -162,6 +166,7 @@ class ResponsePolicy:
                 self.proofs.pop(key)
         missing = {key: body for key, body in by_key.items() if key not in self.proofs}
         if missing:
+            self._progress("Připravuji zkušební dávku.")
             trial_id = uuid.uuid4().hex
             rows = [{"custom_id": key, "method": "POST", "url": "/v1/responses", "body": body} for key, body in missing.items()]
             data = ("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n").encode()
@@ -170,21 +175,22 @@ class ResponsePolicy:
             trial_dir = self.log_dir / ("PREFLIGHT_BATCH_" + trial_id)
             trial_dir.mkdir(parents=True, exist_ok=True)
             atomic_write_text(str(trial_dir / "input.jsonl"), data.decode("utf-8"))
-            # Soubory byly plně validovány před vstupem do transportu.
+            self._progress("Nahrávám zkušební dávku.")
             uploaded = self.client._req("POST", "/files", json_body={"purpose": "batch"},
                 files={"file": (f"preflight-{trial_id}.jsonl", io.BytesIO(data), "application/jsonl")})
             file_id = uploaded["id"]
+            self._progress("Odesílám zkušební dávku.")
             try:
                 job = self.client._req("POST", "/batches", json_body={"input_file_id": file_id,
                     "endpoint": "/v1/responses", "completion_window": "24h", "metadata": {"purpose": "kajovong_preflight", "matrix": matrix_version()}})
             except Exception as exc:
                 definitive = getattr(exc, "status_code", None) in (400, 401, 403, 404, 422)
-                # Neurčitý transportní výsledek nelze automaticky opakovat .
                 for key, body in missing.items():
                     self.proofs[key] = {"model": body["model"], "state": "failed" if definitive else "submission_unknown",
                         "input_file_id": file_id, "error": str(exc), "status_code": getattr(exc, "status_code", None),
                         "param": getattr(exc, "param", None), "code": getattr(exc, "code", None)}
                 self.save()
+                self._progress("Zkušební dávku se nepodařilo bezpečně odeslat.")
                 raise rejection(rows[0]["body"]["model"], exc, True) from exc
             for key, body in missing.items():
                 self.proofs[key] = {"model": body["model"], "state": "pending", "batch_id": job["id"],
@@ -203,6 +209,8 @@ class ResponsePolicy:
                     raise RuntimeError("STOP_REQUESTED")
                 job = self.client.retrieve_batch(batch_id)
                 self._observe_batch(job)
+                status = str(job.get("status") or "unknown")
+                self._progress(f"Čekám na OpenAI – zkušební dávka má stav {status}.", state="waiting")
                 for proof in self.proofs.values():
                     if proof.get("batch_id") == batch_id:
                         proof["batch_record"] = job
@@ -224,6 +232,7 @@ class ResponsePolicy:
                 from .openai_client import OpenAIError
                 raise rejection(by_key[key]["model"], OpenAIError(proof.get("error", "Batch nebyl ověřen"),
                     proof.get("status_code"), param=proof.get("param"), code=proof.get("code")), True)
+        self._progress("Zkušební dávka byla úspěšně ověřena.")
 
     def finish_batch(self, job, payloads):
         log_dir = self.log_dir / ("PREFLIGHT_BATCH_" + job["id"])
@@ -250,7 +259,7 @@ class ResponsePolicy:
             body = response.get("body") or {}
             error = row.get("error") or body.get("error") or {}
             proof.update(state="failed", status_code=response.get("status_code"),
-                error=error.get("message") or str(job.get("errors") or f"Batch {job['status']}: chybí úspěšný řádek"),
+                error=error.get("message") or str(job.get("errors") or f"Batch {job['status']}: chybí úspěšnǽ řádek"),
                 param=error.get("param"), code=error.get("code"))
             if job["status"] == "completed" and response.get("status_code") == 200 and not error:
                 try:
@@ -260,7 +269,6 @@ class ResponsePolicy:
                 else:
                     proof.update(state="verified", response_id=body.get("id"), tested_at=time.time())
         self.save()
-        # Úklid pouze vlastních souborů až po převzetí všech odpovědí .
         related = [p for p in self.proofs.values() if p.get("batch_id") == job["id"]]
         if all(p["state"] != "pending" for p in related):
             owned = {job.get("output_file_id"), job.get("error_file_id"), *(p.get("input_file_id") for p in related)} - {None}

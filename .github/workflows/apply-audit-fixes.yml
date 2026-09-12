@@ -1,0 +1,50 @@
+name: apply-audit-fixes
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply deterministic SSOT migration
+        shell: bash
+        run: |
+          python - <<'PY'
+          import gzip
+          from pathlib import Path
+          payload = Path('scripts/apply_audit_fixes.py.gz')
+          source = gzip.decompress(payload.read_bytes()).decode('utf-8')
+          exec(compile(source, 'scripts/apply_audit_fixes.py', 'exec'))
+          PY
+      - name: Verify generated source
+        shell: bash
+        run: |
+          python -m compileall -q kajovo kajovong utf8nobom tests Build
+          git diff --check
+      - name: Remove one-time migration machinery
+        shell: bash
+        run: |
+          rm scripts/apply_audit_fixes.py.gz
+          rm .github/workflows/apply-audit-fixes.yml
+      - name: Commit directly to main
+        shell: bash
+        run: |
+          git config user.name 'Kájovo NG SSOT fixer'
+          git config user.email 'kajovo-ng-ssot-fixer@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'Migration produced no changes'; exit 1; }
+          git commit -m 'Odstranit procesní odchylky podle SSOT'
+          git push origin HEAD:main
