@@ -8,15 +8,15 @@ datový parametr,UiRunConfig.model_a1,povinný,Volitelný model fáze A1/A2/A3; 
 datový parametr,UiRunConfig.model_a2,povinný,Volitelný model fáze A1/A2/A3; prázdný přebírá hlavní model; schopnosti každé fáze zvlášť,kajovo/core/pipeline.py:54
 datový parametr,UiRunConfig.model_a3,povinný,Volitelný model fáze A1/A2/A3; prázdný přebírá hlavní model; schopnosti každé fáze zvlášť,kajovo/core/pipeline.py:55
 datový parametr,UiRunConfig.response_id,povinný,Podpora previous_response_id modelem; samostatné BATCH položky bez návaznosti,kajovo/core/pipeline.py:56
-datový parametr,UiRunConfig.attached_file_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; validace ID a serverový preflight,kajovo/core/pipeline.py:57
-datový parametr,UiRunConfig.input_file_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; validace ID a serverový preflight,kajovo/core/pipeline.py:58
-datový parametr,UiRunConfig.attached_vector_store_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; validace ID a serverový preflight,kajovo/core/pipeline.py:59
+datový parametr,UiRunConfig.attached_file_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; lokální validace ID a ne-generativní ověření existujících prostředků; bez placeného preflightu,kajovo/core/pipeline.py:57
+datový parametr,UiRunConfig.input_file_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; lokální validace ID a ne-generativní ověření existujících prostředků; bez placeného preflightu,kajovo/core/pipeline.py:58
+datový parametr,UiRunConfig.attached_vector_store_ids,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; lokální validace ID a ne-generativní ověření existujících prostředků; bez placeného preflightu,kajovo/core/pipeline.py:59
 datový parametr,UiRunConfig.in_dir,povinný,MODIFY vyžaduje existující adresář; prázdný není pracovní adresář; security.py,kajovo/core/pipeline.py:60
 datový parametr,UiRunConfig.out_dir,povinný,Zapisující režim vyžaduje adresář; bezpečné cesty; nepřekrývat OUT aktivních běhů,kajovo/core/pipeline.py:61
 datový parametr,UiRunConfig.in_equals_out,povinný,Při zapnutí OUT přebírá IN,kajovo/core/pipeline.py:62
 datový parametr,UiRunConfig.versing,povinný,Snapshot OUT před přepisem; nenahrazuje kontrolu cest,kajovo/core/pipeline.py:63
 datový parametr,UiRunConfig.temperature,povinný,0–2; odesílá se pouze při podpoře modelu a reasoning režimu; core/response_policy.py,kajovo/core/pipeline.py:64
-datový parametr,UiRunConfig.use_file_search,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; validace ID a serverový preflight,kajovo/core/pipeline.py:65
+datový parametr,UiRunConfig.use_file_search,povinný,Schopnosti modelu × LIVE/BATCH × přílohy: REQUEST_COMBINATIONS.csv; lokální validace ID a ne-generativní ověření existujících prostředků; bez placeného preflightu,kajovo/core/pipeline.py:65
 datový parametr,UiRunConfig.diag_windows_in,povinný,Dostupnost podle režimu/fáze; BATCH výstup bez diagnostiky; SSH vyžaduje připojení,kajovo/core/pipeline.py:67
 datový parametr,UiRunConfig.diag_windows_out,povinný,Dostupnost podle režimu/fáze; BATCH výstup bez diagnostiky; SSH vyžaduje připojení,kajovo/core/pipeline.py:68
 datový parametr,UiRunConfig.diag_ssh_in,povinný,Dostupnost podle režimu/fáze; BATCH výstup bez diagnostiky; SSH vyžaduje připojení,kajovo/core/pipeline.py:69
@@ -40,7 +40,7 @@ datový parametr,CascadeStep.temperature,None,0–2; odesílá se pouze při pod
 datový parametr,CascadeStep.instructions,'',Datový typ str; kontrakt CascadeStep; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:14
 datový parametr,CascadeStep.input_text,'',Datový typ str; kontrakt CascadeStep; textová/metadata hodnota bez dalšího číselného rozsahu,kajovo/core/cascade_types.py:15
 datový parametr,CascadeStep.input_content_json,None,JSON objekt nebo pole; má přednost před input_text; API obsah validuje response_policy.py,kajovo/core/cascade_types.py:16
-datový parametr,CascadeStep.files_existing_ids,field(default_factory=list),Jedno file_id nebo proměnná předchozího kroku na řádek; typ a dostupnost kontroluje preflight,kajovo/core/cascade_types.py:17
+datový parametr,CascadeStep.files_existing_ids,field(default_factory=list),Jedno file_id nebo proměnná předchozího kroku na řádek; typ a dostupnost ověřuje lokální politika a ne-generativní načtení metadat,kajovo/core/cascade_types.py:17
 datový parametr,CascadeStep.files_local_paths,field(default_factory=list),Existující lokální soubory nebo proměnné předchozích kroků; bezpečnost a limit uploadu,kajovo/core/cascade_types.py:18
 datový parametr,CascadeStep.previous_response_id_expr,None,ID odpovědi nebo reference předchozího kroku; nebudoucí krok,kajovo/core/cascade_types.py:19
 datový parametr,CascadeStep.output_type,'text',text/json; očekávané soubory a schéma vyžadují json,kajovo/core/cascade_types.py:20
