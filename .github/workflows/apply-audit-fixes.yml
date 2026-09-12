@@ -18,6 +18,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Reconstruct and verify migration payload
+        shell: bash
+        run: |
+          cat scripts/apply_audit_fixes.py.gz.b64.part* | base64 -d > scripts/apply_audit_fixes.py.gz
+          gzip -t scripts/apply_audit_fixes.py.gz
       - name: Apply deterministic SSOT migration
         shell: bash
         run: |
@@ -37,6 +42,7 @@ jobs:
         shell: bash
         run: |
           rm scripts/apply_audit_fixes.py.gz
+          rm scripts/apply_audit_fixes.py.gz.b64.part*
           rm .github/workflows/apply-audit-fixes.yml
       - name: Commit directly to main
         shell: bash
