@@ -15,6 +15,9 @@ from .dialogs import msg_warning, dialog_save_file
 class ResponseRequestPanel(QWidget):
     rerun = Signal(str)
     complete_batch = Signal(str)
+    # Dočasná binární/API kompatibilita s hlavním oknem. UI tento signál nikdy
+    # neemituje; placené preflight workflow bylo odstraněno.
+    continue_preflight = Signal(str)
 
     def __init__(self, log_dir, parent=None):
         super().__init__(parent)
