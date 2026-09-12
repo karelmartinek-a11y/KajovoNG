@@ -463,10 +463,10 @@ class CascadeRunWorker(QThread):
                 if step.expected_out_files and step.output_type == "text":
                     step.output_type = "json"
                     step.output_schema_kind = "manifest"
-                probe_payload = {"model": step.model, "input": "kontrola"}
+                validation_payload = {"model": step.model, "input": "lokální kontrola"}
                 if step.temperature is not None:
-                    probe_payload["temperature"] = step.temperature
-                validate_response_payload(probe_payload)
+                    validation_payload["temperature"] = step.temperature
+                validate_response_payload(validation_payload)
                 schema = self._schema_for_step(step)
                 if schema is not None:
                     self._validate_schema_minimal(schema)
@@ -496,12 +496,12 @@ class CascadeRunWorker(QThread):
             prepared_schemas = {}
             per_step_text = {}
             for idx, step in enumerate(self.cfg.cascade.steps, 1):
-                check = {"model": step.model, "input": "kontrola", "text": text_format()}
+                check = {"model": step.model, "input": "lokální kontrola", "text": text_format()}
                 if step.temperature is not None:
                     check["temperature"] = step.temperature
                 if step.previous_response_id_expr:
-                    check["previous_response_id"] = "resp_preflight"
-                client.preflight_response(check)
+                    check["previous_response_id"] = "resp_local_validation"
+                client.validate_prepared_payload(check)
                 if step.output_type == "json":
                     original = self._schema_for_step(step)
                     if step.output_schema_kind == "prompts":
@@ -546,16 +546,16 @@ class CascadeRunWorker(QThread):
                 check_parts = copy.deepcopy(content_parts)
                 check_parts += [{"type": "input_file", "file_id": fid} for fid in file_ids]
                 if step.files_local_paths:
-                    check_parts.append({"type": "input_file", "file_id": "file_preflight"})
-                precheck = {"model": step.model, "instructions": resolved_instructions,
+                    check_parts.append({"type": "input_file", "file_id": "file_local_validation"})
+                local_check = {"model": step.model, "instructions": resolved_instructions,
                     "input": [{"role": "user", "content": check_parts}],
                     "text": response_format(f"cascade_step_{idx:02d}_schema", prepared_schemas[idx]) if step.output_type == "json" else text_format()}
                 if step.temperature is not None:
-                    precheck["temperature"] = step.temperature
+                    local_check["temperature"] = step.temperature
                 if resolved_prev_expr:
-                    precheck["previous_response_id"] = resolved_prev_expr
-                validate_response_payload(precheck)
-                client.preflight_response(precheck)
+                    local_check["previous_response_id"] = resolved_prev_expr
+                validate_response_payload(local_check)
+                client.validate_prepared_payload(local_check)
                 for local_path in step.files_local_paths or []:
                     self._check_stop()
                     resolved_path = self._resolve_text(local_path, context)
