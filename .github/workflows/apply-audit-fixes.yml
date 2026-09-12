@@ -22,6 +22,7 @@ jobs:
         shell: bash
         run: |
           cat scripts/apply_audit_fixes.py.gz.b64.part* | base64 -d > scripts/apply_audit_fixes.py.gz
+          echo 'fd396244a4a03c5f25f70263ca8de6ecde0e1a063b2aaec6846db6723601c8f3  scripts/apply_audit_fixes.py.gz' | sha256sum -c -
           gzip -t scripts/apply_audit_fixes.py.gz
       - name: Apply deterministic SSOT migration
         shell: bash
