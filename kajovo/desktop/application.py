@@ -163,7 +163,7 @@ class MainWindow(QMainWindow):
         help_layout.addWidget(label("Jak pracovat", "Heading"))
         help_layout.addWidget(
             editor(
-                "1. Nastavte API klíč a obnovte katalog modelů.\n2. V Zadání vyberte cíl, model a vstupy.\n3. Spusťte připravené zadání.\n4. Průběh lze skrýt a otevřít přes Aktivní běhy.\n5. Odeslaný BATCH převezměte tlačítkem Dokončit v Historii nebo Dávkách.\n\nGENERATE vytvoří plán, strukturu a soubory. MODIFY upravuje existující IN. QA vrací textovou odpověď. QFILE zapisuje souborový výstup. KASKADA spouští uloženou posloupnost kroků.\n\nVýchozí model nastavíte u volby modelu nebo v Nastavení. Použije se pro nové zadání; rozpracované zadání zachová svůj model.\n\nReRun v Historii obnoví uložené zadání, naváže na poslední odpověď a přeskočí pouze doložené soubory, které skutečně existují v OUT.\n\nPevná matice ověřuje parametry podle modelu a LIVE/BATCH. Před pracovním voláním proběhne placená zkouška konkrétního požadavku. Chyba uvede odmítnutý parametr.",
+                "1. Nastavte API klíč a obnovte katalog modelů.\n2. V Zadání vyberte cíl, model a vstupy.\n3. Spusťte připravené zadání.\n4. Průběh lze skrýt a otevřít přes Aktivní běhy.\n5. Odeslaný BATCH převezměte tlačítkem Dokončit v Historii nebo Dávkách.\n\nGENERATE vytvoří plán, strukturu a soubory. MODIFY upravuje existující IN. QA vrací textovou odpověď. QFILE zapisuje souborový výstup. KASKADA spouští uloženou posloupnost kroků.\n\nVýchozí model nastavíte u volby modelu nebo v Nastavení. Použije se pro nové zadání; rozpracované zadání zachová svůj model.\n\nReRun v Historii obnoví uložené zadání, naváže na poslední odpověď a přeskočí pouze doložené soubory, které skutečně existují v OUT.\n\nPevná matice a lokální validace ověřují parametry podle modelu a LIVE/BATCH. Před skutečným pracovním požadavkem se neposílá žádná samostatná placená zkouška ani zkušební BATCH.",
                 True,
             )
         )
@@ -229,8 +229,6 @@ class MainWindow(QMainWindow):
         self.ed_out.textChanged.connect(self.batch_panel.set_out_dir)
         self.history_panel.rerun.connect(self.rerun)
         self.history_panel.complete_batch.connect(self.batch_panel.complete_run)
-        self.history_panel.continue_preflight.connect(self.batch_panel.continue_run)
-        self.batch_panel.continue_preflight.connect(self.rerun)
         self.batch_panel.run_guard = self._guard_batch_run
         self.batch_panel.runs_changed.connect(self.history_panel.refresh_runs)
         self.batch_panel.operation_changed.connect(
@@ -707,7 +705,6 @@ class MainWindow(QMainWindow):
         self.sp_temp.setValue(self.s.default_temperature)
         self._refresh_model_tab()
 
-
     def log(self, message):
         line = time.strftime("%H:%M:%S") + " · " + str(message)
         self.txt_log.appendPlainText(line)
@@ -921,12 +918,7 @@ class MainWindow(QMainWindow):
             action()
 
     def _refresh_batch_links(self):
-        from ..core.batch_completion import local_batches
         busy = set(self._run_contexts)
-        for info in local_batches(self.s.log_dir).values():
-            linked = {link["run_id"] for link in info["runs"]}
-            if info["kind"] == "preflight" and linked & set(self._run_contexts):
-                busy.update(linked)
         self.batch_panel.active_runs = busy
         self.history_panel.active_runs = busy
         self.history_panel.refresh_runs()
@@ -946,15 +938,6 @@ class MainWindow(QMainWindow):
     def on_run_ok(self, key, result):
         context = self._run_contexts.get(key)
         if not context:
-            return
-        if result.get("status") == "preflight_pending":
-            context["dialog"].on_progress_event(
-                ProgressEvent("RUN", "preflight_pending", detail=result["detail"])
-            )
-            msg_info(self, "Ověření dávky probíhá", result["detail"],
-                     details=result.get("preflight_batches"))
-            self.history_panel.refresh_runs()
-            self.batch_panel.render_records()
             return
         cfg = context["worker"].cfg
         batch = bool(result.get("batch_id") or result.get("mode") == "C")
@@ -1189,12 +1172,17 @@ class MainWindow(QMainWindow):
             if not RUN_ID_RE.fullmatch(run_id):
                 raise ValueError("Neplatný RUN ID.")
             if run_id in self.batch_panel.active_runs:
-                raise ValueError("Běh nebo jeho sdílenou zkoušku právě zpracovává aktivní práce.")
+                raise ValueError("Běh nebo jeho související pracovní dávku právě zpracovává aktivní práce.")
             from .recovery import read_record
             state = read_record(Path(self.s.log_dir) / run_id / "run_state.json")
             if batch_ids(state):
                 self.batch_panel.complete_run(run_id)
                 return
+            if state.get("preflight_batches"):
+                raise ValueError(
+                    "Tento historický běh obsahuje pouze odstraněné preflight podklady. "
+                    "Automatické odeslání z nich je zakázáno; spusťte nové zadání."
+                )
             if self.batch_panel.busy_run_id == run_id:
                 raise ValueError("Tento běh již zpracovává dávku.")
             if state.get("generate_batch"):
