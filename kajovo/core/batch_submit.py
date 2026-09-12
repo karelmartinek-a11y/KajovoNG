@@ -13,16 +13,16 @@ def submit_verified_batch(client, input_file_id: str, rows: Iterable[dict[str, A
     client._validate_resource_id(input_file_id)
     if endpoint != "/v1/responses" or completion_window != "24h":
         raise ValueError("Program podporuje pouze Batch Responses s oknem 24h.")
-    body = {"input_file_id": input_file_id, "endpoint": endpoint, "completion_window": completion_window}
-    result = client._req("POST", "/batches", json_body=body)
-    policy = getattr(client, "_policy", None)
-    if policy is not None:
-        for row in rows:
-            payload = row.get("body") if isinstance(row, dict) else None
-            if isinstance(payload, dict):
-                policy.proofs.pop(policy.key(payload, True), None)
-        policy.save()
-    return result
+    verified_rows = list(rows)
+    if not verified_rows:
+        raise ValueError("Pracovní dávka neobsahuje žádný ověřený požadavek.")
+    # OpenAIClient zde dostane přesně řádky, které upload_file(purpose=batch)
+    # již kanonicky ověřil. create_batch proto přeskočí druhý preflight, ale
+    # zachová jedinou veřejnou transportní cestu a úklid proof cache po úspěchu.
+    return client.create_batch(
+        input_file_id=input_file_id, endpoint=endpoint, completion_window=completion_window,
+        _prevalidated_rows=verified_rows,
+    )
 
 
 def exact_batch_matches(records: Iterable[dict[str, Any]], input_file_id: str, endpoint: str = "/v1/responses") -> list[dict[str, Any]]:

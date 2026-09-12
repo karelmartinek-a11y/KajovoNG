@@ -82,16 +82,20 @@ def test_unknown_work_submission_blocks_resume(tmp_path):
 
 
 
-def test_second_validation_pending_is_safe_to_resume(tmp_path):
-    from kajovo.core.response_policy import PreflightPending
-    from kajovo.core.runlog import RunLogger
+def test_work_submission_reuses_preflighted_rows_without_second_validation(tmp_path):
     worker = make_worker(tmp_path, "GENERATE")
     client = Mock()
     client.upload_file.return_value = {"id": "file_work"}
-    client.create_batch.side_effect = PreflightPending("Čeká", "batch_trial", "in_progress")
-    with pytest.raises(PreflightPending):
-        worker._submit_generate_batch(client, manifest())
-    RunLogger(worker.settings.log_dir, worker.log.run_id, resume=True)
+    client.create_batch.return_value = {"id": "batch_work", "status": "validating"}
+    result = worker._submit_generate_batch(client, manifest())
+    assert result["batch_id"] == "batch_work"
+    client.create_batch.assert_called_once()
+    kwargs = client.create_batch.call_args.kwargs
+    assert kwargs["input_file_id"] == "file_work"
+    assert kwargs["endpoint"] == "/v1/responses"
+    assert kwargs["_prevalidated_rows"] == manifest()["requests"]
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    assert state["submission_unknown"] is False
 
 
 def outputs(m):

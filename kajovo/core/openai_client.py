@@ -406,11 +406,23 @@ class OpenAIClient:
     def list_batches(self) -> List[Dict[str, Any]]:
         return self._list_all("/batches")
 
-    def create_batch(self, input_file_id: str, endpoint: str = "/v1/responses", completion_window: str = "24h") -> Dict[str, Any]:
+    def create_batch(self, input_file_id: str, endpoint: str = "/v1/responses", completion_window: str = "24h", *, _prevalidated_rows=None) -> Dict[str, Any]:
+        """Vytvoří BATCH. `_prevalidated_rows` je interní cesta pouze pro již ověřený work submit.
+
+        Běžné volání vždy znovu načte a kanonicky ověří vzdálený JSONL. Interní
+        work-submit cesta naopak nesmí před jediným POST /batches provést žádnou
+        další síťovou operaci, protože submission_unknown už v tom okamžiku chrání
+        právě transportní neurčitost tohoto POSTu.
+        """
         self._validate_resource_id(input_file_id)
         if endpoint != "/v1/responses" or completion_window != "24h":
             raise ValueError("Program podporuje pouze Batch Responses s oknem 24h.")
-        rows = self.validate_batch_data(self.file_content(input_file_id))
+        if _prevalidated_rows is None:
+            rows = self.validate_batch_data(self.file_content(input_file_id))
+        else:
+            rows = list(_prevalidated_rows)
+            if not rows or not all(isinstance(row, dict) and isinstance(row.get("body"), dict) for row in rows):
+                raise ValueError("Interní work submit vyžaduje již ověřené řádky dávky.")
         body = {"input_file_id": input_file_id, "endpoint": endpoint, "completion_window": completion_window}
         result = self._req("POST", "/batches", json_body=body)
         for row in rows:

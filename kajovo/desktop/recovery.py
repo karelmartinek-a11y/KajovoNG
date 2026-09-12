@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 from ..core.contracts import parse_json_strict, extract_text_from_response
-from ..core.runlog import verified_output_evidence
+from ..core.runlog import load_output_evidence
 from ..core.utils import safe_join_under_root
 
 
@@ -94,7 +94,12 @@ def recover_run(log_dir, run_id):
         if not structure:
             source_state = read_record(source / "run_state.json")
             source_out = source_state.get("out_dir") or output
-            for entry in verified_output_evidence(source, source_out):
+            for entry in load_output_evidence(source):
+                try:
+                    if source_out:
+                        safe_join_under_root(source_out, entry["path"])
+                except ValueError:
+                    continue
                 structure.append({"path": entry["path"], "purpose": entry.get("purpose", "")})
         if structure:
             return (

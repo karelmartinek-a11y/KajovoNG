@@ -1,5 +1,6 @@
 """Sledování dávek, přenos výsledků a opakování vybraných souborů."""
 
+import inspect
 import json
 import time
 from datetime import datetime
@@ -349,7 +350,25 @@ class BatchPanel(QWidget):
             client.configure_validation(self.s)
         return client
 
-    def _start_operation(self, title, operation, *, run_id=None):
+    @staticmethod
+    def _invoke_operation(operation, client, job):
+        """Volá starší operation(client) i novější operation(client, job) bez maskování TypeError uvnitř operace."""
+        try:
+            signature = inspect.signature(operation)
+        except (TypeError, ValueError):
+            return operation(client, job)
+        params = list(signature.parameters.values())
+        positional = [p for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        if any(p.kind == p.VAR_POSITIONAL for p in params) or len(positional) >= 2:
+            return operation(client, job)
+        return operation(client)
+
+    def _start_operation(self, title_or_operation, operation=None, *, run_id=None):
+        if operation is None:
+            operation = title_or_operation
+            title = "Zpracování výsledků BATCH"
+        else:
+            title = str(title_or_operation)
         if self._operation_task:
             return
         if run_id:
@@ -391,7 +410,7 @@ class BatchPanel(QWidget):
             action.setEnabled(False)
         self._operation_task = self.jobs.start(
             title,
-            lambda job: operation(self._validated_client(key), job),
+            lambda job: self._invoke_operation(operation, self._validated_client(key), job),
             receive,
             on_finished=finished,
         )
