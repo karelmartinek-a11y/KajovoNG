@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from ..core.contracts import parse_json_strict, extract_text_from_response
+from ..core.runlog import verified_output_evidence
 from ..core.utils import safe_join_under_root
 
 
@@ -61,7 +62,7 @@ def recover_run(log_dir, run_id):
     for source in candidates:
         structure, structure_id = [], None
         responses = newest(source / "responses")
-        # Strukturální odpověď je vhodnější záloha návaznosti než nezávislý soubor.
+        # Strukturální odpověď je vhodnější záloha struktury než nezávislý soubor.
         responses.sort(
             key=lambda path: not any(part in path.name for part in ("A2_response", "B2_response"))
         )
@@ -91,26 +92,10 @@ def recover_run(log_dir, run_id):
                     if structure:
                         break
         if not structure:
-            for path in manifests:
-                if not path.name.endswith("_out_saved_map.json"):
-                    continue
-                record = read_record(path)
-                saved = record.get(
-                    "saved", {key: value for key, value in record.items() if key != "out_dir"}
-                )
-                entries = [{"path": key} for key in saved] if isinstance(saved, dict) else saved
-                for entry in entries if isinstance(entries, list) else []:
-                    if not isinstance(entry, dict):
-                        continue
-                    name = entry.get("path") or entry.get("dst_rel") or entry.get("dst")
-                    try:
-                        if name:
-                            safe_join_under_root(output or "/validation", name)
-                            structure.append({"path": name, "purpose": entry.get("purpose", "")})
-                    except ValueError:
-                        continue
-                if structure:
-                    break
+            source_state = read_record(source / "run_state.json")
+            source_out = source_state.get("out_dir") or output
+            for entry in verified_output_evidence(source, source_out):
+                structure.append({"path": entry["path"], "purpose": entry.get("purpose", "")})
         if structure:
             return (
                 ui,

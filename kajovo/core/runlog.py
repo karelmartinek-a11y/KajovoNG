@@ -7,9 +7,10 @@ import tempfile
 import time
 import traceback
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .utils import ensure_dir, validate_relative_path
+from .utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
 
 _REDACT_KEYS = {
     "authorization",
@@ -22,6 +23,13 @@ _REDACT_KEYS = {
     "bearer",
 }
 
+_KIND_DIRS = {
+    "requests": "requests",
+    "responses": "responses",
+    "manifests": "manifests",
+    "misc": "misc",
+}
+
 
 @dataclass
 class RunPaths:
@@ -32,6 +40,131 @@ class RunPaths:
     responses_dir: str
     manifests_dir: str
     misc_dir: str
+
+
+def _safe_component(value: str, limit: int) -> str:
+    return "".join(c for c in str(value or "") if c.isalnum() or c in "._-")[:limit]
+
+
+def json_artifact_filename(run_id: str, project_name: str, name: str) -> str:
+    """Kanonický název JSON artefaktu používaný zápisem i recovery."""
+    safe = _safe_component(name, 140)
+    safe += "_" + hashlib.sha256(str(name).encode("utf-8")).hexdigest()[:12]
+    prefix = _safe_component(project_name.strip() or "NO_PROJECT", 60)
+    base = f"{prefix}_{run_id}_{safe}" if prefix else f"{run_id}_{safe}"
+    return base + ".json"
+
+
+def json_artifact_path(run_dir: str | Path, kind: str, run_id: str, project_name: str, name: str) -> Path:
+    folder = _KIND_DIRS.get(kind, "misc")
+    return Path(run_dir) / folder / json_artifact_filename(run_id, project_name, name)
+
+
+def _read_json_dict(path: Path) -> Dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _saved_entries(record: Dict[str, Any]) -> list[Dict[str, Any]]:
+    saved = record.get("saved")
+    if isinstance(saved, dict):
+        values = []
+        for key, value in saved.items():
+            row = dict(value) if isinstance(value, dict) else {}
+            row.setdefault("path", key)
+            values.append(row)
+        saved = values
+    elif saved is None and isinstance(record.get("out_dir"), str):
+        # Konzervativní kompatibilita se starými mapami path -> metadata.
+        legacy = []
+        for key, value in record.items():
+            if key == "out_dir" or not isinstance(key, str):
+                continue
+            row = dict(value) if isinstance(value, dict) else {}
+            row.setdefault("path", key)
+            legacy.append(row)
+        saved = legacy
+    if not isinstance(saved, list):
+        return []
+
+    valid = []
+    for item in saved:
+        if not isinstance(item, dict):
+            continue
+        rel = item.get("path") or item.get("dst_rel")
+        if not isinstance(rel, str) or not rel:
+            continue
+        try:
+            validate_relative_path(rel)
+        except ValueError:
+            continue
+        row = dict(item)
+        row["path"] = rel
+        digest = row.get("sha256")
+        if digest is not None and (not isinstance(digest, str) or len(digest) != 64):
+            continue
+        valid.append(row)
+    return valid
+
+
+def load_output_evidence(run_dir: str | Path) -> list[Dict[str, Any]]:
+    """Vrátí semanticky ověřené důkazy zápisu bez filename-suffix heuristiky."""
+    directory = Path(run_dir)
+    state = _read_json_dict(directory / "run_state.json")
+    run_id = str(state.get("run_id") or directory.name)
+    project = str(state.get("project") or "NO_PROJECT")
+    manifests = directory / "manifests"
+    candidates = []
+    for name in ("out_saved_map", "out_write_journal"):
+        path = json_artifact_path(directory, "manifests", run_id, project, name)
+        if path.is_file():
+            candidates.append(path)
+
+    # Legacy fallback: typ artefaktu je potvrzen obsahem, ne názvem souboru.
+    exact = {path.resolve() for path in candidates}
+    if manifests.is_dir():
+        for path in manifests.glob("*.json"):
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if resolved in exact:
+                continue
+            record = _read_json_dict(path)
+            if isinstance(record.get("out_dir"), str) and _saved_entries(record):
+                candidates.append(path)
+
+    merged: Dict[str, Dict[str, Any]] = {}
+    for path in candidates:
+        record = _read_json_dict(path)
+        for entry in _saved_entries(record):
+            merged[entry["path"].casefold()] = entry
+    return list(merged.values())
+
+
+def verified_output_evidence(run_dir: str | Path, out_dir: str | None = None) -> list[Dict[str, Any]]:
+    """Vrátí pouze důkazy, jejichž cílový soubor stále existuje a případný hash sedí."""
+    directory = Path(run_dir)
+    state = _read_json_dict(directory / "run_state.json")
+    root = str(out_dir or state.get("out_dir") or "").strip()
+    if not root:
+        return []
+    verified = []
+    for entry in load_output_evidence(directory):
+        try:
+            target = safe_join_under_root(root, entry["path"])
+        except ValueError:
+            continue
+        if not os.path.isfile(target):
+            continue
+        expected = entry.get("sha256")
+        if expected and sha256_file(target) != expected:
+            continue
+        verified.append(entry)
+    return verified
 
 
 class RunLogger:
@@ -120,6 +253,19 @@ class RunLogger:
         state.update(self._redact(patch))
         self._write_state(state)
 
+    def clear_state_keys(self, *keys: str) -> None:
+        """Atomicky odstraní již neplatná pole stavové evidence."""
+        state = {}
+        try:
+            if os.path.exists(self.state_path):
+                with open(self.state_path, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+        except Exception:
+            state = {"status": "corrupt_state"}
+        for key in keys:
+            state.pop(key, None)
+        self._write_state(state)
+
     def record_preflight_batch(self, record):
         """Zachová vazbu ověřovací dávky i při okamžitém dokončení nebo chybě."""
         with open(self.state_path, encoding="utf-8") as source:
@@ -134,18 +280,15 @@ class RunLogger:
         with open(self.events_path, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
 
+    def _json_path(self, kind: str, name: str) -> str:
+        return str(json_artifact_path(self.paths.run_dir, kind, self.run_id, self.project_name, name))
+
+    def find_json(self, kind: str, name: str) -> Optional[str]:
+        path = self._json_path(kind, name)
+        return path if os.path.isfile(path) else None
+
     def save_json(self, kind: str, name: str, obj: Any) -> str:
-        folder = {
-            "requests": self.paths.requests_dir,
-            "responses": self.paths.responses_dir,
-            "manifests": self.paths.manifests_dir,
-            "misc": self.paths.misc_dir,
-        }.get(kind, self.paths.misc_dir)
-        safe = "".join(c for c in name if c.isalnum() or c in "._-")[:140]
-        safe += "_" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
-        prefix = "".join(c for c in self.project_name if c.isalnum() or c in "._-")[:60]
-        safe2 = f"{prefix}_{self.run_id}_{safe}" if prefix else f"{self.run_id}_{safe}"
-        path = os.path.join(folder, f"{safe2}.json")
+        path = self._json_path(kind, name)
         self._atomic_write_json(path, self._redact(obj))
         self.event(f"file.saved.{kind}", {"path": path, "bytes": os.path.getsize(path)})
         return path

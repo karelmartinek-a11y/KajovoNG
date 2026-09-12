@@ -262,6 +262,7 @@ class TaskProgressDialog(FitDialog):
         self.setWindowTitle(title)
         self.resize(700, 500)
         self._done = False
+        self.terminal_state = None
         self.clock = ProgressClock()
         layout = column(self, 16)
         layout.setSpacing(8)
@@ -297,33 +298,75 @@ class TaskProgressDialog(FitDialog):
 
     def set_status(self, value):
         self.lbl_status.setText(value)
-        self.clock.update(ProgressEvent("Operace", detail=value))
+        if not self._done:
+            self.clock.update(ProgressEvent("Operace", detail=value))
 
     def set_current(self, value):
         self.lbl_current.setText(value)
 
     def set_progress(self, value):
+        if self._done:
+            return
         self.pb.setRange(0, 100)
         self.pb.setValue(value)
         self.clock.update(ProgressEvent("Operace"))
 
     def set_subprogress(self, value):
+        if self._done:
+            return
         self.pb_sub.setRange(0, 100)
         self.pb_sub.setValue(value)
 
+    def on_progress_event(self, event):
+        if self._done:
+            return
+        self.clock.update(event)
+        if event.detail:
+            self.lbl_status.setText(event.detail)
+        self.lbl_current.setText(f"{event.stage} · {STATES.get(event.state, event.state)}")
+        if event.total:
+            self.pb_sub.setVisible(True)
+            self.pb_sub.setRange(0, event.total)
+            self.pb_sub.setValue(event.completed)
+            self.pb_sub.setFormat(f"%v / %m {event.unit}" if event.unit else "%v / %m")
+        self._tick()
+
     def add_log(self, value):
         self.txt_log.appendPlainText(value)
-        self.clock.update(ProgressEvent("Operace"))
+        if not self._done:
+            self.clock.update(ProgressEvent("Operace"))
 
-    def mark_done(self, text="Dokončeno."):
+    def _mark_terminal(self, state, text, *, success=False):
+        if self._done:
+            return
         self._done = True
-        self.set_status(text)
-        self.clock.update(ProgressEvent("RUN", "completed"))
-        self.pb.setRange(0, 100)
+        self.terminal_state = state
+        self.lbl_status.setText(text)
+        self.clock.update(ProgressEvent("RUN", state))
+        if success:
+            self.pb.setRange(0, 100)
+            self.pb.setValue(100)
+        elif self.pb.minimum() == 0 and self.pb.maximum() == 0:
+            # Chyba/zrušení ukončí animaci, ale nesmí implikovat 100% úspěch.
+            self.pb.setRange(0, 100)
+            self.pb.setValue(0)
         self.btn_close.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.timer.stop()
         self._tick()
+
+    def mark_success(self, text="Dokončeno."):
+        self._mark_terminal("completed", text, success=True)
+
+    def mark_failed(self, text="Operace selhala."):
+        self._mark_terminal("failed", text)
+
+    def mark_cancelled(self, text="Operace byla zastavena."):
+        self._mark_terminal("cancelled", text)
+
+    def mark_done(self, text="Dokončeno."):
+        """Kompatibilní alias; nové volající mají používat explicitní terminální větev."""
+        self.mark_success(text)
 
     def set_cancel_handler(self, handler):
         self._cancel = handler
