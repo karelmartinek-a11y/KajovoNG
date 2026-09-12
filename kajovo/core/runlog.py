@@ -134,7 +134,12 @@ def load_output_evidence(run_dir: str | Path) -> list[Dict[str, Any]]:
             if resolved in exact:
                 continue
             record = _read_json_dict(path)
-            if isinstance(record.get("out_dir"), str) and _saved_entries(record):
+            # Starší saved-map artefakty nemusely obsahovat out_dir. Jejich typ je
+            # proto určen explicitním polem saved; jednotlivé cesty se níže vždy
+            # validují přes validate_relative_path a nebezpečné položky se zahodí.
+            if isinstance(record.get("saved"), (list, dict)) and _saved_entries(record):
+                candidates.append(path)
+            elif isinstance(record.get("out_dir"), str) and _saved_entries(record):
                 candidates.append(path)
 
     merged: Dict[str, Dict[str, Any]] = {}
