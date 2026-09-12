@@ -11,25 +11,27 @@
 | Zadání | Projekt, GENERATE/MODIFY/QA/QFILE/KASKADA, LIVE/BATCH, model, prompt a výsledek, připojené zdroje, IN/OUT, návaznost response_id, teplota, modely A1/A2/A3, snapshot, diagnostika Windows/SSH, Nový/Uložit/Načíst/Spustit/Zastavit/ReRun |
 | Kaskády | Knihovna definic, vytvoření/uložení/uložení pod jiným názvem/načtení, přidání/duplikace/odstranění/přesun kroků, model, teplota, instrukce, text/JSON vstup, soubory API i lokální, proměnné předchozích kroků, návaznost, text/JSON výstup, manifest/prompts/vlastní schéma, očekávané cesty a OUT |
 | Zdroje | Soubory API: obnovit, nahrát, smazat vybrané/vše, připojit/odpojit; úložiště: vytvořit/smazat vybrané/vše, seznam souborů, přidání podle ID/z API, odebrání, podrobnosti a atributy JSON, připojit/odpojit |
-| Dávky | Projekt, místní datum odeslání, oddělený stav API a uložení do OUT, Dokončit, seznam/počty/poslední a příští kontrola, interval a konec sledování, stažení raw i souborového výstupu, částečné chyby, zrušení, opakování vybraných cest a oprava s připomínkou |
+| Dávky | Projekt, místní datum odeslání pracovní dávky, oddělený stav API a uložení do OUT, Dokončit, seznam/počty/poslední a příští kontrola, interval a konec sledování, stažení raw i souborového výstupu, částečné chyby, zrušení, opakování vybraných cest a oprava s připomínkou |
 | Historie | Běhy, request/response, filtry běh/odpověď/datum/fulltext, detail, TXT/tisk, Dokončit u nepřevzatých BATCH, pokračování ReRun ostatních běhů; provozní log |
 | Verze | Lokální adresář a Git, založení, stav, remote/push/pull, milníky vytvořit/obnovit/odstranit, odstranění repozitáře, strom, editor, porovnání s milníkem |
 | Nastavení | Klíč zobrazit/uložit/smazat, výchozí model a teplota, bezpečnost vstupů, deny přípony/globy, timeouty API/BATCH, SMTP host/port/login/heslo/TLS/SSL/odesílatel/příjemce/uložit/test, SSH |
 | Modely a nápověda | Katalog účtu, hledání a filtry schopností, výchozí a aktivní model, pevná matice, návody a vysvětlení režimů |
 
+Aktuální UI neobsahuje workflow pro zkušební generativní Responses ani zkušební BATCH dávky. Historická preflight data ze starších LOGů mohou být čitelná kvůli zpětné kompatibilitě, ale nesmějí vytvářet aktivní akci, která by odeslala placenou zkoušku.
+
 ## Validační matice
 
-API pravidla zůstávají centrálně v `core/request_rules.py`, `core/model_registry.py` a `core/response_policy.py`. UI zobrazuje důvod zákazu a předává stejný snímek nastavení do backendu. Změna dostupnosti nesmí tiše vybrat jiný model.
+API pravidla zůstávají centrálně v `core/request_rules.py`, `core/model_registry.py` a `core/response_policy.py`. `response_policy.py` je neplacená validační hranice: lokální kontrola plus ne-generativní čtení katalogu/metadat existujících prostředků. UI zobrazuje důvod lokálního zákazu a předává stejný snímek nastavení do backendu. Změna dostupnosti nesmí tiše vybrat jiný model.
 
 | Volba / situace | Pravidlo a reakce |
 |---|---|
 | Model | Přesný identifikátor pevné matice a dostupnost v katalogu účtu; neznámý zůstává viditelný jako nedostupný |
 | Režim × model × přílohy | [Matice modelů](MODEL_MATRIX.md), [matice požadavků](REQUEST_MATRIX.md), [1024 kombinací](REQUEST_COMBINATIONS.csv) |
-| BATCH | Jen GENERATE/MODIFY; GENERATE A1/A2 běží LIVE, A3 BATCH; návaznost/diagnostika podle konkrétní fáze |
+| BATCH | Jen GENERATE/MODIFY; GENERATE A1/A2 běží LIVE, A3 BATCH; před pracovní dávkou pouze lokální validace, žádná zkušební dávka |
 | Teplota | 0–2 pouze v podporovaném režimu modelu; jinak neposílat |
 | response_id | Podpora návaznosti modelu; nepovolit nezávislým dávkovým položkám |
-| Files / vector stores | Validní ID, typ a velikost souborů, schopnosti modelu, pravidla file_search a BATCH; serverový preflight před pracovním požadavkem |
-| MODIFY | Existující IN; zapisující režimy vyžadují OUT; souběžné zapisující běhy nesmějí mít překrývající se OUT |
+| Files / vector stores | Validní ID, typ a velikost souborů, schopnosti modelu, pravidla file_search a BATCH; stav existujícího prostředku lze ověřit ne-generativním čtením, nikdy pomocným placeným Response |
+| MODIFY | Existující IN pro LIVE; zapisující režimy vyžadují OUT; souběžné zapisující běhy nesmějí mít překrývající se OUT |
 | IN = OUT | OUT sleduje IN; snapshot a bezpečné cesty platí i při přepisu |
 | Diagnostika | Dostupnost podle režimu; SSH vyžaduje spojení a případný pin; spuštění oprav vždy s existujícím potvrzením obsahu/cíle/hash |
 | Kaskáda | Neprázdné kroky, přesné modely, JSON objekt/seznam vstupu, validní schéma, JSON výstup při schématu, bezpečné relativní očekávané cesty, proměnné pouze známých kroků |
@@ -52,6 +54,7 @@ Klidná světlá pracovní plocha s trvalou tmavou navigací. Jedna hlavní akce
 6. „Změna modelu mi přepíše volbu.“ Nedostupný uložený model se označí a zablokuje spuštění; náhradu volí uživatel.
 7. „Dávka je hotová, ale nemám soubory.“ Stav API, stažení a ověření souborů jsou odlišné stavy s vlastním souhrnem chyb.
 8. „Omylem jsem něco smazal.“ Mazání na serveru, odstranění Git, obnova milníku a spuštění oprav zachovávají potvrzovací dialogy.
+9. „Nechci platit za automatickou zkoušku před skutečnou prací.“ UI ani backend nesmí automaticky spustit samostatný generativní test kompatibility; placený generativní požadavek vzniká pouze jako skutečná pracovní operace zvolená uživatelem.
 
 ## Dialogový kontrakt
 
@@ -59,7 +62,7 @@ Nové dialogy zachovají titul, účel, všechny informační položky, potvrzen
 
 ## Ověření implementace
 
-Funkční inventář se porovná s novými akcemi a testy. Skript `scripts/render_ui.py` pořizuje snímky hlavních sekcí a druhů dialogů ze skutečně vykresleného Qt rozhraní, v běžném i menším okně. Kontrola zahrnuje ořez, kontrast, jednotky, tab pořadí, prázdné/chybové stavy a dostupnost hlavních akcí. Backendové testy, desktopové testy, Ruff a konzistence závislostí jsou povinné před zápisem na main.
+Funkční inventář se porovná s novými akcemi a testy. Skript `scripts/render_ui.py` pořizuje snímky hlavních sekcí a druhů dialogů ze skutečně vykresleného Qt rozhraní, v běžném i menším okně. Kontrola zahrnuje ořez, kontrast, jednotky, tab pořadí, prázdné/chybové stavy a dostupnost hlavních akcí. Backendové testy, desktopové testy, Ruff, zákaz placené preflight vrstvy a konzistence závislostí jsou povinné před zápisem na main.
 
 ## Implementační mapa
 
@@ -83,7 +86,5 @@ Původní moduly nejsou importovány ani zachovány jako záložní cesta. Backe
 Skutečně vykreslené Qt rozhraní s izolovanými ukázkovými daty. Zadání je z plochy 1366 × 900; dialogy z logické plochy 911 × 480 při 150% škálování.
 
 ![Zadání](ui/zadani.png)
-
-
 
 ![Průběh na malé ploše](ui/prubeh.png)
