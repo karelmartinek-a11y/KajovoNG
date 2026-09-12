@@ -31,6 +31,11 @@ jobs:
           from pathlib import Path
           payload = Path('scripts/apply_audit_fixes.py.gz')
           source = gzip.decompress(payload.read_bytes()).decode('utf-8')
+          old = 'ROOT = Path(__file__).resolve().parents[1]'
+          new = 'ROOT = Path.cwd().resolve()'
+          if source.count(old) != 1:
+              raise RuntimeError(f'migration root guard: expected one anchor, got {source.count(old)}')
+          source = source.replace(old, new, 1)
           exec(compile(source, 'scripts/apply_audit_fixes.py', 'exec'))
           PY
       - name: Verify generated source
