@@ -1,4 +1,4 @@
-"""Historie požadavků, odpovědí a dokončování uložených dávek."""
+"""Historie požadavků, odpovědí a dokončování uložených pracovních dávek."""
 
 import re
 from datetime import datetime
@@ -6,9 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QListWidget, QListWidgetItem, QTabWidget
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
-from ..core.batch_completion import (
-    pending_batch_ids, batch_ids, read_state, can_continue_preflight, read_batch_statuses,
-)
+from ..core.batch_completion import pending_batch_ids, batch_ids, read_state, read_batch_statuses
 from .batch_view import project_name, history_batch_detail
 from .design import column, row, label, button, text, editor
 from .dialogs import msg_warning, dialog_save_file
@@ -17,7 +15,6 @@ from .dialogs import msg_warning, dialog_save_file
 class ResponseRequestPanel(QWidget):
     rerun = Signal(str)
     complete_batch = Signal(str)
-    continue_preflight = Signal(str)
 
     def __init__(self, log_dir, parent=None):
         super().__init__(parent)
@@ -150,6 +147,7 @@ class ResponseRequestPanel(QWidget):
                 if not all(any(query in content for content in contents) for query in queries):
                     continue
             from .dialogs import STATES
+
             state = read_state(run["path"])
             status = state.get("status", "")
             suffix = " · " + STATES.get(status, status) if status else ""
@@ -163,14 +161,14 @@ class ResponseRequestPanel(QWidget):
             item = QListWidgetItem(title)
             item.setData(Qt.UserRole, run)
             self.lst_runs.addItem(item)
-            if pending_batch_ids(state) or can_continue_preflight(state):
-                trial = can_continue_preflight(state)
-                signal = self.continue_preflight if trial else self.complete_batch
-                action = button("Pokračovat" if trial else "Dokončit",
-                                lambda checked=False, rid=run["id"], sig=signal: sig.emit(rid), "Primary")
+            if pending_batch_ids(state):
+                action = button(
+                    "Dokončit",
+                    lambda checked=False, rid=run["id"]: self.complete_batch.emit(rid),
+                    "Primary",
+                )
                 action.setEnabled(not self.batch_busy and run["id"] not in self.active_runs)
-                action.setToolTip("Převzít ověření a při úspěchu odeslat pracovní dávku." if trial else
-                                  "Ověřit stav a převzít dostupné výsledky do původního OUT.")
+                action.setToolTip("Ověřit stav pracovní dávky a převzít dostupné výsledky do původního OUT.")
                 title_label = label(title)
                 title_label.setWordWrap(True)
                 title_label.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -182,6 +180,7 @@ class ResponseRequestPanel(QWidget):
                 self.lst_runs.setItemWidget(item, widget)
             if run["id"] == current_id:
                 from PySide6.QtCore import QItemSelectionModel
+
                 self.lst_runs.setCurrentItem(item, QItemSelectionModel.NoUpdate)
             item.setSelected(run["id"] in selected)
         self._update_rerun_action()
@@ -193,9 +192,15 @@ class ResponseRequestPanel(QWidget):
     def _update_rerun_action(self):
         item = self.lst_runs.currentItem()
         state = read_state(item.data(Qt.UserRole)["path"]) if item else {}
-        self.btn_rerun.setEnabled(bool(item) and not batch_ids(state) and not self.batch_busy
-                                 and item.data(Qt.UserRole)["id"] not in self.active_runs)
-        self.btn_rerun.setToolTip("Odeslané dávky převezměte tlačítkem Dokončit." if batch_ids(state) else "")
+        self.btn_rerun.setEnabled(
+            bool(item)
+            and not batch_ids(state)
+            and not self.batch_busy
+            and item.data(Qt.UserRole)["id"] not in self.active_runs
+        )
+        self.btn_rerun.setToolTip(
+            "Odeslané pracovní dávky převezměte tlačítkem Dokončit." if batch_ids(state) else ""
+        )
 
     def load_entries_for_selected_run(self):
         self._update_rerun_action()
@@ -211,10 +216,13 @@ class ResponseRequestPanel(QWidget):
         for item in self.lst_runs.selectedItems():
             run = item.data(Qt.UserRole)
             entries.extend(
-                dict(entry, run_id=run["id"]) for entry in self._collect_entries(run["path"])
+                dict(entry, run_id=run["id"])
+                for entry in self._collect_entries(run["path"])
             )
         for entry in sorted(entries, key=lambda value: value["mtime"]):
-            item = QListWidgetItem(entry["kind"] + " · " + entry["name"] + "\n" + entry["run_id"])
+            item = QListWidgetItem(
+                entry["kind"] + " · " + entry["name"] + "\n" + entry["run_id"]
+            )
             item.setData(Qt.UserRole, entry)
             self.lst_entries.addItem(item)
 
@@ -224,14 +232,18 @@ class ResponseRequestPanel(QWidget):
             return
         try:
             self.txt_detail.setPlainText(
-                Path(item.data(Qt.UserRole)["path"]).read_text(encoding="utf-8", errors="replace")
+                Path(item.data(Qt.UserRole)["path"]).read_text(
+                    encoding="utf-8", errors="replace"
+                )
             )
             self.tabs.setCurrentIndex(1)
         except OSError as exc:
             msg_warning(self, "Načtení detailu", str(exc))
 
     def save_selected_entry(self):
-        path, _ = dialog_save_file(self, "Uložit detail", "request-response.txt", "Text (*.txt)")
+        path, _ = dialog_save_file(
+            self, "Uložit detail", "request-response.txt", "Text (*.txt)"
+        )
         if path:
             try:
                 Path(path).write_text(self.txt_detail.toPlainText(), encoding="utf-8")
