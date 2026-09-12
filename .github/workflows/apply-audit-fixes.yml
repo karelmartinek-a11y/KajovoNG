@@ -30,8 +30,15 @@ jobs:
           python - <<'PY'
           import gzip
           from pathlib import Path
+
           payload = Path('scripts/apply_audit_fixes.py.gz')
           source = gzip.decompress(payload.read_bytes()).decode('utf-8')
+          old = 'result = import_bundle(b"\\n".join(lines).encode("utf-8"), out_dir, progress=progress)'
+          new = 'result = import_bundle(b"\\\\n".join(lines).encode("utf-8"), out_dir, progress=progress)'
+          count = source.count(old)
+          if count != 1:
+              raise RuntimeError(f'batch_completion newline guard: expected one anchor, got {count}')
+          source = source.replace(old, new, 1)
           exec(compile(source, 'scripts/apply_audit_fixes.py', 'exec'))
           PY
       - name: Verify generated source
