@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from kajovo.core.batch_submit import exact_batch_matches
 from kajovo.core.batch_completion import recover_unknown_submission
+from kajovo.core.openai_client import OpenAIClient
 from kajovo.core.pipeline import RunWorker
 from kajovo.core.progress import ProgressClock, ProgressEvent
 from kajovo.core.runlog import RunLogger, verified_output_evidence
@@ -51,6 +53,30 @@ def test_unknown_batch_recovery_refuses_ambiguous_match(tmp_path):
         pass
     else:
         raise AssertionError("ambiguous work submission must be a blocker")
+
+
+def test_prevalidated_work_batch_performs_only_the_single_work_post():
+    client = OpenAIClient("test", base_url="https://example.invalid/v1")
+    client._policy = Mock()
+    client._policy.proofs = {"proof": {"state": "verified"}}
+    client._policy.key.return_value = "proof"
+    client.file_content = Mock(side_effect=AssertionError("work submit must not fetch or preflight the JSONL again"))
+    client._req = Mock(return_value={"id": "batch_work", "status": "validating"})
+    rows = [{
+        "custom_id": "row-1", "method": "POST", "url": "/v1/responses",
+        "body": {"model": "gpt-4o-mini", "text": {"format": {"type": "text"}}},
+    }]
+
+    result = client.create_batch("file_work", _prevalidated_rows=rows)
+
+    assert result["id"] == "batch_work"
+    client.file_content.assert_not_called()
+    client._req.assert_called_once_with(
+        "POST", "/batches",
+        json_body={"input_file_id": "file_work", "endpoint": "/v1/responses", "completion_window": "24h"},
+    )
+    assert client._policy.proofs == {}
+    client._policy.save.assert_called_once()
 
 
 def test_rerun_reads_real_hashed_runlogger_manifest_and_verifies_hash(tmp_path):
