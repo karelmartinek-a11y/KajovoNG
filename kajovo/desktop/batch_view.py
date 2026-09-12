@@ -1,4 +1,4 @@
-"""Společné popisky a poslední známé stavy dávek v obou přehledech."""
+"""Společné popisky pracovních dávek a read-only historických záznamů."""
 
 from ..core.batch_completion import batch_ids, preflight_ids
 from .dialogs import STATES
@@ -10,11 +10,13 @@ def project_name(state):
 
 
 def saved_record(state, bid, snapshots):
-    trials = state.get("preflight_batches") or []
-    trials = trials if isinstance(trials, list) else []
-    trial = next((item for item in trials
-                  if isinstance(item, dict) and item.get("id") == bid), {})
-    records = [trial, state.get("batch_records", {}).get(bid, {}), snapshots.get(bid, {})]
+    """Přečte stav pracovní dávky nebo starý preflight záznam bez aktivace workflow."""
+    legacy = state.get("preflight_batches") or []
+    legacy = legacy if isinstance(legacy, list) else []
+    historical = next(
+        (item for item in legacy if isinstance(item, dict) and item.get("id") == bid), {}
+    )
+    records = [historical, state.get("batch_records", {}).get(bid, {}), snapshots.get(bid, {})]
     records.sort(key=lambda record: record.get("checked_at", 0) or 0)
     result = {"id": bid}
     for record in records:
@@ -22,23 +24,31 @@ def saved_record(state, bid, snapshots):
     return result
 
 
-def server_label(record, preflight=False):
+def server_label(record, historical_preflight=False):
     status = record.get("status", "")
-    if preflight and status == "completed":
-        return "Zkouška dokončena – čeká na převzetí ověření"
-    return STATES.get(status, status) or "Stav dosud neověřen"
+    value = STATES.get(status, status) or "Stav dosud neověřen"
+    if historical_preflight:
+        return value + " · historický preflight (neaktivní)"
+    return value
 
 
 def history_batch_detail(state, snapshots):
     work = batch_ids(state)
-    detail = " · ".join(
-        f"{'Pracovní dávka' if bid in work else 'Zkušební dávka'} {bid}: "
-        + server_label(saved_record(state, bid, snapshots), bid not in work and not work)
-        for bid in dict.fromkeys([*work, *preflight_ids(state)])
+    legacy = preflight_ids(state)
+    parts = [
+        f"Pracovní dávka {bid}: " + server_label(saved_record(state, bid, snapshots))
+        for bid in work
+    ]
+    parts.extend(
+        f"Historický preflight {bid}: "
+        + server_label(saved_record(state, bid, snapshots), historical_preflight=True)
+        for bid in legacy
+        if bid not in work
     )
+    detail = " · ".join(parts)
     if detail and state.get("error"):
         detail += " · " + str(state["error"])
-    errors = [saved_record(state, bid, snapshots).get("errors") for bid in [*work, *preflight_ids(state)]]
+    errors = [saved_record(state, bid, snapshots).get("errors") for bid in [*work, *legacy]]
     if any(errors):
         detail += " · " + "; ".join(str(error) for error in errors if error)
     return detail
