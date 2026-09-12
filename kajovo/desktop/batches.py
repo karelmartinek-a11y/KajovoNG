@@ -29,9 +29,6 @@ from .jobs import Jobs
 
 
 class BatchPanel(QWidget):
-    # Kompatibilita se starším wiringem MainWindow. Aktuální panel tento signál
-    # nikdy neemituje; historické preflight záznamy jsou výhradně read-only.
-    continue_preflight = Signal(str)
     logline = Signal(str)
     runs_changed = Signal()
     operation_changed = Signal()
@@ -343,14 +340,6 @@ class BatchPanel(QWidget):
 
     def _batch_run_info(self, batch_id):
         return local_batches(self.s.log_dir).get(batch_id)
-
-    def continue_run(self, run_id):
-        """Legacy vstup z dřívějšího UI; nikdy nic neodesílá."""
-        msg_info(
-            self,
-            "Historický preflight",
-            "Placení preflight workflow bylo odstraněno. Historický záznam je pouze ke čtení a nelze v něm pokračovat.",
-        )
 
     def complete_run(self, run_id, batch_id=""):
         if self._operation_task:
