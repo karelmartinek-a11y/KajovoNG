@@ -29,37 +29,8 @@ jobs:
           python - <<'PY'
           import gzip
           from pathlib import Path
-
           payload = Path('scripts/apply_audit_fixes.py.gz')
           source = gzip.decompress(payload.read_bytes()).decode('utf-8')
-
-          def patch_once(old, new, label):
-              global source
-              count = source.count(old)
-              if count != 1:
-                  raise RuntimeError(f'{label}: expected one migration-source anchor, got {count}')
-              source = source.replace(old, new, 1)
-
-          patch_once(
-              'ROOT = Path(__file__).resolve().parents[1]',
-              'ROOT = Path.cwd().resolve()',
-              'migration root',
-          )
-          patch_once(
-              'state.get("generated_hashes"), allowed, progress=progress)\\n\', \'    if progress:',
-              'state.get("generated_hashes"), allowed)\\n\', \'    if progress:',
-              'generate-batch original-call anchor',
-          )
-          patch_once(
-              'detail="Ověřuji výsledky proti uloženému manifestu."))\\n    result = import_results(manifest, raw_files, target, state.get("generated_hashes"), allowed)\\n\', \'validate progress gb\')',
-              'detail="Ověřuji výsledky proti uloženému manifestu."))\\n    result = import_results(manifest, raw_files, target, state.get("generated_hashes"), allowed, progress=progress)\\n\', \'validate progress gb\')',
-              'generate-batch progress propagation',
-          )
-          patch_once(
-              'lambda job: operation(self.client or OpenAIClient(key), job),',
-              'lambda job: operation(self._validated_client(key), job),',
-              'validated BatchPanel client',
-          )
           exec(compile(source, 'scripts/apply_audit_fixes.py', 'exec'))
           PY
       - name: Verify generated source
