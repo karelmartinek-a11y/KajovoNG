@@ -23,7 +23,8 @@ jobs:
           path: source.zip
           retention-days: 1
       - name: Download declared test dependencies
-        run: python -m pip download --only-binary=:all: --dest wheels 'PySide6>=6.8,<7' 'openai>=3.9,<4' 'requests>=2.31' 'paramiko>=3.4' 'keyring>=24' 'jsonschema>=4.23,<5' 'pytest>=9.0.3,<10' 'pytest-qt>=4.4,<5' 'ruff>=0.6,<1' 'pillow>=11,<13' setuptools wheel packaging
+        run: |
+          python -m pip download --only-binary=:all: --dest wheels 'PySide6>=6.8,<7' 'openai>=3.9,<4' 'requests>=2.31' 'paramiko>=3.4' 'keyring>=24' 'jsonschema>=4.23,<5' 'pytest>=9.0.3,<10' 'pytest-qt>=4.4,<5' 'ruff>=0.6,<1' 'pillow>=11,<13' setuptools wheel packaging
       - uses: actions/upload-artifact@v4
         with:
           name: quality-wheels
