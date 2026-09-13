@@ -1,165 +1,105 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
 import re
+import tempfile
 import time
 import jsonschema
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QThread, Signal
-from .progress import ProgressEvent
 
+from .cascade_contract import (
+    CascadeValidationError,
+    describe_output,
+    humanize_cascade_error,
+    output_machine_key,
+    runtime_schema_for_step,
+    step_signature,
+    validate_cascade_definition,
+)
 from .cascade_log import CascadeLogger
-from .cascade_types import CascadeDefinition, CascadeStep
+from .cascade_types import CascadeDefinition, CascadeInput, CascadeOutput, CascadeStep
 from .contracts import ContractError, validate_paths
-from .request_rules import validate_response_payload
-from .structured_output import resolve_schema, response_format, text_format, validate_output, restore_optional_fields
 from .openai_client import OpenAIClient
+from .progress import ProgressEvent
+from .request_rules import validate_response_payload
 from .retry import CircuitBreaker, with_retry
-from .utils import ensure_dir, new_run_id, safe_join_under_root, validate_relative_path, atomic_write_text
+from .structured_output import (
+    resolve_schema,
+    response_format,
+    restore_optional_fields,
+    text_format,
+    validate_output,
+)
+from .utils import (
+    atomic_write_text,
+    ensure_dir,
+    new_run_id,
+    safe_join_under_root,
+    validate_relative_path,
+)
 
 
-PLACEHOLDER_RE = re.compile(r"\{\{\s*step\.(\d+)\.(response_id|json|out_file_path|out_file_id)(?::([^}]+))?\s*\}\}")
+PLACEHOLDER_RE = re.compile(
+    r"\{\{\s*step\.(\d+)\.(response_id|json|text|out_file_path|out_file_id)(?::([^}]+))?\s*\}\}"
+)
 
 
 PRESET_MANIFEST_SCHEMA: Dict[str, Any] = {
-    "description": "Souborový manifest pro přímé uložení do OUT (kompatibilní s interním save pipeline).",
+    "description": "Souborový manifest pro přímé uložení do OUT.",
     "type": "object",
     "required": ["files"],
     "additionalProperties": False,
     "properties": {
-        "mode": {"type": "string", "description": "Volitelné označení režimu (např. patches)."},
-        "root": {"type": "string", "description": "Volitelný kořen projektu pro orientaci."},
         "files": {
             "type": "array",
             "minItems": 1,
             "items": {
                 "type": "object",
-                "required": ["path", "content"],
+                "required": ["path", "content", "encoding"],
                 "additionalProperties": False,
                 "properties": {
-                    "path": {"type": "string", "description": "Relativní cesta souboru vůči OUT."},
-                    "content": {"type": "string", "description": "Textový obsah souboru (UTF-8)."},
-                    "purpose": {"type": "string", "description": "Volitelný účel souboru (metadata)."},
-                    "encoding": {
-                        "type": "string",
-                        "description": "Volitelné metadata o kódování, typicky utf-8 nebo base64.",
-                    },
-                    "mode": {
-                        "type": "string",
-                        "description": "Volitelná akce pro kompatibilitu (např. add/modify).",
-                    },
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "encoding": {"type": "string", "enum": ["utf-8", "base64"]},
                 },
             },
-        },
-        "note": {"type": "string", "description": "Volitelná poznámka k dávce změn."},
+        }
     },
 }
 
+
 PRESET_PROMPTS_SCHEMA: Dict[str, Any] = {
-    "description": "Definice kaskády promptů; JSON lze rovnou uložit a načíst v Kaskádě.",
+    "description": "Definice kaskády promptů.",
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "version": {
-            "type": "integer",
-            "description": "Verze CascadeDefinition (kladné celé číslo, běžně 1).",
-        },
-        "name": {
-            "type": "string",
-            "description": "Název kaskády pro zobrazení v UI.",
-        },
-        "created_at": {
-            "type": "number",
-            "description": "Volitelné unix timestamp vytvoření (float).",
-        },
-        "updated_at": {
-            "type": "number",
-            "description": "Volitelné unix timestamp poslední změny (float).",
-        },
-        "default_out_dir": {
-            "type": "string",
-            "description": "Volitelný fallback OUT adresář pro běh Kaskády.",
-        },
+        "version": {"type": "integer"},
+        "name": {"type": "string"},
         "steps": {
             "type": "array",
-            "description": "Sekvence kroků kompatibilních s CascadeStep.from_dict().",
             "items": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "title": {"type": "string", "description": "Krátký název kroku."},
-                    "model": {
-                        "type": "string",
-                        "description": "Model pro konkrétní krok; zvol podle účelu (plánování vs. generování kódu).",
-                    },
-                    "temperature": {"type": ["number", "null"]},
-                    "instructions": {
-                        "type": "string",
-                        "description": "Pole instructions (developer-level instrukce API requestu).",
-                    },
-                    "input_text": {
-                        "type": "string",
-                        "description": "Jednoduchý text uživatelského vstupu. Použij když neposíláš strukturované content parts.",
-                    },
-                    "input_content_json": {
-                        "type": ["array", "object", "null"],
-                        "description": (
-                            "Volitelné Responses API content parts (dict/list). "
-                            "Pokud je vyplněno, odešle se 1:1 do payload[\"input\"][user].content. "
-                            "Používej pro input_file, multimodální části nebo přesnou strukturu."
-                        ),
-                    },
-                    "files_existing_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "files_local_paths": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "previous_response_id_expr": {
-                        "type": ["string", "null"],
-                        "description": (
-                            "Volitelný výraz pro previous_response_id. "
-                            "Podporované výrazy: {{step.N.response_id}}, {{step.N.json}}, {{step.N.out_file_id:REL_PATH}} a {{step.N.out_file_path:REL_PATH}}."
-                        ),
-                    },
-                    "output_type": {"type": "string", "enum": ["text", "json"]},
-                    "output_schema_kind": {
-                        "type": ["string", "null"],
-                        "enum": ["manifest", "prompts", "custom", None],
-                    },
-                    "output_schema_custom": {"type": ["object", "null"]},
-                    "expected_out_files": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Volitelné relativní cesty souborů očekávaných v OUT manifestu tohoto kroku.",
-                    },
+                    "title": {"type": "string"},
+                    "model": {"type": "string"},
+                    "instructions": {"type": "string"},
+                    "input_text": {"type": "string"},
                 },
-                "required": [
-                    "title",
-                    "model",
-                    "temperature",
-                    "instructions",
-                    "input_text",
-                    "input_content_json",
-                    "files_existing_ids",
-                    "files_local_paths",
-                    "previous_response_id_expr",
-                    "output_type",
-                    "output_schema_kind",
-                    "output_schema_custom",
-                    "expected_out_files",
-                ],
+                "required": ["title", "model", "instructions", "input_text"],
             },
         },
     },
     "required": ["version", "name", "steps"],
 }
+
 
 JSON_ONLY_DEVELOPER_MESSAGE = {
     "type": "message",
@@ -167,25 +107,7 @@ JSON_ONLY_DEVELOPER_MESSAGE = {
     "content": [
         {
             "type": "input_text",
-            "text": "Return ONLY valid JSON. Do not include any extra text outside JSON.",
-        }
-    ],
-}
-
-PROMPTS_JSON_DEVELOPER_MESSAGE = {
-    "type": "message",
-    "role": "developer",
-    "content": [
-        {
-            "type": "input_text",
-            "text": (
-                "Return ONLY valid JSON matching the schema exactly (no markdown, no prose, no extra keys). "
-                "The output must be a loadable CascadeDefinition with version, name and steps compatible with CascadeStep. "
-                "Use steps[].instructions for developer-style behavior and steps[].input_text for plain user text; "
-                "use steps[].input_content_json only when you need structured Responses API content parts sent 1:1. "
-                "When chaining future values, use placeholders like {{step.N.response_id}} or {{step.N.json}}; if supported by runtime, you may also use {{step.N.out_file_id:REL_PATH}} and {{step.N.out_file_path:REL_PATH}}. "
-                "Recommend an appropriate model in each step.model (e.g., lighter model for planning, stronger for code generation)."
-            ),
+            "text": "Vrať pouze data vyhovující přesně předepsanému JSON schématu; žádný další text.",
         }
     ],
 }
@@ -209,6 +131,8 @@ class CascadeRunWorker(QThread):
     finished_ok = Signal(dict)
     finished_err = Signal(str)
 
+    STEP_ATTEMPTS = 3
+
     def __init__(
         self,
         cfg: CascadeRunConfig,
@@ -222,9 +146,14 @@ class CascadeRunWorker(QThread):
             self.cfg.out_dir = self.cfg.cascade.default_out_dir.strip()
         self.settings = copy.deepcopy(settings)
         self.api_key = api_key
-        self.breaker = CircuitBreaker(settings.retry.circuit_breaker_failures, settings.retry.circuit_breaker_cooldown_s)
+        self.breaker = CircuitBreaker(
+            settings.retry.circuit_breaker_failures,
+            settings.retry.circuit_breaker_cooldown_s,
+        )
         self._stop = False
         self.logger: Optional[CascadeLogger] = None
+        self._failed_step_index = 0
+        self._runtime_cache: Dict[str, Any] = {}
 
     def request_stop(self):
         self._stop = True
@@ -242,6 +171,34 @@ class CascadeRunWorker(QThread):
         self.status.emit(text)
         self.logline.emit(f"{self._ts()} | {text}")
 
+    @staticmethod
+    def _cascade_filename(name: str) -> str:
+        safe = re.sub(r"[^\w .-]", "_", str(name or "")).strip(" .") or "cascade"
+        return safe + ".runtime.json"
+
+    def _runtime_path(self) -> str:
+        base = Path(self.settings.log_dir or "LOG").resolve().parent / "cascades" / ".runtime"
+        base.mkdir(parents=True, exist_ok=True)
+        return str(base / self._cascade_filename(self.cfg.cascade.name))
+
+    def _read_runtime_state(self) -> Dict[str, Any]:
+        path = self._runtime_path()
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _write_runtime_state(self, patch: Dict[str, Any]) -> None:
+        state = self._read_runtime_state()
+        state.update(patch)
+        state["cascade_name"] = self.cfg.cascade.name
+        state["updated_at"] = time.time()
+        atomic_write_text(
+            self._runtime_path(),
+            json.dumps(state, ensure_ascii=False, indent=2, default=str),
+        )
+
     def _resolve_text(self, text: Optional[str], context: Dict[str, Any]) -> str:
         if not text:
             return ""
@@ -250,25 +207,19 @@ class CascadeRunWorker(QThread):
             idx = int(match.group(1))
             key = match.group(2)
             rel_suffix = (match.group(3) or "").strip()
-            if key == "response_id":
-                storage_key = f"step.{idx}.response_id"
-                if not context.get(storage_key):
+            if key in ("response_id", "json", "text"):
+                storage_key = f"step.{idx}.{key}"
+                if storage_key not in context or context.get(storage_key) in (None, ""):
                     raise ContractError(f"Chybí hodnota odkazu: {storage_key}")
-                return str(context[storage_key])
-            if key == "json":
-                storage_key = f"step.{idx}.json"
-                if storage_key not in context:
-                    raise ContractError(f"Chybí hodnota odkazu: {storage_key}")
-                val = context[storage_key]
-                if isinstance(val, str):
-                    return val
-                return json.dumps(val, ensure_ascii=False)
+                value = context[storage_key]
+                if isinstance(value, str):
+                    return value
+                return json.dumps(value, ensure_ascii=False)
             if key in ("out_file_path", "out_file_id"):
                 if not rel_suffix:
                     raise ContractError("Odkaz na výstupní soubor vyžaduje relativní cestu.")
                 validate_relative_path(rel_suffix)
-                norm_rel = rel_suffix
-                storage_key = f"step.{idx}.{key}:{norm_rel}"
+                storage_key = f"step.{idx}.{key}:{rel_suffix}"
                 if not context.get(storage_key):
                     raise ContractError(f"Chybí hodnota odkazu: {storage_key}")
                 return str(context[storage_key])
@@ -280,12 +231,14 @@ class CascadeRunWorker(QThread):
         if isinstance(obj, str):
             return self._resolve_text(obj, context)
         if isinstance(obj, list):
-            return [self._resolve_json(x, context) for x in obj]
+            return [self._resolve_json(value, context) for value in obj]
         if isinstance(obj, dict):
-            return {k: self._resolve_json(v, context) for k, v in obj.items()}
+            return {key: self._resolve_json(value, context) for key, value in obj.items()}
         return obj
 
     def _schema_for_step(self, step: CascadeStep) -> Optional[Dict[str, Any]]:
+        if step.deterministic:
+            return runtime_schema_for_step(step)
         if step.output_type != "json":
             return None
         if step.output_schema_kind == "manifest":
@@ -302,15 +255,19 @@ class CascadeRunWorker(QThread):
         if "type" not in schema and "properties" not in schema:
             raise RuntimeError("Schema musí obsahovat aspoň 'type' nebo 'properties'.")
         jsonschema.Draft202012Validator.check_schema(schema)
-        def check_refs(value):
+
+        def check_refs(value: Any) -> None:
             if isinstance(value, dict):
                 for key, child in value.items():
-                    if key in ("$ref", "$dynamicRef") and (not isinstance(child, str) or not child.startswith("#")):
+                    if key in ("$ref", "$dynamicRef") and (
+                        not isinstance(child, str) or not child.startswith("#")
+                    ):
                         raise ValueError("JSON Schema smí odkazovat pouze uvnitř vlastního dokumentu.")
                     check_refs(child)
             elif isinstance(value, list):
                 for child in value:
                     check_refs(child)
+
         check_refs(schema)
 
     def _validate_json_output(self, obj: Dict[str, Any], schema: Dict[str, Any]) -> None:
@@ -319,47 +276,29 @@ class CascadeRunWorker(QThread):
         jsonschema.validate(obj, schema)
         if not isinstance(obj, dict):
             raise RuntimeError("JSON výstup musí být objekt.")
-        required = schema.get("required")
-        if isinstance(required, list):
-            missing = [k for k in required if k not in obj]
-            if missing:
-                raise RuntimeError(f"JSON output missing required keys: {', '.join(missing)}")
-        props = schema.get("properties")
-        if isinstance(props, dict):
-            for k, meta in props.items():
-                if k not in obj:
-                    continue
-                expected_type = meta.get("type") if isinstance(meta, dict) else None
-                val = obj.get(k)
-                if expected_type == "array" and not isinstance(val, list):
-                    raise RuntimeError(f"JSON key '{k}' musí být array")
-                if expected_type == "object" and not isinstance(val, dict):
-                    raise RuntimeError(f"JSON key '{k}' musí být object")
-                if expected_type == "string" and not isinstance(val, str):
-                    raise RuntimeError(f"JSON key '{k}' musí být string")
 
     def _normalize_content_parts(self, resolved_content_json: Any, idx: int) -> List[Dict[str, Any]]:
         if isinstance(resolved_content_json, list):
             out: List[Dict[str, Any]] = []
             for part in resolved_content_json:
                 if not isinstance(part, dict):
-                    raise RuntimeError(f"input_content_json list musí obsahovat object part (krok {idx})")
+                    raise RuntimeError(
+                        f"input_content_json list musí obsahovat object part (krok {idx})"
+                    )
                 out.append(part)
             return out
         if isinstance(resolved_content_json, dict):
             return [resolved_content_json]
         raise RuntimeError(f"input_content_json musí být object nebo list (krok {idx})")
 
-    def _extract_input_file_ids(self, parts: List[Dict[str, Any]]) -> set[str]:
+    @staticmethod
+    def _extract_input_file_ids(parts: List[Dict[str, Any]]) -> set[str]:
         ids: set[str] = set()
         for part in parts:
-            if not isinstance(part, dict):
-                continue
-            if str(part.get("type") or "") != "input_file":
-                continue
-            fid = str(part.get("file_id") or "").strip()
-            if fid:
-                ids.add(fid)
+            if isinstance(part, dict) and str(part.get("type") or "") == "input_file":
+                fid = str(part.get("file_id") or "").strip()
+                if fid:
+                    ids.add(fid)
         return ids
 
     def _normalize_expected_rel_path(self, rel_path: str) -> str:
@@ -371,24 +310,87 @@ class CascadeRunWorker(QThread):
             return runtime_out
         return (self.cfg.cascade.default_out_dir or "").strip()
 
-    def _save_manifest_to_out(self, files: List[Dict[str, Any]], out_dir: str, step_idx: int) -> Dict[str, Any]:
+    @staticmethod
+    def _decode_file_content(row: Dict[str, Any]) -> bytes:
+        content = row.get("content")
+        if not isinstance(content, str):
+            raise ContractError("Obsah výstupního souboru musí být text nebo base64.")
+        encoding = str(row.get("encoding") or "utf-8").lower()
+        if encoding == "utf-8":
+            return content.encode("utf-8")
+        if encoding == "base64":
+            try:
+                return base64.b64decode(content, validate=True)
+            except Exception as exc:
+                raise ContractError("Výstupní soubor obsahuje neplatná base64 data.") from exc
+        raise ContractError("Neznámé kódování výstupního souboru.")
+
+    def _write_files_atomically(
+        self,
+        rows: List[Dict[str, Any]],
+        out_dir: str,
+        step_idx: int,
+    ) -> Dict[str, Any]:
         out_abs = os.path.abspath(out_dir)
-        validate_paths(files)
-        for row in files:
-            safe_join_under_root(out_abs, row["path"])
-            if not isinstance(row.get("content"), str):
-                raise ContractError("Obsah výstupního souboru musí být text.")
-        ensure_dir(out_abs)
-        saved: List[Dict[str, Any]] = []
-        for row in files:
+        normalized: List[Tuple[str, bytes]] = []
+        for row in rows:
             rel = self._normalize_expected_rel_path(str(row.get("path") or ""))
-            content = str(row.get("content") or "")
             dst = safe_join_under_root(out_abs, rel.replace("/", os.sep))
-            ensure_dir(os.path.dirname(dst))
-            atomic_write_text(dst, content)
-            saved.append({"path": rel, "dst": dst, "bytes": os.path.getsize(dst)})
-        self.logger.save_json("manifests", f"cascade_step_{step_idx:02d}_out_saved_map", {"saved": saved, "out_dir": out_abs})
-        return {"saved": saved, "out_dir": out_abs}
+            data = self._decode_file_content(row)
+            normalized.append((dst, data))
+
+        ensure_dir(out_abs)
+        written: List[Dict[str, Any]] = []
+        temp_paths: List[str] = []
+        try:
+            for dst, data in normalized:
+                ensure_dir(os.path.dirname(dst))
+                fd, temp_path = tempfile.mkstemp(prefix=".cascade_", dir=os.path.dirname(dst))
+                temp_paths.append(temp_path)
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_path, dst)
+                temp_paths.remove(temp_path)
+                written.append(
+                    {
+                        "path": os.path.relpath(dst, out_abs).replace(os.sep, "/"),
+                        "dst": dst,
+                        "bytes": os.path.getsize(dst),
+                    }
+                )
+        finally:
+            for temp_path in temp_paths:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+        if self.logger:
+            self.logger.save_json(
+                "manifests",
+                f"cascade_step_{step_idx:02d}_out_saved_map",
+                {"saved": written, "out_dir": out_abs},
+            )
+        return {"saved": written, "out_dir": out_abs}
+
+    def _save_manifest_to_out(
+        self,
+        files: List[Dict[str, Any]],
+        out_dir: str,
+        step_idx: int,
+    ) -> Dict[str, Any]:
+        validate_paths(files)
+        normalized = []
+        for row in files:
+            normalized.append(
+                {
+                    "path": str(row.get("path") or ""),
+                    "content": row.get("content"),
+                    "encoding": str(row.get("encoding") or "utf-8"),
+                }
+            )
+        return self._write_files_atomically(normalized, out_dir, step_idx)
 
     def _process_expected_out_files(
         self,
@@ -399,84 +401,509 @@ class CascadeRunWorker(QThread):
         context: Dict[str, Any],
         client: OpenAIClient,
     ) -> Dict[str, Any]:
-        expected = [self._normalize_expected_rel_path(x) for x in (step.expected_out_files or []) if str(x).strip()]
+        expected = [
+            self._normalize_expected_rel_path(path)
+            for path in (step.expected_out_files or [])
+            if str(path).strip()
+        ]
         if not expected:
             return {}
         out_dir = self._select_out_dir_for_step()
         if not out_dir:
             raise RuntimeError(
-                f"Krok {idx}: expected_out_files vyžaduje OUT adresář. Nastav RUN OUT nebo default_out_dir v definici Kaskády."
+                f"Krok {idx}: výstupní soubory vyžadují OUT adresář."
             )
         if not isinstance(json_output, dict):
             raise RuntimeError(f"Krok {idx}: očekáván JSON object s manifestem souborů.")
         files = json_output.get("files")
         if not isinstance(files, list):
             raise RuntimeError(f"Krok {idx}: očekáván JSON manifest se seznamem 'files'.")
+
         normalized_manifest: List[Dict[str, Any]] = []
         for row in files:
             if not isinstance(row, dict):
                 raise RuntimeError(f"Krok {idx}: položka files[] musí být object.")
-            rel = self._normalize_expected_rel_path(row.get("path"))
-            if not isinstance(row.get("content"), str):
-                raise ContractError("Obsah výstupního souboru musí být text.")
-            normalized_manifest.append({
-                "path": rel,
-                "content": str(row.get("content") or ""),
-                "purpose": row.get("purpose"),
-                "encoding": row.get("encoding"),
-                "mode": row.get("mode"),
-            })
-        validate_paths(normalized_manifest)
-
+            rel = self._normalize_expected_rel_path(str(row.get("path") or ""))
+            normalized_manifest.append(
+                {
+                    "path": rel,
+                    "content": row.get("content"),
+                    "encoding": str(row.get("encoding") or "utf-8"),
+                }
+            )
         manifest_paths = {row["path"] for row in normalized_manifest}
-        missing_manifest = [rel for rel in expected if rel not in manifest_paths]
-        if missing_manifest:
+        missing = [rel for rel in expected if rel not in manifest_paths]
+        if missing:
             raise RuntimeError(
-                f"Krok {idx}: v manifestu chybí expected soubory: {', '.join(missing_manifest)}"
+                f"Krok {idx}: v manifestu chybí očekávané soubory: {', '.join(missing)}"
             )
 
+        # Nothing is written before the whole manifest passes validation.
+        for row in normalized_manifest:
+            self._decode_file_content(row)
         self._save_manifest_to_out(normalized_manifest, out_dir, idx)
 
+        result: Dict[str, Dict[str, str]] = {}
         out_abs = os.path.abspath(out_dir)
-        out_files: Dict[str, Dict[str, str]] = {}
         for rel in expected:
             abs_path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
-            if not os.path.isfile(abs_path):
-                raise RuntimeError(f"Krok {idx}: expected soubor neexistuje po uložení: {rel}")
-            up = with_retry(lambda p=abs_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
-            fid = str(up.get("id") or "").strip()
-            if not fid:
-                raise RuntimeError(f"Krok {idx}: upload expected souboru nevrátil file_id: {rel}")
+            uploaded = with_retry(
+                lambda path=abs_path: client.upload_file(path, purpose="user_data"),
+                self.settings.retry,
+                self.breaker,
+            )
+            file_id = str(uploaded.get("id") or "").strip()
+            if not file_id:
+                raise RuntimeError(f"Krok {idx}: upload souboru nevrátil file_id: {rel}")
             context[f"step.{idx}.out_file_path:{rel}"] = abs_path
-            context[f"step.{idx}.out_file_id:{rel}"] = fid
-            out_files[rel] = {"path": abs_path, "file_id": fid}
-            self.logger.event("cascade.step.out_file.upload", {"idx": idx, "path": rel, "abs_path": abs_path, "file_id": fid})
-        return out_files
+            context[f"step.{idx}.out_file_id:{rel}"] = file_id
+            result[rel] = {"path": abs_path, "file_id": file_id}
+        return result
+
+    def _load_resume_cache(
+        self,
+        start_index: int,
+    ) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, Any], set[str]]:
+        if start_index <= 0:
+            return {}, {}, {}, set()
+        state = self._read_runtime_state()
+        cache = state.get("cache")
+        if not isinstance(cache, dict):
+            raise CascadeValidationError(
+                "Pro spuštění od vybraného kroku chybí předchozí dokončený stav; spusťte kaskádu od začátku."
+            )
+        signatures = cache.get("step_signatures", {})
+        if not isinstance(signatures, dict):
+            signatures = {}
+        for index in range(start_index):
+            step = self.cfg.cascade.steps[index]
+            if signatures.get(step.id) != step_signature(step):
+                raise CascadeValidationError(
+                    f"Předchozí krok {index + 1} se od posledního běhu změnil; spusťte kaskádu nejpozději od tohoto kroku."
+                )
+        context = cache.get("legacy_context", {})
+        context_ids = cache.get("context_response_ids", {})
+        values = cache.get("values", {})
+        executed = set(cache.get("executed_step_ids", []))
+        if not isinstance(context, dict) or not isinstance(context_ids, dict) or not isinstance(values, dict):
+            raise CascadeValidationError(
+                "Uložený mezistav kaskády je poškozený; spusťte kaskádu od začátku."
+            )
+        return (
+            copy.deepcopy(context),
+            {str(k): str(v) for k, v in context_ids.items() if v},
+            copy.deepcopy(values),
+            executed,
+        )
+
+    @staticmethod
+    def _value_key(step_id: str, output_id: str) -> str:
+        return f"{step_id}|{output_id}"
+
+    def _resolve_deterministic_inputs(
+        self,
+        *,
+        step: CascadeStep,
+        idx: int,
+        values: Dict[str, Any],
+        client: OpenAIClient,
+    ) -> Tuple[str, List[str]]:
+        extra_text: List[str] = []
+        file_ids: List[str] = []
+
+        for item in step.inputs:
+            if item.source == "text":
+                extra_text.append(f"[Vstup: {item.name}]\n{item.value}")
+                continue
+            if item.source == "local_file":
+                path = self._resolve_text(item.value, {})
+                if not os.path.isfile(path):
+                    raise RuntimeError(f"Vstupní soubor neexistuje: {path}")
+                uploaded = with_retry(
+                    lambda p=path: client.upload_file(p, purpose="user_data"),
+                    self.settings.retry,
+                    self.breaker,
+                )
+                file_id = str(uploaded.get("id") or "").strip()
+                if not file_id:
+                    raise RuntimeError(f"Upload souboru nevrátil file_id: {path}")
+                file_ids.append(file_id)
+                continue
+            if item.source == "file_id":
+                if item.value.strip():
+                    file_ids.append(item.value.strip())
+                continue
+            if item.source == "output":
+                key = self._value_key(item.source_step_id, item.source_output_id)
+                if key not in values:
+                    raise ContractError(
+                        f"Krok {idx}: vstup „{item.name}“ nemá k dispozici výstup předchozího kroku."
+                    )
+                value = values[key]
+                if isinstance(value, dict) and value.get("kind") == "file":
+                    file_id = str(value.get("file_id") or "").strip()
+                    if file_id:
+                        file_ids.append(file_id)
+                    elif value.get("path") and os.path.isfile(str(value["path"])):
+                        uploaded = with_retry(
+                            lambda p=str(value["path"]): client.upload_file(p, purpose="user_data"),
+                            self.settings.retry,
+                            self.breaker,
+                        )
+                        file_id = str(uploaded.get("id") or "").strip()
+                        if not file_id:
+                            raise RuntimeError("Upload návazného souboru nevrátil file_id.")
+                        file_ids.append(file_id)
+                    else:
+                        raise RuntimeError("Návazný soubor už není dostupný.")
+                else:
+                    visible = value.get("value") if isinstance(value, dict) and "value" in value else value
+                    if not isinstance(visible, str):
+                        visible = json.dumps(visible, ensure_ascii=False)
+                    extra_text.append(f"[Vstup: {item.name}]\n{visible}")
+        text = step.input_text
+        if extra_text:
+            text = text.rstrip() + "\n\n" + "\n\n".join(extra_text)
+        return text, file_ids
+
+    def _deterministic_instructions(self, step: CascadeStep) -> str:
+        lines = [
+            "Dodrž přesně výstupní kontrakt tohoto kroku.",
+            "Nevracej žádné další klíče ani doprovodný text.",
+        ]
+        for output in step.outputs:
+            lines.append("- " + describe_output(output))
+            if output.kind == "json":
+                lines.append(
+                    f"  Hodnotu „{output.name}“ vrať jako validní JSON serializovaný do jednoho textového řetězce."
+                )
+            if output.kind == "file" and output.file_mode == "modify":
+                lines.append(
+                    f"  Soubor „{output.name}“ musí být upravenou verzí vybraného vstupního souboru, nikoli novým nesouvisejícím souborem."
+                )
+        prefix = step.instructions.strip()
+        return (prefix + "\n\n" if prefix else "") + "\n".join(lines)
+
+    def _prepare_step(
+        self,
+        *,
+        step: CascadeStep,
+        idx: int,
+        context: Dict[str, Any],
+        context_response_ids: Dict[str, str],
+        values: Dict[str, Any],
+        client: OpenAIClient,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
+        if step.deterministic:
+            resolved_input_text, file_ids = self._resolve_deterministic_inputs(
+                step=step,
+                idx=idx,
+                values=values,
+                client=client,
+            )
+            content_parts: List[Dict[str, Any]] = [
+                {"type": "input_text", "text": resolved_input_text}
+            ]
+            existing_file_ids = set()
+            for file_id in file_ids:
+                if file_id and file_id not in existing_file_ids:
+                    content_parts.append({"type": "input_file", "file_id": file_id})
+                    existing_file_ids.add(file_id)
+            schema = self._schema_for_step(step)
+            payload: Dict[str, Any] = {
+                "model": step.model,
+                "instructions": self._deterministic_instructions(step),
+                "input": [{"type": "message", "role": "user", "content": content_parts}],
+                "text": response_format(f"cascade_step_{idx:02d}_det", schema),
+            }
+            previous_id = context_response_ids.get(step.context_id, "")
+            if previous_id:
+                payload["previous_response_id"] = previous_id
+            if step.temperature is not None:
+                payload["temperature"] = float(step.temperature)
+            validate_response_payload(payload)
+            client.validate_prepared_payload(payload)
+            return payload, schema or {}, file_ids
+
+        # Legacy compatibility path.
+        file_ids: List[str] = []
+        for expression in step.files_existing_ids or []:
+            resolved = self._resolve_text(expression, context).strip()
+            if resolved:
+                file_ids.append(resolved)
+        resolved_input = self._resolve_text(step.input_text, context)
+        resolved_instructions = self._resolve_text(step.instructions, context)
+        resolved_content = (
+            self._resolve_json(step.input_content_json, context)
+            if step.input_content_json is not None
+            else None
+        )
+        content_parts = (
+            self._normalize_content_parts(resolved_content, idx)
+            if resolved_content is not None
+            else [{"type": "input_text", "text": resolved_input}]
+        )
+
+        # Validate the wire shape before any local file is uploaded, so a bad
+        # content part cannot create chargeable/orphaned uploads.
+        preflight_parts = copy.deepcopy(content_parts)
+        preflight_existing = self._extract_input_file_ids(preflight_parts)
+        for file_id in file_ids:
+            if file_id and file_id not in preflight_existing:
+                preflight_parts.append({"type": "input_file", "file_id": file_id})
+                preflight_existing.add(file_id)
+        if step.files_local_paths and "file_local_validation" not in preflight_existing:
+            preflight_parts.append({"type": "input_file", "file_id": "file_local_validation"})
+        preflight_payload = {
+            "model": step.model,
+            "instructions": resolved_instructions,
+            "input": [{"type": "message", "role": "user", "content": preflight_parts}],
+            "text": text_format(),
+        }
+        if step.temperature is not None:
+            preflight_payload["temperature"] = float(step.temperature)
+        validate_response_payload(preflight_payload)
+        client.validate_prepared_payload(preflight_payload)
+
+        for local_path in step.files_local_paths or []:
+            resolved_path = self._resolve_text(local_path, context)
+            if not os.path.isfile(resolved_path):
+                raise RuntimeError(f"Lokální soubor neexistuje: {resolved_path}")
+            uploaded = with_retry(
+                lambda p=resolved_path: client.upload_file(p, purpose="user_data"),
+                self.settings.retry,
+                self.breaker,
+            )
+            file_id = str(uploaded.get("id") or "").strip()
+            if not file_id:
+                raise RuntimeError(f"Upload souboru nevrátil file_id: {resolved_path}")
+            file_ids.append(file_id)
+
+        existing = self._extract_input_file_ids(content_parts)
+        for file_id in file_ids:
+            if file_id and file_id not in existing:
+                content_parts.append({"type": "input_file", "file_id": file_id})
+                existing.add(file_id)
+
+        schema = self._schema_for_step(step)
+        if step.output_type == "json":
+            if schema is None:
+                schema = resolve_schema(
+                    client,
+                    step.model,
+                    step.instructions + "\n" + step.input_text,
+                    None,
+                    [],
+                )
+            wire_format = response_format(f"cascade_step_{idx:02d}_schema", schema)
+        else:
+            wire_format = text_format()
+
+        payload = {
+            "model": step.model,
+            "instructions": resolved_instructions,
+            "input": [{"type": "message", "role": "user", "content": content_parts}],
+            "text": wire_format,
+        }
+        if step.temperature is not None:
+            payload["temperature"] = float(step.temperature)
+        resolved_prev = self._resolve_text(step.previous_response_id_expr or "", context).strip()
+        if resolved_prev:
+            payload["previous_response_id"] = resolved_prev
+        validate_response_payload(payload)
+        client.validate_prepared_payload(payload)
+        return payload, schema or {}, file_ids
+
+    def _process_deterministic_output(
+        self,
+        *,
+        step: CascadeStep,
+        idx: int,
+        decoded: Dict[str, Any],
+        client: OpenAIClient,
+        context: Dict[str, Any],
+        values: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Optional[str]]:
+        out_dir = self._select_out_dir_for_step()
+        file_rows: List[Tuple[CascadeOutput, Dict[str, Any]]] = []
+        decision_value: Optional[str] = None
+        summary: Dict[str, Any] = {}
+
+        for output in step.outputs:
+            key = output_machine_key(output)
+            if key not in decoded:
+                raise ContractError(f"Krok {idx}: chybí deterministický výstup „{output.name}“.")
+            raw = decoded[key]
+            value_key = self._value_key(step.id, output.id)
+            if output.kind == "text":
+                if not isinstance(raw, str):
+                    raise ContractError(f"Krok {idx}: výstup „{output.name}“ musí být text.")
+                values[value_key] = {"kind": "text", "value": raw}
+                summary[output.id] = raw
+            elif output.kind == "json":
+                if not isinstance(raw, str):
+                    raise ContractError(f"Krok {idx}: výstup „{output.name}“ musí obsahovat JSON text.")
+                try:
+                    parsed = json.loads(raw)
+                except ValueError as exc:
+                    raise ContractError(
+                        f"Krok {idx}: výstup „{output.name}“ neobsahuje platný JSON."
+                    ) from exc
+                values[value_key] = {"kind": "json", "value": parsed}
+                summary[output.id] = parsed
+            elif output.kind == "decision":
+                if not isinstance(raw, str):
+                    raise ContractError(f"Krok {idx}: rozhodnutí musí být text.")
+                allowed = {item.value for item in output.decision_options}
+                if raw not in allowed:
+                    raise ContractError(
+                        f"Krok {idx}: rozhodnutí „{raw}“ není mezi povolenými odpověďmi."
+                    )
+                values[value_key] = {"kind": "decision", "value": raw}
+                summary[output.id] = raw
+                decision_value = raw
+            elif output.kind == "file":
+                if not isinstance(raw, dict):
+                    raise ContractError(f"Krok {idx}: souborový výstup musí být objekt.")
+                if str(raw.get("path") or "") != output.file_name:
+                    raise ContractError(
+                        f"Krok {idx}: model vrátil jiný název souboru než „{output.file_name}“."
+                    )
+                self._decode_file_content(raw)
+                file_rows.append((output, raw))
+            else:
+                raise ContractError(f"Krok {idx}: neznámý typ výstupu.")
+
+        # Validate every file first, then write all.
+        if file_rows:
+            if not out_dir:
+                raise RuntimeError("Souborový výstup vyžaduje OUT adresář.")
+            rows = [row for _, row in file_rows]
+            self._write_files_atomically(rows, out_dir, idx)
+            out_abs = os.path.abspath(out_dir)
+            for output, row in file_rows:
+                rel = output.file_name
+                path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
+                uploaded = with_retry(
+                    lambda p=path: client.upload_file(p, purpose="user_data"),
+                    self.settings.retry,
+                    self.breaker,
+                )
+                file_id = str(uploaded.get("id") or "").strip()
+                if not file_id:
+                    raise RuntimeError(f"Krok {idx}: upload výstupu nevrátil file_id: {rel}")
+                value = {"kind": "file", "path": path, "file_id": file_id, "file_type": output.file_type}
+                values[self._value_key(step.id, output.id)] = value
+                summary[output.id] = value
+                context[f"step.{idx}.out_file_path:{rel}"] = path
+                context[f"step.{idx}.out_file_id:{rel}"] = file_id
+        return summary, decision_value
+
+    def _next_index_for_step(
+        self,
+        current_index: int,
+        step: CascadeStep,
+        decision_value: Optional[str],
+    ) -> int:
+        decisions = [output for output in step.outputs if output.kind == "decision"]
+        if not decisions:
+            return current_index + 1
+        if decision_value is None:
+            raise ContractError("Rozhodovací krok nevrátil volbu.")
+        decision = decisions[0]
+        option = next(
+            (item for item in decision.decision_options if item.value == decision_value),
+            None,
+        )
+        if option is None or not option.target_step_id:
+            raise ContractError("Rozhodnutí nemá platně definovaný cílový krok.")
+        target = self.cfg.cascade.step_index(option.target_step_id)
+        if target <= current_index:
+            raise ContractError("Rozhodnutí nesmí vytvořit smyčku ani návrat zpět.")
+        return target
+
+    def _cache_snapshot(
+        self,
+        *,
+        context: Dict[str, Any],
+        context_response_ids: Dict[str, str],
+        values: Dict[str, Any],
+        executed_step_ids: set[str],
+    ) -> Dict[str, Any]:
+        return {
+            "legacy_context": copy.deepcopy(context),
+            "context_response_ids": copy.deepcopy(context_response_ids),
+            "values": copy.deepcopy(values),
+            "executed_step_ids": sorted(executed_step_ids),
+            "step_signatures": {
+                step.id: step_signature(step) for step in self.cfg.cascade.steps
+            },
+        }
+
+    def _selected_final_outputs(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for ref in self.cfg.cascade.final_outputs:
+            key = self._value_key(ref.step_id, ref.output_id)
+            if key in values:
+                result[key] = copy.deepcopy(values[key])
+        return result
 
     def run(self):
         run_id = self.cfg.run_id or new_run_id()
+        current_index = 0
+        context: Dict[str, Any] = {}
+        context_response_ids: Dict[str, str] = {}
+        values: Dict[str, Any] = {}
+        executed_step_ids: set[str] = set()
         try:
-            self.logger = CascadeLogger(self.settings.log_dir, run_id, project_name=self.cfg.project)
-            if not self.cfg.cascade.steps:
-                raise ValueError("Kaskáda musí obsahovat alespoň jeden krok.")
-            for step_index, step in enumerate(self.cfg.cascade.steps, 1):
-                if step.expected_out_files and step.output_type == "text":
-                    step.output_type = "json"
-                    step.output_schema_kind = "manifest"
-                validation_payload = {"model": step.model, "input": "lokální kontrola"}
-                if step.temperature is not None:
-                    validation_payload["temperature"] = step.temperature
-                validate_response_payload(validation_payload)
-                schema = self._schema_for_step(step)
-                if schema is not None:
-                    self._validate_schema_minimal(schema)
-                if step.expected_out_files:
-                    if step.output_type != "json":
-                        raise ValueError("Výstupní soubory vyžadují JSON manifest.")
-                    validate_paths([{"path": path} for path in step.expected_out_files])
-                for match in PLACEHOLDER_RE.finditer(json.dumps(step.to_dict())):
-                    if not 1 <= int(match.group(1)) < step_index:
-                        raise ValueError("Krok může odkazovat pouze na předchozí kroky.")
+            validate_cascade_definition(self.cfg.cascade, strict=True)
+            self.logger = CascadeLogger(
+                self.settings.log_dir,
+                run_id,
+                project_name=self.cfg.project,
+            )
+            start_index = 0
+            if self.cfg.cascade.run_from_step_id:
+                start_index = self.cfg.cascade.step_index(self.cfg.cascade.run_from_step_id)
+                if start_index < 0:
+                    raise CascadeValidationError("Vybraný počáteční krok už neexistuje.")
+            context, context_response_ids, values, executed_step_ids = self._load_resume_cache(
+                start_index
+            )
+            # All values and response lineage from the selected step onward become invalid.
+            invalid_step_ids = {
+                step.id for step in self.cfg.cascade.steps[start_index:]
+            }
+            values = {
+                key: value
+                for key, value in values.items()
+                if key.split("|", 1)[0] not in invalid_step_ids
+            }
+            executed_step_ids = {
+                step_id for step_id in executed_step_ids if step_id not in invalid_step_ids
+            }
+            if start_index > 0:
+                context = {
+                    key: value
+                    for key, value in context.items()
+                    if not (
+                        key.startswith("step.")
+                        and key.split(".", 2)[1].isdigit()
+                        and int(key.split(".", 2)[1]) >= start_index + 1
+                    )
+                }
+                context_response_ids = {}
+                for prior_index in range(start_index):
+                    prior_step = self.cfg.cascade.steps[prior_index]
+                    response_id = str(
+                        context.get(f"step.{prior_index + 1}.response_id") or ""
+                    ).strip()
+                    if response_id:
+                        context_response_ids[prior_step.context_id] = response_id
+            else:
+                context_response_ids = {}
+            current_index = start_index
+
             self.logger.update_state(
                 {
                     "status": "running",
@@ -486,197 +913,327 @@ class CascadeRunWorker(QThread):
                     "out_dir": self.cfg.out_dir,
                     "in_dir": self.cfg.in_dir,
                     "cascade_name": self.cfg.cascade.name,
-                    "steps": len(self.cfg.cascade.steps or []),
+                    "steps": len(self.cfg.cascade.steps),
+                    "start_step": start_index + 1,
                 }
             )
-            self._emit_status(1, 0, f"KASKÁDA start: {self.cfg.cascade.name}")
+            self._write_runtime_state(
+                {
+                    "status": "running",
+                    "run_id": run_id,
+                    "failed_step_id": "",
+                    "failed_step_number": 0,
+                    "human_error": "",
+                    "technical_error": "",
+                    "cache": self._cache_snapshot(
+                        context=context,
+                        context_response_ids=context_response_ids,
+                        values=values,
+                        executed_step_ids=executed_step_ids,
+                    ),
+                }
+            )
+
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
             client.configure_validation(self.settings)
             client.stopped = lambda: self._stop
-            prepared_schemas = {}
-            per_step_text = {}
-            for idx, step in enumerate(self.cfg.cascade.steps, 1):
-                check = {"model": step.model, "input": "lokální kontrola", "text": text_format()}
-                if step.temperature is not None:
-                    check["temperature"] = step.temperature
-                if step.previous_response_id_expr:
-                    check["previous_response_id"] = "resp_local_validation"
-                client.validate_prepared_payload(check)
-                if step.output_type == "json":
-                    original = self._schema_for_step(step)
-                    if step.output_schema_kind == "prompts":
-                        original = copy.deepcopy(PRESET_PROMPTS_SCHEMA)
-                        props = original["properties"]["steps"]["items"]["properties"]
-                        for field in ("input_content_json", "output_schema_custom"):
-                            props[field] = {"type": ["string", "null"], "description": "JSON serializovaný do textu, nebo null."}
-                    prepared_schemas[idx] = resolve_schema(client, step.model, step.instructions + "\n" + step.input_text,
-                        original, [s.to_dict() for s in self.cfg.cascade.steps[idx:]])
-                    self.logger.save_json("misc", f"schema_{idx}", prepared_schemas[idx])
-            context: Dict[str, Any] = {}
+
+            total = max(1, len(self.cfg.cascade.steps))
             per_step_response_ids: Dict[str, str] = {}
+            per_step_text: Dict[str, str] = {}
             per_step_json: Dict[str, Any] = {}
-            per_step_out_files: Dict[str, Dict[str, Dict[str, str]]] = {}
+            per_step_out_files: Dict[str, Dict[str, Any]] = {}
             last_response_id = ""
 
-            total = max(1, len(self.cfg.cascade.steps or []))
-            for idx, raw_step in enumerate(self.cfg.cascade.steps or [], start=1):
+            while current_index < len(self.cfg.cascade.steps):
                 self._check_stop()
-                step = CascadeStep.from_dict(raw_step.to_dict())
-                step_label = step.title or f"Step {idx}"
-                base_p = int((idx - 1) * 100 / total)
+                self._failed_step_index = current_index
+                idx = current_index + 1
+                step = copy.deepcopy(self.cfg.cascade.steps[current_index])
+                step_label = step.title or f"Krok {idx}"
+                base_p = int(current_index * 100 / total)
                 self._emit_status(base_p, 0, f"Krok {idx}/{total}: {step_label}")
-                self.progress_event.emit(ProgressEvent("KASKÁDA", completed=idx - 1, total=total, unit="kroků", detail=step_label))
-                self.logger.event("cascade.step.start", {"idx": idx, "title": step_label, "model": step.model})
+                self.progress_event.emit(
+                    ProgressEvent(
+                        "KASKÁDA",
+                        completed=len(executed_step_ids),
+                        total=total,
+                        unit="kroků",
+                        detail=step_label,
+                    )
+                )
 
+                last_exc: Optional[BaseException] = None
+                decoded: Dict[str, Any] = {}
+                response: Dict[str, Any] = {}
+                schema: Dict[str, Any] = {}
                 file_ids: List[str] = []
-                for fid_expr in step.files_existing_ids or []:
-                    resolved_fid = self._resolve_text(fid_expr, context).strip()
-                    if resolved_fid:
-                        file_ids.append(resolved_fid)
-                resolved_instructions = self._resolve_text(step.instructions, context)
-                resolved_input_text = self._resolve_text(step.input_text, context)
-                resolved_prev_expr = self._resolve_text(step.previous_response_id_expr or "", context).strip()
-                resolved_content_json = self._resolve_json(step.input_content_json, context) if step.input_content_json is not None else None
+                step_summary: Dict[str, Any] = {}
+                decision_value: Optional[str] = None
 
-                if resolved_content_json is not None:
-                    content_parts = self._normalize_content_parts(resolved_content_json, idx)
-                else:
-                    content_parts = [{"type": "input_text", "text": resolved_input_text}]
-
-                check_parts = copy.deepcopy(content_parts)
-                check_parts += [{"type": "input_file", "file_id": fid} for fid in file_ids]
-                if step.files_local_paths:
-                    check_parts.append({"type": "input_file", "file_id": "file_local_validation"})
-                local_check = {"model": step.model, "instructions": resolved_instructions,
-                    "input": [{"role": "user", "content": check_parts}],
-                    "text": response_format(f"cascade_step_{idx:02d}_schema", prepared_schemas[idx]) if step.output_type == "json" else text_format()}
-                if step.temperature is not None:
-                    local_check["temperature"] = step.temperature
-                if resolved_prev_expr:
-                    local_check["previous_response_id"] = resolved_prev_expr
-                validate_response_payload(local_check)
-                client.validate_prepared_payload(local_check)
-                for local_path in step.files_local_paths or []:
+                for attempt in range(1, self.STEP_ATTEMPTS + 1):
                     self._check_stop()
-                    resolved_path = self._resolve_text(local_path, context)
-                    if not resolved_path:
-                        continue
-                    if not os.path.isfile(resolved_path):
-                        raise RuntimeError(f"Lokální soubor neexistuje: {resolved_path}")
-                    self._emit_status(base_p, 20, f"Upload souboru pro krok {idx}: {os.path.basename(resolved_path)}")
-                    self.logger.event("cascade.step.file_upload.start", {"idx": idx, "path": resolved_path})
-                    up = with_retry(lambda p=resolved_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
-                    fid = str(up.get("id") or "").strip()
-                    if not fid:
-                        raise RuntimeError(f"Upload souboru nevrátil file_id: {resolved_path}")
-                    file_ids.append(fid)
-                    self.logger.event("cascade.step.file_upload.ok", {"idx": idx, "path": resolved_path, "file_id": fid})
+                    try:
+                        payload, schema, file_ids = self._prepare_step(
+                            step=step,
+                            idx=idx,
+                            context=context,
+                            context_response_ids=context_response_ids,
+                            values=values,
+                            client=client,
+                        )
+                        self.logger.save_json(
+                            "requests",
+                            f"cascade_step_{idx:02d}_attempt_{attempt}",
+                            payload,
+                        )
+                        self._emit_status(
+                            base_p,
+                            50,
+                            f"Krok {idx}: požadavek na OpenAI · pokus {attempt}/{self.STEP_ATTEMPTS}",
+                        )
+                        response = client.create_response(payload)
+                        self.logger.save_json(
+                            "responses",
+                            f"cascade_step_{idx:02d}_attempt_{attempt}",
+                            response,
+                        )
+                        decoded = validate_output(response, payload)
 
-                existing_file_ids = self._extract_input_file_ids(content_parts)
-                for fid in file_ids:
-                    if not fid or fid in existing_file_ids:
-                        continue
-                    content_parts.append({"type": "input_file", "file_id": fid})
-                    existing_file_ids.add(fid)
+                        if step.deterministic:
+                            self._validate_json_output(decoded, schema)
+                            step_summary, decision_value = self._process_deterministic_output(
+                                step=step,
+                                idx=idx,
+                                decoded=decoded,
+                                client=client,
+                                context=context,
+                                values=values,
+                            )
+                        elif step.output_type == "json":
+                            restored = restore_optional_fields(decoded, schema or {})
+                            self._validate_json_output(restored, schema or {})
+                            per_step_json[str(idx)] = restored
+                            context[f"step.{idx}.json"] = restored
+                            if step.expected_out_files:
+                                per_step_out_files[str(idx)] = self._process_expected_out_files(
+                                    step=step,
+                                    idx=idx,
+                                    json_output=restored,
+                                    context=context,
+                                    client=client,
+                                )
+                        else:
+                            text = str(decoded.get("text") or "")
+                            per_step_text[str(idx)] = text
+                            context[f"step.{idx}.text"] = text
 
-                input_messages: List[Dict[str, Any]] = []
-
-                payload: Dict[str, Any] = {
-                    "model": step.model,
-                    "instructions": resolved_instructions,
-                }
-                if step.temperature is not None:
-                    payload["temperature"] = float(step.temperature)
-                if resolved_prev_expr:
-                    payload["previous_response_id"] = resolved_prev_expr
-
-                schema = self._schema_for_step(step)
-                payload["text"] = response_format(f"cascade_step_{idx:02d}_schema", prepared_schemas[idx]) if step.output_type == "json" else text_format()
-                if step.output_type == "json":
-                    input_messages.append(copy.deepcopy(PROMPTS_JSON_DEVELOPER_MESSAGE if step.output_schema_kind == "prompts" else JSON_ONLY_DEVELOPER_MESSAGE))
-
-                input_messages.append({"type": "message", "role": "user", "content": content_parts})
-                payload["input"] = input_messages
-
-                self.logger.save_json("requests", f"cascade_step_{idx:02d}", payload)
-                self._emit_status(base_p, 55, f"OpenAI request krok {idx}")
-                self.progress_event.emit(ProgressEvent("KASKÁDA", "waiting", detail=f"Krok {idx}: čekám na API."))
-                response = client.create_response(payload)
-                self.logger.save_json("responses", f"cascade_step_{idx:02d}", response)
+                        last_exc = None
+                        break
+                    except Exception as exc:
+                        if str(exc) in ("STOPPED", "STOP_REQUESTED"):
+                            raise
+                        last_exc = exc
+                        self.logger.event(
+                            "cascade.step.attempt_failed",
+                            {
+                                "idx": idx,
+                                "attempt": attempt,
+                                "error": str(exc),
+                            },
+                        )
+                        if attempt < self.STEP_ATTEMPTS:
+                            self._emit_status(
+                                base_p,
+                                50,
+                                f"Krok {idx}: výstup neprošel kontrolou, opakuji ({attempt + 1}/{self.STEP_ATTEMPTS}).",
+                            )
+                            time.sleep(min(2.0, 0.35 * attempt))
+                if last_exc is not None:
+                    raise last_exc
 
                 response_id = str(response.get("id") or "").strip()
                 if response_id:
                     context[f"step.{idx}.response_id"] = response_id
                     per_step_response_ids[str(idx)] = response_id
                     last_response_id = response_id
+                    if step.deterministic:
+                        context_response_ids[step.context_id] = response_id
 
-                parsed_json: Optional[Dict[str, Any]] = None
-                decoded = validate_output(response, payload)
-                if step.output_type == "text":
-                    self.logger.save_json("misc", f"step_{idx}_text", {"text": decoded["text"]})
-                    per_step_text[str(idx)] = decoded["text"]
-                if step.output_type == "json":
-                    parsed_json = restore_optional_fields(decoded, schema or {})
-                    if step.output_schema_kind == "prompts":
-                        for generated_step in parsed_json.get("steps", []):
-                            for field in ("input_content_json", "output_schema_custom"):
-                                if isinstance(generated_step.get(field), str):
-                                    generated_step[field] = json.loads(generated_step[field])
-                    self._validate_json_output(parsed_json, schema or {})
-                    context[f"step.{idx}.json"] = parsed_json
-                    per_step_json[str(idx)] = parsed_json
-                    self.logger.save_json("misc", f"cascade_step_{idx:02d}_json", parsed_json)
+                if step.deterministic:
+                    # Mirror useful values into legacy numbered context for diagnostics/templates.
+                    for output in step.outputs:
+                        value = values.get(self._value_key(step.id, output.id))
+                        if value is None:
+                            continue
+                        if output.kind == "text":
+                            context[f"step.{idx}.text"] = value.get("value", "")
+                            if str(idx) not in per_step_text:
+                                per_step_text[str(idx)] = str(value.get("value", ""))
+                        elif output.kind in ("json", "decision"):
+                            context[f"step.{idx}.json"] = value.get("value")
+                            per_step_json.setdefault(str(idx), {})[output.id] = value.get("value")
+                        elif output.kind == "file":
+                            per_step_out_files.setdefault(str(idx), {})[output.id] = value
 
-                expected_map = self._process_expected_out_files(
-                    step=step,
-                    idx=idx,
-                    json_output=parsed_json,
-                    context=context,
-                    client=client,
-                )
-                if expected_map:
-                    per_step_out_files[str(idx)] = expected_map
-
+                executed_step_ids.add(step.id)
                 self.logger.event(
                     "cascade.step.ok",
                     {
                         "idx": idx,
+                        "step_id": step.id,
                         "title": step_label,
+                        "context_id": step.context_id,
                         "response_id": response_id,
-                        "json_output": bool(step.output_type == "json"),
+                        "outputs": step_summary,
                         "file_ids": file_ids,
-                        "expected_out_files": list(step.expected_out_files or []),
                     },
                 )
-                self._emit_status(int(idx * 100 / total), 100, f"Krok {idx} dokončen")
-                self.progress_event.emit(ProgressEvent("KASKÁDA", completed=idx, total=total, unit="kroků", detail=f"Krok {idx} dokončen."))
+                self._write_runtime_state(
+                    {
+                        "status": "running",
+                        "run_id": run_id,
+                        "last_completed_step_id": step.id,
+                        "last_completed_step_number": idx,
+                        "cache": self._cache_snapshot(
+                            context=context,
+                            context_response_ids=context_response_ids,
+                            values=values,
+                            executed_step_ids=executed_step_ids,
+                        ),
+                    }
+                )
+                self._emit_status(
+                    int((current_index + 1) * 100 / total),
+                    100,
+                    f"Krok {idx} dokončen",
+                )
+                self.progress_event.emit(
+                    ProgressEvent(
+                        "KASKÁDA",
+                        completed=len(executed_step_ids),
+                        total=total,
+                        unit="kroků",
+                        detail=f"Krok {idx} dokončen.",
+                    )
+                )
+                current_index = self._next_index_for_step(
+                    current_index,
+                    step,
+                    decision_value,
+                )
 
+            final_outputs = self._selected_final_outputs(values)
+            text_value = per_step_text.get(str(max(per_step_text, key=int)), "") if per_step_text else ""
             result = {
                 "mode": "KASKADA",
                 "run_id": run_id,
                 "response_id": last_response_id,
+                "last_response_id": last_response_id,
                 "step_response_ids": per_step_response_ids,
                 "step_json_outputs": per_step_json,
                 "step_text_outputs": per_step_text,
-                "text": per_step_text.get(str(total), ""),
                 "step_out_files": per_step_out_files,
+                "final_outputs": final_outputs,
+                "executed_step_ids": sorted(executed_step_ids),
+                "text": text_value,
             }
-            self.logger.update_state({
-                "status": "completed",
-                "finished_at": time.time(),
-                "last_response_id": last_response_id,
-                "steps_done": len(self.cfg.cascade.steps or []),
-                "result": {
-                    "step_response_ids": per_step_response_ids,
-                    "step_json_outputs": per_step_json,
-                    "step_out_files": per_step_out_files,
-                },
-            })
+            self.logger.update_state(
+                {
+                    "status": "completed",
+                    "finished_at": time.time(),
+                    "last_response_id": last_response_id,
+                    "steps_done": len(executed_step_ids),
+                    "result": result,
+                }
+            )
             self.logger.event("cascade.completed", result)
+            self._write_runtime_state(
+                {
+                    "status": "completed",
+                    "run_id": run_id,
+                    "failed_step_id": "",
+                    "failed_step_number": 0,
+                    "human_error": "",
+                    "technical_error": "",
+                    "cache": self._cache_snapshot(
+                        context=context,
+                        context_response_ids=context_response_ids,
+                        values=values,
+                        executed_step_ids=executed_step_ids,
+                    ),
+                    "result": result,
+                }
+            )
             self.finished_ok.emit(result)
         except Exception as ex:
-            msg = str(ex)
+            if str(ex) in ("STOPPED", "STOP_REQUESTED"):
+                if self.logger:
+                    self.logger.event("cascade.cancelled", {"error": str(ex)})
+                    self.logger.update_state(
+                        {"status": "cancelled", "finished_at": time.time(), "error": str(ex)}
+                    )
+                self._write_runtime_state(
+                    {
+                        "status": "cancelled",
+                        "run_id": run_id,
+                        "failed_step_id": "",
+                        "failed_step_number": 0,
+                        "human_error": "Běh kaskády byl zastaven.",
+                        "technical_error": str(ex),
+                        "cache": self._cache_snapshot(
+                            context=context,
+                            context_response_ids=context_response_ids,
+                            values=values,
+                            executed_step_ids=executed_step_ids,
+                        ),
+                    }
+                )
+                self.finished_err.emit(str(ex))
+                return
+
+            human = humanize_cascade_error(ex)
+            technical = str(ex)
+            failed_step_id = ""
+            failed_step_number = 0
+            if 0 <= self._failed_step_index < len(self.cfg.cascade.steps):
+                failed_step = self.cfg.cascade.steps[self._failed_step_index]
+                failed_step_id = failed_step.id
+                failed_step_number = self._failed_step_index + 1
             if self.logger:
-                self.logger.event("cascade.failed", {"error": msg})
-                self.logger.update_state({"status": "failed", "finished_at": time.time(), "error": msg})
-            self.finished_err.emit(msg)
+                self.logger.event(
+                    "cascade.failed",
+                    {
+                        "error": technical,
+                        "human_error": human,
+                        "failed_step_id": failed_step_id,
+                        "failed_step_number": failed_step_number,
+                    },
+                )
+                self.logger.update_state(
+                    {
+                        "status": "failed",
+                        "finished_at": time.time(),
+                        "error": technical,
+                        "human_error": human,
+                        "failed_step_id": failed_step_id,
+                        "failed_step_number": failed_step_number,
+                    }
+                )
+            self._write_runtime_state(
+                {
+                    "status": "failed",
+                    "run_id": run_id,
+                    "failed_step_id": failed_step_id,
+                    "failed_step_number": failed_step_number,
+                    "human_error": human,
+                    "technical_error": technical,
+                    "cache": self._cache_snapshot(
+                        context=context,
+                        context_response_ids=context_response_ids,
+                        values=values,
+                        executed_step_ids=executed_step_ids,
+                    ),
+                }
+            )
+            self.finished_err.emit(human)
