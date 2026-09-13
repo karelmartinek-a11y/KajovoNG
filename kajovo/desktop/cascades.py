@@ -170,6 +170,7 @@ class CascadePanel(QWidget):
         self.ed_prev_resp = text()
         self.ed_prev_resp.setEnabled(True)
         self.schema_kind = combo(["Bez schématu", "manifest", "prompts", "custom"])
+        self.expected_files = editor(height=80)
 
         self.refresh_saved_list()
         self.add_step()
@@ -1156,6 +1157,14 @@ class CascadePanel(QWidget):
             if self.schema_kind.currentText() == "custom":
                 raise ValueError(
                     "V deterministické kaskádě se výstupní kontrakt vytváří automaticky podle definovaných výstupů."
+                )
+            if self.expected_files.toPlainText().strip():
+                raise ValueError(
+                    "Výstupní soubory definujte jako pojmenované výstupy typu Soubor, ne jako volný seznam cest."
+                )
+            if "{{step." in self.txt_input_text.toPlainText():
+                raise ValueError(
+                    "Deterministické návaznosti vybírejte v záložce Vstupy; ruční odkazy {{step...}} nejsou v novém editoru povoleny."
                 )
             step.temperature = (
                 self.sp_step_temp.value() if self.chk_step_temp.isChecked() else None
