@@ -44,12 +44,15 @@ Součástí výchozí sady jsou:
 
 ## Image Edit BATCH
 
-Podporované modely se neodvozují z názvu. `image_edit_model_ids()` vybírá pouze přesné identifikátory z `openai_model_matrix.json`, které:
+Podporované modely se neodvozují pouze z názvu ani pouze z výskytu endpointu. `image_edit_model_ids()` vybírá jen přesné identifikátory z `openai_model_matrix.json`, které současně:
 
 1. nejsou deprecated;
-2. mají dokumentované Batch;
-3. mají endpoint `v1/images/edits`;
-4. při načteném katalogu účtu jsou skutečně dostupné na účtu.
+2. mají v pevné matici povolený Batch;
+3. mají image-edit schopnost `inpainting`;
+4. mají endpoint `v1/images/edits`;
+5. při načteném katalogu účtu jsou skutečně dostupné na účtu.
+
+Tato kombinace je záměrná. Obecný Responses model se nesmí stát Image API modelem jen proto, že jeho zdrojová dokumentace zmiňuje stejnou endpointovou rodinu. Naopak nový GPT Image model se do pracovního Photo BATCH nezařadí dříve, než pevná matice doloží i jeho Batch kontrakt. Aktualizace modelové matice je samostatná explicitní změna.
 
 Jeden řádek pracovního JSONL znamená právě jednu vstupní fotografii a jeden výsledek:
 
@@ -116,6 +119,7 @@ Testy jsou pouze lokální/mockované a nesmí posílat placené požadavky. Ov�
 - CRUD uživatelských šablon;
 - tvar strict Responses požadavku pro vylepšení promptu;
 - Image Edit JSONL a přesný endpoint;
+- odmítnutí obecných Responses modelů v Image Edit BATCH;
 - právě jeden pracovní `/batches` submit;
 - mapování přes `custom_id`;
 - zachování originálu;
