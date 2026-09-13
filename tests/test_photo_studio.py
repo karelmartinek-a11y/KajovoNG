@@ -180,8 +180,11 @@ def test_photo_studio_panel_constructs_without_api(qtbot, tmp_path):
     qtbot.addWidget(panel)
     assert panel.prompt_editor.isEnabled()
     assert panel.template_list.count() >= 6
-    assert panel.image_model.count() == 0
-    assert not panel.btn_submit.isEnabled()
+    # Dokud účetní katalog ještě není načtený, Photo Studio smí nabídnout
+    # pouze modely, které jsou doložené v pevné matici. Samotný pracovní
+    # submit i Vylepšit prompt stále explicitně vyžadují API klíč.
+    assert panel.image_model.count() >= 1
+    assert panel.btn_submit.isEnabled()
 
 
 def test_install_photo_studio_adds_real_main_navigation(qtbot, tmp_path, monkeypatch):
