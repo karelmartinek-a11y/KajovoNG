@@ -18,9 +18,9 @@ Obálka odděluje `source_snapshot_hash`, `file_context_hash`, `contract_hash` a
 
 Nový manifest má verzi 3. Auditní snapshot se ukládá jednou; řádky obsahují FileContext bez globálního snapshotu, bez tools a bez návaznosti. `encode_requests` znovu kompiluje kontext proti snapshotu a ověřuje hashe původních obsahů. Verze 1 a 2 se interpretují pouze podle svých původních kontraktů. Jejich import zůstává dostupný; opakované odeslání vyžaduje novou implementační přípravu. Žádná tichá migrace nebo full-snapshot fallback neexistuje.
 
-`recoverable_artifacts.py` ukládá přesný serializovaný obsah odděleně od redigovaných provozních záznamů. Obsahově adresované soubory vznikají výhradně exkluzivním vytvořením, při čtení se ověřuje SHA-256 a poškozený obsah se nenahrazuje logem. Index vybírá aktuální artefakt, staré objekty se nemažou. Na POSIX se používají režimy 0700/0600; na Windows zůstává přístup závislý na ACL zvoleného LOG adresáře. Nejde o šifrování ani bezpečnostní hranici vůči uživateli s přístupem k tomuto adresáři.
+`recoverable_artifacts.py` ukládá přesný serializovaný obsah jako obsahově adresovanou obnovitelnou evidenci. Současný `RunLogger` a Run Bundle uchovávají důkazní obsah rovněž bezeztrátově; nová evidence se obsahově nerediguje ani nemaskuje. Obsahově adresované soubory vznikají výhradně exkluzivním vytvořením, při čtení se ověřuje SHA-256 a poškozený obsah se nenahrazuje jiným logem. Index vybírá aktuální artefakt, staré objekty se nemažou. Na POSIX se používají režimy 0700/0600; na Windows zůstává přístup závislý na ACL zvoleného LOG adresáře. Nejde o šifrování ani bezpečnostní hranici vůči uživateli s přístupem k tomuto adresáři.
 
-`RunLogger.find_json` preferuje přesný artefakt. Obnova přípravy a Batch načítá kanonická stavová pole přes `load_run_state`. Staré redigované runy bez přesného artefaktu se neopravují odhadem. Response journal zachovává request hash, response ID i neznámý submit; import failure nevyvolává generování.
+`RunLogger.find_json` preferuje přesný artefakt. Obnova přípravy a Batch načítá kanonická stavová pole přes `load_run_state`. Historické legacy běhy, jejichž starší verze obsah dříve redigovala a nemají přesný artefakt, se zpětně neopravují odhadem. Response journal zachovává request hash, response ID i neznámý submit; import failure nevyvolává generování.
 
 ## Rozpočet a směrování
 
