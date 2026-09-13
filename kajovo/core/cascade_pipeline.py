@@ -24,7 +24,7 @@ from .cascade_contract import (
     validate_cascade_definition,
 )
 from .cascade_log import CascadeLogger
-from .cascade_types import CascadeDefinition, CascadeInput, CascadeOutput, CascadeStep
+from .cascade_types import CascadeDefinition, CascadeOutput, CascadeStep
 from .contracts import ContractError, validate_paths
 from .openai_client import OpenAIClient
 from .progress import ProgressEvent
@@ -781,7 +781,7 @@ class CascadeRunWorker(QThread):
             rows = [row for _, row in file_rows]
             self._write_files_atomically(rows, out_dir, idx)
             out_abs = os.path.abspath(out_dir)
-            for output, row in file_rows:
+            for output, _row in file_rows:
                 rel = output.file_name
                 path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
                 uploaded = with_retry(
