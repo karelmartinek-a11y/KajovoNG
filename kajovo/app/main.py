@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-import sys, os
+import os
+import sys
 from pathlib import Path
 
+from PySide6.QtCore import QCoreApplication, Qt
+from PySide6.QtGui import QFont, QFontDatabase, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QFontDatabase, QFont, QIcon, QPixmap
-from PySide6.QtCore import Qt, QCoreApplication
 
 from kajovo.core.config import load_settings
 from kajovo.core.resources import resource_path
 from kajovo.desktop.application import MainWindow
+
 
 def _project_root() -> Path:
     if getattr(sys, "frozen", False):
@@ -22,7 +24,10 @@ def _resource_path(*parts: str) -> Path:
 
 
 def _load_fonts() -> None:
-    for path in (_resource_path("montserrat_regular.ttf"), _resource_path("montserrat_bold.ttf")):
+    for path in (
+        _resource_path("montserrat_regular.ttf"),
+        _resource_path("montserrat_bold.ttf"),
+    ):
         if path.exists():
             QFontDatabase.addApplicationFont(str(path))
 
@@ -71,27 +76,32 @@ def main():
     _load_fonts()
 
     # Výchozí písmo; při nedostupném Montserratu zůstává systémové.
-    f = QFont("Montserrat", 10)
-    app.setFont(f)
+    font = QFont("Montserrat", 10)
+    app.setFont(font)
     from ..desktop.design import install_ui_style
+
     install_ui_style()
 
     app_icon = _load_app_icon()
     app.setWindowIcon(app_icon)
 
-    from kajovo.desktop.windows import SplashScreen
+    from kajovo.desktop.history_actions import install_history_run_explorer
     from kajovo.desktop.photos import install_photo_studio
+    from kajovo.desktop.windows import SplashScreen
+
     splash = SplashScreen()
     splash.show()
     app.processEvents()
     settings = load_settings()
     app.processEvents()
-    w = MainWindow(settings)
-    install_photo_studio(w)
-    w.setWindowIcon(app_icon)
-    w.showMaximized()
+    window = MainWindow(settings)
+    install_history_run_explorer(window)
+    install_photo_studio(window)
+    window.setWindowIcon(app_icon)
+    window.showMaximized()
     splash.finish()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
