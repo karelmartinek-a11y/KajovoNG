@@ -3,6 +3,30 @@
 from copy import deepcopy
 
 
+def implementation_fixture(structure, requirements=None, plan=None):
+    """Výslovný testovací kontrakt jednoduchých souborů, nikoli produkční migrace."""
+    from kajovo.core.context_compiler import file_index, global_obligations
+    snapshot = {"structure": structure, "requirements": requirements, "plan": plan}
+    files = file_index(snapshot)
+    structure["implementation"] = {
+        "version": 1,
+        "scopes": [{"source": source, "paths": list(files),
+                    "reason": "Společná povinnost této malé testovací aplikace"}
+                   for source in global_obligations(snapshot)],
+        "interfaces": [{"id": interface["id"], "version": "1", "signature": interface["definition"],
+                        "error_semantics": "Testovací operace nemá chybový výsledek.",
+                        "lifecycle": "Synchronní bezstavová operace."}
+                       for interface in structure.get("interfaces", [])],
+        "files": [{"path": p, "facets": [], "required_facets": [],
+                   "interface_bindings": [{"id": symbol, "version": "1"}
+                                          for symbol in sorted(set(f.get("provides", []) + f.get("requires", [])))],
+                   "acceptance_criteria": [f["behavior"]], "test_scenarios": ["Ověřit přesný očekávaný obsah."],
+                   "assumptions": [], "unresolved_questions": [], "expected_output_tokens": 1024,
+                   "allow_empty": False} for p, f in files.items()],
+    }
+    return structure
+
+
 def requirements_payload(mode="GENERATE", **overrides):
     """Vrátí explicitní i implicitní požadavek se stabilními identifikátory."""
     explicit = [{"id": "REQ-1", "description": "Dodat požadovaný textový výstup."}]
@@ -108,7 +132,8 @@ def structure_payload(mode="GENERATE", files=None, **overrides):
         {"requirement_ids": ["REQ-1", "REQ-2"], "architecture_item_ids": ["ARCH-1"], **item}
         for item in payload[key]
     ]
-    return {**payload, **deepcopy(overrides)}
+    result = {**payload, **deepcopy(overrides)}
+    return result if "implementation" in overrides else implementation_fixture(result, requirements_payload(mode), plan_payload(mode, files))
 
 
 def delivery_payloads(mode="GENERATE", files=None):

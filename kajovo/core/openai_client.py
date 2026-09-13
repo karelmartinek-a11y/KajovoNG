@@ -342,6 +342,18 @@ class OpenAIClient:
                 batch=True,
             )
 
+    def count_input_tokens(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Samostatné ne-generativní měření; neodesílá pracovní Response."""
+        from .context_compiler import content_hash
+        allowed = {"model", "input", "instructions", "previous_response_id", "text", "tools",
+                   "tool_choice", "parallel_tool_calls", "reasoning", "truncation"}
+        result = self._req("POST", "/responses/input_tokens",
+                           json_body={k: v for k, v in payload.items() if k in allowed}, max_attempts=1)
+        count = result.get("input_tokens") if isinstance(result, dict) else None
+        if type(count) is not int or count < 0:
+            raise OpenAIError("Token count endpoint nevrátil platný počet tokenů.")
+        return {"input_tokens": count, "request_hash": content_hash(payload), "method": "responses.input_tokens"}
+
     def create_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         from .structured_output import validate_output
         from .contracts import ContractError

@@ -127,6 +127,8 @@ def test_manifest_creation_remains_strict_and_existing_requests_stay_unchanged()
     with pytest.raises(ContractError):
         build_manifest("run", "test", {}, original, "gpt-4.1", 0)
     prepared, _ = prepare_structure(original)
+    from delivery_fixtures import implementation_fixture
+    implementation_fixture(prepared)
     manifest = build_manifest("run", "test", {}, prepared, "gpt-4.1", 0)
     before = copy.deepcopy(manifest)
     raw = encode_requests(manifest)
@@ -167,7 +169,7 @@ def test_new_a2_is_prepared_before_live_or_batch_generation(tmp_path, batch):
         assert state["generate_batch"]["snapshot"]["structure"] == prepared
         rows = [json.loads(line) for line in Path(client.upload_file.call_args.args[0]).read_text(encoding="utf-8").splitlines()]
         assert len(rows) == len(prepared["files"])
-        assert all(json.loads(row["body"]["input"])["specification"]["structure"] == prepared for row in rows)
+        assert all(json.loads(row["body"]["input"])["file_context"]["working_context"]["target_file"] in prepared["files"] for row in rows)
         generate.assert_not_called()
     else:
         assert results[0]["structure"] == prepared

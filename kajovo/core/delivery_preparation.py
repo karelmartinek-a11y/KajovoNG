@@ -62,7 +62,7 @@ def validate_preparation_snapshot(snapshot, mode, maximum_quality):
         raise ContractError("Standard nesmí obnovit quality gate.")
     for key, fmt in (("requirements", requirements_format(mode)),
                      ("plan", enriched_plan_format(mode)),
-                     ("structure", enriched_structure_format(mode))):
+                     ("structure", enriched_structure_format(mode, implementation="implementation" in (snapshot.get("structure") or {})))):
         if (key == "plan" and index < 1) or (key == "structure" and index < 2):
             continue
         try:
@@ -82,6 +82,7 @@ def validate_delivery_structure(requirements, plan, structure, mode):
     additions = []
     if mode == "GENERATE":
         base = copy.deepcopy(structure)
+        base.pop("implementation", None)
         for file in base["files"]:
             file.pop("requirement_ids", None)
             file.pop("architecture_item_ids", None)
@@ -100,11 +101,11 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
     stages = [prefix + "0R", prefix + "1", prefix + "2"]
     if quality:
         stages.append(prefix + "2Q")
-    formats = [requirements_format(mode), enriched_plan_format(mode), enriched_structure_format(mode)]
+    formats = [requirements_format(mode), enriched_plan_format(mode), enriched_structure_format(mode, implementation=True)]
     labels = (["Profesionální requirements", "Architektonický plán", "Implementační struktura"]
               if mode == "GENERATE" else ["Change requirements", "Plán změny", "Implementační struktura změny"])
     if quality:
-        formats.append(enriched_structure_format(mode))
+        formats.append(enriched_structure_format(mode, implementation=True))
         labels.append("Quality gate")
     checkpoint = worker.cfg.preparation_snapshot
     if checkpoint:
@@ -136,6 +137,25 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
             supports_temperature=worker._model_caps(model).get("supports_temperature", False),
         )
         payload["text"] = fmt
+        if index >= 2:
+            payload["instructions"] += (
+                "\nImplementační kontrakt v1 je povinný. implementation.scopes určuje pro každou "
+                "atomickou globální povinnost přesné cesty a důvod působnosti. Zdroj je JSON pointer "
+                "/requirements/<pole>/<index>, /plan/<pole>/<index> nebo /structure/<pole>/<index>; "
+                "u neprázdného objektu či skaláru bez indexu. Vynech contract, version, files, "
+                "touched_files, preserved_files, interfaces, implementation, architecture_items "
+                "a seznamy requirement objektů s id, které se vážou pomocí requirement_ids. "
+                "Objekt plan.requirements je samostatná globální povinnost. "
+                "Žádná povinnost nesmí zůstat bez vlastníka. U každého rozhraní definuj přesnou "
+                "signaturu včetně typů/nullability, verzi, chybovou sémantiku a lifecycle. "
+                "Consumer/provider používají stejný verzovaný kontrakt. U každého souboru "
+                "vyjmenuj required_facets podle skutečných rizik a vyplň příslušné facets včetně "
+                "zdrojových odkazů. Zachyť persistence, transakce, konkurenci, security a globální "
+                "invarianty tam, kde platí. Akceptace a testovací scénáře musí být konkrétní. "
+                "Neznámé kritické detaily označ jako critical unresolved_questions; nevymýšlej je. "
+                "expected_output_tokens je odhad viditelného úplného souboru bez reasoning. "
+                "Cykly implementuj proti přesným společným rozhraním, nikoli domnělému kódu."
+            )
         apply_quality(payload, quality)
         if tools:
             payload["tools"] = tools
@@ -153,6 +173,9 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
             try:
                 if index >= 2:
                     value, additions = validate_delivery_structure(snapshot["requirements"], snapshot["plan"], value, mode)
+                    from .context_compiler import validate_implementation
+                    validate_implementation({"requirements": snapshot["requirements"],
+                                             "plan": snapshot["plan"], "structure": value})
                     worker.log.save_json("manifests", f"{stage}_prepared_candidate_{attempt}", {
                         "response_id": previous_id, "structure": value, "added_dependencies": additions})
                 break

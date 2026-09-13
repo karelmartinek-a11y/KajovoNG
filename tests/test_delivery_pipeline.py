@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from delivery_fixtures import delivery_payloads
+from delivery_fixtures import delivery_payloads, implementation_fixture
 from kajovo.core.requirements import CORE_INSTRUCTIONS, validate_traceability
 from kajovo.core.generate_batch import import_results
 from test_workflows import make_worker, response
@@ -113,13 +113,15 @@ def test_delivery_eight_variants_use_canonical_preparation(tmp_path, mode, batch
         final = rows[0]["body"]
         assert set(rows[0]) == {"custom_id", "method", "url", "body"}
         assert "previous_response_id" not in final
-        assert _input(final)["specification"]["structure"] == preparation[-1]
-        assert _input(final)["specification"]["requirements"] == preparation[0]
+        working = _input(final)["file_context"]["working_context"]
+        assert working["target_file"] == preparation[-1]["files" if mode == "GENERATE" else "touched_files"][0]
+        assert len(working["relevant_requirements"]) == 2
+        assert "specification" not in _input(final)
         assert not (tmp_path / "out" / "hello.txt").exists()
     else:
         client.create_batch.assert_not_called()
         final = calls[-1]
-        assert final["previous_response_id"] == f"resp_{len(preparation) - 1}"
+        assert "previous_response_id" not in final
         assert (tmp_path / "out" / "hello.txt").read_text(encoding="utf-8") == file["content"]
     assert CORE_INSTRUCTIONS in final["instructions"]
     assert final["text"]["format"]["schema"]["properties"]["contract"]["enum"] == [prefix + "3_FILE"]
@@ -235,6 +237,7 @@ def test_nonexistent_preserved_file_blocks_delivery_and_no_changes(tmp_path, bat
     if no_changes:
         structure["touched_files"] = []
         preparation[1]["change_plan"]["files_to_modify"] = []
+    implementation_fixture(structure, preparation[0], preparation[1])
     validate_traceability(*preparation)
     client, calls = _client(preparation)
     results, errors = _run(worker, client)
@@ -332,27 +335,23 @@ def test_reasoning_and_progress_follow_actual_delivery_stages(tmp_path, mode, ba
     if quality:
         assert all(call["reasoning"]["effort"] == "xhigh" for call in calls)
     else:
-        assert all("reasoning" not in call for call in calls)
+        assert all("reasoning" not in call for call in calls[:-1])
+        assert calls[-1]["reasoning"]["effort"] == "medium"
     assert all("temperature" not in call for call in calls)
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 @pytest.mark.parametrize("batch", [False, True])
 @pytest.mark.parametrize("size", [150_000, 150_001])
-def test_long_prompt_ingestion_keeps_exact_chunks_and_precedes_requirements(tmp_path, mode, batch, size):
+def test_long_prompt_ingestion_preserves_source_without_paid_acknowledgements(tmp_path, mode, batch, size):
     worker, preparation, file = _scenario(tmp_path, mode, batch, False)
     worker.cfg.prompt = ("Obsah zadání bez zkrácení.\n" * 10_000)[:size]
-    count = (size + 19_999) // 20_000 if size > 150_000 else 0
+    count = 0
     client, calls = _client(["Přijato"] * count + preparation + ([] if batch else [file]))
     results, errors = _run(worker, client)
     assert not errors and results
     assert len(calls) == count + 3 + int(not batch)
-    chunks = ["".join(part["text"] for message in call["input"] for part in message["content"]).split("\n", 1)[1]
-              for call in calls[:count]]
-    if count:
-        assert "".join(chunks) == worker.cfg.prompt
-        assert all(len(chunk) <= 20_000 for chunk in chunks)
-        assert calls[count]["previous_response_id"] == f"resp_{count - 1}"
+    assert worker.cfg.prompt in _input(calls[0])["source"]
     assert all(worker.cfg.prompt not in call["instructions"] for call in calls)
 
 
@@ -366,6 +365,7 @@ def test_quality_gate_added_file_is_really_delivered(tmp_path, mode, batch):
     if mode == "MODIFY":
         added["action"] = "add"
     preparation[-1][key].append(added)
+    implementation_fixture(preparation[-1], preparation[0], preparation[1])
     additional = {**file, "path": "added.txt"}
     if mode == "MODIFY":
         additional["action"] = "add"
@@ -393,11 +393,16 @@ def test_live_file_chunks_keep_order_content_and_canonical_context(tmp_path, mod
     assert not errors and results[0]["status"] == "completed"
     assert Path(worker.cfg.out_dir, file["path"]).read_text(encoding="utf-8") == first["content"] + last["content"]
     assert calls[-1]["previous_response_id"] == f"resp_{len(preparation)}"
-    for call in calls[-2:]:
+    for index, call in enumerate(calls[-2:]):
         assert "500 řádků" in call["instructions"]
         text = "".join(part["text"] for message in call["input"] for part in message["content"]
                        if part["type"] == "input_text")
-        assert json.dumps(preparation[-1], ensure_ascii=False) in text
+        context = json.loads(text.split("\n")[1])
+        if index == 0:
+            assert context["file_context"]["working_context"]["target_file"]["path"] == file["path"]
+        else:
+            assert "file_context_hash" in context and "file_context" not in context
+        assert "specification" not in context
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
@@ -408,6 +413,7 @@ def test_batch_completion_distinguishes_missing_from_previously_completed(tmp_pa
     existing = deepcopy(preparation[-1][key][0])
     existing["path"] = "done.txt"
     preparation[-1][key].append(existing)
+    implementation_fixture(preparation[-1], preparation[0], preparation[1])
     out = Path(worker.cfg.out_dir)
     out.mkdir()
     (out / "done.txt").write_bytes(b"done")

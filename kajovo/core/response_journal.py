@@ -38,7 +38,14 @@ class ResponseJournal:
                     raise ValueError("Evidence požadavku má neplatný hash; automatické pokračování je zablokováno.")
 
     def save(self):
-        self.log.save_json("manifests", "response_journal", {"version": 1, "entries": self.entries})
+        # Čas pollingu a identita GET patří provozní evidenci; nesmějí vytvářet
+        # další kopii všech pracovních payloadů při každé kontrole stavu.
+        entries = copy.deepcopy(self.entries)
+        for entry in entries.values():
+            entry.pop("checked_at", None)
+            if isinstance(entry.get("response"), dict):
+                entry["response"].pop("_request_id", None)
+        self.log.save_json("manifests", "response_journal", {"version": 1, "entries": entries})
 
     def execute(self, client, payload, *, stopped, cancelled, progress):
         body = copy.deepcopy(payload)
@@ -120,6 +127,10 @@ class ResponseJournal:
         return copy.deepcopy(response)
 
     def _record(self, key, entry, response):
+        from .cost_context_report import CostContextReport
+        CostContextReport(self.log.paths.run_dir).record(entry["payload"], response=response)
+        if response.get("status") not in ("queued", "in_progress"):
+            self.log.save_json("responses", "provider_" + entry["id"], response)
         old_status = entry.get("status")
         entry.update(status=response.get("status", "unknown"), response=response, checked_at=time.time())
         self.save()

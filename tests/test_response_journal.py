@@ -282,6 +282,8 @@ def test_restart_after_first_output_write_keeps_files_and_response_chain(tmp_pat
     second = copy.deepcopy(structure[key][0])
     second["path"] = "world.txt"
     structure[key].append(second)
+    from delivery_fixtures import implementation_fixture
+    implementation_fixture(structure, preparation[0], preparation[1])
     files = [{"contract": "A3_FILE" if mode == "GENERATE" else "B3_FILE", "path": path, "content": path + "\n",
               "chunking": {"chunk_index": 0, "chunk_count": 1, "has_more": False, "next_chunk_index": None}}
              for path in ("hello.txt", "world.txt")]

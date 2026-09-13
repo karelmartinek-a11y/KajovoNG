@@ -24,17 +24,24 @@ def newest(directory, pattern="*.json"):
 
 def recover_run(log_dir, run_id):
     directory = Path(safe_join_under_root(log_dir, run_id))
-    state = read_record(directory / "run_state.json")
+    from ..core.recoverable_artifacts import load_run_state, artifact_path
+    if (directory / "run_state.json").exists():
+        state = load_run_state(directory)
+    elif (directory / "artifacts" / "index.json").exists():
+        raise ValueError("Chybí stav nového běhu; přesné artefakty nelze nahradit provozním logem.")
+    else:
+        state = {}
     if state.get("status") == "submission_unknown" or (
         not state.get("response_transport") and "timed out" in str(state.get("error", "")).lower()
     ):
         raise ValueError("Předchozí odeslání nemá potvrzený výsledek. Automatické opakování není bezpečné; případné nové generování spusťte jako nový běh.")
     ui = state.get("ui_state")
-    for path in newest(directory / "requests"):
-        candidate = read_record(path).get("ui_state")
-        if isinstance(candidate, dict) and candidate:
-            ui = candidate
-            break
+    if artifact_path(directory, "state/ui_state") is None:
+        for path in newest(directory / "requests"):
+            candidate = read_record(path).get("ui_state")
+            if isinstance(candidate, dict) and candidate:
+                ui = candidate
+                break
     if not isinstance(ui, dict) or not ui:
         raise ValueError("Uložené zadání nebylo nalezeno.")
     ui = copy.deepcopy(ui)

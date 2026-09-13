@@ -52,7 +52,7 @@ def save_state(tmp_path, manifest):
 
 def test_modify_rows_include_full_original_and_action():
     manifest = modify_manifest()
-    assert manifest["version"] == 2 and manifest["mode"] == "MODIFY"
+    assert manifest["version"] == 3 and manifest["mode"] == "MODIFY"
     assert manifest["snapshot"]["requirements"] is None
     assert manifest["snapshot"]["maximum_quality"] is False
     assert len(manifest["requests"]) == 2
@@ -61,10 +61,11 @@ def test_modify_rows_include_full_original_and_action():
         context = json.loads(body["input"])
         assert body["instructions"] == stage_instructions("B3_FILE", batch=True)
         assert "additionalProperties" not in body["instructions"]
-        assert context["original_content"] == ("původní\n" * 1000 if action == "modify" else "")
+        sources = context["file_context"]["working_context"]["relevant_source_excerpts"]
+        assert {s["path"]: s["content"] for s in sources} == {"maths.py": "původní\n" * 1000}
         assert body["text"]["format"]["schema"]["properties"]["action"]["enum"] == [action]
         assert "_B3_" in row["custom_id"]
-        assert context["originals"] == {"maths.py": "původní\n" * 1000}
+        assert "originals" not in context
 
 
 @pytest.mark.parametrize("model,effort", [("gpt-4.1-nano", None), ("gpt-5-mini", "high"), ("gpt-5.2", "xhigh")])
@@ -228,7 +229,7 @@ def test_versing_does_not_snapshot_rejected_results(tmp_path):
 
 
 def test_enriched_generate_traceability_and_snapshot():
-    from delivery_fixtures import plan_payload
+    from delivery_fixtures import plan_payload, implementation_fixture
     from kajovo.core.requirements import requirements_format
 
     schema = requirements_format("GENERATE")["format"]["schema"]
@@ -242,6 +243,7 @@ def test_enriched_generate_traceability_and_snapshot():
     struct = specification()
     for file in struct["files"]:
         file.update(requirement_ids=["R1"], architecture_item_ids=["component"])
+    implementation_fixture(struct, requirements, plan)
     manifest = build_manifest("r", "p", plan, struct, "gpt-4.1-nano", 0,
                               requirements=requirements, maximum_quality=True)
     assert manifest["snapshot"]["requirements"] == requirements
@@ -261,7 +263,7 @@ def test_modify_preserved_dependency_is_context_not_batch_task():
                               originals={"maths.py": "def add(a, b): return a + b"})
     assert list(prepared["expected"].values()) == ["main.py"]
     context = json.loads(prepared["requests"][0]["body"]["input"])
-    assert context["originals"] == {"maths.py": "def add(a, b): return a + b"}
+    assert {s["path"]: s["content"] for s in context["file_context"]["working_context"]["relevant_source_excerpts"]} == {"maths.py": "def add(a, b): return a + b"}
     assert prepared["omitted"] == []
 
 

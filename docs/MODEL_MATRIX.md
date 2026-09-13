@@ -181,3 +181,6 @@ Modelová stránka GPT-5.2 Pro a GPT-5.4 Pro nepotvrzuje Batch ani strict Struct
 | [tts-1](https://developers.openai.com/api/docs/models/tts-1) | ne | ne | — | omit | ne / ne / ne | — |
 | [tts-1-hd](https://developers.openai.com/api/docs/models/tts-1-hd) | ne | ne | — | omit | ne / ne / ne | — |
 | [whisper-1](https://developers.openai.com/api/docs/models/whisper-1) | ne | ne | — | omit | ne / ne / ne | — |
+
+
+Souborové GENERATE/MODIFY používá [Context Compiler a rozpočet](CONTEXT_COMPILER.md). Průběh ukazuje odhad vstupu, model, reasoning a output budget; úplný rozpad a usage jsou v lokálním cost_context_report.json. Modelová matice zůstává zdrojem kapacit; klasifikace souboru ji nemění.

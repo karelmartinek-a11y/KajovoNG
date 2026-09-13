@@ -122,7 +122,7 @@ def enriched_plan_format(mode: str) -> dict:
     return result
 
 
-def enriched_structure_format(mode: str) -> dict:
+def enriched_structure_format(mode: str, *, implementation: bool = False) -> dict:
     """Vrátí A2/B2 i pro quality gate, nikoli samostatný gate kontrakt."""
     prefix = _prefix(mode)
     text = {"type": "string"}
@@ -151,6 +151,9 @@ def enriched_structure_format(mode: str) -> dict:
             "behavior": text, "preserved_behaviour": strings,
         })
     _extend(item, {"requirement_ids": strings, "architecture_item_ids": strings})
+    if implementation:
+        from .context_compiler import implementation_schema
+        _extend(result["format"]["schema"], {"implementation": implementation_schema()})
     return result
 
 
@@ -179,7 +182,9 @@ def validate_traceability(req: dict, plan: dict, struct: dict, mode: str | None 
     for value, factory in ((req, requirements_format), (plan, enriched_plan_format),
                            (struct, enriched_structure_format)):
         try:
-            jsonschema.validate(value, factory(mode)["format"]["schema"])
+            fmt = (enriched_structure_format(mode, implementation="implementation" in struct)
+                   if factory is enriched_structure_format else factory(mode))
+            jsonschema.validate(value, fmt["format"]["schema"])
         except jsonschema.ValidationError as exc:
             raise ContractError(f"Neplatná specifikace: {exc.message}") from exc
     requirement_keys = (

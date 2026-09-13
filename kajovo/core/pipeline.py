@@ -430,6 +430,12 @@ class RunWorker(QThread):
                 self.log.update_state({"status": final_status})
             self.finished_ok.emit(result)
         except BaseException as e:
+            measurement = getattr(e, "context_report", None)
+            if measurement:
+                from .cost_context_report import CostContextReport
+                CostContextReport(self.log.paths.run_dir).record(
+                    {"model": measurement["model"]}, custom_id=measurement["request_hash"],
+                    measurement=measurement, status="blocked")
             msg = str(e)
             if self._last_prev_id_error:
                 msg = self._last_prev_id_error
@@ -964,47 +970,15 @@ class RunWorker(QThread):
 
     # Zavedení dlouhého zadání.
     def _ingest_prompt_if_needed(self, client: OpenAIClient, prev_id: Optional[str]) -> Optional[str]:
+        """Zachová přesný dlouhý vstup lokálně; příjem proběhne v pracovní A0R/B0R."""
+        from .recoverable_artifacts import save_artifact
         prompt = self.cfg.prompt or ""
-        if len(prompt) <= 150_000:
-            return prev_id
+        if len(prompt) > 150_000:
+            save_artifact(self.log.paths.run_dir, "source_prompt", {"text": prompt})
+            self.progress_event.emit(ProgressEvent("A0", completed=1, total=1,
+                unit="zadání", detail=f"Uloženo přesné zadání: {len(prompt):,} znaků; bez placených potvrzení částí."))
+        return prev_id
 
-        # Zavedení zadání vyžaduje návaznost odpovědí.
-        ingest_model = self._generate_model("A1") if self.cfg.mode == "GENERATE" else self.cfg.model
-        if self._model_caps(ingest_model).get("supports_previous_response_id") is False:
-            raise RuntimeError("Long prompt ingest requires previous_response_id (model flagged as unsupported).")
-
-        self._set(4, 0, f"A0: načítám dlouhé zadání ({len(prompt)} znaků)…", stage="A0")
-        chunks = split_text(prompt, max_chars=20_000)
-        part_count = len(chunks)
-
-        last_id = prev_id
-        for i, ch in enumerate(chunks):
-            self._check_stop()
-            self._progress_stage = "A0"
-            self.progress_event.emit(ProgressEvent("A0", completed=i, total=part_count, unit="částí zadání"))
-
-            instructions = stage_instructions("A0")
-            payload = self._payload_base(
-                model=ingest_model,
-                instructions=instructions,
-                input_parts=self._input_parts(f"PART {i+1}/{part_count}:\n{ch}", []),
-                prev_id=last_id,
-                supports_temperature=self._model_caps(ingest_model).get("supports_temperature", False),
-            )
-            self.log.save_json("requests", f"A0_ingest_{i}_{ts_code()}", {"payload": payload, "ui_state": self.cfg.__dict__})
-            resp = self._create_response(client, payload)
-            self.log.save_json("responses", f"A0_ingest_resp_{resp.get('id','NOID')}_{i}_{ts_code()}", resp)
-
-            last_id = str(resp.get("id") or "")
-            if not last_id:
-                raise RuntimeError("A0 ingest: missing response id")
-            self.subprogress.emit(int((i + 1) * 100 / max(1, part_count)))
-            self.progress_event.emit(ProgressEvent("A0", completed=i + 1, total=part_count, unit="částí zadání"))
-
-        self._set(6, 100, f"A0: zadání načteno; navazuji odpovědí {last_id}.", stage="A0")
-        return last_id
-
-    # Snapshoty a zápis souborů.
     def _create_snapshot(self, root: str) -> str:
         root = os.path.abspath(root)
         root_name = os.path.basename(root)
@@ -1105,12 +1079,16 @@ class RunWorker(QThread):
         return report_path
 
     def _create_response(self, client, payload, *, attempt=0):
+        from .cost_context_report import CostContextReport
         if attempt:
             payload = copy.deepcopy(payload)
             payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
         prepare_payload(payload)
         if self.cfg.mode in ("GENERATE", "MODIFY"):
             apply_quality(payload, self.cfg.maximum_quality)
+        cost_report = CostContextReport(self.log.paths.run_dir)
+        cost_payload = {**payload, "background": True, "store": True} if self._response_journal is not None else payload
+        cost_report.record(cost_payload, status="submitting")
         self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
         self.progress_event.emit(ProgressEvent(self._progress_stage, "waiting", detail="Čekám na odpověď API."))
         try:
@@ -1129,6 +1107,7 @@ class RunWorker(QThread):
             response = getattr(exc, "response", None)
             if not isinstance(response, dict):
                 raise
+        cost_report.record(cost_payload, response=response)
         self.progress_event.emit(ProgressEvent(self._progress_stage, detail="Odpověď přijata; ověřuji výsledek."))
         self.log.save_json("responses", f"received_{response.get('id', 'NOID')}", response)
         if response.get("status") not in (None, "completed") or response.get("error"):
@@ -1195,7 +1174,7 @@ class RunWorker(QThread):
                     continue
                 files.append(f)
         else:
-            a1_text = (self.cfg.prompt or "") if len(self.cfg.prompt or "") <= 150_000 else "Použij celé zadání zavedené technickým A0."
+            a1_text = self.cfg.prompt or ""
             a1_text = self._with_diag_text(self._append_io_reference(
                 a1_text, self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)))
             note = self._in_dir_fallback_note()
@@ -1307,6 +1286,21 @@ class RunWorker(QThread):
 
     # Odeslání souborových úloh po živé přípravě.
     def _submit_generate_batch(self, client, manifest):
+        from .cost_context_report import CostContextReport
+        from .recoverable_artifacts import load_run_state
+        current_state = load_run_state(self.log.paths.run_dir)
+        if current_state.get("submission_unknown") or current_state.get("status") == "submission_unknown":
+            raise ContractError("Předchozí neurčitý submit musí být dohledán před dalším odesláním.")
+        if manifest.get("version") != 3:
+            raise ContractError("Nové odeslání legacy snapshotové dávky je zakázáno; je nutná explicitní příprava FileContext.")
+        report = CostContextReport(self.log.paths.run_dir)
+        for row, measurement in zip(manifest["requests"], manifest["cost_context_reports"], strict=True):
+            report.record(row["body"], custom_id=row["custom_id"],
+                          path=manifest["expected"][row["custom_id"]], measurement=measurement)
+        total_input = sum(r["input_tokens"] for r in manifest["cost_context_reports"])
+        self.progress_event.emit(ProgressEvent("Kontext BATCH", detail=
+            f"{len(manifest['requests'])} úloh · odhad vstupu {total_input:,} tokenů · "
+            f"{manifest['requests'][0]['body']['model']} · podrobnosti v cost_context_report.json"))
         self._verify_completed_files()
         completed = {path: value for path, value in (getattr(self.cfg, "completed_hashes", None) or {}).items()
                      if path in (self.cfg.skip_paths or []) and path in manifest.get("omitted", [])}
@@ -1461,7 +1455,7 @@ class RunWorker(QThread):
                 if tools:
                     self._fs_tools = tools
 
-            b_text = (self.cfg.prompt or "") if len(self.cfg.prompt or "") <= 150_000 else "Použij celé zadání zavedené technickým A0."
+            b_text = self.cfg.prompt or ""
             b_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids + [manifest_file_id] + [fid for _, fid in uploaded])
             b_input_files, b_input_images = self._build_input_attachments(
                 client, self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded])
@@ -1745,16 +1739,19 @@ class RunWorker(QThread):
         tools: Optional[List[Dict[str, Any]]] = None,
         model_override: Optional[str] = None,
     ) -> Tuple[str, str]:
-        gen_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-        if contract == "A3_FILE":
-            gen_input_files, gen_input_images = [], []
-        else:
-            gen_input_files, gen_input_images = self._build_input_attachments(client, self._input_file_ids())
+        from .context_compiler import ContextCompiler, canonical
+        from .context_budget import configure_file_request, enforce_budget, measure_request
+        if not getattr(self, "_delivery_snapshot", None):
+            raise ContractError("Souborová generace vyžaduje úplnou kanonickou přípravu FileContext.")
+        compiler = ContextCompiler(self._delivery_snapshot)
+        compiled = compiler.compile(path, originals=getattr(self, "_delivery_originals", None))
+        gen_ref_files, gen_input_files, gen_input_images = [], [], []
+        tools = None
 
         instructions = stage_instructions("A3" if contract == "A3_FILE" else "B3")
         chunk_index = 0
         parts: List[str] = []
-        latest_response_id = str(prev_id or "")
+        latest_response_id = ""
         declared_chunk_count = 0
         step_model = str(model_override or self.cfg.model or "").strip()
         while True:
@@ -1763,14 +1760,16 @@ class RunWorker(QThread):
                 prompt = f"Vrať obsah souboru PATH={path}. Pokud je dlouhý, vrať chunk CHUNK_INDEX={chunk_index}."
             else:
                 prompt = f"Vrať výsledný obsah souboru PATH={path} ACTION={action}. Pokud je dlouhý, vrať chunk CHUNK_INDEX={chunk_index}."
-            if contract != "A3_FILE":
-                prompt = self._append_io_reference(prompt, gen_ref_files)
-            prompt = self._with_diag_text(prompt)
-            if getattr(self, "_delivery_snapshot", None):
-                prompt += "\n" + json.dumps({"specification": self._delivery_snapshot}, ensure_ascii=False)
-            if contract == "B3_FILE" and getattr(self, "_delivery_originals", None):
-                prompt += "\n" + json.dumps({"originals": self._delivery_originals}, ensure_ascii=False)
+            prompt += "\n" + canonical({"file_context": compiled} if not parts else {
+                "file_context_hash": compiled["file_context_hash"],
+                "instruction": "Zachovej implementační kontrakt prvního chunku tohoto souboru."})
             prompt += "\n" + json.dumps({"chunk_max_lines": 500}, ensure_ascii=False)
+            if parts:
+                prompt += "\n" + canonical({"continuation": {
+                    "chunk_index": chunk_index,
+                    "prefix_sha256": hashlib.sha256("".join(parts).encode("utf-8")).hexdigest(),
+                    "prefix_characters": sum(len(part) for part in parts),
+                    "instruction": "Pokračuj přesně za posledním potvrzeným chunkem; neopakuj prefix."}})
 
             payload = self._payload_base(
                 model=step_model,
@@ -1784,7 +1783,19 @@ class RunWorker(QThread):
             if step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True) and not uses_reasoning_defaults(step_model):
                 payload["temperature"] = 0.0
 
-            apply_quality(payload, self.cfg.maximum_quality)
+            routing = configure_file_request(payload, compiled, maximum_quality=self.cfg.maximum_quality)
+            token_count = None
+            if parts:
+                measured = client.count_input_tokens(payload)
+                if isinstance(measured, dict):
+                    token_count = measured["input_tokens"]
+            report = enforce_budget(measure_request(payload, compiled=compiled, exact_input_tokens=token_count))
+            self.progress_event.emit(ProgressEvent(contract[:2], detail=
+                f"{path} · vstup ~{report['input_tokens']:,} tokenů · {step_model} · "
+                f"reasoning {payload.get('reasoning', {}).get('effort', 'bez reasoning')} · "
+                f"výstupní rozpočet {payload['max_output_tokens']:,} · " + " ".join(report["warnings"])))
+            self.log.save_json("manifests", f"context_{path.replace('/', '_')}_{chunk_index}",
+                               {"context": compiled, "routing": routing, "measurement": report})
             if tools:
                 payload["tools"] = tools
             vs_ids = []
@@ -1818,6 +1829,11 @@ class RunWorker(QThread):
                 except OutputContractError as exc:
                     self.log.save_json("responses", f"{contract}_invalid_{chunk_index}_{attempt}", exc.response)
                     last_err = exc
+                    repair = {"validation_error": str(exc),
+                              "invalid_output": extract_text_from_response(exc.response),
+                              "instruction": "Oprav konkrétní chybu a vrať úplný platný chunk podle původního kontraktu."}
+                    payload["input"] = self._input_parts(prompt + "\n" + canonical({"repair": repair}), [], [])
+                    enforce_budget(measure_request(payload, compiled=compiled))
                     attempt += 1
                     continue
                 resp_id = str(resp.get("id") or "")
@@ -1908,4 +1924,16 @@ class RunWorker(QThread):
         if self._response_journal:
             self._response_file_ids[path] = latest_response_id
             self.log.update_state({"response_file_ids": self._response_file_ids})
-        return "".join(parts), latest_response_id
+        content = "".join(parts)
+        if not content.strip() and not compiled["working_context"]["implementation_contract"]["allow_empty"]:
+            raise ContractError(f"{path}: prázdný soubor odporuje implementačnímu kontraktu.")
+        from .recoverable_artifacts import save_artifact
+        save_artifact(self.log.paths.run_dir, "generated/" + path, {
+            "path": path, "content": content, "output_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "file_context_hash": compiled["file_context_hash"], "contract_hash": compiled["contract_hash"],
+            "dependency_hashes": compiled["dependency_hashes"], "response_id": latest_response_id,
+            "validation_status": "file_contract_validated_integration_unverified",
+            "chunks": [{"index": i, "sha256": hashlib.sha256(part.encode("utf-8")).hexdigest()}
+                       for i, part in enumerate(parts)],
+        })
+        return content, latest_response_id

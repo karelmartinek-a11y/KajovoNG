@@ -17,6 +17,8 @@ from .structured_output import validate_output
 from .utils import atomic_write_text, is_versing_snapshot_dir, safe_join_under_root
 from .batch_submit import submit_verified_batch
 from .progress import ProgressEvent
+from .context_compiler import ContextCompiler, canonical
+from .context_budget import configure_file_request, measure_request, enforce_budget
 
 
 def object_schema(properties):
@@ -65,7 +67,8 @@ def _validate_structure_base(struct):
     """Ověří tvar a jednoznačnost identifikátorů před zpracováním vazeb."""
     import jsonschema
     try:
-        jsonschema.validate(struct, structure_format()["format"]["schema"])
+        jsonschema.validate({k: v for k, v in struct.items() if k != "implementation"},
+                            structure_format()["format"]["schema"])
     except jsonschema.ValidationError as exc:
         raise ContractError(f"Neúplná specifikace A2: {exc.message}") from exc
     validate_paths(struct["files"])
@@ -177,6 +180,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
             raise ContractError("MODIFY podporuje pouze akce add a modify.")
     else:
         normalized = copy.deepcopy(structure)
+        normalized.pop("implementation", None)
         for file in normalized.get("files", []):
             file.pop("requirement_ids", None)
             file.pop("architecture_item_ids", None)
@@ -187,27 +191,23 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
     snapshot = copy.deepcopy({"prompt": prompt, "plan": plan, "structure": structure,
                               "requirements": requirements, "maximum_quality": maximum_quality})
     originals = originals or {}
+    if any(not isinstance(value, str) for value in originals.values()):
+        raise ContractError("Původní obsah musí být text.")
+    snapshot["original_hashes"] = {path: hashlib.sha256(content.encode("utf-8")).hexdigest()
+                                   for path, content in originals.items()}
+    compiler = ContextCompiler(snapshot)
     selected = [f for f in files if f["kind"] == "text" and (paths is None or f["path"] in paths)]
     if not selected:
         raise ContractError("Manifest neobsahuje žádné vybrané textové soubory.")
     if len(selected) > 50_000:
         raise ContractError("Dávka překračuje 50 000 souborů.")
-    rows = []
+    rows, reports = [], []
     for index, file in enumerate(selected):
         action = file["action"] if modifying else None
         if modifying and action == "modify" and not isinstance(originals.get(file["path"]), str):
             raise ContractError(f"Chybí úplný původní obsah souboru {file['path']}.")
-        context = {"specification": snapshot, "file": file}
-        if modifying:
-            context["original_content"] = originals.get(file["path"], "")
-            if not isinstance(context["original_content"], str):
-                raise ContractError("Původní obsah souboru musí být text.")
-            context["originals"] = {
-                path: originals[path] for path in dict.fromkeys([file["path"], *file["dependencies"]])
-                if path in originals
-            }
-            if any(not isinstance(content, str) for content in context["originals"].values()):
-                raise ContractError("Původní obsah závislostí musí být text.")
+        compiled = compiler.compile(file["path"], originals=originals)
+        context = {"file_context": compiled, "file": file}
         fmt = file_response_format(stage, file["path"], 0, action=action)
         chunk = fmt["format"]["schema"]["properties"]["chunking"]["properties"]
         chunk["chunk_count"] = {"type": "integer", "enum": [1]}
@@ -217,15 +217,27 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
             "model": model,
             "store": False,
             "instructions": stage_instructions(stage, batch=True),
-            "input": json.dumps(context, ensure_ascii=False),
+            "input": canonical(context),
         }
         body["text"] = fmt
         if temperature is not None and not uses_reasoning_defaults(model):
             body["temperature"] = temperature
+        routing = configure_file_request(body, compiled, maximum_quality=maximum_quality)
         apply_quality(body, maximum_quality)
+        report = enforce_budget(measure_request(body, compiled=compiled, batch=True))
+        legacy_context = {"specification": snapshot, "file": file}
+        if modifying:
+            legacy_context["original_content"] = originals.get(file["path"], "")
+            legacy_context["originals"] = {p: originals[p] for p in [file["path"], *file["dependencies"]] if p in originals}
+        legacy = measure_request({**body, "input": json.dumps(legacy_context, ensure_ascii=False)}, batch=True)
+        report["legacy_estimated_input_tokens"] = legacy["input_tokens"]
+        report["saved_estimated_input_tokens"] = legacy["input_tokens"] - report["input_tokens"]
         validate_response_payload(body)
         rows.append({"custom_id": f"{run_id}_{stage[:2]}_{index:05d}", "method": "POST", "url": "/v1/responses", "body": body})
-    manifest = {"version": 2, "mode": mode, "snapshot": snapshot, "snapshot_hash": digest(snapshot), "requests": rows,
+        report.update(routing=routing, path=file["path"], custom_id=rows[-1]["custom_id"])
+        reports.append(report)
+    manifest = {"version": 3, "mode": mode, "snapshot": snapshot, "snapshot_hash": digest(snapshot), "requests": rows,
+                "cost_context_reports": reports, "dependency_waves": compiler.graph,
                 "expected": {row["custom_id"]: file["path"] for row, file in zip(rows, selected, strict=True)},
                 "omitted": [f["path"] for f in files if f not in selected]}
     encode_requests(manifest)
@@ -233,7 +245,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
 
 
 def encode_requests(manifest):
-    if manifest.get("version", 1) not in {1, 2} or manifest.get("mode", "GENERATE") not in {"GENERATE", "MODIFY"}:
+    if manifest.get("version", 1) not in {1, 2, 3} or manifest.get("mode", "GENERATE") not in {"GENERATE", "MODIFY"}:
         raise ContractError("Nepodporovaná verze nebo režim manifestu.")
     if digest(manifest["snapshot"]) != manifest["snapshot_hash"]:
         raise ContractError("Specifikace dávky byla změněna.")
@@ -259,14 +271,30 @@ def encode_requests(manifest):
     if set(manifest["expected"]) != {r["custom_id"] for r in rows}:
         raise ContractError("Mapování úloh neodpovídá požadavkům.")
     validate_paths([{"path": p} for p in manifest["expected"].values()])
+    compiler = ContextCompiler(manifest["snapshot"]) if manifest.get("version") == 3 else None
     for row in rows:
         validate_response_payload(row["body"])
         if row["method"] != "POST" or row["url"] != "/v1/responses" or row["body"].get("previous_response_id"):
             raise ContractError("Souborová úloha musí být samostatný požadavek Responses.")
         context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
-        if digest(context["specification"]) != manifest["snapshot_hash"] or context["file"]["path"] != manifest["expected"][row["custom_id"]]:
+        if manifest.get("version") == 3:
+            compiled = context.get("file_context", {})
+            original_sources = {s["path"]: s["content"] for s in
+                                compiled.get("working_context", {}).get("relevant_source_excerpts", [])}
+            if any(hashlib.sha256(value.encode("utf-8")).hexdigest() !=
+                   manifest["snapshot"].get("original_hashes", {}).get(path)
+                   for path, value in original_sources.items()):
+                raise ContractError("Původní obsah neodpovídá auditnímu snapshotu.")
+            expected_context = compiler.compile(
+                context["file"]["path"], originals=original_sources)
+            if compiled != expected_context or "specification" in context or row["body"].get("tools"):
+                raise ContractError("FileContext neodpovídá kanonické přípravě.")
+            enforce_budget(measure_request(row["body"], compiled=compiled, batch=True))
+        elif digest(context["specification"]) != manifest["snapshot_hash"]:
+            raise ContractError("Úloha neodpovídá společné specifikaci.")
+        if context["file"]["path"] != manifest["expected"][row["custom_id"]]:
             raise ContractError("Úloha neodpovídá společné specifikaci nebo cílové cestě.")
-        if manifest.get("version") == 2:
+        if manifest.get("version") in {2, 3}:
             modifying = manifest["mode"] == "MODIFY"
             files = manifest["snapshot"]["structure"]["touched_files" if modifying else "files"]
             if context["file"] not in files:
@@ -275,7 +303,7 @@ def encode_requests(manifest):
             stage = "B3_FILE" if modifying else "A3_FILE"
             if properties["contract"].get("enum") != [stage] or properties["path"].get("enum") != [context["file"]["path"]]:
                 raise ContractError("Schéma úlohy neodpovídá režimu nebo cestě manifestu.")
-            if modifying and (not isinstance(context.get("original_content"), str)
+            if modifying and ((manifest.get("version") == 2 and not isinstance(context.get("original_content"), str))
                               or properties.get("action", {}).get("enum") != [context["file"]["action"]]):
                 raise ContractError("Úloha MODIFY nemá původní obsah nebo správnou akci.")
     data = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
@@ -352,6 +380,12 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             if not isinstance(chunk, dict) or type(chunk.get("chunk_index")) is not int or chunk["chunk_index"] != 0 or type(chunk.get("chunk_count")) is not int or chunk["chunk_count"] != 1 or chunk.get("has_more") is not False or chunk.get("next_chunk_index") is not None:
                 raise ContractError("Dávkový soubor musí být úplný v jediné části.")
             contents[cid] = payload["content"]
+            if manifest.get("version") == 3:
+                context, _ = json.JSONDecoder().raw_decode(request_body["input"])
+                allow_empty = context["file_context"]["working_context"]["implementation_contract"]["allow_empty"]
+                if not payload["content"].strip() and not allow_empty:
+                    contents.pop(cid)
+                    raise ContractError("Prázdný soubor odporuje implementačnímu kontraktu.")
         except (ContractError, AttributeError) as exc:
             errors[cid] = str(exc)
     hashes, written = dict(previous_hashes or {}), []
@@ -402,7 +436,8 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
 def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, progress=None):
     """Stáhne a vyhodnotí vlastní dávku; neprovádí žádný vygenerovaný kód."""
     state_path = Path(run_dir) / "run_state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
+    from .recoverable_artifacts import load_run_state
+    state = load_run_state(run_dir)
     if batch_id != state.get("batch_id") and batch_id not in state.get("generate_batches", {}):
         raise ContractError("Dávka nepatří k tomuto běhu.")
     manifest = (state.get("generate_batches") or {}).get(batch_id, state["generate_batch"])
@@ -420,6 +455,29 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
             raw_files.append(raw)
             raw_path = safe_join_under_root(str(response_dir), f"{batch_id}_{key}.jsonl")
             Path(raw_path).write_bytes(raw)
+    from .cost_context_report import CostContextReport
+    reporter = CostContextReport(run_dir)
+    batch_usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+    requests_by_id = {r["custom_id"]: r["body"] for r in manifest["requests"]}
+    for raw in raw_files:
+        for line in raw.decode("utf-8").splitlines():
+            if not line.strip():
+                continue
+            result_row = parse_json_strict(line)
+            cid = result_row.get("custom_id")
+            if cid in requests_by_id:
+                body = (result_row.get("response") or {}).get("body") or {"status": "failed"}
+                if result_row.get("error"):
+                    body = {**body, "error": result_row["error"]}
+                reporter.record(requests_by_id[cid], custom_id=cid, response=body,
+                                path=manifest["expected"][cid])
+                usage = body.get("usage") or {}
+                batch_usage["input_tokens"] += usage.get("input_tokens", 0)
+                batch_usage["output_tokens"] += usage.get("output_tokens", 0)
+                batch_usage["reasoning_tokens"] += (usage.get("output_tokens_details") or {}).get("reasoning_tokens", 0)
+    if progress:
+        progress(ProgressEvent("Spotřeba BATCH", detail=f"Vstup {batch_usage['input_tokens']:,} · "
+            f"výstup {batch_usage['output_tokens']:,} · reasoning {batch_usage['reasoning_tokens']:,} tokenů"))
     target = state.get("out_dir")
     if not target:
         raise ContractError("Běh nemá cílový adresář OUT.")
@@ -429,6 +487,7 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
     if progress:
         progress(ProgressEvent("Validace kontraktů", detail="Ověřuji výsledky proti uloženému manifestu."))
     result = import_results(manifest, raw_files, target, state.get("generated_hashes"), allowed, progress=progress)
+    result["usage"] = batch_usage
     result["import_status"] = result["status"]
     for body in result.pop("responses"):
         stage = "B3" if manifest.get("mode") == "MODIFY" else "A3"
@@ -469,11 +528,16 @@ def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
     from .requirements import stage_instructions
 
     state_path = Path(run_dir) / "run_state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
+    from .recoverable_artifacts import load_run_state, save_artifact
+    state = load_run_state(run_dir)
     if source_batch_id != state.get("batch_id") and source_batch_id not in state.get("generate_batches", {}):
         raise ContractError("Dávka nepatří k tomuto běhu.")
     source = (state.get("generate_batches") or {}).get(source_batch_id, state["generate_batch"])
     encode_requests(source)
+    if source.get("version") != 3:
+        raise ContractError("Legacy dávku lze importovat; nové odeslání vyžaduje implementační přípravu a manifest v3.")
+    if state.get("submission_unknown") or state.get("pending_batch_submission") or state.get("status") == "submission_unknown":
+        raise ContractError("Neznámý submit musí být dohledán před novým odesláním.")
     selected = set(paths)
     if not selected or not selected <= set(source["expected"].values()):
         raise ContractError("Vyberte pouze soubory z manifestu dávky.")
@@ -513,8 +577,16 @@ def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
     data = encode_requests(manifest)
     path = Path(run_dir) / "requests" / f"repeat_{prefix}.jsonl"
     path.write_bytes(data)
+    from .cost_context_report import CostContextReport
+    reporter = CostContextReport(run_dir)
+    for row in rows:
+        context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
+        measurement = measure_request(row["body"], compiled=context["file_context"], batch=True)
+        reporter.record(row["body"], custom_id=row["custom_id"], path=expected[row["custom_id"]],
+                        measurement=measurement, status="submitting")
     uploaded = client.upload_file(str(path), purpose="batch")
     state["pending_batch_submission"] = {"input_file_id": uploaded["id"], "manifest": manifest}
+    save_artifact(run_dir, "state/pending_batch_submission", state["pending_batch_submission"])
     state["submission_input_file_id"] = uploaded["id"]
     state["submission_endpoint"] = "/v1/responses"
     state["submission_jsonl_sha256"] = hashlib.sha256(data).hexdigest()
@@ -523,6 +595,7 @@ def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
     batch = submit_verified_batch(client, uploaded["id"], manifest["requests"])
     state.setdefault("batch_records", {})[batch["id"]] = batch
     state.setdefault("generate_batches", {})[batch["id"]] = manifest
+    save_artifact(run_dir, "state/generate_batches", state["generate_batches"])
     state.pop("pending_batch_submission", None)
     state["submission_unknown"] = False
     state["status"] = "batch_pending"

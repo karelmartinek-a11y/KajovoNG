@@ -95,3 +95,6 @@ Skutečně vykreslené Qt rozhraní s izolovanými ukázkovými daty. Zadání j
 ![Zadání](ui/zadani.png)
 
 ![Průběh na malé ploše](ui/prubeh.png)
+
+
+Souborové GENERATE/MODIFY používá [Context Compiler a rozpočet](CONTEXT_COMPILER.md). Průběh ukazuje odhad vstupu, model, reasoning a output budget; úplný rozpad a usage jsou v lokálním cost_context_report.json. Modelová matice zůstává zdrojem kapacit; klasifikace souboru ji nemění.

@@ -1,12 +1,9 @@
 import unittest
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
-from kajovo.core.config import AppSettings
 from kajovo.core.contracts import ContractError, parse_json_strict, validate_paths
-from kajovo.core.pipeline import RunWorker
 
 
 @pytest.mark.parametrize("text", ['{"x":1,"x":2}', '{"x":NaN}', '{"x":Infinity}', 'prefix {"x":NaN} suffix', '{"x":1e999}'])
@@ -45,10 +42,12 @@ def test_manifest_path_conflicts(paths):
         validate_paths([{"path": path} for path in paths])
 
 
-def test_invalid_generated_json_fails_instead_of_returning_empty_file():
-    cfg = SimpleNamespace(attached_file_ids=[], model="test", model_caps={}, temperature=0.0,
-                          use_file_search=False, mode="GENERATE", project="test", prompt="test")
-    worker = RunWorker(cfg, AppSettings(), "test", Mock())
+def test_invalid_generated_json_fails_instead_of_returning_empty_file(tmp_path):
+    from test_workflows import make_worker
+    from delivery_fixtures import delivery_payloads
+    worker = make_worker(tmp_path, "GENERATE")
+    req, plan, struct = delivery_payloads(files=[{"path": "keep.txt"}])
+    worker._delivery_snapshot = {"requirements": req, "plan": plan, "structure": struct}
     client = Mock()
     client.create_response.return_value = {"id": "response", "status": "completed", "output_text": "invalid"}
     with pytest.raises(ContractError):

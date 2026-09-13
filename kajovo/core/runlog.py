@@ -249,6 +249,9 @@ class RunLogger:
         self._atomic_write_json(self.state_path, self._redact(state))
 
     def update_state(self, patch: Dict[str, Any]) -> None:
+        from .recoverable_artifacts import STATE_ARTIFACTS, save_artifact
+        for key in STATE_ARTIFACTS & patch.keys():
+            save_artifact(self.paths.run_dir, "state/" + key, patch[key])
         state = {}
         try:
             if os.path.exists(self.state_path):
@@ -281,10 +284,16 @@ class RunLogger:
         return str(json_artifact_path(self.paths.run_dir, kind, self.run_id, self.project_name, name))
 
     def find_json(self, kind: str, name: str) -> Optional[str]:
+        from .recoverable_artifacts import artifact_path
+        exact = artifact_path(self.paths.run_dir, kind + "/" + name)
+        if exact:
+            return exact
         path = self._json_path(kind, name)
         return path if os.path.isfile(path) else None
 
     def save_json(self, kind: str, name: str, obj: Any) -> str:
+        from .recoverable_artifacts import save_artifact
+        save_artifact(self.paths.run_dir, kind + "/" + name, obj)
         path = self._json_path(kind, name)
         self._atomic_write_json(path, self._redact(obj))
         self.event(f"file.saved.{kind}", {"path": path, "bytes": os.path.getsize(path)})

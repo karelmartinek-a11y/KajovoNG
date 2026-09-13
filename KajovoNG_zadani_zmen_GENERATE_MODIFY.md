@@ -496,3 +496,6 @@ Implementace této etapy je hotová pouze tehdy, když automatické testy a inte
 # 21. Jednovětá definice cílového výsledku
 
 **KájovoNG nesmí považovat práci za hotovou ve chvíli, kdy pouze splnil napsané body zadání; za hotovou ji smí považovat až tehdy, když je původní záměr uživatele profesionálně rozpracován, všechny relevantní implicitní požadavky jsou dotaženy do konkrétního chování a výsledná implementace je skutečná, konzistentní a bez skeletonů, provizorií či „divadla, aby to hrálo“.**
+# Implementační kontext a návaznost kontraktů
+
+Odborné instrukce v tomto dokumentu doplňuje pracovní schema A2/B2 s `implementation.version: 1` a pravidly působnosti globálních povinností. Souborové fáze používají FileContext, nikoli celý projektový snapshot. Technický příjem A0 neprovádí placená potvrzení částí. Přesnou strukturu, hashování, lokální blokace a hranice integračního ověření určuje [Context Compiler](docs/CONTEXT_COMPILER.md) a kanonická [SSOT](docs/SSOT.md).

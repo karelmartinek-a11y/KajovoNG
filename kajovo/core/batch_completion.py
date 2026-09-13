@@ -20,7 +20,8 @@ CANCELLABLE = {"validating", "in_progress", "finalizing"}
 
 def read_state(run_dir):
     try:
-        value = json.loads((Path(run_dir) / "run_state.json").read_text(encoding="utf-8"))
+        from .recoverable_artifacts import load_run_state
+        value = load_run_state(run_dir)
         if not isinstance(value, dict):
             return {}
         for key in ("generate_batches", "batch_imports", "batch_records", "ui_state"):

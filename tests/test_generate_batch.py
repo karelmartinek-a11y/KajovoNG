@@ -14,11 +14,11 @@ from kajovo.core.generate_batch import (
     repeat_saved_batch,
 )
 from test_workflows import make_worker, response
-from delivery_fixtures import plan_payload, requirements_payload, structure_payload
+from delivery_fixtures import plan_payload, requirements_payload, structure_payload, implementation_fixture
 
 
 def specification():
-    return {
+    return implementation_fixture({
         "contract": "A2_STRUCTURE",
         "version": 2,
         "rules": ["Python 3.12"],
@@ -48,7 +48,7 @@ def specification():
                 "behavior": "Vypíše add(2,3).",
             },
         ],
-    }
+    })
 
 
 def manifest():
@@ -147,8 +147,9 @@ def test_live_preparation_then_one_request_per_file(tmp_path):
     assert len(rows) == 2
     assert all("previous_response_id" not in row["body"] for row in rows)
     assert all(row["body"]["store"] is False for row in rows)
-    snapshots = [json.loads(row["body"]["input"])["specification"] for row in rows]
-    assert snapshots[0] == snapshots[1]
+    contexts = [json.loads(row["body"]["input"]) for row in rows]
+    assert all("specification" not in context for context in contexts)
+    assert contexts[0]["file_context"]["file_context_hash"] != contexts[1]["file_context"]["file_context_hash"]
     assert not (tmp_path / "out" / "maths.py").exists()
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert state["status"] == "batch_pending"
