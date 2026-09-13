@@ -70,6 +70,14 @@ def _image_model():
     return models[0]
 
 
+def test_image_model_selector_excludes_general_responses_models():
+    models = image_edit_model_ids()
+    assert "gpt-5.6-luna" not in models
+    assert "gpt-5.6-sol" not in models
+    assert models
+    assert all(model.startswith("gpt-image-") for model in models)
+
+
 def test_image_edit_batch_row_uses_image_endpoint():
     item = PhotoBatchItem(
         item_id="one",
@@ -180,9 +188,6 @@ def test_photo_studio_panel_constructs_without_api(qtbot, tmp_path):
     qtbot.addWidget(panel)
     assert panel.prompt_editor.isEnabled()
     assert panel.template_list.count() >= 6
-    # Dokud účetní katalog ještě není načtený, Photo Studio smí nabídnout
-    # pouze modely, které jsou doložené v pevné matici. Samotný pracovní
-    # submit i Vylepšit prompt stále explicitně vyžadují API klíč.
     assert panel.image_model.count() >= 1
     assert panel.btn_submit.isEnabled()
 
