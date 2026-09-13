@@ -2,7 +2,7 @@
 
 ## Účel a rozsah
 
-KájovoNG je desktopový klient OpenAI Responses API pro vytváření a úpravy textových souborů, dotazy, uživatelské kaskády a dávkové požadavky. Zahrnuje správu vzdálených souborů a vector stores, evidenci běhů, Git, SMTP a diagnostiku Windows a SSH. Součástí projektu je samostatný převodník textů `utf8nobom`.
+KájovoNG je desktopový klient OpenAI Responses API pro vytváření a úpravy textových souborů, dotazy, uživatelské kaskády, dávkové požadavky a hromadné úpravy fotografií. Zahrnuje správu vzdálených souborů a vector stores, forenzní evidenci běhů, Run Explorer, Git, SMTP a diagnostiku Windows a SSH. Součástí projektu je samostatný převodník textů `utf8nobom`.
 
 Tento dokument je kanonickou technickou specifikací. [README](../README.md) popisuje spuštění a [návod sestavení](../Build/README.md) distribuci. Chování ověřují zdrojový kód a automatické testy. Změny kontraktů se promítají do specifikace i odpovídajících testů.
 
@@ -25,9 +25,11 @@ Před každým spuštěním ověří pip (chybějící doplní přes `ensurepip`
 | Spuštění | `kajovo/app`, `kajovong` | Inicializace a společný vstupní bod |
 | Běžné běhy | `pipeline.py` | GENERATE, MODIFY, QA, QFILE, batch, přílohy a výstupy |
 | Vlastní kaskády | `cascade_types.py`, `cascade_pipeline.py`, `cascade_log.py` | Kroky, substituce, schémata, soubory a evidence |
+| Photo Studio | `photo_types.py`, `photo_templates.py`, `photo_prompt.py`, `photo_batch.py`, `photo_results.py`, `desktop/photos.py` | Promptové šablony, profesionální přeformulování zadání a úpravy fotografií pouze přes Image Edit BATCH |
 | API | `openai_client.py`, `response_policy.py`, `retry.py`, `compat.py`, `model_capabilities.py` | SDK/REST, neplacená validační politika, chyby, stránkování, opakování a schopnosti modelů |
 | Souborové hranice | `contracts.py`, `filescan.py`, `utils.py` | Kontrakty, sken vstupu, validace cest, hashe a zápisy |
-| Evidence | `runlog.py` | Logy, požadavky, odpovědi a stavy běhů |
+| Evidence | `runlog.py`, `run_bundle.py`, `recoverable_artifacts.py` | Runtime stav, bezeztrátová kanonická evidence, request/response, kroky, artefakty, checkpointy, lineage a integrita |
+| Historie | `desktop/history_run_explorer.py`, `desktop/history_actions_impl.py` | Run Explorer, filtry, timeline, odpovědi, artefakty, události, návaznosti a bezpečné navazující akce |
 | Nastavení | `config.py`, `secret_store.py`, `resources.py` | Konfigurace, hesla a prostředky |
 | Diagnostika | `diagnostics/windows.py`, `diagnostics/ssh.py`, `notifications.py` | Sběr diagnostiky a SMTP |
 | Desktop | `kajovo/desktop` | Hlavní okno, panely, dialogy a workery Qt |
@@ -37,7 +39,7 @@ Názvy modulů bez adresáře označují soubory pod `kajovo/core`.
 
 ## Uživatelské rozhraní
 
-Hlavní okno má devět sekcí v levé navigaci: Zadání, Kaskády, Zdroje, Dávky, Historie, Verze projektu, Modely, Nastavení a Nápověda. Zadání odděluje prompt, parametry a adresáře, diagnostiku a výsledek. Spustit, Zastavit a přístup k aktivním běhům zůstávají mimo posuvný obsah. Teplota běhu a výchozí teplota mají samostatné ovladače. Nastavení a Dávky lze otevřít i v samostatném okně se stejným obsahem a stavem. [Inventář a návrh UI](UI_DESIGN.md) popisuje pokrytí funkcí a odkazy na validační matice.
+Hlavní navigace obsahuje Zadání, Fotografie, Kaskády, Zdroje, Dávky, Historii, Verze projektu, Modely, Nastavení a Nápovědu. Zadání odděluje prompt, parametry a adresáře, diagnostiku a výsledek. Spustit, Zastavit a přístup k aktivním běhům zůstávají mimo posuvný obsah. Teplota běhu a výchozí teplota mají samostatné ovladače. Nastavení a Dávky lze otevřít i v samostatném okně se stejným obsahem a stavem. [Inventář a návrh UI](UI_DESIGN.md) popisuje pokrytí funkcí a odkazy na validační matice.
 
 Rozhraní v `kajovo/desktop` používá světlou pracovní plochu, tmavou navigaci a Montserrat 10 bodů. Formuláře a navigace dovolují posouvání i na malé logické ploše při zvýšeném DPI; hlavní akce Zadání zůstávají dosažitelné. Dialogy přizpůsobují velikost dostupnému oknu, podrobnosti mají posuv a společný přepínač technických podkladů. Tabulky mají čitelné jednotky, kopírování výběru a vodorovný posuv. Nové rozhraní je samostatná implementace; balík `kajovo/ui` se nedistribuuje.
 
@@ -47,7 +49,7 @@ BATCH zobrazuje počet zpracovaných úloh včetně chyb, čas poslední úspě�
 
 Síťové operace panelů, Git příkazy a SMTP test běží v asynchronních workerech. Správce Jobs drží worker do signálu finished; teprve poté předá výsledek UI a případně zahájí navazující obnovu. Správa zdrojů a Git blokuje konfliktní akce po dobu operace. Průběžné textové logy mají limit 2000 bloků; uložená evidence tím není omezena.
 
-Zdroje obsahují soubory API a vector stores. Odpojení souboru od úložiště a odstranění z Files API jsou odlišné operace. Modely filtrují katalog podle pevné matice a zobrazují pravidla. Historie zobrazuje uložené požadavky a odpovědi.
+Zdroje obsahují soubory API a vector stores. Odpojení souboru od úložiště a odstranění z Files API jsou odlišné operace. Modely filtrují katalog podle pevné matice a zobrazují pravidla. Historie je Run Explorer nad odvozeným `HistoryIndex` a kanonickým Run Bundle; zobrazuje přehled běhu, timeline, lidské i technické odpovědi, soubory, události, návaznosti a integritu. Legacy běhy se otevírají read-only bez domýšlení chybějících faktů.
 
 GITHUB pracuje s lokálním repozitářem a příkazy Git. Obnovení stavu nepřepisuje remote. Zápis, commit, synchronizaci a změnu remote vyvolávají příslušné uživatelské akce. Pull používá aktuální větev a fast-forward. Příkazy mají časový limit a nepovolují interaktivní terminálový prompt. Editor dovoluje uložit pouze úspěšně načtený UTF-8 soubor.
 
@@ -56,7 +58,8 @@ GITHUB pracuje s lokálním repozitářem a příkazy Git. Obnovení stavu nepř
 | Výchozí umístění | Obsah |
 | --- | --- |
 | `kajovo_settings.json` | Nastavení; vzor je `kajovo_settings.example.json` |
-| `LOG/RUN_DDMMYYYYHHMM_XXXX` | Data běhu; poslední čtyři znaky jsou náhodné |
+| `LOG/RUN_DDMMYYYYHHMM_XXXX` | Data běhu a Run Bundle; poslední čtyři znaky jsou náhodné |
+| `LOG/history_index.json` | Rebuildovatelný read-model Historie; není kanonickou evidencí |
 | `LOG/ui_session.log` | Zprávy desktopového rozhraní |
 | `kajovo/core/openai_model_matrix.json` | Pevná verzovaná pravidla všech doložených modelů |
 | `cache/cascades` | Definice vlastních kaskád |
@@ -65,7 +68,7 @@ GITHUB pracuje s lokálním repozitářem a příkazy Git. Obnovení stavu nepř
 
 Výchozí retry má šest pokusů, počáteční prodlevu 0,8 s, strop 20 s, jitter do 0,25 s a circuit breaker po šesti chybách s prodlevou 20 s. SMTP má port 587 a STARTTLS.
 
-`logging.max_total_mb` a `logging.max_runs` se ukládají a validují, ale implementace podle nich automaticky nemaže logy. Panel BATCH načítá seznam na pracovním vlákně a při nedokončených dávkách opakuje načtení podle `batch_poll_interval_s`. Po `batch_timeout_s` sledování skončí, aniž by zrušilo vzdálenou dávku; UI uvede, že vypršel pouze lokální monitorovací limit, a ruční obnovení zahájí nové sledování. `security.allow_upload_sensitive` výslovně povoluje soubory zachycené heuristikou citlivých názvů a obsahu. Ostatní filtry skenu zůstávají účinné.
+`logging.max_total_mb` a `logging.max_runs` se ukládají a validují, ale implementace podle nich automaticky nemaže logy. Panel BATCH načítá seznam na pracovním vlákně a při nedokončených dávkách opakuje načtení podle `batch_poll_interval_s`. Po `batch_timeout_s` sledování skončí, aniž by zrušilo vzdálenou dávku; UI uvede, že vypršel pouze lokální monitorovací limit, a ruční obnovení zahájí nové sledování. `security.allow_upload_sensitive` výslovně povoluje soubory zachycené heuristikou citlivých názvů a obsahu. Ostatní filtry skenu zůstávají účinné. Toto nastavení se týká uploadové hranice a nemění obsah kanonické evidence běhu.
 
 ## Běhy a souborové kontrakty
 
@@ -95,7 +98,7 @@ A1/B1 přidává `architecture_items` s `id`, `requirement_ids` a `responsibilit
 
 `delivery_preparation.py` po každé úspěšné přípravné fázi ukládá `preparation_snapshot` do stavu běhu a manifestů. Snímek má `version: 1`, `mode`, `maximum_quality`, `prompt_hash`, `canonical_stage`, `requirements`, `plan`, `structure`, `response_id` a `snapshot_hash`. Nedokončené podklady jsou `null`; `canonical_stage` je A0R/A1/A2/A2Q nebo B0R/B1/B2/B2Q. `snapshot_hash` je SHA-256 celého snímku bez vlastního hash pole, `prompt_hash` otisk zadání. Nejde o verzi dávkového manifestu ani o souborový VERSING snapshot.
 
-ReRun ověřuje integritu, verzi, režim, Maximum Quality, response ID a kontrakty dokončených podkladů; při spuštění také shodu zadání. Pokračuje až následující chybějící fází. Checkpoint A2/B2 v Maximum Quality proto ještě vyžaduje quality gate. Poškozený nebo nekompatibilní checkpoint se odmítá. Obnova používá stav vybraného běhu; pokud novému běhu chybí checkpoint, vyčistí převzaté souborové podklady a návaznost a začne přípravu znovu. Starší běhy bez nové evidence používají kompatibilní obnovu. Maximum Quality a checkpoint se přenášejí v konfiguraci zadání a ReRun.
+Přípravné checkpointy zůstávají kompatibilní se stávajícím recovery kontraktem. Nová Historie nad nimi navíc vytváří explicitní `CheckpointRecord` se stavovým hashem, seznamem povinných artefaktů/response, kompatibilitní verzí a příznakem `safe_to_continue`. Akce Historie `Pokračovat`, `ReRun` a `Opravit` validují tento checkpoint a vždy vytvářejí nový běh s LineageRecord; zdrojový běh se nemění. Pokud bezpečný checkpoint neexistuje, Run Explorer nepoužívá heuristický ReRun a nabídne pouze bezpečné akce, například klon přes přesně uložený `ui_state`. Starší legacy recovery fallbacky zůstávají pouze pro čtení a kompatibilitu historických běhů, nikoli jako zdroj nového implicitního checkpointu.
 
 `skip_paths` dovoluje přeskočit pouze dokončené výstupy s doloženým SHA-256 v `completed_hashes`. Jádro ověřuje hashe před API operacemi a znovu před zápisem nebo odesláním dávky; chybějící či změněný soubor běh zastaví. Ověřené zápisy se přenášejí do evidence pokračujícího běhu. Dávkový manifest uchovává `completed_hashes` mimo digest specifikace a tyto soubory nepočítá do `omitted`; import jejich existenci a obsah znovu ověřuje. Pokud už nejsou potřeba žádné souborové úlohy, nevytváří se prázdná dávka.
 
@@ -155,11 +158,11 @@ Podporované substituce jsou `{{step.N.response_id}}`, `{{step.N.json}}`, `{{ste
 
 JSON výstup používá předvolbu `manifest`, `prompts`, vlastní schéma nebo automaticky připravené schéma. Program převádí konkrétní objekty do strict formátu; nepřítomná volitelná pole přenáší jako nullable hodnoty a obnovuje je před kontrolou původního kontraktu. U neurčitého schématu provede samostatnou funkční přípravu s pevným strict kontraktem a nejvýše dvě opravy návrhu. Tyto požadavky vytvářejí artefakt potřebný pro vlastní práci a nejsou preflightem kompatibility. Schéma ukládá k běhu. Selhání přípravy zastaví pracovní krok bez požadavku na ruční psaní schématu. Původní významové podmínky ověřuje i lokálně. Externí odkazy jsou zakázané. V předvolbě `prompts` se dynamická pole `input_content_json` a `output_schema_custom` přenášejí jako serializovaný JSON text a program je rozbalí. Textové kroky rovněž používají strict schéma; výsledek obsahuje jejich rozbalené odpovědi.
 
-Zápis manifestu do OUT spouští neprázdný `expected_out_files`. Bez něj samotný JSON manifest soubory neukládá. OUT běhu má přednost před `default_out_dir`. Všechny očekávané cesty musí být v manifestu před prvním zápisem. Ukládá se celý validovaný manifest, včetně dalších souborů; očekávané soubory se následně nahrávají do Files API a jejich cesty a ID jsou dostupné dalším krokům. Selhání uploadu nevrací lokální zápis zpět. Každá odpověď kroku se eviduje pod společným ID běhu.
+Zápis manifestu do OUT spouští neprázdný `expected_out_files`. Bez něj samotný JSON manifest soubory neukládá. OUT běhu má přednost před `default_out_dir`. Všechny očekávané cesty musí být v manifestu před prvním zápisem. Ukládá se celý validovaný manifest, včetně dalších souborů; očekávané soubory se následně nahrávají do Files API a jejich cesty a ID jsou dostupné dalším krokům. Selhání uploadu nevrací lokální zápis zpět. Každá odpověď kroku se eviduje pod společným ID běhu. `CascadeLogger` používá stejný `RunLogger`/Run Bundle kontrakt jako ostatní běhy, takže KASKÁDA je v Run Exploreru součástí stejné typované evidence.
 
 ## IN, přílohy a vzdálené prostředky
 
-Sken IN aplikuje allow/deny seznamy přípon a masek. Vynechává Git, prostředí, runtime adresáře, cache, symlinky, junctions a rozpoznané snapshoty. Výchozí limit souboru je 10 MiB. Prázdné, binární a nečitelné soubory nejsou nahratelné. Citlivé názvy a rozpoznané vzory tajných údajů sken blokuje, pokud uživatel výslovně nepovolí jejich upload; manifest i tehdy zachovává příznak citlivosti. Detekce je heuristická.
+Sken IN aplikuje allow/deny seznamy přípon a masek. Vynechává Git, prostředí, runtime adresáře, cache, symlinky, junctions a rozpoznané snapshoty. Výchozí limit souboru je 10 MiB. Prázdné, binární a nečitelné soubory nejsou nahratelné. Citlivé názvy a rozpoznané vzory tajných údajů sken blokuje, pokud uživatel výslovně nepovolí jejich upload; manifest i tehdy zachovává příznak citlivosti. Detekce je heuristická. Tato uploadová heuristika není obsahovou redakcí Run Bundle.
 
 Balíček IN je textový soubor s JSONL položkami `path` a `content`, nikoli ZIP. Načtený obsah musí odpovídat SHA-256 ze skenu a být dekódovatelný jako UTF-8. Celkový limit balíčku je 40 MiB. Podle schopností modelu může aplikace vytvořit i vector store a čekat na indexaci. Ručně vybrané přílohy nepodléhají stejnému skenu. Podporované dokumenty se připojují jako `input_file`, obrázky jako `input_image`. Nepodporovaná příloha nebo neověřitelná metadata běh zastaví. Kontrola velikosti zahrnuje součet příloh; pravidla jsou v [matici požadavků](REQUEST_MATRIX.md).
 
@@ -177,8 +180,7 @@ GENERATE/MODIFY používají pro samostatné pracovní Responses `background=tru
 
 Evidence `response_journal` ukládá před odesláním přesný payload a jeho hash, ihned po přijetí ID pak odpověď a poslední ověřený stav. Dokončený výsledek se ukládá před jeho doménovým zpracováním. Obnova používá původní přílohy, diagnostiku, přípravné podklady a uložené odpovědi, včetně částí souborů a opravných pokusů; znovu generuje pouze dosud neodeslané požadavky. Výsledky přehrává přes stejné validátory a teprve potom posouvá checkpointy či zapisuje OUT. Hashové kontroly dokončených souborů platí i při této obnově. Zámek `execution.lock` brání současnému vykonávání stejného běhu ve více instancích.
 
-Stav `response_pending` znamená přerušené sledování s uloženým ID; ReRun pokračuje ve stejném běhu. `submission_unknown` znamená nepotvrzený výsledek generujícího POST, včetně pádu mezi odesláním a trvalým uložením ID; automatické opakování je zakázáno. Historický timeout bez ID se také nesmí automaticky zopakovat. Definitivně odmítnutý požadavek vyžaduje opravu nastavení a nový běh. Zastavit ukončuje místní čekání, nikoli vzdálenou generaci; samostatné Zrušit generování volá cancel a výsledek posuzuje podle vráceného vzdáleného stavu.
-
+Stav `response_pending` znamená přerušené sledování s uloženým ID; obnova pokračuje ve stejném poskytovatelském Response tam, kde to pracovní kontrakt dovoluje. `submission_unknown` znamená nepotvrzený výsledek generujícího POST, včetně pádu mezi odesláním a trvalým uložením ID; automatické opakování je zakázáno. Historický timeout bez ID se také nesmí automaticky zopakovat. Definitivně odmítnutý požadavek vyžaduje opravu nastavení a nový běh. Zastavit ukončuje místní čekání, nikoli vzdálenou generaci; samostatné Zrušit generování volá cancel a výsledek posuzuje podle vráceného vzdáleného stavu.
 
 `model_registry` čte pouze distribuovaný `openai_model_matrix.json`; pravidla nemění katalog účtu, historie chyb ani stažený web. Matice obsahuje přesné modely a snapshoty, endpointy, modality, nástroje, reasoning, sampling, cache a limity. Neznámý model je nepovolený. Úplné osy a zdroje jsou v [matici požadavků](REQUEST_MATRIX.md) a [matici modelů](MODEL_MATRIX.md).
 
@@ -208,13 +210,23 @@ SSH OUT spouští schválený obsah `.sh` přes stdin vzdáleného `sh -s` na ho
 
 Textový kontrakt odmítá nedokončené a chybové odpovědi, odmítnutí modelu a odpověď bez textu. JSON objekt nesmí obsahovat duplicitní klíče ani nestandardní číselné konstanty. Kaskáda kontroluje modely, teploty, schémata a odkazy na předchozí kroky před první síťovou operací. Chybějící hodnotu odkazu nenahrazuje prázdným textem.
 
-## Logy a evidence
+## Logy, Run Bundle a Historie
 
-Adresář běhu obsahuje `files`, `requests`, `responses`, `manifests`, `misc`, `events.jsonl` a `run_state.json`. Vytvoření odmítá existující adresář téhož běhu; výslovné pokračování připravené GENERATE dávky znovu otevře její evidenci. Názvy uložených JSON kombinují bezpečný zkrácený název a hash. Recovery používá stejnou kanonickou naming logiku a význam artefaktu neodvozuje pouze ze suffixu názvu. Stav běžného běhu rozlišuje vytvoření, běh, dokončení, zastavení a selhání.
+`run_state.json` zůstává kompatibilním mutable runtime stavem pracovního workflow, ale není kanonickou historickou pravdou. Každý nový běh má vlastní Run Bundle v adresáři `RUN_*`: `bundle.json`, `run.json`, `steps.jsonl`, `events.jsonl`, `requests/`, `responses/`, `validations/`, `checkpoints/`, `artifacts/`, `manifests/`, `reports/`, `lineage.json` a `checksums.json`. Podrobný kontrakt je v [RUN_BUNDLE_SPEC.md](RUN_BUNDLE_SPEC.md).
 
-Logy obsahují zadání, odpovědi a případně zdrojový kód. Známá tajná pole a řetězce s Bearer hodnotami se redigují, ale volný text může obsahovat další citlivá data. Logy nejsou šifrované a ovladač šifrování je neaktivní. Správa přístupu a uchování provozních dat je odpovědností provozovatele.
+Kanonická evidence je typovaná a verzovaná. `RunRecord` popisuje běh a jeho přesný stav; `StepRecord` logické kroky; `EventRecord` append-only události s monotónní sequence; `RequestRecord` přesný odeslaný payload a jeho hash; `ResponseRecord` kompletní response, usage a incomplete/error stav; `ValidationRecord` významnou validaci; `ArtifactRecord` soubor nebo externí zdroj s provenance a SHA-256; `CheckpointRecord` explicitní bezpečný nebo nebezpečný bod pokračování; `LineageRecord` vztah source run → nový target run. Runtime log a `run_state.json` mohou sloužit provoznímu workflow, ale Run Explorer staví nad kanonickou evidencí a rebuildovatelným `HistoryIndex`.
 
-Aplikace neprovádí cenění, předběžné počítání tokenů, finanční kalkulace, potvrzování rozpočtů ani cenové audity. Odpovědi API včetně původních metadat se ukládají do LOG bez finančního vyhodnocení. Zároveň platí tvrdý nákladový invariant: automatická validace nesmí přidávat samostatné generativní požadavky nebo dávky, jejichž jediným účelem je ověřit budoucí pracovní požadavek. Existující provozní databáze a cache se nemažou ani nemigrují; neznámé položky starého nastavení se při načtení ignorují.
+**Kanonická evidence se obsahově nerediguje, nemaskuje, neořezává ani nenahrazuje.** Přesný request, response, event data, uložený artefakt a technický detail musí zachovat skutečný obsah. Prostředí je považováno za důvěrné; ochrana této evidence je vlastností přístupu k pracovnímu prostředí, nikoli obsahové transformace logu. Kompatibilní metoda `_redact` proto u nové evidence obsah nemění. Historické legacy běhy mohou pocházet ze starších verzí, které data redigovaly; chybějící původní obsah se zpětně nedoplňuje odhadem.
+
+Lokální vstupy a výstupy potřebné pro rekonstrukci se kopírují do Run Bundle a dostávají SHA-256. Vzdálený Files API nebo vector-store zdroj, jehož bytes aplikace lokálně nemá, je evidován jako explicitní externí ArtifactRecord s `available_local=false`; aplikace nepředstírá, že takový obsah je self-contained. Zapečetění vytváří integritní manifest a `bundle_hash`; Run Explorer rozlišuje ověřenou integritu, změněnou/neúplnou evidenci a legacy běh bez integritního manifestu.
+
+Historie používá `LOG/history_index.json` jako odvozený read-model. Index lze kdykoli smazat a znovu sestavit z Run Bundle/legacy adresářů; není zdrojem pravdy. UI poskytuje časové, projektové, stavové, modelové a fulltextové filtry, přehled, timeline kroků, lidský i technický pohled na odpovědi, správu artefaktů, event stream, lineage a raw technický detail. Velký artefakt může být v UI zobrazen pouze jako jasně označený náhled, ale kanonický obsah v bundle se tím nesmí zkrátit.
+
+Zdrojový běh je v Historii neměnný. `Pokračovat`, `ReRun`, `Opravit`, `Klonovat` a `Použít v novém běhu` nikdy nepřepisují starý Run Bundle. Pokračování/repair/rerun používá pouze explicitní validní safe checkpoint a vytváří nový RUN s LineageRecord; klon přebírá pouze přesně uložené zadání a nastavení a automaticky nezdědí starou response historii; znovupoužití souborů vyžaduje stabilní reusable ArtifactRecord a ověření SHA-256. Odeslaný Batch se neduplikuje novým submittem, ale dokončuje se v původním běhu. Legacy adapter je read-only, nevytváří domýšlené checkpointy, kroky ani provenance a chybějící údaj zobrazuje jako neznámý.
+
+Vzdálený Batch `completed` znamená pouze dokončení dávky poskytovatelem. Projekt není `completed`, dokud neproběhne požadovaný import a validace lokálního výsledku. Stejně tak Response se stavem `incomplete`, error nebo odmítnutím není úspěšná odpověď a nesmí být v Historii zobrazena jako `completed`.
+
+Aplikace neprovádí cenění, předběžné počítání tokenů, finanční kalkulace, potvrzování rozpočtů ani cenové audity mimo explicitně definovaný `cost_context_report` pro souborové dodání. Odpovědi API včetně původních metadat se ukládají do LOG bez změny důkazního obsahu. Zároveň platí tvrdý nákladový invariant: automatická validace nesmí přidávat samostatné generativní požadavky nebo dávky, jejichž jediným účelem je ověřit budoucí pracovní požadavek. Existující provozní databáze a cache se nemažou ani nemigrují; neznámé položky starého nastavení se při načtení ignorují.
 
 ## Dokončení uložených dávek a výchozí model
 
@@ -222,7 +234,7 @@ Po úspěšném odeslání pracovní dávky uživatel pokračuje akcí **Dokonč
 
 `run_state.json` zachovává `batch_records` podle ID pracovní dávky včetně dostupného serverového `created_at`. Přehled páruje `batch_id` a `generate_batches` s místními běhy a jejich projektem; serverový čas zobrazuje v místním pásmu jako `DD.MM.YYYY HH:mm:ss`. Chybějící čas není odvozován z času vzniku běhu. Cizí dávka bez místních podkladů nemá akci dokončení běhu. Starší stav bez `batch_records` zůstává čitelný.
 
-Serverový stav a uložení do OUT jsou oddělené. `batch_imports[batch_id].import_status` eviduje výsledek konkrétního importu, zatímco `status` běhu zohledňuje úplnost výstupu i dosud nepřevzaté opravné dávky. `files_complete_unverified` označuje úplné uložení souborů, nikoli ověření funkčnosti. Částečný import zůstává opakovatelný. GENERATE i MODIFY ověřují jednotlivé souborové výsledky podle uloženého manifestu a chrání zápisy hashi. Jen historické souhrnné dávky MODIFY používají jediné ID C1 a kontrakt C_FILES_ALL. Již změněné nebo cizí soubory se nepřepisují. Dokončení nesmí běžet současně s další operací stejného běhu nebo s aktivním během používajícím překrývající se OUT. Výsledek obnoví Historii i Dávky.
+Serverový stav a uložení do OUT jsou oddělené. `batch_imports[batch_id].import_status` eviduje výsledek konkrétního importu, zatímco `status` běhu zohledňuje úplnost výstupu i dosud nepřevzaté opravné dávky. `files_complete_unverified` označuje úplné uložení souborů, nikoli ověření funkčnosti. Částečný import zůstává opakovatelný. GENERATE i MODIFY ověřují jednotlivé souborové výsledky podle uloženého manifestu a chrání zápisy hashi. Jen historické souhrnné dávky MODIFY používají jediné ID C1 a kontrakt C_FILES_ALL. Již změněné nebo cizí soubory se nepřepisují. Dokončení nesmí běžet současně s další operací stejného běhu nebo s aktivním během používajícím překrývající se OUT. Výsledek obnoví Historii i Dávky a Run Bundle eviduje BATCH import i jeho artefakty.
 
 Zrušení zpracování je dostupné pro `validating`, `in_progress` a `finalizing` a vyžaduje potvrzení. Aplikace nemaže serverové soubory ani nenabízí smazání záznamu dávky, které Batch API nepodporuje.
 
@@ -242,6 +254,7 @@ Repozitář neobsahuje placené `verify_*_live.py` nástroje, které by kvůli s
 
 | Testy | Ověřované chování |
 | --- | --- |
+| `test_run_bundle.py` | Run Bundle, append-only eventy, exact evidence bez redakce, integrita, checkpointy, lineage, legacy adaptér a HistoryIndex |
 | `test_batch_completion.py`, `test_batch_completion_ui.py` | Převzetí pracovních dávek, historie, ochrana souborů, souběh a výchozí model |
 | `test_workflows.py` | Offline režimy, batch, snímky konfigurace a validace výstupu |
 | `test_delivery_pipeline.py`, `test_requirements.py`, `test_modify_batch.py` | Osm variant GENERATE/MODIFY, kanonický quality gate, traceability, reasoning, dlouhé vstupy/výstupy a souborové dávky |
@@ -259,7 +272,6 @@ Povinné kontroly jsou `python -m pytest -q`, `python -m ruff check --select F,B
 
 Úspěch kontrol platí pro jejich rozsah. Skutečné pracovní OpenAI požadavky, SMTP, vzdálené SSH, oprávnění účtu, interaktivní provoz a platformní distribuce vyžadují ověření v odpovídajícím prostředí. Automatické testy nejsou zárukou nepřítomnosti všech chyb.
 
-
 ## Kontext a náklady souborového dodání
 
-Nové LIVE A3/B3 používá FileContext stejně jako Batch v3. První chunk nemá historii přípravy ani přílohy celého IN; pokračování navazuje jen uvnitř souboru a používá hash kontextu/prefixu. Globální zdroje zůstávají v přesných obnovitelných artefaktech oddělených od redigovaných logů. Requesty se měří lokálně, pokračování může použít ne-generativní input token count. Placený generativní preflight není povolen. Lokální cost_context_report.json eviduje odhady, rozpočet, usage a incomplete důvody. Podrobný kontrakt, omezení integrační validace a scheduleru jsou v [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).
+Nové LIVE A3/B3 používá FileContext stejně jako Batch v3. První chunk nemá historii přípravy ani přílohy celého IN; pokračování navazuje jen uvnitř souboru a používá hash kontextu/prefixu. Globální zdroje zůstávají v přesných obnovitelných artefaktech a kanonickém bezeztrátovém Run Bundle; evidence se obsahově nerediguje. Requesty se měří lokálně, pokračování může použít ne-generativní input token count. Placený generativní preflight není povolen. Lokální `cost_context_report.json` eviduje odhady, rozpočet, usage a incomplete důvody. Podrobný kontrakt, omezení integrační validace a scheduleru jsou v [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).
