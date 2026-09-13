@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 
 from ..core.cascade_contract import (
     CascadeValidationError,
-    describe_output,
     validate_cascade_definition,
 )
 from ..core.cascade_types import (
