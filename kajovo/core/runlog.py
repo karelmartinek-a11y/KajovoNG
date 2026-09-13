@@ -7,6 +7,7 @@ import tempfile
 import time
 import traceback
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -234,7 +235,10 @@ class RunLogger:
                     "created_at": time.time(),
                 }
             )
-        self.event("run.resumed" if resume else "run.created", {"project": self.project_name})
+        self.event(
+            "run.resumed" if resume else "run.created",
+            {"project": self.project_name},
+        )
 
     def _atomic_write_json(self, path: str, payload: Any) -> None:
         ensure_dir(os.path.dirname(path) or ".")
@@ -274,14 +278,21 @@ class RunLogger:
             batches.append(state["batch_id"])
         if isinstance(state.get("generate_batches"), dict):
             batches.extend(
-                value for value in state["generate_batches"] if isinstance(value, str) and value
+                value
+                for value in state["generate_batches"]
+                if isinstance(value, str) and value
             )
         status = str(state.get("status") or "created")
         patch: Dict[str, Any] = {
             "project": str(state.get("project") or self.project_name),
             "mode": mode,
             "status": status,
-            "result_class": status if status in TERMINAL_STATUSES or status in {"partial", "files_complete_unverified"} else "",
+            "result_class": (
+                status
+                if status in TERMINAL_STATUSES
+                or status in {"partial", "files_complete_unverified"}
+                else ""
+            ),
             "related_batch_ids": list(dict.fromkeys(batches)),
             "last_response_id": str(state.get("last_response_id") or ""),
             "model_summary": models,
@@ -290,21 +301,20 @@ class RunLogger:
         }
         created = state.get("created_at")
         if isinstance(created, (int, float)):
-            from datetime import datetime, timezone
-
-            patch["created_at"] = datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
-        if status not in {"created", "preparing"} and not self.bundle.run_record().get("started_at"):
-            from datetime import datetime, timezone
-
+            patch["created_at"] = datetime.fromtimestamp(
+                created, tz=timezone.utc
+            ).isoformat()
+        if (
+            status not in {"created", "preparing"}
+            and not self.bundle.run_record().get("started_at")
+        ):
             patch["started_at"] = datetime.now(timezone.utc).isoformat()
         completed = state.get("completed_at")
         if isinstance(completed, (int, float)):
-            from datetime import datetime, timezone
-
-            patch["finished_at"] = datetime.fromtimestamp(completed, tz=timezone.utc).isoformat()
+            patch["finished_at"] = datetime.fromtimestamp(
+                completed, tz=timezone.utc
+            ).isoformat()
         elif status in TERMINAL_STATUSES:
-            from datetime import datetime, timezone
-
             patch["finished_at"] = datetime.now(timezone.utc).isoformat()
         configuration = ui or state.get("configuration_snapshot")
         if configuration:
@@ -318,23 +328,52 @@ class RunLogger:
             patch["configuration_snapshot_hash"] = hashlib.sha256(raw).hexdigest()
         return patch
 
-    def _checkpoint_if_needed(self, patch: Dict[str, Any], state: Dict[str, Any]) -> None:
+    def _canonical_response_record_ids(self, provider_ids: list[str]) -> list[str]:
+        wanted = {value for value in provider_ids if value}
+        if not wanted:
+            return []
+        result = []
+        for path in Path(self.paths.responses_dir).glob("_record_res_*.json"):
+            record = _read_json_dict(path)
+            if (
+                record.get("response_id") in wanted
+                and isinstance(record.get("response_record_id"), str)
+                and record["response_record_id"]
+            ):
+                result.append(record["response_record_id"])
+        return sorted(set(result))
+
+    def _checkpoint_if_needed(
+        self, patch: Dict[str, Any], state: Dict[str, Any]
+    ) -> None:
         checkpoint_type = ""
         safe = False
         reason = ""
-        if "preparation_snapshot" in patch and isinstance(state.get("preparation_snapshot"), dict):
+        if "preparation_snapshot" in patch and isinstance(
+            state.get("preparation_snapshot"), dict
+        ):
             snapshot = state["preparation_snapshot"]
-            checkpoint_type = str(snapshot.get("canonical_stage") or "prepared_structure")
+            checkpoint_type = str(
+                snapshot.get("canonical_stage") or "prepared_structure"
+            )
             safe = True
-            reason = "Kanonická příprava byla uložena a lze ji před pokračováním znovu validovat."
-        elif "generate_batch" in patch and isinstance(state.get("generate_batch"), dict):
+            reason = (
+                "Kanonická příprava byla uložena a lze ji před pokračováním znovu validovat."
+            )
+        elif "generate_batch" in patch and isinstance(
+            state.get("generate_batch"), dict
+        ):
             checkpoint_type = "batch_manifest_prepared"
             safe = True
-            reason = "Pracovní Batch manifest je lokálně připraven; vzdálený submit není součástí checkpointu."
+            reason = (
+                "Pracovní Batch manifest je lokálně připraven; vzdálený submit není součástí checkpointu."
+            )
         elif patch.get("status") == "files_complete_unverified":
             checkpoint_type = "files_downloaded_validated"
             safe = True
-            reason = "Výsledky byly staženy a strukturálně importovány; následná doménová kontrola zůstává oddělena."
+            reason = (
+                "Výsledky byly staženy a strukturálně importovány; následná doménová kontrola zůstává oddělena."
+            )
         elif patch.get("status") == "completed":
             checkpoint_type = "run_completed"
             safe = True
@@ -342,14 +381,22 @@ class RunLogger:
         if not checkpoint_type:
             return
         state_hash = hashlib.sha256(
-            json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            json.dumps(
+                state,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
         ).hexdigest()
         for existing in self.bundle.checkpoints():
-            if existing.get("checkpoint_type") == checkpoint_type and existing.get("state_hash") == state_hash:
+            if (
+                existing.get("checkpoint_type") == checkpoint_type
+                and existing.get("state_hash") == state_hash
+            ):
                 return
-        required_responses = []
-        if state.get("last_response_id"):
-            required_responses.append(str(state["last_response_id"]))
+        provider_id = str(state.get("last_response_id") or "")
+        required_responses = self._canonical_response_record_ids([provider_id])
         self.bundle.checkpoint(
             checkpoint_type,
             state_snapshot=state,
@@ -361,6 +408,71 @@ class RunLogger:
                 "Chybějící nebo hashově změněný artefakt blokuje automatické pokračování.",
             ],
         )
+
+    def _archive_run_inputs(self, patch: Dict[str, Any], state: Dict[str, Any]) -> None:
+        if "ui_state" not in patch or not isinstance(state.get("ui_state"), dict):
+            return
+        ui = state["ui_state"]
+        known_originals = {
+            str(item.get("original_path") or "")
+            for item in self.bundle.artifacts()
+        }
+        in_dir = str(ui.get("in_dir") or "").strip()
+        if in_dir and Path(in_dir).is_dir():
+            root = Path(in_dir).resolve()
+            for source in sorted(root.rglob("*")):
+                if not source.is_file():
+                    continue
+                key = str(source.resolve())
+                if key in known_originals:
+                    continue
+                try:
+                    relative = source.resolve().relative_to(root).as_posix()
+                    self.bundle.archive_artifact(
+                        source,
+                        role="in_project_file",
+                        kind="input_file",
+                        source="ui_state.in_dir",
+                        reusable=True,
+                        reconstruction_role=relative,
+                        metadata={"relative_path": relative},
+                    )
+                    known_originals.add(key)
+                except (OSError, ValueError) as exc:
+                    self.bundle.append_event(
+                        "artifact.archive_error",
+                        {"path": str(source), "error": str(exc)},
+                        severity="error",
+                        source_module="runlog",
+                        operation="archive_input",
+                        human_message=f"Vstupní soubor {source.name} nebylo možné archivovat.",
+                        technical_message=str(exc),
+                    )
+        existing_external = {
+            str(item.get("original_path") or "")
+            for item in self.bundle.artifacts()
+            if not item.get("available_local", True)
+        }
+        for key, kind in (
+            ("attached_file_ids", "remote_file"),
+            ("input_file_ids", "remote_file"),
+            ("attached_vector_store_ids", "vector_store"),
+        ):
+            values = ui.get(key)
+            if not isinstance(values, list):
+                continue
+            for identifier in values:
+                if not isinstance(identifier, str) or not identifier:
+                    continue
+                if identifier in existing_external:
+                    continue
+                self.bundle.record_external_artifact(
+                    identifier,
+                    role="external_reference",
+                    kind=kind,
+                    metadata={"source_field": key},
+                )
+                existing_external.add(identifier)
 
     def update_state(self, patch: Dict[str, Any]) -> None:
         from .recoverable_artifacts import STATE_ARTIFACTS, save_artifact
@@ -377,7 +489,10 @@ class RunLogger:
         state.update(patch)
         self._write_state(state)
         self.bundle.update_run(self._bundle_patch_from_state(state))
-        self.event("state.updated", {"patch": patch, "status": state.get("status")})
+        self._archive_run_inputs(patch, state)
+        self.event(
+            "state.updated", {"patch": patch, "status": state.get("status")}
+        )
         self._checkpoint_if_needed(patch, state)
         if str(state.get("status") or "") in TERMINAL_STATUSES:
             self.bundle.seal()
@@ -397,11 +512,24 @@ class RunLogger:
         self._write_state(state)
         self.bundle.update_run(self._bundle_patch_from_state(state))
         if removed:
-            self.event("state.keys_cleared", {"keys": list(removed), "previous_values": removed})
+            self.event(
+                "state.keys_cleared",
+                {"keys": list(removed), "previous_values": removed},
+            )
 
     def event(self, typ: str, data: Dict[str, Any]) -> None:
-        severity = "error" if typ.startswith("error.") or typ.endswith("_error") else "warning" if "warning" in typ else "info"
-        stage = str(data.get("stage") or data.get("operation") or "") if isinstance(data, dict) else ""
+        severity = (
+            "error"
+            if typ.startswith("error.") or typ.endswith("_error")
+            else "warning"
+            if "warning" in typ
+            else "info"
+        )
+        stage = (
+            str(data.get("stage") or data.get("operation") or "")
+            if isinstance(data, dict)
+            else ""
+        )
         message = ""
         if isinstance(data, dict):
             message = str(data.get("msg") or data.get("message") or "")
@@ -413,9 +541,23 @@ class RunLogger:
             operation=stage,
             human_message=message,
             technical_message=message,
-            related_response_id=str(data.get("response_id") or "") if isinstance(data, dict) else "",
-            related_request_id=str(data.get("request_id") or "") if isinstance(data, dict) else "",
+            related_response_id=(
+                str(data.get("response_id") or "")
+                if isinstance(data, dict)
+                else ""
+            ),
+            related_request_id=(
+                str(data.get("request_id") or "")
+                if isinstance(data, dict)
+                else ""
+            ),
         )
+        state = _read_json_dict(Path(self.state_path))
+        if (
+            str(state.get("status") or "") in TERMINAL_STATUSES
+            and (Path(self.paths.run_dir) / "checksums.json").is_file()
+        ):
+            self.bundle.seal()
 
     def _json_path(self, kind: str, name: str) -> str:
         return str(
@@ -497,7 +639,9 @@ class RunLogger:
                 mode = str(self.bundle.run_record().get("mode") or "")
                 self.bundle.archive_artifact(
                     dst,
-                    role="modified_file" if mode == "MODIFY" else "generated_file",
+                    role=(
+                        "modified_file" if mode == "MODIFY" else "generated_file"
+                    ),
                     kind="output_file",
                     source="filesystem_write",
                     reusable=True,
@@ -525,15 +669,42 @@ class RunLogger:
             human_message=str(ex),
             technical_message=traceback.format_exc(),
         )
+        state = _read_json_dict(Path(self.state_path))
+        if (
+            str(state.get("status") or "") in TERMINAL_STATUSES
+            and (Path(self.paths.run_dir) / "checksums.json").is_file()
+        ):
+            self.bundle.seal()
 
     def record_lineage(self, *args, **kwargs):
-        return self.bundle.record_lineage(*args, **kwargs)
+        value = self.bundle.record_lineage(*args, **kwargs)
+        state = _read_json_dict(Path(self.state_path))
+        if (
+            str(state.get("status") or "") in TERMINAL_STATUSES
+            and (Path(self.paths.run_dir) / "checksums.json").is_file()
+        ):
+            self.bundle.seal()
+        return value
 
     def record_validation(self, **kwargs):
-        return self.bundle.record_validation(**kwargs)
+        value = self.bundle.record_validation(**kwargs)
+        state = _read_json_dict(Path(self.state_path))
+        if (
+            str(state.get("status") or "") in TERMINAL_STATUSES
+            and (Path(self.paths.run_dir) / "checksums.json").is_file()
+        ):
+            self.bundle.seal()
+        return value
 
     def checkpoint(self, *args, **kwargs):
-        return self.bundle.checkpoint(*args, **kwargs)
+        value = self.bundle.checkpoint(*args, **kwargs)
+        state = _read_json_dict(Path(self.state_path))
+        if (
+            str(state.get("status") or "") in TERMINAL_STATUSES
+            and (Path(self.paths.run_dir) / "checksums.json").is_file()
+        ):
+            self.bundle.seal()
+        return value
 
 
 def find_last_incomplete_run(log_dir: str) -> Optional[str]:
