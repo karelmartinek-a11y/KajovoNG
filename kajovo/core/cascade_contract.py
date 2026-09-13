@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import PurePosixPath
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from .cascade_types import (
     CASCADE_FILE_TYPES,
