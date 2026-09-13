@@ -26,6 +26,14 @@ Standard (`maximum_quality=false`) zahrnuje A0R/B0R a zachovává běžnou polit
 
 Technický příjem delšího zadání uloží přesný lokální artefakt bez placených potvrzení částí; celý vstup přijímá pracovní requirements fáze. LIVE A3/B3 má 500 řádků na chunk a návaznost pouze uvnitř téhož souboru. Souborové Batch úlohy vyžadují celý soubor v jediné části. Přípravný checkpoint verze 1 a souborový manifest verze 3 s `mode` a FileContexty mají odlišné účely; jejich pole a pravidla ReRun uvádí [SSOT](SSOT.md).
 
+### Historie a Run Explorer
+
+Prohlížení Historie, filtrování přes `HistoryIndex`, ověření integrity Run Bundle, otevření request/response, náhled/porovnání artefaktů, export Run Bundle a zobrazení lineage jsou čistě lokální operace a nevytvářejí OpenAI požadavek.
+
+Akce **Klonovat**, **Pokračovat**, **ReRun**, **Opravit** a **Použít v novém běhu** nikdy neposílají skrytý generativní preflight. Připraví nový běh nebo jeho vstupy a explicitní `LineageRecord`; skutečná placená modelová práce vznikne až běžným spuštěním nového pracovního běhu uživatelem. `Pokračovat`, `ReRun` a `Opravit` vyžadují explicitní `CheckpointRecord` s `safe_to_continue=true` a ověřenou integritu požadovaných artefaktů/response. Zdrojový Run Bundle se nemění.
+
+Akce **Dokončit** u již odeslané dávky používá čtení stavu existujícího Batch a stažení/import jeho výstupu. Nevytváří nový generativní submit. Pokud zdrojový běh již obsahuje odeslaný Batch, Run Explorer nepovolí pokračování, které by mohlo vytvořit duplicitní pracovní dávku; dokončení probíhá v původním běhu.
+
 ## Úplná matice parametrů aplikace
 
 Každá volba musí současně projít lokálním kontraktem, řádkem konkrétního modelu v [MODEL_MATRIX.csv](MODEL_MATRIX.csv), pravidly pracovního postupu a případným ne-generativním ověřením existence použitých vzdálených prostředků. Neznámé parametry a nedoložené modely se odmítají. Hodnoty jsou konečné kategorie a intervaly; nekonečné množství textových zadání a reálných čísel se nevyjmenovává po jednotlivých hodnotách.
@@ -66,7 +74,7 @@ Každá volba musí současně projít lokálním kontraktem, řádkem konkrétn
 | user / safety_identifier / prompt_cache_key | Neprázdný text | Stejné | Samostatné parametry; žádné automatické přepisování |
 | prompt_cache_retention | in_memory/24h podle matice | Stejné | GPT-5.5 pouze 24h; novější modely používají options podle matice |
 | prompt_cache_options | mode=implicit/explicit, ttl=30m podle matice | Stejné | Bez automatické konverze ze starší retention |
-| Batch endpoint / metoda | — | /v1/responses / POST | Další API endpointy katalog uvádí informativně, aplikace je negeneruje |
+| Batch endpoint / metoda | — | GENERATE/MODIFY: `/v1/responses` / POST; Photo Studio: `/v1/images/edits` / POST | Jeden pracovní JSONL používá právě jeden endpoint; žádný placený testovací Batch |
 | completion_window | — | 24h | Nejvýše 50 000 řádků a 200 MB; unikátní neprázdné custom_id |
 | Vector file attributes | Nejvýše 16 hodnot | Správa úložiště mimo dávku | Klíč do 64 znaků; text do 512, jinak konečné číslo či boolean |
 | GENERATE A1/A2/A3 | Samostatné volby modelů; A0R sdílí A1 a A2Q sdílí A2 | Příprava LIVE, pouze A3 Batch | Tentýž model může mít současně oba kontexty; dávkové A3 nedědí nástroje a návaznost přípravy |
@@ -111,13 +119,12 @@ Standardní ověření repozitáře je offline vůči placeným generativním en
 | MODELS | seznam API a pevná matice → dostupné pracovní modely; bez generativního probe |
 | BATCH | seznam na pracovním vlákně, časované sledování, stažení souborů a cancel |
 | GITHUB | Git subprocess → stav, diff, commit, remote a synchronizace repozitáře |
-| REQUEST/RESPONSE | RunLogger a uložené požadavky → filtrování, zobrazení a výběr podkladů ReRun |
+| HISTORIE | Run Explorer + Run Bundle → lokální index, timeline, request/response, artefakty, validace, integrita, lineage a příprava nového navazujícího běhu bez skrytého API volání |
 | HELP | Dokumentace a odkazy aplikace |
 
 Strukturální test Qt kontroluje připojení všech aktivních akčních tlačítek. Funkční testy odděleně kontrolují pracovní postupy, soubory, databázi, síťové kontrakty a vybrané interakce; samotné připojení signálu není důkazem správnosti vzdálené služby.
 
 Offline testy odděleně pokrývají kombinace režimu, Batch, návaznosti, úložiště a diagnostiky; sampling kombinuje rodinu modelu, reasoning a hraniční hodnoty teploty. Další testy ověřují formáty, velikosti a atributy. Jde o konečné kategorie podmínek, nikoli výčet nekonečně mnoha textových zadání a čísel.
-
 
 ## Souborové kontexty a měření
 
