@@ -258,3 +258,36 @@ def test_history_filters_use_derived_index(qtbot, tmp_path):
     panel.apply_filters()
     assert panel.lst_runs.count() == 1
     assert "QFILE" in panel.lst_runs.item(0).text()
+
+
+def test_history_custom_date_interval_filters_runs(qtbot, tmp_path):
+    from kajovo.desktop.history import ResponseRequestPanel
+
+    for run_id, project, created_at in (
+        ("RUN_100920261200_A", "Older", "2026-09-10T12:00:00+00:00"),
+        ("RUN_120920261200_B", "Inside", "2026-09-12T12:00:00+00:00"),
+        ("RUN_140920261200_C", "Newer", "2026-09-14T12:00:00+00:00"),
+    ):
+        logger = RunLogger(str(tmp_path), run_id, project)
+        logger.bundle.update_run({"created_at": created_at, "project": project, "mode": "QA"})
+        logger.update_state({"ui_state": {"mode": "QA", "prompt": project}, "status": "running"})
+    panel = ResponseRequestPanel(str(tmp_path))
+    qtbot.addWidget(panel)
+    panel.period.setCurrentText("Vlastní interval")
+    panel.ed_date_from.setText("11.09.2026")
+    panel.ed_date_to.setText("13.09.2026")
+    panel.apply_filters()
+    assert panel.lst_runs.count() == 1
+    assert "Inside" in panel.lst_runs.item(0).text()
+
+
+def test_history_files_offer_compare_and_direct_provenance_actions(qtbot, tmp_path):
+    from kajovo.desktop.history import ResponseRequestPanel
+
+    logger = RunLogger(str(tmp_path), "RUN_140920261300_UI", "demo")
+    logger.update_state({"ui_state": {"mode": "QA", "prompt": "x"}, "status": "running"})
+    panel = ResponseRequestPanel(str(tmp_path))
+    qtbot.addWidget(panel)
+    assert panel.btn_compare_artifacts.text() == "Porovnat vybrané"
+    assert panel.btn_source_request.text() == "Zdrojový request"
+    assert panel.btn_source_response.text() == "Zdrojová response"
