@@ -1,0 +1,487 @@
+FORENZNÍ PODKLAD PRO ODBORNÉ POSOUZENÍ
+Limity kontextu a výstupu při generování souborů v OpenAI Batch API
+
+ÚČEL A ROZSAH
+
+Dokument popisuje konkrétní neúspěšné dávkové generování projektu KájovoCML,
+odděluje doložená zjištění od neověřených hypotéz a předkládá návrh změny
+orchestrace pro odborné posouzení. Není implementační specifikací schválenou
+k realizaci ani potvrzením funkčnosti výsledného projektu.
+
+Uživatel požaduje, aby přípravné fáze vytvořily natolik přesné a provázané
+kontrakty, že generování jednotlivého souboru nebude vyžadovat celé původní
+zadání, celý plán a celou strukturu projektu. Zmenšení kontextu nesmí znamenat
+ztrátu požadavků, rozhraní nebo kvality implementace.
+
+Při sepisování dokumentu nebylo spuštěno nové placené generování. Dokument
+neobsahuje API klíče ani plný obsah provozních požadavků. Odkazuje na lokální
+důkazy, které nejsou součástí Git repozitáře. Samotné zaslání tohoto dokumentu
+specialistovi tedy nepředává celou důkazní sadu.
+
+1. IDENTIFIKACE PROSTŘEDÍ A BĚHU
+
+Repozitář aplikace: D:\kajovong
+GitHub: karelmartinek-a11y/KajovoNG
+Referenční commit zdrojového kódu při tomto posouzení:
+e1857f11a45c6c07ee8cd2d08b6f8b0010849d02
+Původní běh: LOG/RUN_130920260322_ID92
+Projekt generovaného výstupu: KájovoCML
+Výstupní adresář: D:\KajovoCMLNG
+Režim: GENERATE, Maximum Quality, následné souborové generování v Batch.
+Původně zvolený model přípravy: gpt-5.6-sol.
+Adresář ruční obnovy a důkazů: LOG/manual_ID92
+Schválený dodatečný rozpočet: 60 USD pro dokončení přípravy a Batch,
+nikoli 60 USD pro každý nový pokus. Náklady před původním vyčerpáním kreditu
+nejsou zahrnuté do zde uvedeného přepočtu dodatečné práce.
+
+Důležité rozlišení:
+- Konkrétní dvě analyzované dávky vytvořil a odeslal pomocný skript
+  LOG/manual_ID92/batch_prepare.py při ruční obnově.
+- Nebyly odeslány běžnou cestou aplikace build_manifest().
+- Běžná aplikace však také vkládá úplný snapshot do jednotlivých požadavků.
+  Architektonický problém širokého kontextu tedy není omezen na tento skript.
+- Nastavení max_output_tokens=16384 je doloženo u ručního skriptu; nelze je
+  automaticky připisovat všem standardním požadavkům aplikace.
+
+2. PRŮBĚH A ZACHOVANÁ PRÁCE
+
+Původní běh dokončil technický příjem dlouhého zadání A0, requirements A0R
+a plán A1. Dvě odpovědi A2 byly dostupné, ale jejich struktura neprošla
+požadovanou validací. Další opravné volání skončilo vyčerpáním kreditu
+credit_balance_exhausted.
+
+Nativní obnovení komplikovala integrita uložených podkladů: redakce loggeru
+mohla změnit obsah řetězců obsahujících citlivě vyhodnocené výrazy, například
+„bearer “, a tím poškodit reprodukovatelnost hashů checkpointu/journalu.
+Toto je samostatný problém obnovy; není doloženou příčinou pozdější chyby
+context_length_exceeded. Vyžaduje oddělené posouzení bezpečného ukládání
+obnovitelných artefaktů proti redigovaným provozním logům.
+
+Při ruční obnově byly získány původní dokončené odpovědi a vstupní části.
+Rekonstruované původní zadání mělo:
+- 1 215 653 znaků;
+- 1 255 676 bajtů UTF-8;
+- projektový digest textu (SHA-256 jeho kanonické JSON serializace):
+  d01039f4bf9d73afab801ff09f6914930dcb313bca778890cbae9f0d8fcffef5.
+Otisk odpovídal původnímu prompt_hash. SHA-256 samotných bajtů souboru je
+6cb63d0d1aa11a1ae7e4a880e81d49b0fa78f157c4a0c43753260bfc46be27b7;
+tyto dvě různé definice otisku se nesmějí zaměňovat. Původní requirements a plán byly
+zachovány, přípravná práce nezačínala od nuly.
+
+Ruční dokončení A2 a A2Q použilo gpt-5.4. Finální struktura obsahuje 300 cest.
+Provenience není pouze „čistý výstup A2Q“: A2 prošla lokálními opravami vazeb
+a pokrytí požadavků. V pomocné tvorbě schématu A2Q navíc vznikla chyba sdíleného
+objektu seznamového schématu: enum pro architecture_item_ids ovlivnil také
+requirement_ids. Byla opravena tvorba nezávislých schémat, přidány regresní
+testy a obnovena známá platná requirement_ids u existujících souborů;
+nové soubory dostaly explicitní vazby. Viz A2*_manual_corrections.json.
+Validace schématu a deklarovaných vazeb následně prošla. Tato validace
+nedokazuje implementační úplnost ani správnost všech obsahových rozhodnutí.
+
+SSOT_CURRENT.md byl určen k přesné lokální kopii, nikoli k další generaci.
+Zbývajících 299 souborů bylo rozděleno do dvou dávek. Toto rozdělení bylo
+provedeno podle přípony, nikoli na základě měřené složitosti jednotlivé úlohy.
+
+3. PŘESNÁ PODOBA SOUBOROVÉHO POŽADAVKU
+
+Každý požadavek na /v1/responses obsahoval:
+- instructions: společné instrukce kvality a instrukce fáze A3;
+- input: jednu uživatelskou zprávu se dvěma položkami:
+  1) input_file s file_id již nahraného SSOT_CURRENT.txt;
+  2) input_text obsahující JSON {specification, file};
+- specification.requirements: celé původní A0R;
+- specification.plan: celý A1;
+- specification.structure: celou finální strukturu A2Q;
+- specification.maximum_quality: true;
+- specification.source: pokyn chápat přílohu jako normativní autoritu;
+- file: kontrakt právě jednoho cílového souboru;
+- text.format: strict JSON schema A3_FILE s pevnou cílovou cestou;
+- reasoning.effort: xhigh;
+- max_output_tokens: 16384;
+- store: false;
+- žádné tools ani previous_response_id.
+
+Struktura byla bezeztrátově převedena na tabulku file_columns + files,
+aby se neopakovaly názvy klíčů. Rekonstrukce tabulky byla kontrolována proti
+původní struktuře. Šlo o úsporu zápisu, nikoli o výběr relevantního kontextu.
+
+Příloha byla nahrána jednou jako soubor purpose=user_data. Každý požadavek
+na ni odkazoval prostřednictvím input_file. To neznamená jednou zpracovaný
+kontext pro celou dávku. Jednotlivé úlohy byly samostatné a každá měla tento
+obsah ve svém vstupu. Vykázaný cached_tokens pro dokončenou dávku luny je 0.
+
+Požadavky měly obsahovat celý cílový soubor v jedné odpovědi:
+{
+  "contract": "A3_FILE",
+  "path": "<pevně určená relativní cesta>",
+  "content": "<celý obsah souboru>",
+  "chunking": {
+    "chunk_index": 0,
+    "chunk_count": 1,
+    "has_more": false,
+    "next_chunk_index": null
+  }
+}
+
+Případné pokračování bylo tímto schématem zakázáno. Generování nemělo
+nástroje pro spuštění testů, kompilaci ani práci s výsledky souběžných úloh.
+Požadavek na testovací soubor znamenal napsání testu, nikoli jeho provedení.
+
+4. DÁVKY, POČTY TOKENŮ A SKUTEČNÉ VÝSLEDKY
+
+A) gpt-5.4-mini
+Batch ID: batch_6aa6a726026c81908fc7695aac52fa9e
+Model vrácený v metadatech dávky: gpt-5.4-mini-2026-03-17
+228 požadavků pro přípony .ts, .tsx, .rs, .sql, .mjs, .tla.
+Spočítaný vstup na požadavek: 377 489 až 377 856 tokenů.
+Součet vstupních tokenů podle předběžného počítadla: 86 082 793.
+Největší vstup + rezervovaný výstup: 377 856 + 16 384 = 394 240.
+Kontrola pomocného skriptu používala kontextové okno 400 000 tokenů.
+Zbývající rezerva největšího požadavku byla pouze 5 760 tokenů (1,44 % okna).
+
+Finální stav dávky: completed.
+Počty jednotlivých požadavků: completed=0, failed=228, total=228.
+Všech 228 řádků chybového souboru obsahovalo HTTP 400 a:
+{
+  "type": "invalid_request_error",
+  "code": "context_length_exceeded",
+  "param": "input",
+  "message": "Your input exceeds the context window of this model. Please adjust your input and try again."
+}
+Vykázaná spotřeba dávky: input_tokens=0, output_tokens=0, total_tokens=0.
+To je evidence nulových tokenů za tuto dávku, nikoli samostatně ověřená faktura.
+
+Konkrétní reprodukční příklad:
+custom_id: ID92_MANUAL_A3_00272
+cílová cesta: tests/generation/workflow.test.ts
+vstup: 377 856 tokenů podle uloženého počítadla
+export: LOG/manual_ID92/aa.txt
+Export obsahuje přesný původní JSONL řádek a odděleně rozepsaný text přílohy.
+Rozepsaná příloha v exportu není další duplicitní položkou původního requestu.
+
+B) gpt-5.6-luna
+Batch ID: batch_6aa6a774d5b081908799dc89832c8075
+71 požadavků pro zbývající přípony: zejména konfigurace, schémata, dokumentace.
+Spočítaný vstup na požadavek: 377 480 až 377 936 tokenů.
+Součet vstupů: 26 804 428 tokenů; odpovídá vykázané spotřebě celé této dávky.
+Největší vstup + rezervovaný výstup: 394 320 tokenů.
+Finální stav dávky: completed.
+Počty API: completed=71, failed=0, total=71; všech 71 řádků mělo HTTP 200.
+
+Po otevření vnitřních Responses se však ukázalo:
+- 38 odpovědí se status=completed;
+- 33 odpovědí se status=incomplete,
+  incomplete_details.reason=max_output_tokens.
+
+Všech 38 dokončených odpovědí prošlo parsováním JSON a přesným výstupním
+schématem příslušného požadavku včetně cílové cesty. To není obsahové ověření
+souborů, kompilace, běh testů ani důkaz vzájemné kompatibility.
+
+Všech 33 neúplných odpovědí spotřebovalo přesně 16 384 výstupních tokenů.
+Žádná z nich neprošla kontrolou výsledného JSON. Jedna neobsahovala žádný
+output_text, ostatní obsahovaly neúplný výstup. Nejde tedy o 33 hotových
+souborů, které by stačilo bez dalšího importovat.
+
+Vykázaná spotřeba luny:
+                         Výstupní tokeny    Z toho reasoning
+38 completed                    422 420              279 150
+33 incomplete                   540 672              258 721
+Celkem                          963 092              537 871
+Vstup celkem: 26 804 428; cached_tokens: 0.
+Reasoning je součást output_tokens, nesmí se k nim při cenovém výpočtu
+přičítat podruhé.
+
+5. CO JE PROKÁZÁNO A CO ZŮSTÁVÁ NEVYSVĚTLENO
+
+Prokázáno:
+- Počítadlo client.responses.input_tokens.count bylo voláno pro každý
+  finální request; používalo pole model, instructions, input, text, reasoning.
+- V uloženém token-count souboru existuje záznam pod digestem každého přesně
+  odeslaného body. Per-model JSONL odpovídají příslušným řádkům společného JSONL.
+  Nebyla zjištěna záměna spočítaného a odeslaného obsahu.
+- Dokumentace mini uvádí okno 400 000 tokenů. Tvrzení „mini má určitě menší
+  dokumentované okno“ proto není doloženým vysvětlením tohoto incidentu.
+- API mini přesto všechny vstupy odmítlo a neposkytlo skutečný počet tokenů,
+  použitý interní limit ani další rozklad chyby.
+- U luny je příčinou nedokončení vyčerpání max_output_tokens. Limit zahrnuje
+  uvažování i viditelnou odpověď; platné schéma samo nezaručuje dokončení.
+- Stav Batch completed a HTTP 200 nestačí k prohlášení souboru za hotový.
+
+Neověřené hypotézy pro mini, nikoli závěry:
+- Rozdíl započítání nebo rozbalení input_file mezi count endpointem a Batch.
+- Další interní režie nebo efektivní rezerva, kterou count nereprezentuje.
+- Nesoulad modelového aliasu/snapshotu nebo konfigurace zpracovávající služby.
+- Jiný problém implementace API při zpracování této konkrétní velikosti vstupu.
+
+Bez informace od poskytovatele nebo řízeného reprodukčního experimentu nelze
+mezi hypotézami rozhodnout. Snížení velikosti vstupu by mohlo problém obejít,
+ale samo by nevysvětlilo tento rozpor. Placené pokusy nebyly při posouzení
+odeslány. Případný experiment má vyžadovat schválený rozpočet a předem určené
+varianty, nikoli opakované posílání celé dávky naslepo.
+
+6. ODPOVĚDNOST ZA PŘÍPRAVU A ARCHITEKTONICKÉ NEDOSTATKY
+
+Konkrétní chybné volby při ruční obnově:
+- Plné zadání bylo přiloženo ke každému souboru současně s kompletními
+  requirements, plánem a strukturou; neexistoval výběr implementačního kontextu.
+- Kontrola mini pracovala téměř na hraně okna bez empiricky ověřené rezervy.
+- Vysoké reasoning bylo plošně zkombinováno s malým výstupním limitem.
+- Jedna kompletní odpověď byla povinná i tam, kde nebylo ověřeno, že se vejde.
+- Modely byly rozděleny podle přípon, bez doložené validace vhodnosti pro úlohy.
+- Celá sada byla odeslána před ověřením reprezentativních skutečných výstupů.
+
+Počítadlo tokenů a cenová rezervace nebyly zárukou přijetí ani dokončení.
+Původní projekce přibližně 58 USD byla rozpočtem jednoho průchodu, nikoli
+důkazem dokončitelnosti včetně opakování a integračních oprav.
+
+V běžném zdrojovém kódu:
+- kajovo/core/generate_batch.py::build_manifest vytváří snapshot obsahující
+  prompt, plan, structure, requirements a maximum_quality a vkládá jej do
+  context.specification pro každý soubor.
+- encode_requests ověřuje integritu celého snapshotu. Nestačí tedy odstranit
+  prompt z jednoho místa: změna potřebuje nový kontrakt manifestu a validace.
+- kajovo/core/delivery_preparation.py a requirements.py kontrolují schémata,
+  pokrytí requirements a deklarované vazby architektury a souborů.
+- Existence requirement_ids, provides, requires a dependencies sama o sobě
+  nedokazuje, že příjemce zná přesné signatury, datové typy, chybovou sémantiku
+  a všechny behaviorální povinnosti nutné pro implementaci.
+- HTTP/API úspěch musí být oddělen od platného artefaktu a od jeho funkčnosti.
+
+7. NÁVRH CÍLOVÉ ORCHESTRACE K POSOUZENÍ
+
+A0/A0R — příjem a výklad zdroje:
+Uchovat úplné zadání jako kanonický lokální artefakt. Zavést stabilní odkazy
+na sekce a přiřazení requirements ke zdroji. Dlouhý zdroj je vstupem analýzy,
+nemá být automatickou přílohou každého následného souborového požadavku.
+
+A1 — architektura a společné kontrakty:
+Definovat hranice komponent, datový model, vlastnictví stavu, sdílené typy,
+rozhraní, verze závislostí, chybové konvence a globální invarianty. Každé
+rozhraní má jednoznačného vlastníka a verzovaný kontrakt. Vyřešit rozpory
+mezi požadavky ještě před rozdělením práce po souborech.
+
+A2 — implementační kontrakt každého souboru:
+Připravit skutečně použitelný pracovní balíček. Navržené položky:
+- identita: path, role, language, action, verze kontraktu;
+- přesné odpovědnosti a jejich hranice;
+- relevantní requirements v plném potřebném znění, nejen jejich ID;
+- veřejné exporty/signatury, typy, serializace, jednotky, nullability;
+- stavové přechody, validace, autorizace, chyby, retry/idempotence, transakce,
+  souběh a persistence, pokud je daný soubor realizuje;
+- importy a přesné kontrakty použitých rozhraní včetně verzí;
+- relevantní společné invarianty a bezpečnostní povinnosti;
+- konkrétní akceptační kritéria a relevantní testovací scénáře;
+- požadované prostředí, konvence frameworku a pravidla náhrad v testech;
+- zdrojové odkazy s hashi pro audit;
+- explicitní předpoklady a seznam nevyřešených závislostí.
+
+Položky nemají být slepě opakovaným obřím checklistem. Musí být relevantní
+pro odpovědnost souboru. Malý konfigurační soubor má jiný kontrakt než runtime
+modul s transakcemi. Specifikace chování má být určitá, ale nemusí předepisovat
+každý interní implementační detail.
+
+A2Q — kontrola dostatečnosti a konzistence:
+Kontrolovat nejen pokrytí ID, ale i shodu poskytovatelů a odběratelů rozhraní,
+úplnost datových typů a chybové sémantiky, konflikty invariantů a nezajištěné
+akceptační podmínky. Nevyřešená otázka kritická pro implementaci blokuje A3
+konkrétního souboru a vrací se k opravě příslušného kontraktu.
+Sémantickou dostatečnost nelze formálně zaručit pouhým JSON schématem ani
+jedním modelovým posudkem; musí se doplnit integračními kontrolami a testy.
+
+A3 — generování z omezeného, úplného pracovního kontextu:
+Deterministický sestavovač z kanonických kontraktů vytvoří file_context:
+  contract_version, source_snapshot_hash, target_file_contract,
+  applicable_invariants, dependency_contracts, acceptance_criteria,
+  relevant_source_excerpts, verified_dependency_artifacts.
+
+Celé zadání, celý plán ani kontrakty nesouvisejících souborů se neposílají
+automaticky. Přesné výňatky zdroje doplní pouze informaci, která není dostatečně
+vyjádřena v kontraktech. Pokud je takových výňatků příliš mnoho, má se opravit
+analytická příprava, nikoli bez kontroly připojit celý SSOT.
+
+Závislosti se vybírají podle významu, nikoli slepým tranzitivním rozbalením
+grafu, které by znovu přitáhlo celý projekt. Nutné tranzitivní typy a invarianty
+se zahrnou; nesouvisející implementace se nepřidávají. Cykly se řeší společným
+kontraktem rozhraní a koordinovanou skupinou, ne libovolným pořadím souborů.
+
+Lokální auditní manifest může dál uchovávat kompletní zdroj a celkový plán.
+API payload má obsahovat pouze konkrétní pracovní kontext. Hash manifestu
+a hash skutečného payloadu mají odlišný význam a musí být evidovány odděleně.
+
+Příklad tests/generation/workflow.test.ts:
+Potřebuje testované chování, přesné importy/signatury workflow, význam stavů
+a chyb, testovací framework, fixture kontrakty, pravidla mockování a očekávané
+výsledky scénářů. Detail nesouvisejícího UI nebo jiného subsystému se nepřidá,
+pokud není skutečnou závislostí testovaného chování.
+
+8. PLÁNOVÁNÍ DÁVEK A OŠETŘENÍ LIMITŮ
+
+- Generovat po skupinách závislostí: stabilní kontrakty/typy, poskytovatelé,
+  konzumenti, navazující testy a integrace. Uvnitř skupiny dávkovat nezávislé
+  úlohy. Batch sám nezajišťuje závislost výsledku jedné úlohy na druhé.
+- Ověřené exporty nebo nutné části již vytvořeného kódu přidávat navazujícím
+  úlohám s hashem a verzí. Změna kontraktu musí invalidovat dotčené konzumenty.
+- Tokeny počítat nad přesným finálním payloadem a uložit model/snapshot,
+  hash payloadu, souborové hashe, výsledek count, max_output_tokens a rezervu.
+- Podmínka přijetí: input_count + output_budget + safety_margin <= model_limit.
+  Velikost rezervy je návrhový parametr k ověření, nikoli zjištěná konstanta API.
+- Zavést samostatný rozpočet kontextu na úlohu; překročení vrací přípravu
+  k úpravě. Nezapínat tiché ořezání vstupu, které by odstranilo povinnosti.
+- Limit výstupu i reasoning volit podle úlohy. Rozsah 32–64 tisíc výstupních
+  tokenů je pouze kandidát pro vybrané složité úlohy, nikoli univerzální řešení.
+  Snížení reasoning může pomoci ceně a délce, ale vyžaduje ověření kvality.
+- Pokud celý soubor nevychází, nespojovat kusy neúplného JSON naslepo.
+  Posoudit buď menší odpovědnost souboru, nebo explicitní verzovaný protokol
+  pokračování. Ten by vyžadoval kontrolu pořadí, integrity a úplnosti; nejde
+  o automatickou změnu stávajícího chunking kontraktu.
+- Před velkou další skupinou ověřit malou skupinu skutečných pracovních úloh
+  a její výstupy použít. Neposílat placené bezúčelné kompatibilitní sondy.
+  Projektový SSOT nyní zakazuje samostatný placený preflight; případná změna
+  této politiky musí být výslovně posouzena. V tomto incidentu uživatel navíc
+  požaduje před dalším odesláním nejprve vysvětlení a projednání postupu.
+
+9. IMPORT, OBNOVA A OCHRANA INVESTOVANÉ PRÁCE
+
+Úspěch má více úrovní: přijatý požadavek -> terminální Response -> platný JSON
+správného kontraktu -> bezpečný soubor -> obsahově správná implementace ->
+úspěšná integrace. completed na úrovni Batch je pouze terminální stav dávky.
+
+Import musí pro každý custom_id zkontrolovat HTTP status, error, body.status,
+incomplete_details, odmítnutí odpovědi, schéma, cestu, neprázdný očekávaný obsah,
+akci a případný protokol chunků. Následně bezpečný zápis, syntaxi a vhodné
+obsahové kontroly. Žádný soubor neoznačit jako dokončený pouze podle počítadla
+completed z Batch API.
+
+Obnova má vycházet z lokální evidence výsledků s hashi, nikoli z opakování
+celé dávky. Neposílat znovu úspěšné a stále platné úlohy. completed_hashes
+musí být ověřené proti aktuálním souborům i verzím jejich kontraktů.
+Neznámý výsledek odeslání se nesmí automaticky zaměnit za neodeslaný požadavek.
+
+Pro tento běh: zachovat A0R/A1, finální přípravu, 38 dokončených odpovědí,
+33 neúplných odpovědí a chybové záznamy mini. Obsah 38 výsledků nejprve
+ověřit; nezaručovat jejich použitelnost před kontrolou. Neúplné texty mohou
+pomoci opravě, ale nesmí být vydávány za hotové soubory. Zbývá 261 úloh
+bez dokončené odpovědi, případně další opravy zjištěné obsahovou validací.
+
+10. NÁKLADY A ROZPOČTOVÁ EVIDENCE
+
+Ruční A2 a A2Q, vykázaná spotřeba:
+A2:  input 395 403, output 93 583.
+A2Q: input 398 576, output 92 871.
+Konzervativní přepočet při sazbách 5 USD / milion vstupních a 30 USD / milion
+výstupních tokenů: 4,784505 + 4,779010 = 9,563515 USD.
+
+Pozor na další nevysvětlenou anomálii: uložené odpovědi A2/A2Q vykazují více
+output_tokens než požadovaných 90 000 a reasoning_tokens shodné s output_tokens,
+přesto obsahují viditelný strukturovaný výstup. Tato metadata zde neopravujeme
+odhadem. Pro rezervaci byl použit celý vykázaný výstup. Soulad těchto metadat
+s fakturací a významem tokenových limitů je další otázka pro poskytovatele.
+
+Luna Batch má dlouhý vstup nad 272 tisíc tokenů. Při sazbách Batch pro dlouhý
+kontext 0,20 USD / milion input a 0,90 USD / milion output vychází přibližně
+6,2276684 USD; při konzervativním použití sazby cache write 0,25 USD na celý
+vstup 7,5678898 USD. Skutečné použití cache-write sazby zde není doložené;
+jde o rezervu, nikoli tvrzení o faktuře.
+
+Konzervativní dosavadní součet dodatečné práce: 17,1314048 USD.
+Z původních 60 USD tedy zbývá výpočtově 42,8685952 USD.
+Nejde o ověřený zůstatek účtu; případné jiné běhy, daně či odlišná fakturace
+nejsou zahrnuté. Rozpočtový odhad vychází z uložené spotřeby a ceníku.
+
+Budoucí rozpočet musí sčítat skutečnou dosavadní spotřebu, rezervace již
+odeslaných úloh, nové požadavky a rezervu na opravy. Neúplné odpovědi jsou
+spotřebou. Nesmí se prezentovat pouze cena dalšího Batch jako celková cena.
+
+11. DŮKAZNÍ SOUBORY A REPRODUKCE BEZ NOVÉHO GENEROVÁNÍ
+
+V LOG/manual_ID92:
+- original_prompt.txt: rekonstruované úplné zadání;
+- original_value_0.json, original_value_1.json: requirements a plán;
+- restored_A1_snapshot.json, final_preparation_snapshot.json: checkpointy;
+- A2_response.json, A2Q_response.json: odpovědi včetně usage;
+- A2_validated.json, A2Q_validated.json: opravené validované struktury;
+- A2_manual_corrections.json, A2Q_manual_corrections.json: lokální zásahy;
+- batch_prepare.py: skutečný sestavovač a odesílač incidentních dávek;
+- source_upload.json: identifikace nahrané přílohy;
+- batch_requests.jsonl: společná sada 299 řádků, nebyla odeslána jako smíšená dávka;
+- gpt-5.4-mini.jsonl, gpt-5.6-luna.jsonl: skutečné vstupní sady;
+- batch_token_counts.json: count výsledky podle digestu request body;
+- batch_budget.json: per-request vstupy, limity a cenové rezervace;
+- batch_expected.json: custom_id -> relativní cesta;
+- gpt-5.4-mini_submission.json, gpt-5.6-luna_submission.json: metadata dávek;
+- gpt-5.4-mini_error_file_id.jsonl: 228 chybových řádků;
+- gpt-5.6-luna_output_file_id.jsonl: 71 odpovědí;
+- aa.txt: reprodukční příklad s plným textem přílohy.
+
+handoff.json je starší předávací záznam ze stavu batch_pending; jeho průběžné
+počty nejsou autoritou pro konečný výsledek. Pro stav použít poslední submission
+metadata a jednotlivé stažené řádky. Původní rezervace v A2_budget/A2Q_budget
+také nejsou náhradou finálně vykázaného usage.
+
+Ne-generativní reprodukce posouzení:
+1) Ověřit shodu řádků per-model JSONL s filtrem společné sady.
+2) Pro body každého řádku použít projektovou digest funkci a ověřit uložený count.
+3) Propojit custom_id se souborem a jeho výstupním schématem.
+4) Spočítat HTTP i vnitřní Response statusy, tokeny a validní/nevalidní JSON.
+5) Rozlišit přesný obsah uploadu lokálně od tvrzení o interním zpracování API.
+   Readback přílohy purpose=user_data byl API odmítnut; nevznikl důkaz
+   vzdáleného stažení a nezávislého porovnání jejího hashe.
+
+12. NAVRŽENÉ OVĚŘENÍ IMPLEMENTAČNÍ ZMĚNY
+
+Při případné realizaci doplnit dočasná testovací data a mockované API:
+- determinismus sestavení file_context a hashů;
+- úplnost nutných závislostí, typů a globálních invariantů;
+- vyloučení nesouvisejících částí bez skrytého fallbacku na celý SSOT;
+- chybějící kontrakt, neznámý symbol, konfliktní verze a cyklus závislostí;
+- invalidaci konzumentů po změně poskytovatele;
+- hranice input/output/reserve a blokaci příliš velkého requestu;
+- completed Batch s HTTP 200, ale body.status=incomplete;
+- neplatný JSON, prázdný obsah, chybnou cestu, duplicity a odmítnutí;
+- obnovu pouze chybějících výsledků a zákaz duplicity neznámého odeslání;
+- souběžné cenové rezervace, skutečný usage a stop před překročením rozpočtu;
+- oddělení redigovaných logů od přesných obnovitelných artefaktů.
+
+Přijetí změny vyžaduje prokázat na reprezentativních pracovních souborech
+menší kontext při zachování požadavků, správná rozhraní a následnou integraci.
+Samotné snížení tokenů ani úspěch unit testů orchestrace nedokazuje kvalitu
+vygenerovaného projektu. Změny kontraktů promítnout do docs/SSOT.md a verzovat
+manifesty; nezneplatnit potichu již připravené běhy.
+
+13. OTÁZKY PRO SPECIALISTU
+
+1) Jak diagnostikovat odmítnutí mini při count+output=394 240 a dokumentovaném
+   okně 400 000? Jaké důkazy nebo experimenty odliší započítání input_file,
+   interní rezervu a konfiguraci snapshotu?
+2) Co vysvětluje anomální usage A2/A2Q nad max_output_tokens a shodu
+   reasoning/output při existujícím viditelném výstupu?
+3) Jaký minimální kontrakt souboru umožní implementaci bez celého SSOT?
+   Jak měřit jeho dostatečnost a zachovat průřezové požadavky?
+4) Kde má být hranice mezi smluveným rozhraním a skutečným kódem závislostí
+   ve vstupu navazující úlohy? Jak řešit cykly a invalidaci změn?
+5) Jak určit model, reasoning a output budget podle složitosti místo přípony?
+6) Jak nejlevněji zachovat 38 dokončených výsledků a opravit zbývající úlohy
+   v rámci zbývajícího rozpočtu bez garance neověřené kvality?
+7) Má se pro velké soubory změnit hranice modulů, nebo protokol výstupních
+   částí? Jak ověřovat celistvost a kompatibilitu takového pokračování?
+
+14. OFICIÁLNÍ PODKLADY OVĚŘENÉ PŘI DIAGNOSTICE
+
+https://developers.openai.com/api/docs/models/gpt-5.4-mini
+Uvádí kontextové okno 400 000 a podporu reasoning.
+https://developers.openai.com/api/docs/models/gpt-5.6-luna
+Uvádí okno 1 050 000, výstup až 128 000 a cenová pravidla dlouhého kontextu.
+https://developers.openai.com/api/docs/guides/reasoning
+Popisuje společný rozpočet reasoning a výstupu a stav incomplete při vyčerpání
+max_output_tokens. Doporučená počáteční rezerva 25 000 není záruka dokončení.
+https://developers.openai.com/api/docs/pricing
+Zdroj sazeb pro cenový přepočet. Před budoucím odesláním znovu ověřit ceny
+a dostupnost konkrétních modelů; dokumentace se může změnit.
+
+ZÁVĚREČNÉ VYMEZENÍ
+
+Doloženou příčinou neúplných výsledků luny je výstupní limit. U mini je
+doloženo odmítnutí kontextu, ale přesný důvod rozporu s počítadlem zůstává
+nevyjasněný. Navržená změna řeší širší problém: analytické fáze mají přeložit
+globální zadání do dostatečných, vzájemně konzistentních kontraktů pro lokální
+implementační úlohy. Široký kontext nesmí suplovat nedokončenou přípravu.
