@@ -80,12 +80,14 @@ def main():
     app.setWindowIcon(app_icon)
 
     from kajovo.desktop.windows import SplashScreen
+    from kajovo.desktop.photos import install_photo_studio
     splash = SplashScreen()
     splash.show()
     app.processEvents()
     settings = load_settings()
     app.processEvents()
     w = MainWindow(settings)
+    install_photo_studio(w)
     w.setWindowIcon(app_icon)
     w.showMaximized()
     splash.finish()
