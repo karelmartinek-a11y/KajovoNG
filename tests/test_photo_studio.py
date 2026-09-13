@@ -169,3 +169,43 @@ def test_invalid_jsonl_is_not_silently_ignored(tmp_path):
     client.file_content.return_value = b"not-json\n"
     with pytest.raises(ValueError, match="neplatný JSON"):
         download_results(client, job, tmp_path / "log")
+
+
+def test_photo_studio_panel_constructs_without_api(qtbot, tmp_path):
+    from kajovo.core.config import AppSettings
+    from kajovo.desktop.photos import PhotoStudioPanel
+
+    settings = AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache"))
+    panel = PhotoStudioPanel(settings, api_key_provider=lambda: "", model_provider=lambda: [])
+    qtbot.addWidget(panel)
+    assert panel.prompt_editor.isEnabled()
+    assert panel.template_list.count() >= 6
+    assert panel.image_model.count() == 0
+    assert not panel.btn_submit.isEnabled()
+
+
+def test_install_photo_studio_adds_real_main_navigation(qtbot, tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from kajovo.core.config import AppSettings
+    from kajovo.desktop.application import MainWindow
+    from kajovo.desktop.jobs import Jobs
+    from kajovo.desktop.photos import install_photo_studio
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    settings = AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache"))
+    with patch("kajovo.desktop.application.get_secret", return_value=None):
+        window = MainWindow(settings)
+    qtbot.addWidget(window)
+    panel = install_photo_studio(window)
+    assert panel is window.photo_panel
+    assert "photos" in window.pages
+    assert "photos" in window.navigation
+    assert window.stack.count() == 10
+    window.select_page("photos")
+    assert window.stack.currentWidget() is window.pages["photos"][0]
+    for manager in window.findChildren(Jobs):
+        for job in list(manager.active):
+            job.request_stop()
+            job.wait(5000)
