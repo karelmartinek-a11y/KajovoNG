@@ -1,6 +1,6 @@
 # KájovoNG
 
-Desktopová aplikace v Pythonu a PySide6 pro práci s OpenAI Responses API, soubory, vlastními kaskádami a dávkami.
+Desktopová aplikace v Pythonu a PySide6 pro práci s OpenAI Responses API, soubory, vlastními kaskádami, dávkami a hromadnými úpravami fotografií.
 
 Kanonická specifikace systému: [SSOT](docs/SSOT.md).
 
@@ -21,7 +21,7 @@ API klíč nastavte v aplikaci v sekci Nastavení → Přístup nebo v proměnn�
 
 Na Windows volba „Uložit“ zachová klíč i pro další spuštění. Uložený klíč má přednost před proměnnou prostředí terminálu; restart Windows není nutný. Volba smazání zabrání i opětovnému načtení starého klíče z prostředí.
 
-Program před pracovním během provádí lokální validaci parametrů, schémat, modelové matice a podle potřeby ne-generativní načtení katalogu nebo metadat již existujících vzdálených prostředků. **Nevytváří samostatné placené testovací Responses ani zkušební BATCH dávky.** První generativní požadavek dané etapy je její skutečný pracovní požadavek. JSON Schema zajišťuje program včetně textových odpovědí a kaskád; uživatel je nemusí sestavovat. V Nastavení lze změnit limit jednoho HTTP požadavku (výchozí 300 sekund) a limit sledování jedné generace (výchozí 3600 sekund). GENERATE/MODIFY spouštějí pracovní odpovědi na pozadí a jejich stav kontrolují každé dvě sekundy. Po výpadku spojení nebo vypršení sledování zůstává uložené ID; v Historii lze pokračovat přes ReRun bez opakovaného generování. Pokud API nepotvrdilo ID při odeslání, automatické opakování je zablokováno.
+Program před pracovním během provádí lokální validaci parametrů, schémat, modelové matice a podle potřeby ne-generativní načtení katalogu nebo metadat již existujících vzdálených prostředků. **Nevytváří samostatné placené testovací Responses ani zkušební BATCH dávky.** První generativní požadavek dané etapy je její skutečný pracovní požadavek. JSON Schema zajišťuje program včetně textových odpovědí a kaskád; uživatel je nemusí sestavovat. V Nastavení lze změnit limit jednoho HTTP požadavku (výchozí 300 sekund) a limit sledování jedné generace (výchozí 3600 sekund). GENERATE/MODIFY spouštějí pracovní odpovědi na pozadí a jejich stav kontrolují každé dvě sekundy. Po výpadku spojení nebo vypršení sledování zůstává uložené ID; obnova pokračuje ve stejné poskytovatelské odpovědi tam, kde to pracovní kontrakt dovoluje. Pokud API nepotvrdilo ID při odeslání, automatické opakování je zablokováno.
 
 ## Vývoj a ověření
 
@@ -36,11 +36,11 @@ Testy používají náhrady API a nevyžadují skutečný klíč. Standardní CI
 
 ## Práce s aplikací
 
-V levé navigaci jsou **Zadání, Kaskády, Zdroje, Dávky, Historie, Verze projektu, Modely, Nastavení a Nápověda**. [Úplný inventář a návrh](docs/UI_DESIGN.md) obsahuje mapu funkcí, parametrů a validačních pravidel.
+V levé navigaci jsou **Zadání, Fotografie, Kaskády, Zdroje, Dávky, Historie, Verze projektu, Modely, Nastavení a Nápověda**. [Úplný inventář a návrh](docs/UI_DESIGN.md) obsahuje mapu funkcí, parametrů a validačních pravidel.
 
 V **Zadání** vyplňte projekt, režim, model a prompt. GENERATE vytváří soubory, MODIFY upravuje existující IN, QA vrací text a QFILE jeden úplný soubor. Adresáře a pokročilé volby mají vlastní kartu; diagnostika a výsledek také. Připojené zdroje jsou vidět v souhrnu zadání. **Spustit**, **Zastavit** a **Aktivní běhy** zůstávají pod pracovní plochou.
 
-Vlastní postup sestavte v **Kaskádách**. Soubory API a vector stores spravujte ve **Zdrojích**. **Modely** ukazují dostupnost a pevnou validační matici. **Dávky** oddělují stav API od stažení a ověření souborů. **Historie** umožňuje hledání, detail, export, tisk, dokončení BATCH a ReRun ostatních běhů. **Verze projektu** obsahují Git, milníky a editor s porovnáním. Nastavení a Dávky lze otevřít také samostatně.
+Vlastní postup sestavte v **Kaskádách**. Hromadné úpravy fotografií a promptové šablony jsou ve **Fotografiích**. Soubory API a vector stores spravujte ve **Zdrojích**. **Modely** ukazují dostupnost a pevnou validační matici. **Dávky** oddělují stav API od stažení a ověření souborů. **Historie** je Run Explorer: umožňuje filtrovat běhy, procházet timeline kroků, lidské i raw odpovědi, artefakty, události, integritu a lineage; z bezpečného checkpointu lze vytvořit nový navazující běh, běh klonovat nebo znovu použít archivované artefakty. Zdrojový běh se těmito akcemi nepřepisuje. **Verze projektu** obsahují Git, milníky a editor s porovnáním. Nastavení a Dávky lze otevřít také samostatně.
 
 Po odeslání **GENERATE nebo MODIFY BATCH** je živá příprava hotová a soubory zpracovává OpenAI. V **Historii** klikněte u běhu na **Dokončit**, případně použijte stejné tlačítko v **Dávkách**. Aplikace ověří stav pracovní dávky a převezme dostupné výsledky do původního OUT bez opakování generování. Pokud dávka stále běží, dokončete ji později. Přehled ukazuje projekt, datum odeslání a zvlášť stav uložení souborů. Částečný výsledek lze znovu převzít; ručně změněné soubory zůstanou zachované. Akce **Zrušit zpracování** zastaví aktivní pracovní dávku; samotný záznam na OpenAI smazat nelze.
 
@@ -54,9 +54,9 @@ Izolované snímky pořídí `.venv\Scripts\python.exe scripts/render_ui.py --ou
 
 GENERATE začíná requirements A0R, pokračuje plánem A1, strukturou A2 a generováním souborů A3. MODIFY používá change requirements B0R, plán B1, strukturu změny B2 a úplné výsledné soubory B3. Standard zahrnuje requirements a zachovává běžnou politiku reasoning.
 
-Volba **Maximum Quality — maximální propracovanost** je výchozí vypnutá. Přidává před soubory nezávislý quality gate A2Q/B2Q, který vrací opravenou kanonickou strukturu, a nejvyšší reasoning podporovaný maticí pro skutečný model kroku. Zvyšuje cenu a dobu běhu. GENERATE používá pro A0R model A1 a pro A2Q model A2; MODIFY používá hlavní model. Volba se ukládá se zadáním a obnovuje při ReRun. ReRun naváže za posledním platným checkpointem přípravy; změněné zadání nebo kvalita vyžadují nový běh.
+Volba **Maximum Quality — maximální propracovanost** je výchozí vypnutá. Přidává před soubory nezávislý quality gate A2Q/B2Q, který vrací opravenou kanonickou strukturu, a nejvyšší reasoning podporovaný maticí pro skutečný model kroku. Zvyšuje cenu a dobu běhu. GENERATE používá pro A0R model A1 a pro A2Q model A2; MODIFY používá hlavní model. Volba se ukládá se zadáním. Nový Run Explorer používá pro navazující akce explicitní bezpečné checkpointy; změněné zadání nebo kvalita vyžadují nový běh.
 
-MODIFY potřebuje existující adresář IN i při odeslání do BATCH. ReRun přeskočí pouze soubory s ověřeným důkazem zápisu a nezměněným obsahem. Nedodané či nepodporované výstupy vedou k částečnému výsledku. Zapnutý dry-run uloží návrh změn do LOG a výslovně oznámí, že OUT zůstal beze změny.
+MODIFY potřebuje existující adresář IN i při odeslání do BATCH. Navazující běh přeskočí pouze soubory s ověřeným důkazem zápisu a nezměněným obsahem. Nedodané či nepodporované výstupy vedou k částečnému výsledku. Zapnutý dry-run uloží návrh změn do LOG a výslovně oznámí, že OUT zůstal beze změny.
 
 Při **SEND AS BATCH** proběhnou requirements, plán, struktura i případný quality gate živě v obou režimech. Pouze A3/B3 vytváří samostatné úlohy na kompletní textové soubory; MODIFY přikládá původní obsah měněného souboru. Modely GENERATE A1/A2/A3 lze vybrat samostatně. Návaznost response_id, technický příjem dlouhého zadání A0, přílohy, diagnostika IN a file search podle pevné matice slouží živé přípravě; diagnostika OUT je při odesílání vypnutá. Starý kontrakt `C_FILES_ALL` slouží pouze kompatibilnímu importu starších dávek.
 
@@ -64,11 +64,11 @@ V sekci Dávky zvolte dokončenou pracovní dávku a stáhněte výsledek. Impor
 
 IN se odesílá jako filtrovaný textový balíček. Ruční přílohy a očekávané soubory kaskády se také nahrávají do API. Vzdálené soubory a úložiště spravujte v sekci Zdroje; dokončení běhu je automaticky nemaže.
 
-**Zastavit** přeruší místní sledování; vzdálená generace může pokračovat a lze na ni navázat přes ReRun. **Zrušit generování** v okně průběhu GENERATE/MODIFY požádá o zrušení na serveru; zrušení platí až po potvrzení API. Obě akce mohou čekat na dokončení právě probíhajícího HTTP požadavku. Snapshot vytváří snapshot v OUT. Nastavení je v `kajovo_settings.json` a běhy v LOG; relativní cesty se vztahují k pracovnímu adresáři aplikace.
+**Zastavit** přeruší místní sledování; vzdálená generace může pokračovat. **Zrušit generování** v okně průběhu GENERATE/MODIFY požádá o zrušení na serveru; zrušení platí až po potvrzení API. Obě akce mohou čekat na dokončení právě probíhajícího HTTP požadavku. Snapshot vytváří snapshot v OUT. Nastavení je v `kajovo_settings.json` a běhy v LOG; relativní cesty se vztahují k pracovnímu adresáři aplikace.
 
 Cena tokenů = (běžný vstup × vstupní sazba + cache × její sazba + výstup × výstupní sazba) / 1 000 000. Reasoning se nepřičítá podruhé. Skutečný file search přidá poplatek za volání; průběžné úložiště je oddělené. Přesné sazby se liší podle modelu, režimu a délky kontextu.
 
-Logy obsahují zadání, odpovědi a případně zdrojový kód. Redakce známých tajných polí není šifrování ani úplná anonymizace. Adresář LOG, databázi a výstupy chraňte před nepovolaným přístupem.
+Run Bundle obsahuje zadání, requesty, response, případně zdrojový kód a další důkazní artefakty. V tomto důvěrném prostředí se kanonická evidence **obsahově nerediguje ani nemaskuje**; ochrana je založena na přístupu k pracovnímu prostředí. Legacy běhy ze starších verzí mohou obsahovat historicky redigovaná data a chybějící původní obsah se nedoplňuje odhadem. Podrobnosti jsou v [Run Bundle specifikaci](docs/RUN_BUNDLE_SPEC.md) a [Run Exploreru](docs/HISTORY_RUN_EXPLORER.md).
 
 Licence projektu: [MIT](LICENSE). Licence závislostí a prostředků: [oznámení třetích stran](THIRD_PARTY_NOTICES.md).
 
