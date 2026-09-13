@@ -269,8 +269,8 @@ def test_history_custom_date_interval_filters_runs(qtbot, tmp_path):
         ("RUN_140920261200_C", "Newer", "2026-09-14T12:00:00+00:00"),
     ):
         logger = RunLogger(str(tmp_path), run_id, project)
-        logger.bundle.update_run({"created_at": created_at, "project": project, "mode": "QA"})
         logger.update_state({"ui_state": {"mode": "QA", "prompt": project}, "status": "running"})
+        logger.bundle.update_run({"created_at": created_at, "project": project, "mode": "QA"})
     panel = ResponseRequestPanel(str(tmp_path))
     qtbot.addWidget(panel)
     panel.period.setCurrentText("Vlastní interval")
