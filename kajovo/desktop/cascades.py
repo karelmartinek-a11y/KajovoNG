@@ -166,6 +166,11 @@ class CascadePanel(QWidget):
         self._build_final_tab()
         self._build_status_tab()
 
+        # Neviditelné kompatibilní handly pro starší automatizaci a uložené scénáře.
+        self.ed_prev_resp = text()
+        self.ed_prev_resp.setEnabled(True)
+        self.schema_kind = combo(["Bez schématu", "manifest", "prompts", "custom"])
+
         self.refresh_saved_list()
         self.add_step()
 
@@ -1145,6 +1150,13 @@ class CascadePanel(QWidget):
             step = copy.deepcopy(self.definition.steps[index])
             step.title = self.ed_step_title.text().strip()
             step.model = self.cb_step_model.currentText().strip()
+            model_item = self.cb_step_model.model().item(self.cb_step_model.currentIndex())
+            if model_item is not None and not model_item.isEnabled():
+                raise ValueError("Vybraný uložený model není v aktuálním katalogu dostupný.")
+            if self.schema_kind.currentText() == "custom":
+                raise ValueError(
+                    "V deterministické kaskádě se výstupní kontrakt vytváří automaticky podle definovaných výstupů."
+                )
             step.temperature = (
                 self.sp_step_temp.value() if self.chk_step_temp.isChecked() else None
             )
