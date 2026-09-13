@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from kajovo.core.model_registry import model_spec
 from kajovo.core.photo_batch import (
     ImageEditBatchAdapter,
     PhotoBatchItem,
@@ -75,7 +76,16 @@ def test_image_model_selector_excludes_general_responses_models():
     assert "gpt-5.6-luna" not in models
     assert "gpt-5.6-sol" not in models
     assert models
-    assert all(model.startswith("gpt-image-") for model in models)
+    for model in models:
+        spec = model_spec(model)
+        assert spec["batch"] is True
+        assert "inpainting" in spec["features"]
+        assert any(
+            isinstance(endpoint, list)
+            and len(endpoint) >= 2
+            and endpoint[1] == "v1/images/edits"
+            for endpoint in spec["endpoints"]
+        )
 
 
 def test_image_edit_batch_row_uses_image_endpoint():

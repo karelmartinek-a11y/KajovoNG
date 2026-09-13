@@ -190,7 +190,7 @@ def test_exact_artifact_is_not_redacted_and_tamper_blocks(tmp_path):
         artifact_path(tmp_path, "sample")
 
 
-def test_journal_recovers_exact_payload_with_redactable_contract_text(tmp_path):
+def test_journal_recovers_exact_payload_without_redaction(tmp_path):
     from kajovo.core.runlog import RunLogger
     from kajovo.core.response_journal import ResponseJournal
     from kajovo.core.generate_batch import digest
@@ -199,7 +199,9 @@ def test_journal_recovers_exact_payload_with_redactable_contract_text(tmp_path):
     entries = {digest(payload): {"payload": payload, "status": "completed", "id": "resp_exact"}}
     log_path = logger.save_json("manifests", "response_journal", {"version": 1, "entries": entries})
     from pathlib import Path
-    assert "REDACTED" in Path(log_path).read_text("utf-8")
+    stored = Path(log_path).read_text("utf-8")
+    assert payload["input"] in stored
+    assert "REDACTED" not in stored
     assert ResponseJournal(logger).entries == entries
 
 

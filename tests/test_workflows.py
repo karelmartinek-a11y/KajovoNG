@@ -101,7 +101,9 @@ def test_complete_offline_workflow(tmp_path, mode, maximum_quality):
         assert snapshot["maximum_quality"] is maximum_quality
     if mode != "QA":
         assert (tmp_path / "out" / "hello.txt").read_text(encoding="utf-8") == "hello\n"
-    assert json.loads((tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text())["status"] == "completed"
+    assert json.loads(
+        (tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(encoding="utf-8")
+    )["status"] == "completed"
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])

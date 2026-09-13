@@ -118,7 +118,7 @@ def test_checkpoint_validates_required_artifact_and_blocks_missing(tmp_path):
     assert bundle.validate_checkpoint(checkpoint["checkpoint_id"])["safe_to_continue"] is True
     archived = bundle.root / artifact["path_in_bundle"]
     archived.unlink()
-    with pytest.raises(ValueError, match="artefakt"):
+    with pytest.raises(ValueError, match="(?i)artefakt"):
         bundle.validate_checkpoint(checkpoint["checkpoint_id"])
 
 
