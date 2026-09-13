@@ -65,8 +65,8 @@ datový parametr,RetryPolicy.circuit_breaker_cooldown_s,20.0,"Datový typ float;
 datový parametr,LoggingPolicy.max_total_mb,2048,"Datový typ int; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:47
 datový parametr,LoggingPolicy.max_runs,200,"Datový typ int; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:48
 datový parametr,LoggingPolicy.encrypt_logs,False,"Datový typ bool; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:49
-datový parametr,LoggingPolicy.mask_secrets,False,"Datový typ bool; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:50
-datový parametr,SecurityPolicy.allow_upload_sensitive,False,Výslovné povolení citlivých příloh; redakce zůstává aktivní,kajovo/core/config.py:61
+datový parametr,LoggingPolicy.mask_secrets,False,Kompatibilní konfigurační pole; kanonický Run Bundle a forenzní evidence se obsahově neredigují,kajovo/core/config.py:50
+datový parametr,SecurityPolicy.allow_upload_sensitive,False,Výslovné povolení souborů zachycených uploadovou heuristikou; nemění obsah kanonické evidence ani Run Bundle,kajovo/core/config.py:61
 datový parametr,SecurityPolicy.deny_extensions_in,field(default_factory=lambda: list(DEFAULT_DENY_EXTENSIONS)),"Seznam přípon, jedna na řádek; filtr před sestavením IN",kajovo/core/config.py:62
 datový parametr,SecurityPolicy.allow_extensions_in,None,"Datový typ Optional[List[str]]; load_settings kontroluje typy a kladné provozní limity; bez samostatného ovladače, pokud není uveden níže",kajovo/core/config.py:65
 datový parametr,SecurityPolicy.deny_globs_in,field(default_factory=lambda: list(DEFAULT_DENY_GLOBS)),"Seznam vzorů, jeden na řádek; filtr před sestavením IN",kajovo/core/config.py:66
@@ -143,7 +143,7 @@ ovladač,self.ed_prev_resp,text(placeholder='resp_… nebo proměnná předchoz�
 ovladač,self.cb_prev_var,combo(),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/cascades.py:77
 ovladač,self.txt_instructions,editor(),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:79
 ovladač,self.txt_input_text,editor(),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:80
-ovladač,self.txt_input_content,editor(),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:94
+ovladač,self.txt_input_content,editor('{}'),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:94
 ovladač,self.file_ids,editor(height=80),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:96
 ovladač,self.local_paths,editor(height=80),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/cascades.py:97
 ovladač,self.variable,combo(),Výběr z uvedených možností; navazující pravidla v modulu,kajovo/desktop/cascades.py:103
@@ -179,11 +179,26 @@ omezení ovladače,self.pb_sub,,"self.pb_sub.setRange(0, 0)",kajovo/desktop/dial
 omezení ovladače,self.pb,,"self.pb.setRange(0, 100)",kajovo/desktop/dialogs.py:229
 omezení ovladače,self.pb_sub,,"self.pb_sub.setRange(0, max(1, self.clock.total or 1))",kajovo/desktop/dialogs.py:231
 omezení ovladače,self.btn_stop,,self.btn_stop.setEnabled(False),kajovo/desktop/dialogs.py:233
-ovladač,self.ed_run_id,text(placeholder='RUN ID'),Text; význam a další validace v obslužné metodě,kajovo/desktop/history.py:20
-ovladač,self.ed_resp_id,text(placeholder='Response ID'),Text; význam a další validace v obslužné metodě,kajovo/desktop/history.py:21
-ovladač,self.ed_date,text(placeholder='Datum DD.MM.YYYY'),Text; význam a další validace v obslužné metodě,kajovo/desktop/history.py:22
-ovladač,self.ed_fulltext,text(placeholder='Hledat v obsahu'),Text; význam a další validace v obslužné metodě,kajovo/desktop/history.py:23
-ovladač,self.txt_detail,editor(readonly=True),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/history.py:49
+ovladač,self.ed_run_id,text(placeholder='RUN ID'),Textový filtr nad odvozeným HistoryIndex; nečte raw soubory při každém filtru,kajovo/desktop/history_run_explorer.py
+ovladač,self.ed_resp_id,text(placeholder='Response ID'),Filtr provider response ID uložených v HistoryIndex,kajovo/desktop/history_run_explorer.py
+ovladač,self.ed_date,text(placeholder='Datum DD.MM.YYYY'),Datum pro přesný/vlastní časový filtr; přijímá podporované datumové formáty,kajovo/desktop/history_run_explorer.py
+ovladač,self.ed_fulltext,text(placeholder='Hledat v historii'),Fulltext nad rebuildovatelným HistoryIndex,kajovo/desktop/history_run_explorer.py
+ovladač,self.period,Vše/Dnes/Včera/Posledních 7 dní/Posledních 30 dní/Tento měsíc/Vlastní datum,Časový filtr; chybějící legacy datum se nevymýšlí,kajovo/desktop/history_run_explorer.py
+ovladač,self.project_filter,Vše + projekty,Přesná hodnota z indexu,kajovo/desktop/history_run_explorer.py
+ovladač,self.mode_filter,Vše + režimy,Přesná hodnota z indexu,kajovo/desktop/history_run_explorer.py
+ovladač,self.status_filter,Vše + stavy,Přesný stav; provider Batch completed se neslučuje s dokončením projektu,kajovo/desktop/history_run_explorer.py
+ovladač,self.model_filter,Vše + modely,Filtr modelů evidovaných u běhu,kajovo/desktop/history_run_explorer.py
+ovladač,self.chk_error,vypnuto,Filtr běhů s evidovanou chybou,kajovo/desktop/history_run_explorer.py
+ovladač,self.chk_batch,vypnuto,Filtr běhů s BATCH,kajovo/desktop/history_run_explorer.py
+ovladač,self.chk_checkpoint,vypnuto,Filtr běhů s explicitním checkpointem,kajovo/desktop/history_run_explorer.py
+ovladač,self.chk_output,vypnuto,Filtr běhů s archivovanými výstupy,kajovo/desktop/history_run_explorer.py
+ovladač,self.chk_lineage,vypnuto,Filtr běhů s explicitní návazností,kajovo/desktop/history_run_explorer.py
+ovladač,self.checkpoint_combo,explicitní checkpointy,Pokračování/ReRun/Repair pouze z checkpointu s safe_to_continue po kontrole integrity,kajovo/desktop/history_run_explorer.py
+omezení ovladače,self.btn_continue,,Zakázáno bez bezpečného checkpointu; legacy bez checkpointu nesmí pokračovat,kajovo/desktop/history_run_explorer.py
+omezení ovladače,self.btn_clone,,Povoleno jen pokud běh obsahuje explicitní ui_state; klon nepřebírá starou response historii,kajovo/desktop/history_actions_impl.py
+ovladač,self.response_status_filter,Vše/completed/incomplete/failed/error/unknown,Incomplete se nikdy nezobrazuje jako completed,kajovo/desktop/history_run_explorer.py
+ovladač,self.event_severity,Vše/info/warning/error/unknown,Filtr append-only EventRecord,kajovo/desktop/history_run_explorer.py
+ovladač,self.event_type,text,Filtr typ/step/request/response/artifact vazeb eventu,kajovo/desktop/history_run_explorer.py
 ovladač,self.ed_file_id,text(placeholder='file_id ze Soubory API'),Text; význam a další validace v obslužné metodě,kajovo/desktop/resources.py:244
 ovladač,self.txt_detail,editor(readonly=True),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/resources.py:264
 ovladač,self.txt_attrs,editor('{}'),Víceřádkový text; JSON a cesty se ověřují při potvrzení,kajovo/desktop/resources.py:265
