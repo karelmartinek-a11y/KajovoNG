@@ -13,13 +13,13 @@ Run Explorer má horní toolbar, levý seznam běhů a hlavní tabovaný detail.
 Obsahuje:
 
 - fulltext nad odvozeným `HistoryIndex`;
-- období: Vše, Dnes, Včera, posledních 7/30 dní, tento měsíc, vlastní datum;
-- kompatibilní přesný RUN ID, Response ID a datum filtr;
+- období: Vše, Dnes, Včera, posledních 7/30 dní, tento měsíc a vlastní interval od–do;
+- kompatibilní přesný RUN ID a Response ID filtr;
 - projekt, mode, stav a model;
 - `Má chybu`, `Má BATCH`, `Má checkpoint`, `Má výstupy`, `Navazuje`;
 - Reset, Obnovit, Exportovat běh a Otevřít Run Bundle.
 
-Filtrování nečte při každé změně celý obsah všech request/response souborů. Read-model je odvozený a rebuildovatelný.
+Vlastní interval přijímá datum `DD.MM.YYYY`, `YYYY-MM-DD` nebo `DDMMYYYY`; lze zadat obě meze nebo pouze jednu. Pokud uživatel zadá obě meze opačně, UI je při vyhodnocení bezpečně prohodí. Filtrování nečte při každé změně celý obsah všech request/response souborů. Read-model je odvozený a rebuildovatelný.
 
 ### Levý seznam
 
@@ -83,9 +83,12 @@ Akce:
 - Náhled;
 - Uložit jako;
 - Použít v novém běhu;
-- Zobrazit původ.
+- Zobrazit původ;
+- Porovnat právě dva vybrané artefakty;
+- Otevřít přímo evidovaný zdrojový RequestRecord;
+- Otevřít přímo evidovaný zdrojový ResponseRecord.
 
-Náhled velkého souboru může být v UI omezen na 1 MiB, ale je označen jako náhled. Kanonický soubor v bundle zůstává kompletní a nezměněný.
+Textové porovnání používá lokální unified diff. U souborů nad 5 MiB se plný diff kvůli responzivitě nenačítá a UI zobrazí jejich metadata/hash; binární artefakty se porovnávají podle integrity, velikosti a provenance. Náhled velkého souboru může být v UI omezen na 1 MiB, ale je označen jako náhled. Kanonický soubor v bundle zůstává kompletní a nezměněný.
 
 **Použít v novém běhu** funguje pouze pro nový Run Bundle s explicitním `artifact_id`, `reusable=true` a platným SHA-256. Vybrané soubory se kopírují do izolovaného dočasného IN a nový MODIFY běh zaznamená lineage `reuse_artifacts`.
 
