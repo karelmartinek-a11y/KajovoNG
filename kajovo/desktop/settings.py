@@ -54,12 +54,14 @@ class SettingsPage(QWidget):
         self.batch_poll = number(settings.batch_poll_interval_s, 0.5, 60, True)
         self.batch_timeout = number(settings.batch_timeout_s, 60, 86400, True)
         self.response_timeout = number(settings.response_timeout_s, 1, 86400, True)
+        self.response_poll_timeout = number(settings.response_poll_timeout_s, 1, 86400, True)
         for name, field in (
             ("Výchozí model", self.default_model),
             ("Výchozí teplota", self.default_temperature),
             ("Kontrola dávky každých (s)", self.batch_poll),
             ("Limit sledování dávky (s)", self.batch_timeout),
-            ("Čekání na API (s)", self.response_timeout),
+            ("Limit jednoho HTTP požadavku (s)", self.response_timeout),
+            ("Limit sledování generace (s)", self.response_poll_timeout),
         ):
             fields.addRow(name, field)
         gl.addStretch()
@@ -213,6 +215,7 @@ class SettingsPage(QWidget):
         candidate.batch_poll_interval_s = self.batch_poll.value()
         candidate.batch_timeout_s = self.batch_timeout.value()
         candidate.response_timeout_s = self.response_timeout.value()
+        candidate.response_poll_timeout_s = self.response_poll_timeout.value()
         candidate.security.allow_upload_sensitive = self.allow_sensitive.isChecked()
         candidate.security.deny_extensions_in = [
             line.strip() for line in self.deny_ext.toPlainText().splitlines() if line.strip()
@@ -260,6 +263,7 @@ class SettingsPage(QWidget):
                     "batch_poll",
                     "batch_timeout",
                     "response_timeout",
+                    "response_poll_timeout",
                 )
             }
         )
@@ -288,6 +292,7 @@ class SettingsPage(QWidget):
                 "batch_poll",
                 "batch_timeout",
                 "response_timeout",
+                "response_poll_timeout",
             ) and type(value) in (int, float):
                 getattr(self, name).setValue(value)
             elif name in ("allow_sensitive",) and type(value) is bool:

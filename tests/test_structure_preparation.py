@@ -12,6 +12,7 @@ from kajovo.core.generate_batch import (
     build_manifest, encode_requests, prepare_structure, validate_structure,
 )
 from test_workflows import make_worker, response
+from delivery_fixtures import plan_payload, requirements_payload, structure_payload
 
 
 def graph_specification():
@@ -138,10 +139,11 @@ def test_manifest_creation_remains_strict_and_existing_requests_stay_unchanged()
 def test_new_a2_is_prepared_before_live_or_batch_generation(tmp_path, batch):
     worker = make_worker(tmp_path, "GENERATE")
     worker.cfg.send_as_c = batch
-    original = graph_specification()
-    prepared, additions = prepare_structure(original)
+    original = structure_payload(files=graph_specification()["files"], interfaces=graph_specification()["interfaces"])
+    base_prepared, additions = prepare_structure(graph_specification())
+    prepared = structure_payload(files=base_prepared["files"], interfaces=base_prepared["interfaces"])
     client = Mock()
-    client.create_response.side_effect = [response(1, {"contract": "A1_PLAN"}), response(2, original)]
+    client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload()), response(2, original)]
     client.upload_file.return_value = {"id": "file_input"}
     client.create_batch.return_value = {"id": "batch_work"}
     results, errors = [], []
@@ -150,13 +152,16 @@ def test_new_a2_is_prepared_before_live_or_batch_generation(tmp_path, batch):
     with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks", return_value=("obsah", "resp_file")) as generate:
         worker.run()
     assert not errors
-    assert client.create_response.call_count == 2
+    assert client.create_response.call_count == 3
     run = Path(worker.log.paths.run_dir)
-    evidence = json.loads(next((run / "manifests").glob("*A2_validated_structure*.json")).read_text(encoding="utf-8"))
+    evidence = json.loads(next((run / "manifests").glob("*A2_prepared_candidate_0*.json")).read_text(encoding="utf-8"))
     assert evidence["structure"] == prepared
     assert evidence["added_dependencies"] == additions
     original_record = json.loads(next((run / "responses").glob("*A2_response*.json")).read_text(encoding="utf-8"))
     assert json.loads(original_record["output_text"]) == original
+    snapshot = json.loads((run / "run_state.json").read_text(encoding="utf-8"))["preparation_snapshot"]
+    assert snapshot["structure"] == prepared
+    assert snapshot["canonical_stage"] == "A2"
     if batch:
         state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
         assert state["generate_batch"]["snapshot"]["structure"] == prepared
@@ -175,13 +180,14 @@ def test_new_a2_is_prepared_before_live_or_batch_generation(tmp_path, batch):
 def test_repair_receives_all_errors_and_current_prepared_manifest(tmp_path):
     worker = make_worker(tmp_path, "GENERATE")
     worker.cfg.send_as_c = True
-    bad = graph_specification()
+    bad = structure_payload(files=graph_specification()["files"], interfaces=graph_specification()["interfaces"])
     bad["files"][1]["requires"].append("unknown-a")
     bad["files"][3]["requires"].append("unknown-b")
-    bad_prepared, _ = prepare_structure(bad)
-    fixed, _ = prepare_structure(graph_specification())
+    fixed_base, _ = prepare_structure(graph_specification())
+    fixed = structure_payload(files=fixed_base["files"], interfaces=fixed_base["interfaces"])
+    good = structure_payload(files=graph_specification()["files"], interfaces=graph_specification()["interfaces"])
     client = Mock()
-    client.create_response.side_effect = [response(1, {"contract": "A1_PLAN"}), response(2, bad), response(3, graph_specification())]
+    client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload()), response(2, bad), response(3, good)]
     client.upload_file.return_value = {"id": "file_input"}
     client.create_batch.return_value = {"id": "batch_work"}
     errors = []
@@ -189,11 +195,15 @@ def test_repair_receives_all_errors_and_current_prepared_manifest(tmp_path):
     with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
         worker.run()
     assert not errors
-    assert client.create_response.call_count == 3
-    repair = client.create_response.call_args_list[2].args[0]
-    prompt = repair["input"][0]["content"][0]["text"]
-    assert "unknown-a" in prompt and "unknown-b" in prompt
-    assert json.dumps(bad_prepared, ensure_ascii=False) in prompt
+    assert client.create_response.call_count == 4
+    repair = client.create_response.call_args_list[3].args[0]
+    context = json.loads(repair["input"][0]["content"][0]["text"])
+    assert "unknown-a" in context["validation_errors"] and "unknown-b" in context["validation_errors"]
+    assert context["structure"] == bad
+    assert context["requirements"] == requirements_payload()
+    assert context["plan"] == plan_payload()
+    request_log = json.loads(next((Path(worker.log.paths.run_dir) / "requests").glob("*A2_request_1*.json")).read_text(encoding="utf-8"))
+    assert json.loads(request_log["payload"]["input"][0]["content"][0]["text"]) == context
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert state["generate_batch"]["snapshot"]["structure"] == fixed
 
@@ -202,16 +212,16 @@ def test_repair_receives_all_errors_and_current_prepared_manifest(tmp_path):
 def test_unrepairable_manifest_blocks_all_file_generation(tmp_path, batch):
     worker = make_worker(tmp_path, "GENERATE")
     worker.cfg.send_as_c = batch
-    spec = graph_specification()
+    spec = structure_payload(files=graph_specification()["files"], interfaces=graph_specification()["interfaces"])
     spec["files"][5]["provides"] = []
     client = Mock()
-    client.create_response.side_effect = [response(0, {"contract": "A1_PLAN"})] + [response(i + 1, spec) for i in range(3)]
+    client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload())] + [response(i + 2, spec) for i in range(3)]
     errors = []
     worker.finished_err.connect(errors.append)
     with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks") as generate:
         worker.run()
     assert errors and "controller" in errors[0]
-    assert client.create_response.call_count == 4
+    assert client.create_response.call_count == 5
     client.create_batch.assert_not_called()
     client.upload_file.assert_not_called()
     generate.assert_not_called()

@@ -2,7 +2,10 @@ druh,parametr,výchozí hodnota / možnosti,pravidlo,zdroj
 datový parametr,UiRunConfig.project,povinný,Identifikátor projektu pro běh a logy; kontrola před spuštěním,kajovo/core/pipeline.py:48
 datový parametr,UiRunConfig.prompt,povinný,Neprázdné zadání pro běžný běh; kaskáda používá kroky,kajovo/core/pipeline.py:49
 datový parametr,UiRunConfig.mode,povinný,GENERATE/MODIFY/QA/QFILE/KASKADA; REQUEST_COMBINATIONS.csv,kajovo/core/pipeline.py:50
-datový parametr,UiRunConfig.send_as_c,povinný,BATCH jen GENERATE/MODIFY; A1/A2 příprava LIVE; request_rules.py,kajovo/core/pipeline.py:51
+datový parametr,UiRunConfig.send_as_c,povinný,BATCH jen GENERATE/MODIFY; requirements/plán/struktura/quality gate LIVE; pouze A3/B3 soubory BATCH,kajovo/core/pipeline.py
+datový parametr,UiRunConfig.maximum_quality,false,Boolean; GENERATE/MODIFY LIVE i BATCH; Standard zachová reasoning; Maximum přidá A2Q/B2Q a nejvyšší effort podle matice,kajovo/core/requirements.py
+datový parametr,UiRunConfig.preparation_snapshot,null,Checkpoint verze 1; hash/režim/kvalita/zadání a dokončené kontrakty; ReRun pokračuje další fází,kajovo/core/delivery_preparation.py
+ovladač,chk_maximum_quality,vypnuto,Maximum Quality — maximální propracovanost; dostupné pouze GENERATE/MODIFY; uložení/načtení a ReRun zachová volbu,kajovo/desktop/application.py
 datový parametr,UiRunConfig.model,povinný,Přesný model z pevné matice; dostupnost katalogu; core/request_rules.py a MODEL_MATRIX.md,kajovo/core/pipeline.py:52
 datový parametr,UiRunConfig.model_a1,povinný,Volitelný model fáze A1/A2/A3; prázdný přebírá hlavní model; schopnosti každé fáze zvlášť,kajovo/core/pipeline.py:53
 datový parametr,UiRunConfig.model_a2,povinný,Volitelný model fáze A1/A2/A3; prázdný přebírá hlavní model; schopnosti každé fáze zvlášť,kajovo/core/pipeline.py:54

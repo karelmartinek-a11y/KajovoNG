@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from kajovo.core.batch_submit import exact_batch_matches
 from kajovo.core.batch_completion import recover_unknown_submission
 from kajovo.core.openai_client import OpenAIClient
@@ -75,8 +77,8 @@ def test_prevalidated_work_batch_performs_only_the_single_work_post():
         "POST", "/batches",
         json_body={"input_file_id": "file_work", "endpoint": "/v1/responses", "completion_window": "24h"},
     )
-    assert client._policy.proofs == {}
-    client._policy.save.assert_called_once()
+    assert client._policy.mock_calls == []
+    assert client._policy.proofs == {"proof": {"state": "verified"}}
 
 
 def test_rerun_reads_real_hashed_runlogger_manifest_and_verifies_hash(tmp_path):
@@ -97,10 +99,15 @@ def test_rerun_reads_real_hashed_runlogger_manifest_and_verifies_hash(tmp_path):
     assert verified_output_evidence(logger.paths.run_dir, str(out)) == []
 
 
-def test_modify_batch_contract_does_not_require_in_source():
-    source = Path("kajovo/desktop/application.py").read_text(encoding="utf-8")
-    assert 'mode == "MODIFY"\n            and not batch' in source
-    assert 'MODIFY vyžaduje existující vstupní adresář IN.' in source
+def test_modify_requires_in_for_both_delivery_modes():
+    from kajovo.desktop.application import MainWindow
+
+    window = SimpleNamespace(ed_in=Mock(), ed_out=Mock())
+    window.ed_in.text.return_value = ""
+    window.ed_out.text.return_value = "out"
+    for batch in (False, True):
+        with pytest.raises(ValueError, match="MODIFY vyžaduje"):
+            MainWindow._validate_paths(window, "MODIFY", batch)
 
 
 def test_batch_submit_instruction_remains_manual_refresh():
@@ -138,7 +145,7 @@ def test_live_generate_partial_semantics_are_wired_end_to_end():
     pipeline = Path("kajovo/core/pipeline.py").read_text(encoding="utf-8")
     desktop = Path("kajovo/desktop/application.py").read_text(encoding="utf-8")
     assert '"status": "partial" if missing_deliverables else "completed"' in pipeline
-    assert 'final_status in ("completed", "partial")' in pipeline
+    assert 'final_status in ("completed", "partial", "dry_run")' in pipeline
     assert 'terminal_status == "partial"' in desktop
     assert "Kájovo NG · částečný výstup" in desktop
 
@@ -153,5 +160,5 @@ def test_user_progress_no_longer_exposes_obsolete_english_stage_messages():
         "QFILE: request...",
     )
     assert not any(message in source for message in obsolete)
-    assert 'stage="Předběžné ověření"' in source
+    assert 'stage="Lokální validace"' in source
     assert 'stage="Příprava BATCH"' in source

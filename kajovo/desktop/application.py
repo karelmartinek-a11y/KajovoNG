@@ -1,5 +1,6 @@
 """Pracovní plocha: navigace, snímek zadání a životní cyklus nezávislých běhů."""
 
+import copy
 import json
 import os
 import time
@@ -304,6 +305,12 @@ class MainWindow(QMainWindow):
         self.cb_model = combo()
         self.cb_model.setPlaceholderText("Obnovte katalog modelů")
         self.chk_send_as_c = QCheckBox("Odeslat jako BATCH")
+        self.chk_maximum_quality = QCheckBox("Maximum Quality — maximální propracovanost")
+        self.lbl_maximum_quality = label(
+            "Přidá nezávislou kontrolu návrhu před generováním souborů a použije nejvyšší úroveň reasoning, kterou zvolený model pro daný krok podporuje. Zvyšuje kvalitu, cenu a dobu běhu.",
+            "Hint",
+        )
+        self.lbl_maximum_quality.setWordWrap(True)
         fields.addRow("Projekt", self.ed_project)
         fields.addRow("Cíl práce", row(self.cb_mode, self.chk_send_as_c))
         fields.addRow("Model", row(self.cb_model, button("Vybrat model…", self.choose_model)))
@@ -321,6 +328,8 @@ class MainWindow(QMainWindow):
         self.txt_prompt = editor(height=170)
         self.txt_prompt.setPlaceholderText("Popište požadovaný výsledek, vstupy a podmínky…")
         ml.addWidget(self.txt_prompt)
+        ml.addWidget(self.chk_maximum_quality)
+        ml.addWidget(self.lbl_maximum_quality)
         self.lbl_caps = label("", "Hint")
         ml.addWidget(self.lbl_caps)
         pl.addWidget(main)
@@ -546,13 +555,15 @@ class MainWindow(QMainWindow):
     def on_mode_changed(self, *_):
         mode = self.cb_mode.currentText()
         self.chk_send_as_c.setEnabled(mode in ("GENERATE", "MODIFY"))
+        self.chk_maximum_quality.setEnabled(mode in ("GENERATE", "MODIFY"))
+        self.lbl_maximum_quality.setVisible(mode in ("GENERATE", "MODIFY"))
         if mode not in ("GENERATE", "MODIFY"):
             self.chk_send_as_c.setChecked(False)
         batch = self.chk_send_as_c.isChecked()
         self.row_cascade_selector.setVisible(mode == "KASKADA")
         self.row_generate_models.setVisible(mode == "GENERATE")
         self.row_generate_models.setEnabled(mode == "GENERATE")
-        self.ed_response_id.setEnabled(mode != "KASKADA" and (not batch or mode == "GENERATE"))
+        self.ed_response_id.setEnabled(mode != "KASKADA")
         for field in (
             self.chk_diag_win_in,
             self.chk_diag_win_out,
@@ -561,7 +572,7 @@ class MainWindow(QMainWindow):
         ):
             allowed = mode != "KASKADA" and (
                 not batch
-                or mode == "GENERATE"
+                or mode in ("GENERATE", "MODIFY")
                 and field in (self.chk_diag_win_in, self.chk_diag_ssh_in)
             )
             field.setEnabled(allowed)
@@ -721,6 +732,8 @@ class MainWindow(QMainWindow):
             prompt=self.txt_prompt.toPlainText(),
             mode=mode,
             send_as_c=self.chk_send_as_c.isChecked(),
+            maximum_quality=self.chk_maximum_quality.isChecked() if mode in ("GENERATE", "MODIFY") else False,
+            preparation_snapshot=copy.deepcopy(getattr(self, "_preparation_snapshot", None)),
             model=model,
             model_a1=self._get_generate_model_override(self.cb_model_a1)
             if mode == "GENERATE"
@@ -752,6 +765,7 @@ class MainWindow(QMainWindow):
             ssh_key=self.ed_ssh_key.text().strip(),
             ssh_password=self.ed_ssh_pwd.text(),
             skip_paths=list(self.skip_paths_current),
+            completed_hashes=copy.deepcopy(getattr(self, "_completed_hashes", {})),
             skip_exts=list(self.skip_exts_default),
             model_caps=caps.to_dict() if caps else {},
             resume_files=list(self._resume_files),
@@ -769,7 +783,6 @@ class MainWindow(QMainWindow):
     def _validate_paths(self, mode, batch):
         if (
             mode == "MODIFY"
-            and not batch
             and (not self.ed_in.text().strip() or not Path(self.ed_in.text()).is_dir())
         ):
             raise ValueError("MODIFY vyžaduje existující vstupní adresář IN.")
@@ -860,7 +873,7 @@ class MainWindow(QMainWindow):
             else:
                 logger = RunLogger(self.s.log_dir, run_id, project_name=cfg.project, resume=bool(resume))
                 worker = RunWorker(cfg, self.s, self.api_key, logger)
-                if resume:
+                if resume and resume.get("generate_batch"):
                     worker.resume_generate_batch = resume["generate_batch"]
             dialog = ProgressDialog(self)
             dialog.setWindowTitle("Průběh · " + run_id)
@@ -876,6 +889,10 @@ class MainWindow(QMainWindow):
             worker.logline.connect(dialog.add_log)
             worker.logline.connect(self.log)
             dialog.btn_stop.clicked.connect(lambda: self.on_stop(run_key=run_id))
+            if getattr(cfg, "mode", "") in ("GENERATE", "MODIFY"):
+                dialog.btn_cancel_response.show()
+                dialog.btn_cancel_response.setEnabled(False)
+                dialog.btn_cancel_response.clicked.connect(worker.request_cancel_response)
             worker.finished_ok.connect(lambda result: self.on_run_ok(run_id, result))
             worker.finished_err.connect(lambda error: self.on_run_err(run_id, error))
             worker.finished.connect(lambda: self._release_run(run_id))
@@ -896,12 +913,12 @@ class MainWindow(QMainWindow):
             or msg_question(
                 self,
                 "Zastavit běh?",
-                "Rozpracovaný krok může zůstat nedokončený. Již provedená volání se účtují.",
+                "Místní sledování skončí. Vzdálená generace může pokračovat; navázat lze přes ReRun. Již provedená volání se účtují.",
             )
             == QMessageBox.Yes
         ):
             context["worker"].request_stop()
-            context["dialog"].set_status("Ruším; čekám na dokončení probíhající operace.")
+            context["dialog"].set_status("Zastavuji místní sledování; čekám na dokončení probíhajícího HTTP požadavku.")
             context["dialog"].btn_stop.setEnabled(False)
 
     def _release_run(self, key):
@@ -942,9 +959,11 @@ class MainWindow(QMainWindow):
         cfg = context["worker"].cfg
         batch = bool(result.get("batch_id") or result.get("mode") == "C")
         terminal_status = "batch_pending" if batch else str(result.get("status") or "completed")
-        if terminal_status not in ("completed", "partial", "batch_pending"):
+        if terminal_status not in ("completed", "partial", "batch_pending", "dry_run"):
             terminal_status = "completed"
         terminal_detail = ""
+        if result.get("dry_run") or terminal_status == "dry_run":
+            terminal_detail = "Dry-run: návrh změn byl ověřen; OUT zůstává beze změny."
         if terminal_status == "partial":
             missing = [str(path) for path in result.get("missing_deliverables", []) if path]
             terminal_detail = "Běh skončil s částečným výstupem."
@@ -973,18 +992,22 @@ class MainWindow(QMainWindow):
         else:
             if terminal_status == "partial":
                 missing = [str(path) for path in result.get("missing_deliverables", []) if path]
-                text = "GENERATE skončil s částečným výstupem. Nedodané položky jsou evidovány v MISSINGFILES.md."
+                text = f"{cfg.mode} skončil s částečným výstupem. Nedodané položky jsou uvedeny v podrobnostech běhu."
+                if result.get("dry_run"):
+                    text += " Dry-run: do OUT se nezapisovalo."
                 if missing:
                     text += "\nNedodáno: " + ", ".join(missing[:20])
                     if len(missing) > 20:
                         text += f" … a dalších {len(missing) - 20}."
                 msg_info(self, "Částečný výstup", text, details=result)
+            if terminal_status == "dry_run":
+                msg_info(self, "Dry-run dokončen", terminal_detail, details=result)
             if terminal_status == "completed":
                 for attr, remote in (("diag_windows_out", False), ("diag_ssh_out", True)):
                     if getattr(cfg, attr, False):
                         self._maybe_execute_repair(cfg.out_dir, cfg, remote)
             if (
-                cfg.out_dir
+                terminal_status != "dry_run" and not result.get("dry_run") and cfg.out_dir
                 and Path(cfg.out_dir).is_dir()
                 and msg_question(self, "Otevřít výstup?", cfg.out_dir) == QMessageBox.Yes
             ):
@@ -1007,6 +1030,10 @@ class MainWindow(QMainWindow):
                     if missing:
                         body += "\nNedodáno: " + ", ".join(missing[:20])
                     title = "Oznámení o částečném výstupu"
+                elif terminal_status == "dry_run":
+                    subject = "Kájovo NG · dry-run dokončen"
+                    body = f"Běh {key}\nProjekt {cfg.project}\nZměny byly ověřeny; OUT zůstává beze změny."
+                    title = "Oznámení o dry-run"
                 else:
                     subject = "Kájovo NG · generování dokončeno" if repair_requested else "Kájovo NG · dokončeno"
                     body = f"Běh {key}\nProjekt {cfg.project}\nOUT {cfg.out_dir}"
@@ -1023,16 +1050,19 @@ class MainWindow(QMainWindow):
         self.batch_panel.render_records()
 
     def on_run_err(self, key, error):
+        from .recovery import read_record
+        state = read_record(Path(self.s.log_dir) / key / "run_state.json").get("status")
+        recoverable = state in ("response_pending", "submission_unknown", "cancelled")
         context = self._run_contexts.get(key)
         if context:
-            context["dialog"].on_progress_event(
-                ProgressEvent(
-                    "RUN",
-                    "cancelled" if error in ("STOPPED", "STOP_REQUESTED") else "failed",
-                    detail=error,
-                )
-            )
-        msg_critical(self, "Běh skončil chybou", error)
+            context["dialog"].on_progress_event(ProgressEvent(
+                "RUN", state if recoverable else "cancelled" if error in ("STOPPED", "STOP_REQUESTED") else "failed",
+                detail=error,
+            ))
+        if recoverable:
+            msg_info(self, "Sledování generace přerušeno", error)
+        else:
+            msg_critical(self, "Běh skončil chybou", error)
 
     def _gather_state(self):
         state = asdict(self._config())
@@ -1046,6 +1076,12 @@ class MainWindow(QMainWindow):
     def _apply_state(self, state):
         if not isinstance(state, dict):
             raise ValueError("Uložené zadání musí být objekt JSON.")
+        self._preparation_snapshot = copy.deepcopy(state.get("preparation_snapshot"))
+        self._resume_files = copy.deepcopy(state.get("resume_files") or [])
+        self._resume_prev_id = state.get("resume_prev_id")
+        self.skip_paths_current = list(state.get("skip_paths") or [])
+        self._completed_hashes = copy.deepcopy(state.get("completed_hashes") or {})
+        self.chk_maximum_quality.setChecked(state.get("maximum_quality") is True)
         for key, field in (
             ("project", self.ed_project),
             ("in_dir", self.ed_in),
@@ -1162,7 +1198,10 @@ class MainWindow(QMainWindow):
 
     def _gather_completed_paths(self, run_id, out_dir):
         run_dir = Path(self.s.log_dir) / run_id
-        return sorted({entry["path"] for entry in verified_output_evidence(run_dir, out_dir)})
+        self._completed_hashes = {entry["path"]: entry["sha256"]
+                                  for entry in verified_output_evidence(run_dir, out_dir)
+                                  if entry.get("sha256")}
+        return sorted(self._completed_hashes)
 
     def on_rerun(self):
         self.rerun(self.ed_rerun.text().strip())
@@ -1195,7 +1234,7 @@ class MainWindow(QMainWindow):
             self.skip_paths_current = self._gather_completed_paths(run_id, ui.get("out_dir", ""))
             self._resume_files, self._resume_prev_id = structure, previous
             self.ed_response_id.setText(previous or "")
-            self._resume_batch_state = state if state.get("generate_batch") else None
+            self._resume_batch_state = state if state.get("generate_batch") or state.get("response_transport") == "background" else None
             try:
                 self.on_go()
             finally:

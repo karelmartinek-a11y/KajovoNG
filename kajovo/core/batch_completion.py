@@ -10,7 +10,7 @@ from .contracts import (
     parse_json_strict, extract_text_from_response, validate_paths,
     validate_chunk_metadata, ContractError,
 )
-from .generate_batch import process_saved_batch
+from .generate_batch import encode_requests, process_saved_batch
 from .progress import ProgressEvent
 from .batch_submit import exact_batch_matches
 
@@ -42,12 +42,12 @@ def batch_ids(state):
 
 
 def pending_batch_ids(state):
-    if state.get("status") == "files_complete_unverified":
+    if state.get("status") in {"files_complete_unverified", "dry_run"}:
         return []
     imports = state.get("batch_imports") or {}
     return [bid for bid in batch_ids(state)
             if imports.get(bid, {}).get("import_status", imports.get(bid, {}).get("status"))
-            != "files_complete_unverified"]
+            not in {"files_complete_unverified", "dry_run"}]
 
 
 def preflight_ids(state):
@@ -57,10 +57,6 @@ def preflight_ids(state):
     return list(dict.fromkeys(item["id"] for item in values
                              if isinstance(item, dict) and isinstance(item.get("id"), str)
                              and item["id"]))
-
-
-def can_continue_preflight(state):
-    return bool(preflight_ids(state)) and not batch_ids(state) and not state.get("submission_unknown")
 
 
 def read_batch_statuses(log_dir):
@@ -99,13 +95,17 @@ def recover_unknown_submission(run_dir, records):
     bid = str(batch.get("id") or "")
     if not bid:
         raise ContractError("Nalezená dávka nemá ID.")
-    state["batch_id"] = bid
+    pending = state.get("pending_batch_submission")
+    if isinstance(pending, dict) and isinstance(pending.get("manifest"), dict):
+        encode_requests(pending["manifest"])
+        state.setdefault("generate_batch", pending["manifest"])
+        state.setdefault("generate_batches", {})[bid] = pending["manifest"]
+    if not state.get("batch_id"):
+        state["batch_id"] = bid
     state["submission_unknown"] = False
     state["status"] = "batch_pending"
     state.setdefault("batch_records", {})[bid] = batch
-    pending = state.pop("pending_batch_submission", None)
-    if isinstance(pending, dict) and isinstance(pending.get("manifest"), dict):
-        state.setdefault("generate_batches", {})[bid] = pending["manifest"]
+    state.pop("pending_batch_submission", None)
     atomic_write_text(str(Path(run_dir) / "run_state.json"), json.dumps(state, ensure_ascii=False, indent=2))
     return batch
 

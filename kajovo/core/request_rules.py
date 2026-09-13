@@ -82,8 +82,10 @@ def validate_response_payload(payload: dict[str, Any], batch=False) -> None:
         raise ValueError("Požadavek vyžaduje model.")
     if payload.get("previous_response_id") and payload.get("conversation"):
         raise ValueError("conversation a previous_response_id nelze kombinovat.")
-    if payload.get("stream") or payload.get("background"):
-        raise ValueError("Synchronní klient vyžaduje stream=false a background=false.")
+    if payload.get("stream"):
+        raise ValueError("Klient vyžaduje stream=false.")
+    if payload.get("background") and (batch or payload.get("store") is not True):
+        raise ValueError("Sledování na pozadí vyžaduje store=true a samostatný LIVE požadavek.")
     reasoning = payload.get("reasoning")
     if reasoning is None:
         reasoning = {}
@@ -184,6 +186,8 @@ def validate_vector_attributes(attributes: dict[str, Any]) -> None:
 
 
 def validate_run_options(cfg, check_models=True) -> None:
+    if type(getattr(cfg, "maximum_quality", False)) is not bool:
+        raise ValueError("Maximum Quality musí být boolean.")
     if cfg.mode not in ("GENERATE", "MODIFY", "QA", "QFILE"):
         raise ValueError("Neznámý režim běhu.")
     if not cfg.model.strip() or not cfg.prompt.strip():
@@ -220,11 +224,11 @@ def validate_run_options(cfg, check_models=True) -> None:
     if cfg.send_as_c:
         if cfg.mode not in ("GENERATE", "MODIFY"):
             raise ValueError("Batch souborového kontraktu podporuje pouze GENERATE a MODIFY.")
-        if cfg.response_id and cfg.mode != "GENERATE":
-            raise ValueError("Batch nepoužívá návaznost response_id; pole musí být prázdné.")
-        if cfg.mode != "GENERATE" and (cfg.attached_vector_store_ids or cfg.diag_windows_in or cfg.diag_ssh_in):
-            raise ValueError("Batch souborového kontraktu nepodporuje vector store ani diagnostiku IN.")
+        if cfg.mode == "MODIFY":
+            validate_response_payload({"model": cfg.model}, batch=True)
         if cfg.diag_windows_out or cfg.diag_ssh_out:
             raise ValueError("Batch nespouští následné opravy OUT.")
     if check_models and cfg.mode != "GENERATE" and cfg.attached_vector_store_ids and not cfg.model_caps.get("supports_file_search"):
         raise ValueError("Pro připojený vector store nejprve ověřte podporu file search u modelu.")
+    if check_models and cfg.mode == "MODIFY" and cfg.model_caps.get("supports_previous_response_id") is False:
+        raise ValueError("Živá příprava MODIFY vyžaduje návaznost Responses.")

@@ -235,29 +235,50 @@ def test_pending_result_is_information_and_stops_progress(window, qtbot):
     from kajovo.core.progress import ProgressEvent
     dialog = ProgressDialog(window)
     qtbot.addWidget(dialog)
-    window._run_contexts["test"] = {"dialog": dialog}
+    window._run_contexts["test"] = {"dialog": dialog, "worker": Mock(cfg=window._config())}
     try:
         with patch("kajovo.desktop.application.msg_info") as info, patch(
             "kajovo.desktop.application.msg_critical"
         ) as critical:
             window.on_run_ok("test", {
-                "status": "preflight_pending", "detail": "Ověření probíhá.",
-                "preflight_batches": [{"id": "batch_trial", "status": "validating"}],
+                "status": "batch_pending", "batch_id": "batch_work",
             })
-        info.assert_called_once_with(
-            window, "Ověření dávky probíhá", "Ověření probíhá.",
-            details=[{"id": "batch_trial", "status": "validating"}],
-        )
+        info.assert_called_once()
+        assert info.call_args.args[1] == "Dávka odeslána"
         critical.assert_not_called()
         assert dialog.clock.finished is not None
         assert not dialog.btn_stop.isEnabled()
-        assert "Čeká na ověření" in dialog.lbl_stage.text()
-        dialog.on_progress_event(ProgressEvent("RUN", "preflight_pending"))
+        assert "BATCH" in dialog.lbl_stage.text()
+        dialog.on_progress_event(ProgressEvent("RUN", "batch_pending"))
     finally:
         window._run_contexts.clear()
 
 
-@pytest.mark.parametrize("status", ["preflight_pending", "batch_pending", "completed", "failed", "cancelled"])
+def test_dry_run_finishes_progress_without_repair_or_opening_out(window, qtbot, tmp_path):
+    dialog = ProgressDialog(window)
+    qtbot.addWidget(dialog)
+    cfg = window._config()
+    cfg.mode = "MODIFY"
+    cfg.out_dir = str(tmp_path)
+    cfg.diag_windows_out = True
+    window._run_contexts["dry"] = {"dialog": dialog, "worker": Mock(cfg=cfg)}
+    try:
+        with patch("kajovo.desktop.application.msg_info") as info, patch(
+            "kajovo.desktop.application.msg_question"
+        ) as question, patch.object(window, "_maybe_execute_repair") as repair:
+            window.on_run_ok("dry", {"status": "dry_run", "dry_run": True, "saved": {"saved": []}})
+        repair.assert_not_called()
+        question.assert_not_called()
+        assert info.call_args.args[1] == "Dry-run dokončen"
+        assert "OUT zůstává beze změny" in info.call_args.args[2]
+        assert dialog.clock.finished is not None
+        assert not dialog.btn_stop.isEnabled()
+        assert "dry-run" in dialog.lbl_stage.text()
+    finally:
+        window._run_contexts.clear()
+
+
+@pytest.mark.parametrize("status", ["dry_run", "batch_pending", "completed", "failed", "cancelled"])
 def test_finished_progress_offers_only_ok(qtbot, status):
     from kajovo.core.progress import ProgressEvent
     from PySide6.QtCore import Qt
@@ -453,9 +474,90 @@ def test_hybrid_import_runs_off_ui_thread(window, qtbot):
     assert panel.btn_download.isEnabled()
 
 
-def test_modify_batch_still_disables_live_preparation(window):
+def test_modify_batch_enables_live_preparation(window):
     window.cb_mode.setCurrentText("MODIFY")
     window.chk_send_as_c.setChecked(True)
-    assert not window.ed_response_id.isEnabled()
-    assert not window.chk_diag_win_in.isEnabled()
+    assert window.ed_response_id.isEnabled()
+    assert window.chk_diag_win_in.isEnabled()
     assert not window.row_generate_models.isEnabled()
+    window.ed_response_id.setText("resp_source")
+    window.chk_diag_win_in.setChecked(True)
+    window.chk_diag_ssh_in.setChecked(True)
+    window.vector_panel.set_attached(["vs_source"])
+    cfg = window._config()
+    assert cfg.response_id == "resp_source"
+    assert cfg.attached_vector_store_ids == ["vs_source"]
+    assert cfg.diag_windows_in and cfg.diag_ssh_in
+    assert not cfg.diag_windows_out and not cfg.diag_ssh_out
+    assert not window.chk_diag_win_out.isEnabled()
+    assert not window.chk_diag_ssh_out.isEnabled()
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_maximum_quality_roundtrip_and_new(window, mode):
+    assert not window.chk_maximum_quality.isChecked()
+    assert window.chk_maximum_quality.text() == "Maximum Quality — maximální propracovanost"
+    assert window.lbl_maximum_quality.text() == (
+        "Přidá nezávislou kontrolu návrhu před generováním souborů a použije nejvyšší úroveň reasoning, "
+        "kterou zvolený model pro daný krok podporuje. Zvyšuje kvalitu, cenu a dobu běhu."
+    )
+    window.cb_mode.setCurrentText(mode)
+    window.chk_maximum_quality.setChecked(True)
+    state = window._gather_state()
+    assert state["maximum_quality"] is True
+    window._apply_state(state)
+    assert window._config().maximum_quality is True
+    window.on_new()
+    assert window._config().maximum_quality is False
+    assert window._config().preparation_snapshot is None
+
+
+def test_preparation_snapshot_project_roundtrip_is_detached(window):
+    snapshot = {"structure": {"files": [{"path": "a.py"}]}}
+    window._apply_state({"preparation_snapshot": snapshot, "maximum_quality": True})
+    state = window._gather_state()
+    snapshot["structure"]["files"].clear()
+    assert state["preparation_snapshot"]["structure"]["files"] == [{"path": "a.py"}]
+    window._apply_state(state)
+    assert window._config().preparation_snapshot == state["preparation_snapshot"]
+    window._apply_state({})
+    assert window._config().preparation_snapshot is None
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_rerun_passes_canonical_preparation_to_config(window, monkeypatch, mode):
+    import json
+    from test_desktop_preparation_recovery import snapshot
+
+    run_id = "RUN_090920261200_ABCD"
+    directory = Path(window.s.log_dir) / run_id
+    directory.mkdir()
+    saved = snapshot(mode)
+    (directory / "run_state.json").write_text(json.dumps({
+        "ui_state": {"mode": mode, "maximum_quality": True},
+        "preparation_snapshot": saved,
+    }), encoding="utf-8")
+    observed = []
+    monkeypatch.setattr(window, "on_go", lambda: observed.append(window._config()))
+    monkeypatch.setattr("kajovo.desktop.application.msg_warning", lambda *args: pytest.fail(str(args)))
+    window.rerun(run_id)
+    assert len(observed) == 1
+    assert observed[0].maximum_quality is True
+    assert observed[0].preparation_snapshot == saved
+    assert observed[0].resume_prev_id == saved["response_id"]
+
+
+@pytest.mark.parametrize("stage, title", [
+    ("A0R_REQUIREMENTS", "Profesionální requirements"),
+    ("B0R_REQUIREMENTS", "Change requirements"),
+    ("A2Q_QUALITY_GATE", "Quality gate"),
+    ("B2Q_QUALITY_GATE", "Quality gate"),
+])
+def test_progress_reports_actual_preparation_stage(qtbot, stage, title):
+    from kajovo.core.progress import ProgressEvent
+
+    dialog = ProgressDialog()
+    qtbot.addWidget(dialog)
+    dialog.on_progress_event(ProgressEvent(stage))
+    assert title in dialog.lbl_stage.text()
+    assert dialog.clock.finished is None

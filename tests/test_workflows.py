@@ -7,6 +7,7 @@ import pytest
 from kajovo.core.config import AppSettings
 from kajovo.core.pipeline import UiRunConfig, RunWorker
 from kajovo.core.runlog import RunLogger
+from delivery_fixtures import delivery_payloads, plan_payload, requirements_payload, structure_payload
 
 
 def make_worker(tmp_path, mode):
@@ -18,6 +19,7 @@ def make_worker(tmp_path, mode):
     values.update(project="test", prompt="Write a file", mode=mode, model="gpt-4o-mini",
                   model_a1="gpt-4o-mini", model_a2="gpt-4o-mini", model_a3="gpt-4o-mini",
                   out_dir=str(tmp_path / "out"), resume_files=None, resume_prev_id=None,
+                  preparation_snapshot=None,
                   available_models=["gpt-4o-mini"])
     cfg = UiRunConfig(**values)
     cfg.model_caps = {"ok_basic": True, "supports_temperature": True, "supports_previous_response_id": True}
@@ -30,41 +32,44 @@ def response(index, payload):
     # Úplné vzorky API pro testy orchestrace; záměrné vady souborů zůstávají zachované.
     if isinstance(payload, str):
         payload = {"text": payload}
+    elif payload.get("contract") in ("A0R_REQUIREMENTS", "B0R_REQUIREMENTS"):
+        mode = "GENERATE" if payload["contract"].startswith("A") else "MODIFY"
+        payload = requirements_payload(mode, **payload)
     elif payload.get("contract") == "A1_PLAN":
-        payload = {"project": {k: "test" for k in ("name", "one_liner", "target_os", "language", "runtime")},
-                   "assumptions": [], "requirements": {k: [] for k in ("functional", "non_functional", "constraints")},
-                   "architecture": {k: [] for k in ("modules", "data_flow", "error_handling", "security_notes")},
-                   "build_run": {k: [] for k in ("prerequisites", "commands", "verification")},
-                   "deliverable_policy": {"max_lines_per_chunk": 500}, **payload}
+        payload = plan_payload("GENERATE", **payload)
     elif payload.get("contract") == "B1_PLAN":
-        payload = {"diagnosis": {"summary": "test", "evidence": [], "likely_root_causes": []},
-                   "change_plan": {k: [] for k in ("goals", "files_to_modify", "files_to_add", "verification_steps")},
-                   "missing_inputs": [], **payload}
+        payload = plan_payload("MODIFY", **payload)
     elif payload.get("contract") == "A2_STRUCTURE" and "version" not in payload:
-        payload = {"version": 2, "rules": [], "packages": [], "interfaces": [], **payload}
-        payload["files"] = [{"purpose": "test", "language": "text", "kind": "text", "dependencies": [],
-                             "provides": [], "requires": [], "behavior": "test", **item} for item in payload["files"]]
+        payload = structure_payload("GENERATE", **payload)
     elif payload.get("contract") == "B2_STRUCTURE":
-        payload = {**payload, "touched_files": [{"intent": "test", **item} for item in payload["touched_files"]]}
+        payload = structure_payload("MODIFY", files=payload["touched_files"],
+                                    **{key: value for key, value in payload.items() if key != "touched_files"})
     return {"id": f"resp_{index}", "object": "response", "model": "gpt-4o-mini", "status": "completed",
             "output_text": json.dumps(payload), "usage": {"input_tokens": 10, "output_tokens": 20}}
 
 
 @pytest.mark.parametrize("mode", ["QA", "QFILE", "GENERATE", "MODIFY"])
-def test_complete_offline_workflow(tmp_path, mode):
+@pytest.mark.parametrize("maximum_quality", [False, True])
+def test_complete_offline_workflow(tmp_path, mode, maximum_quality):
     worker = make_worker(tmp_path, mode)
+    worker.cfg.maximum_quality = maximum_quality
     file = {"contract": "A3_FILE", "path": "hello.txt", "content": "hello\n",
             "chunking": {"chunk_index": 0, "chunk_count": 1, "has_more": False, "next_chunk_index": None}}
     payloads = ["answer"] if mode == "QA" else [file]
     if mode == "GENERATE":
-        payloads = [{"contract": "A1_PLAN"}, {"contract": "A2_STRUCTURE", "files": [{"path": "hello.txt", "purpose": "test"}]}, file]
+        payloads = [*delivery_payloads(mode), file]
     if mode == "MODIFY":
         in_dir = tmp_path / "in"
         in_dir.mkdir()
         worker.cfg.in_dir = str(in_dir)
         file["contract"] = "B3_FILE"
         file["action"] = "add"
-        payloads = [{"contract": "B1_PLAN"}, {"contract": "B2_STRUCTURE", "touched_files": [{"path": "hello.txt", "action": "add"}]}, file]
+        payloads = [*delivery_payloads(mode), file]
+    if maximum_quality and mode in ("GENERATE", "MODIFY"):
+        canonical = structure_payload(mode)
+        key = "files" if mode == "GENERATE" else "touched_files"
+        canonical[key][0]["behavior"] = "Úplný obsah po nezávislé kontrole návrhu."
+        payloads.insert(-1, canonical)
     client = Mock()
     client.upload_file.return_value = {"id": "file_test"}
     client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 100}
@@ -77,9 +82,41 @@ def test_complete_offline_workflow(tmp_path, mode):
     assert not errors
     assert len(results) == 1
     assert client.create_response.call_count == len(payloads)
+    if mode in ("GENERATE", "MODIFY"):
+        from kajovo.core.requirements import CORE_INSTRUCTIONS
+
+        calls = [call.args[0] for call in client.create_response.call_args_list]
+        assert all(CORE_INSTRUCTIONS in call["instructions"] for call in calls)
+        assert all("reasoning" not in call for call in calls)
+        assert [call.get("previous_response_id") for call in calls[1:]] == [
+            f"resp_{index}" for index in range(len(calls) - 1)
+        ]
+        state = json.loads((tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(encoding="utf-8"))
+        snapshot = state["preparation_snapshot"]
+        assert snapshot["requirements"] == payloads[0]
+        assert snapshot["plan"] == payloads[1]
+        assert snapshot["structure"] == payloads[-2]
+        prefix = "A" if mode == "GENERATE" else "B"
+        assert snapshot["canonical_stage"] == prefix + ("2Q" if maximum_quality else "2")
+        assert snapshot["maximum_quality"] is maximum_quality
     if mode != "QA":
         assert (tmp_path / "out" / "hello.txt").read_text(encoding="utf-8") == "hello\n"
     assert json.loads((tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text())["status"] == "completed"
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_delivery_fixtures_have_complete_traceability_and_independent_values(mode):
+    from copy import deepcopy
+    from kajovo.core.requirements import validate_traceability
+
+    requirements, plan, structure = delivery_payloads(mode)
+    before = deepcopy((requirements, plan, structure))
+    validate_traceability(requirements, plan, structure)
+    assert (requirements, plan, structure) == before
+    key = "files" if mode == "GENERATE" else "touched_files"
+    structure[key][0]["requirement_ids"].clear()
+    assert delivery_payloads(mode) == before
+    assert plan["architecture_items"][0]["requirement_ids"] == ["REQ-1", "REQ-2"]
 
 
 def test_log_disk_error_does_not_repeat_api(tmp_path):
@@ -108,7 +145,7 @@ def test_premature_file_termination_preserves_output(tmp_path):
     out.mkdir()
     target = out / "hello.txt"
     target.write_text("original", encoding="utf-8")
-    payloads = [{"contract": "A1_PLAN"}, {"contract": "A2_STRUCTURE", "files": [{"path": "hello.txt", "purpose": "test"}]},
+    payloads = [*delivery_payloads(),
                 {"contract": "A3_FILE", "path": "hello.txt", "content": "partial",
                  "chunking": {"chunk_index": 0, "chunk_count": 3, "has_more": False, "next_chunk_index": None}}]
     client = Mock()
@@ -119,6 +156,8 @@ def test_premature_file_termination_preserves_output(tmp_path):
     with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
         worker.run()
     assert errors and not results
+    assert "chunk" in errors[0].lower() or "část" in errors[0].lower()
+    assert client.create_response.call_count == len(payloads)
     assert target.read_text(encoding="utf-8") == "original"
 
 
@@ -189,8 +228,13 @@ def test_custom_cascade_records_each_step(tmp_path):
 def test_batch_uses_only_supported_jsonl_fields(tmp_path):
     worker = make_worker(tmp_path, "MODIFY")
     worker.cfg.send_as_c = True
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    worker.cfg.in_dir = str(in_dir)
     client = Mock()
+    client.create_response.side_effect = [response(i, value) for i, value in enumerate(delivery_payloads("MODIFY"))]
     client.upload_file.return_value = {"id": "file_batch"}
+    client.retrieve_file.return_value = {"id": "file_batch", "filename": "input.txt", "bytes": 100}
     client.create_batch.return_value = {"id": "batch_test"}
     results, errors = [], []
     worker.finished_ok.connect(results.append)
@@ -203,4 +247,5 @@ def test_batch_uses_only_supported_jsonl_fields(tmp_path):
     with open(path, encoding="utf-8") as handle:
         request = json.loads(handle.readline())
     assert set(request) == {"custom_id", "method", "url", "body"}
-    client.create_response.assert_not_called()
+    assert client.create_response.call_count == 3
+    assert request["body"]["text"]["format"]["schema"]["properties"]["contract"]["enum"] == ["B3_FILE"]

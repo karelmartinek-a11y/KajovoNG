@@ -2,7 +2,7 @@
 import copy
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -52,17 +52,17 @@ def test_policy_ensure_never_sends_generative_request(client):
     client._policy.ensure(payload)
     client._policy.ensure(payload)
     client._send_response.assert_not_called()
-    client.validate_resources.assert_has_calls([pytest.call(payload), pytest.call(payload)]) if False else None
+    client.validate_resources.assert_has_calls([call(payload), call(payload)])
 
 
 def test_batch_policy_never_creates_trial_file_or_batch(client):
     client.validate_resources = Mock()
     client._req = Mock(side_effect=AssertionError("Validační politika nesmí volat transport."))
-    payloads = [request(), request(reasoning={"effort": "minimal"})]
+    payloads = [request(), request(reasoning={"effort": "high"})]
     client._policy.ensure_batch(payloads)
     client._send_response.assert_not_called()
     client._req.assert_not_called()
-    assert client._policy.proofs == {}
+    assert not hasattr(client._policy, "proofs")
 
 
 @pytest.mark.parametrize(
@@ -107,10 +107,11 @@ def test_catalog_is_account_scoped_without_probe(client):
     other.validate_resources.assert_not_called()
 
 
-def test_no_preflight_proof_cache_is_created(client):
+def test_no_preflight_proof_cache_is_created(client, tmp_path):
     client.validate_resources = Mock()
     client._policy.ensure(request())
-    assert client._policy.proofs == {}
+    assert not hasattr(client._policy, "proofs")
+    assert not (tmp_path / "cache").exists()
     assert not hasattr(client._policy, "trial_live")
     assert not hasattr(client._policy, "finish_batch")
 
@@ -174,7 +175,7 @@ def test_valid_batch_data_is_only_locally_checked_before_real_upload(client, tmp
     parsed = client.validate_batch_data(path.read_bytes())
     assert len(parsed) == 1
     client._send_response.assert_not_called()
-    assert client._policy.proofs == {}
+    assert not hasattr(client._policy, "proofs")
 
 
 def test_remote_batch_is_validated_before_creation(client):
@@ -234,13 +235,23 @@ def test_unsupported_schema_cannot_reach_api(client, bad):
 
 
 def test_known_contracts_are_native_for_gpt52(tmp_path):
-    from test_workflows import make_worker
+    from test_workflows import make_worker, response
     from kajovo.core.generate_batch import build_manifest
     from test_generate_batch import specification
+    from delivery_fixtures import delivery_payloads
+    from kajovo.core.delivery_preparation import prepare_delivery
 
     worker = make_worker(tmp_path, "MODIFY")
-    for contract in ("B1_PLAN", "B2_STRUCTURE"):
-        payload = worker._payload_base("gpt-5.2", f"KONTRAKT {contract}: test", [], None)
+    worker.cfg.model = "gpt-5.2"
+    client = Mock()
+    client.create_response.side_effect = [response(index, data)
+                                         for index, data in enumerate(delivery_payloads("MODIFY"))]
+    prepare_delivery(worker, client, "MODIFY", None, "test", [], [], None)
+    calls = client.create_response.call_args_list
+    assert len(calls) == 3
+    for recorded, contract in zip(calls, ("B0R_REQUIREMENTS", "B1_PLAN", "B2_STRUCTURE"), strict=True):
+        payload = recorded.args[0]
+        assert payload["model"] == "gpt-5.2"
         assert payload["text"]["format"]["strict"] is True
         assert payload["text"]["format"]["name"] == contract
     manifest = build_manifest("r", "test", {}, specification(), "gpt-5.2", None)
@@ -266,7 +277,7 @@ def test_run_capabilities_are_derived_without_paid_probe(client):
         send_as_c=True,
         attached_vector_store_ids=["vs_actual"],
     )
-    client.preflight_run(cfg)
+    client.prepare_run_validation(cfg)
     assert cfg.caps_by_model["gpt-5.2"]["supports_file_search"]
     assert not cfg.caps_by_model["gpt-oss-120b"]["supports_file_search"]
     client._send_response.assert_not_called()

@@ -96,6 +96,7 @@ class AppSettings:
     batch_poll_interval_s: float = 4.0
     batch_timeout_s: float = 60.0 * 60.0
     response_timeout_s: float = 300.0
+    response_poll_timeout_s: float = 3600.0
     default_model: str = ""
     default_temperature: float = 0.2
     dry_run_modify: bool = False
@@ -130,7 +131,7 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
     s = AppSettings()
     merge(s, raw)
     numeric_positive = [s.retry.max_attempts, s.retry.circuit_breaker_failures,
-                        s.batch_poll_interval_s, s.batch_timeout_s, s.response_timeout_s, s.smtp.port,
+                        s.batch_poll_interval_s, s.batch_timeout_s, s.response_timeout_s, s.response_poll_timeout_s, s.smtp.port,
                         s.logging.max_total_mb, s.logging.max_runs]
     numeric_nonnegative = [s.retry.base_delay_s, s.retry.max_delay_s, s.retry.jitter_s,
                            s.retry.circuit_breaker_cooldown_s]

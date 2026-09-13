@@ -10,16 +10,21 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QObject, Signal, QThread
+from PySide6.QtCore import QObject, Signal, QThread, QLockFile
+from pathlib import Path
+from types import SimpleNamespace
+from .response_journal import ResponseJournal, ResponsePending, SubmissionUnknown, ResponseCancelled
 from .progress import ProgressEvent
 
 from .request_rules import uses_reasoning_defaults, validate_run_options
-from .structured_output import prepare_payload, validate_output, user_text, builtin_format, text_format, OutputContractError
+from .structured_output import prepare_payload, validate_output, user_text, text_format, OutputContractError
 from .compat import validate_input_file_sizes
 from .generate_batch import build_manifest as build_batch_manifest
-from .generate_batch import encode_requests, plan_format, prepare_structure, structure_format, validate_structure
+from .generate_batch import encode_requests
+from .delivery_preparation import prepare_delivery, validate_preparation_snapshot, validate_modify_sources
+from .requirements import apply_quality, stage_instructions
 from .contracts import validate_chunk_metadata
-from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths, structure_response_format, file_response_format
+from .contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths, file_response_format
 from .filescan import build_manifest, scan_tree
 from .openai_client import OpenAIClient
 from .batch_submit import submit_verified_batch
@@ -85,6 +90,9 @@ class UiRunConfig:
     caps_by_model: Optional[Dict[str, Any]] = None
     # Aktuální katalog modelů z API; při jeho předání se vyžaduje povolení v pevné matici.
     available_models: Optional[List[str]] = None
+    maximum_quality: bool = False
+    preparation_snapshot: Optional[Dict[str, Any]] = None
+    completed_hashes: Optional[Dict[str, str]] = None
 
 
 class RunWorker(QThread):
@@ -106,11 +114,16 @@ class RunWorker(QThread):
     ):
         super().__init__(parent)
         self.cfg = copy.deepcopy(cfg)
+        self.cfg.maximum_quality = getattr(self.cfg, "maximum_quality", False)
+        self.cfg.preparation_snapshot = getattr(self.cfg, "preparation_snapshot", None)
         self.settings = copy.deepcopy(settings)
         self.api_key = api_key
         self.log = run_logger
         self.breaker = CircuitBreaker(settings.retry.circuit_breaker_failures, settings.retry.circuit_breaker_cooldown_s)
         self._stop = False
+        self._cancel_response = False
+        self._response_journal = None
+        self._response_file_ids = {}
         self._last_prev_id_error: Optional[str] = None
         self._final_response_id: Optional[str] = None
         self._in_dir_info: Optional[Dict[str, Any]] = None
@@ -285,8 +298,11 @@ class RunWorker(QThread):
     def request_stop(self):
         self._stop = True
 
+    def request_cancel_response(self):
+        self._cancel_response = True
+
     def _check_stop(self):
-        if self._stop:
+        if self._stop or self._cancel_response:
             raise RuntimeError("STOP_REQUESTED")
 
     def _set(self, p: int, sp: int, msg: str, *, stage=None):
@@ -303,12 +319,29 @@ class RunWorker(QThread):
             pass
 
     def run(self):
+        lock = QLockFile(str(Path(self.log.paths.run_dir) / "execution.lock"))
+        lock.setStaleLockTime(0)
+        if not lock.tryLock(0):
+            self.finished_err.emit("Tento běh již používá jiná instance aplikace.")
+            return
         try:
+            if self.cfg.mode in ("GENERATE", "MODIFY"):
+                self._response_journal = ResponseJournal(self.log, self.settings.response_poll_timeout_s)
+                saved_state = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
+                self._response_file_ids = saved_state.get("response_file_ids", {})
+                self.log.update_state({"response_transport": "background", "ui_state": self.cfg.__dict__})
+
             if not self.api_key or not self.cfg.model or not self.cfg.prompt.strip():
                 raise ValueError("Běh vyžaduje API klíč, model a neprázdné zadání.")
             validate_run_options(self.cfg, check_models=False)
+            if self.cfg.mode == "MODIFY" and not (
+                self.cfg.in_dir and os.path.isdir(self.cfg.in_dir)
+            ) and not getattr(self, "resume_generate_batch", None):
+                raise ValueError("MODIFY vyžaduje existující vstupní adresář IN.")
             if self.cfg.resume_files is not None:
                 validate_paths(self.cfg.resume_files)
+            if self.cfg.mode in ("GENERATE", "MODIFY"):
+                self._verify_completed_files()
             self.log.update_state(
                 {
                     "status": "running", "error": None, "failed_at": None,
@@ -334,74 +367,44 @@ class RunWorker(QThread):
                 raise RuntimeError("QFILE nepodporuje SEND AS BATCH.")
 
             # GENERATE a MODIFY vyžadují návaznost; výslovné odmítnutí ji zablokuje.
-            if not self.cfg.send_as_c and self.cfg.mode == "MODIFY" and self.cfg.model_caps.get("supports_previous_response_id") is False:
+            if self.cfg.mode == "MODIFY" and self.cfg.model_caps.get("supports_previous_response_id") is False:
                 raise RuntimeError("Selected model explicitly rejects previous_response_id (required for cascades).")
 
-            if self._input_file_ids():
-                self._set(2, 0, "Ověřuji vstupní přílohy…", stage="Přílohy")
-            input_files, input_images = self._build_input_attachments(client, self._input_file_ids())
-            if input_files or input_images:
-                for model in self.cfg.caps_by_model:
-                    client.validate_access({"model": model, "text": text_format(),
-                        "input": self._input_parts("kontrola příloh", input_files, input_images)})
-            diag_file_ids, diag_text = self._maybe_collect_diagnostics(client)
-            self._diag_text = diag_text or ""
-            self._in_dir_info = self._prepare_in_dir_upload(client)
-            self._vector_store_ids = list(self.cfg.attached_vector_store_ids or [])
-            if self._in_dir_info and self._in_dir_info.get("vector_store_id"):
-                self._vector_store_ids.append(str(self._in_dir_info["vector_store_id"]))
-            if diag_file_ids:
-                self._attach_diagnostics_vector_store(client, diag_file_ids)
-            if (
-                self._preparation_cap("supports_file_search")
-                and (bool(self.cfg.use_file_search) or bool(diag_file_ids))
-                and self._vector_store_ids
-            ):
-                uniq: List[str] = []
-                seen: set = set()
-                for vid in self._vector_store_ids:
-                    if vid and vid not in seen:
-                        uniq.append(vid)
-                        seen.add(vid)
-                if uniq:
-                    self._fs_tools = [{"type": "file_search", "vector_store_ids": uniq}]
-            try:
-                all_file_ids = list(self.cfg.attached_file_ids or [])
-                input_file_ids, input_image_ids = self._build_input_attachments(client, self._input_file_ids())
-                zip_supported = bool(self._diag_zip_path and self._is_supported_input_file(self._diag_zip_path))
-                supports_input_file = bool(self.cfg.model_caps.get("supports_input_file", True))
-                self.log.event(
-                    "io.reference",
-                    {
-                        "file_ids": all_file_ids,
-                        "input_file_ids": list(input_file_ids),
-                        "input_image_ids": list(input_image_ids),
-                        "vector_store_ids": list(self._vector_store_ids or []),
-                        "use_file_search": bool(self.cfg.use_file_search),
-                        "supports_file_search": bool(self.cfg.model_caps.get("supports_file_search", False)),
-                        "supports_vector_store": bool(self.cfg.model_caps.get("supports_vector_store", False)),
-                        "supports_input_file": supports_input_file,
-                        "diagnostics_zip": self._diag_zip_path or None,
-                        "diagnostics_zip_supported_input": zip_supported,
-                        "file_search": bool(self._fs_tools),
-                    },
-                )
-            except Exception:
-                pass
+            runtime_path = self.log.find_json("manifests", "response_runtime") if self._response_journal else None
+            if runtime_path:
+                runtime = json.loads(Path(runtime_path).read_text(encoding="utf-8"))
+                for name, value in runtime["attributes"].items():
+                    setattr(self, name, value)
+                diag_file_ids = runtime["diag_file_ids"]
+                self.cfg.preparation_snapshot = runtime["preparation_snapshot"]
+                self.cfg.response_id = runtime["response_id"]
+                self.cfg.resume_files = runtime["resume_files"]
+                self.cfg.resume_prev_id = runtime["resume_prev_id"]
+            else:
+                self._prepare_response_runtime(client)
+                diag_file_ids = self._runtime_diag_file_ids
+                if self._response_journal:
+                    self.log.save_json("manifests", "response_runtime", {
+                        "attributes": {name: getattr(self, name) for name in (
+                            "_diag_text", "_in_dir_info", "_vector_store_ids", "_diag_vector_store_ids",
+                            "_fs_tools", "_diag_zip_path", "_input_kind_cache", "_file_name_cache")},
+                        "diag_file_ids": diag_file_ids, "preparation_snapshot": self.cfg.preparation_snapshot,
+                        "response_id": self.cfg.response_id, "resume_files": self.cfg.resume_files,
+                        "resume_prev_id": self.cfg.resume_prev_id,
+                    })
 
             # Zpracování dlouhého zadání.
             # GENERATE/MODIFY zavádí zadání přes A0 s previous_response_id.
-            # QA/BATCH odesílá zadání v textových částech zprávy.
-            if self.cfg.send_as_c and self.cfg.mode != "GENERATE":
-                base_prev_id = None
+            # QA odesílá zadání v textových částech zprávy.
+            if self.cfg.preparation_snapshot and self.cfg.mode in ("GENERATE", "MODIFY"):
+                checkpoint = validate_preparation_snapshot(self.cfg.preparation_snapshot, self.cfg.mode, self.cfg.maximum_quality)
+                base_prev_id = checkpoint["response_id"]
             elif self.cfg.mode in ("GENERATE", "MODIFY"):
                 base_prev_id = self._ingest_prompt_if_needed(client, prev_id=self.cfg.response_id or None)
             else:
                 base_prev_id = self.cfg.response_id or None
 
-            if self.cfg.send_as_c and self.cfg.mode != "GENERATE":
-                result = self._run_c_batch(client, diag_file_ids, base_prev_id)
-            else:
+            if self.cfg.mode in ("GENERATE", "MODIFY", "QA", "QFILE"):
                 if self.cfg.mode == "GENERATE":
                     result = self._run_a_generate(client, diag_file_ids, base_prev_id)
                 elif self.cfg.mode == "MODIFY":
@@ -418,9 +421,9 @@ class RunWorker(QThread):
                     result["response_id"] = self._final_response_id
 
             final_status = "batch_pending" if result.get("batch_id") else str(result.get("status") or "completed")
-            if final_status not in ("completed", "partial", "batch_pending"):
+            if final_status not in ("completed", "partial", "batch_pending", "dry_run"):
                 raise ContractError(f"Neplatný terminální stav běhu: {final_status}")
-            if final_status in ("completed", "partial"):
+            if final_status in ("completed", "partial", "dry_run"):
                 self.log.update_state({"status": final_status, "completed_at": time.time()})
             else:
                 self.log.clear_state_keys("completed_at")
@@ -430,7 +433,14 @@ class RunWorker(QThread):
             msg = str(e)
             if self._last_prev_id_error:
                 msg = self._last_prev_id_error
-            if str(e) == "STOP_REQUESTED":
+            if isinstance(e, (ResponsePending, SubmissionUnknown)):
+                state = "response_pending" if isinstance(e, ResponsePending) else "submission_unknown"
+                self.log.update_state({"status": state, "error": str(e)})
+                self.finished_err.emit(str(e))
+            elif isinstance(e, ResponseCancelled):
+                self.log.update_state({"status": "cancelled", "error": str(e)})
+                self.finished_err.emit(str(e))
+            elif str(e) == "STOP_REQUESTED":
                 self.log.update_state({"status": "stopped", "stopped_at": time.time()})
                 self.finished_err.emit("STOPPED")
             else:
@@ -440,6 +450,77 @@ class RunWorker(QThread):
                     pass
                 self.log.update_state({"status": "failed", "failed_at": time.time(), "error": str(e)})
                 self.finished_err.emit(msg)
+        finally:
+            lock.unlock()
+
+    def _prepare_response_runtime(self, client):
+        if self._input_file_ids():
+            self._set(2, 0, "Ověřuji vstupní přílohy…", stage="Přílohy")
+        input_files, input_images = self._build_input_attachments(client, self._input_file_ids())
+        if input_files or input_images:
+            for model in self.cfg.caps_by_model:
+                client.validate_access({"model": model, "text": text_format(),
+                    "input": self._input_parts("kontrola příloh", input_files, input_images)})
+        diag_file_ids, diag_text = self._maybe_collect_diagnostics(client)
+        self._diag_text = diag_text or ""
+        self._in_dir_info = self._prepare_in_dir_upload(client)
+        self._vector_store_ids = list(self.cfg.attached_vector_store_ids or [])
+        if self._in_dir_info and self._in_dir_info.get("vector_store_id"):
+            self._vector_store_ids.append(str(self._in_dir_info["vector_store_id"]))
+        if diag_file_ids:
+            self._attach_diagnostics_vector_store(client, diag_file_ids)
+        if (
+            self._preparation_cap("supports_file_search")
+            and (bool(self.cfg.use_file_search) or bool(diag_file_ids))
+            and self._vector_store_ids
+        ):
+            uniq: List[str] = []
+            seen: set = set()
+            for vid in self._vector_store_ids:
+                if vid and vid not in seen:
+                    uniq.append(vid)
+                    seen.add(vid)
+            if uniq:
+                self._fs_tools = [{"type": "file_search", "vector_store_ids": uniq}]
+        try:
+            all_file_ids = list(self.cfg.attached_file_ids or [])
+            input_file_ids, input_image_ids = self._build_input_attachments(client, self._input_file_ids())
+            zip_supported = bool(self._diag_zip_path and self._is_supported_input_file(self._diag_zip_path))
+            supports_input_file = bool(self.cfg.model_caps.get("supports_input_file", True))
+            self.log.event(
+                "io.reference",
+                {
+                    "file_ids": all_file_ids,
+                    "input_file_ids": list(input_file_ids),
+                    "input_image_ids": list(input_image_ids),
+                    "vector_store_ids": list(self._vector_store_ids or []),
+                    "use_file_search": bool(self.cfg.use_file_search),
+                    "supports_file_search": bool(self.cfg.model_caps.get("supports_file_search", False)),
+                    "supports_vector_store": bool(self.cfg.model_caps.get("supports_vector_store", False)),
+                    "supports_input_file": supports_input_file,
+                    "diagnostics_zip": self._diag_zip_path or None,
+                    "diagnostics_zip_supported_input": zip_supported,
+                    "file_search": bool(self._fs_tools),
+                },
+            )
+        except Exception:
+            pass
+
+        self._runtime_diag_file_ids = diag_file_ids
+
+    def _verify_completed_files(self):
+        """ReRun přeskočí pouze doložený soubor, který uživatel mezitím nezměnil."""
+        hashes = getattr(self.cfg, "completed_hashes", None) or {}
+        entries = []
+        for path in self.cfg.skip_paths or []:
+            target = safe_join_under_root(self.cfg.out_dir, path)
+            if not hashes.get(path) or not os.path.isfile(target) or sha256_file(target) != hashes[path]:
+                raise ContractError(f"ReRun: dokončený soubor nemá platný důkaz zápisu: {path}")
+            entries.append({"path": path, "sha256": hashes[path], "dst": target})
+        if entries:
+            self.log.save_json("manifests", "out_completed_evidence", {
+                "out_dir": self.cfg.out_dir, "saved": entries,
+            })
 
     # Sestavení požadavků.
     def _input_parts(self, text: str, file_ids: List[str], image_file_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -479,11 +560,8 @@ class RunWorker(QThread):
         if prev_id:
             payload["previous_response_id"] = prev_id
         payload["text"] = text_format()
-        for contract in ("A2_STRUCTURE", "B2_STRUCTURE"):
-            if f"KONTRAKT {contract}:" in instructions:
-                payload["text"] = structure_response_format(contract)
-        if "KONTRAKT B1_PLAN:" in instructions:
-            payload["text"] = builtin_format("B1_PLAN")
+        if self.cfg.mode in ("GENERATE", "MODIFY"):
+            apply_quality(payload, self.cfg.maximum_quality)
         return payload
 
     # Diagnostika.
@@ -905,12 +983,7 @@ class RunWorker(QThread):
             self._progress_stage = "A0"
             self.progress_event.emit(ProgressEvent("A0", completed=i, total=part_count, unit="částí zadání"))
 
-            schema = '{"contract":"A0_INGEST_ACK","part_index":0,"part_count":0,"ok":true}'
-            instructions = (
-                "You are an ingestion step. DO NOT summarize. "
-                "Return ONLY valid JSON matching contract. No extra text. "
-                f"CONTRACT: {schema}"
-            )
+            instructions = stage_instructions("A0")
             payload = self._payload_base(
                 model=ingest_model,
                 instructions=instructions,
@@ -962,6 +1035,10 @@ class RunWorker(QThread):
             safe_join_under_root(out_dir, row["path"])
             if not isinstance(row.get("content"), str):
                 raise ContractError("Obsah výstupního souboru musí být text.")
+        if self.cfg.mode == "MODIFY" and self.settings.dry_run_modify:
+            self.log.save_json("manifests", "modify_dry_run", {"files": files})
+            self.log.update_state({"dry_run": True, "written_files": []})
+            return {"saved": [], "dry_run": True}
         ensure_dir(out_dir)
 
         if self.cfg.versing and files:
@@ -977,6 +1054,10 @@ class RunWorker(QThread):
             content = f["content"]
             dst = safe_join_under_root(out_dir, rel)
             ensure_dir(os.path.dirname(dst))
+            if self.cfg.mode == "MODIFY" and hasattr(self, "_delivery_overwrite_hashes"):
+                current_hash = sha256_file(dst) if os.path.isfile(dst) else None
+                if current_hash != self._delivery_overwrite_hashes.get(rel):
+                    raise ContractError(f"OUT se během generování změnil; soubor zachován: {rel}")
             before_size = os.path.getsize(dst) if os.path.exists(dst) else None
             before = sha256_file(dst) if os.path.exists(dst) else None
             atomic_write_text(dst, content)
@@ -1023,12 +1104,27 @@ class RunWorker(QThread):
         self._log_debug(f"A3: wrote missing files report -> {report_path} ({len(skipped_files)} entries)")
         return report_path
 
-    def _create_response(self, client, payload):
+    def _create_response(self, client, payload, *, attempt=0):
+        if attempt:
+            payload = copy.deepcopy(payload)
+            payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
         prepare_payload(payload)
+        if self.cfg.mode in ("GENERATE", "MODIFY"):
+            apply_quality(payload, self.cfg.maximum_quality)
         self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
         self.progress_event.emit(ProgressEvent(self._progress_stage, "waiting", detail="Čekám na odpověď API."))
         try:
-            response = client.create_response(payload)
+            if self._response_journal is not None:
+                labels = {"queued": "Čeká ve frontě", "in_progress": "API zpracovává zadání",
+                          "cancelling": "API potvrzuje zrušení generace",
+                          "connection_error": "Spojení nedostupné; opakuji kontrolu stejné odpovědi"}
+                response = self._response_journal.execute(
+                    client, payload, stopped=lambda: self._stop, cancelled=lambda: self._cancel_response,
+                    progress=lambda state, elapsed: self.progress_event.emit(ProgressEvent(
+                        self._progress_stage, "waiting", detail=f"{labels[state]} · sledování {elapsed} s")),
+                )
+            else:
+                response = client.create_response(payload)
         except ContractError as exc:
             response = getattr(exc, "response", None)
             if not isinstance(response, dict):
@@ -1044,14 +1140,11 @@ class RunWorker(QThread):
     def _run_a_generate(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
         # ReRun se známou strukturou přeskočí A1 a A2.
         plan = {}
-        resp2 = None
-        a1_model = self._generate_model("A1")
-        a2_model = self._generate_model("A2")
         a3_model = self._generate_model("A3")
         files: List[Dict[str, Any]] = []
         skipped_a3_deliverables: List[Dict[str, Any]] = []
         auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
-        if self.cfg.resume_files:
+        if self.cfg.resume_files and not self.cfg.preparation_snapshot:
             if self.cfg.send_as_c:
                 raise ContractError("Starý ReRun neobsahuje společnou specifikaci. Opakujte dávku v panelu BATCH nebo spusťte nový A1/A2.")
             self._set(10, 0, "ReRun: používám uloženou strukturu A2; A1/A2 se neopakují.", stage="ReRun")
@@ -1074,6 +1167,8 @@ class RunWorker(QThread):
                 self._check_stop()
                 path = f.get("path")
                 if not isinstance(path, str) or not path:
+                    continue
+                if path in (self.cfg.skip_paths or []):
                     continue
                 ext = os.path.splitext(path)[1].lower()
                 if f.get("kind") == "binary" or ext in auto_skip_image_exts:
@@ -1100,164 +1195,27 @@ class RunWorker(QThread):
                     continue
                 files.append(f)
         else:
-            self._set(10, 0, "A1: připravuji plán…", stage="A1")
-            a1_schema = (
-                '{"contract":"A1_PLAN","project":{"name":"string","one_liner":"string","target_os":"string","language":"string","runtime":"string"},'
-                '"assumptions":["string"],"requirements":{"functional":["string"],"non_functional":["string"],"constraints":["string"]},'
-                '"architecture":{"modules":[{"name":"string","responsibility":"string"}],"data_flow":["string"],"error_handling":["string"],"security_notes":["string"]},'
-                '"build_run":{"prerequisites":["string"],"commands":["string"],"verification":["string"]},"deliverable_policy":{"max_lines_per_chunk":500}}'
-            )
-            instructions = (
-                "Jsi senior software architekt a implementátor. "
-                "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
-                f"KONTRAKT A1_PLAN: {a1_schema}"
-            )
-
-            a1_text = (self.cfg.prompt or "") if len(self.cfg.prompt or "") <= 150_000 else "Použij ingested Zadání (A0) a přiložené soubory, a vrať A1 plan dle kontraktu."
+            a1_text = (self.cfg.prompt or "") if len(self.cfg.prompt or "") <= 150_000 else "Použij celé zadání zavedené technickým A0."
+            a1_text = self._with_diag_text(self._append_io_reference(
+                a1_text, self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)))
             note = self._in_dir_fallback_note()
             if note:
-                a1_text = f"{a1_text}\n\n{note}"
-            a1_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-            a1_input_files, a1_input_images = self._build_input_attachments(client, self._input_file_ids())
-            a1_text = self._append_io_reference(a1_text, a1_ref_files)
-            a1_text = self._with_diag_text(a1_text)
-            instructions = self._append_io_reference_instructions(instructions, a1_ref_files)
-            payload = self._payload_base(
-                model=a1_model,
-                instructions=instructions,
-                input_parts=self._input_parts(a1_text, a1_input_files, a1_input_images),
-                prev_id=base_prev_id,
-                supports_temperature=(a1_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
-            )
-            payload["text"] = plan_format()
-            if self._fs_tools:
-                payload["tools"] = self._fs_tools
-            self._log_request_attachments("A1", a1_ref_files, a1_input_files, a1_input_images, self._vector_store_ids, self._fs_tools)
-            self._log_api_action(
-                "A1",
-                "prepare",
-                {
-                    "prompt_len": len(a1_text),
-                    "files": len(self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)),
-                },
-            )
-            self.log.save_json(
-                "requests",
-                f"A1_request_{ts_code()}",
-                {
-                    "payload": payload,
-                    "ui_state": self.cfg.__dict__,
-                },
-            )
-            self._log_api_action("A1", "send", {"contract": "A1_PLAN", "stage": "PLAN", "model": a1_model})
-            resp1 = self._create_response(client, payload)
-            self.log.save_json("responses", f"A1_response_{resp1.get('id','NOID')}_{ts_code()}", resp1)
-            self._log_api_action("A1", "receive", {"response_id": resp1.get("id"), "status": resp1.get("status"), "contract": "A1_PLAN"})
-
-            resp1_id = str(resp1.get("id") or "")
-            plan = parse_json_strict(extract_text_from_response(resp1))
-            if plan.get("contract") != "A1_PLAN":
-                raise ContractError("A1_PLAN contract mismatch")
-
-            self._set(20, 0, "A2: připravuji strukturu souborů…", stage="A2")
-            a2_schema = json.dumps(structure_format()["format"]["schema"], ensure_ascii=False)
-            instructions2 = (
-                "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
-                f"KONTRAKT A2_STRUCTURE: {a2_schema}"
-            )
-            a2_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-            a2_input_files, a2_input_images = [], []
-            a2_text = (
-                "Vygeneruj strukturu souborů podle A1 plánu. Pro každé rozhraní v requires "
-                "uveď v dependencies cestu alespoň jednoho souboru, který toto id poskytuje "
-                "v provides; vlastní rozhraní nevyžaduje závislost souboru na sobě. "
-                "dependencies vyjadřují vazby mezi soubory, nejen přímé importy knihoven."
-            )
+                a1_text += "\n\n" + note
+            input_files, input_images = self._build_input_attachments(client, self._input_file_ids())
+            plan, struct, resp2_id = prepare_delivery(
+                self, client, "GENERATE", base_prev_id, a1_text, input_files, input_images, self._fs_tools)
             if self.cfg.send_as_c:
-                a2_text += (" Vytvoř samostatnou závaznou specifikaci verze 2 pro nezávislé generování souborů. "
-                            "Zahrň všechny podstatné závěry z příloh, vyhledávání a diagnostiky; další úlohy neuvidí historii. "
-                            "Rozhraní definuj přesnými signaturami, datovými typy a API endpointy. "
-                            "Uváděj verze balíčků. Každé rozhraní má stabilní id, poskytovatele a konzumenty. "
-                            "Navrhni malé moduly, každý musí vzniknout jedinou odpovědí. Binární prostředky označ kind=binary.")
-            a2_text = self._with_diag_text(a2_text)
-            payload2 = self._payload_base(
-                model=a2_model,
-                instructions=instructions2,
-                input_parts=self._input_parts(
-                    a2_text,
-                    a2_input_files,
-                    a2_input_images,
-                ),
-                prev_id=resp1_id,
-                supports_temperature=(a2_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True)),
-            )
-            if self._fs_tools:
-                payload2["tools"] = self._fs_tools
-            payload2["text"] = structure_format()
-            self._log_request_attachments("A2", a2_ref_files, a2_input_files, a2_input_images, self._vector_store_ids, self._fs_tools)
-            self._log_api_action(
-                "A2",
-                "prepare",
-                {
-                    "files": len(self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)),
-                },
-            )
-            self.log.save_json(
-                "requests",
-                f"A2_request_{ts_code()}",
-                {
-                    "payload": payload2,
-                    "ui_state": self.cfg.__dict__,
-                },
-            )
-            self._log_api_action("A2", "send", {"contract": "A2_STRUCTURE", "stage": "STRUCTURE", "model": a2_model})
-            resp2 = self._create_response(client, payload2)
-            self.log.save_json("responses", f"A2_response_{resp2.get('id','NOID')}_{ts_code()}", resp2)
-            self._log_api_action("A2", "receive", {"response_id": resp2.get("id"), "status": resp2.get("status"), "contract": "A2_STRUCTURE"})
-
-            resp2_id = str(resp2.get("id") or "")
-            struct = parse_json_strict(extract_text_from_response(resp2))
-            if struct.get("contract") != "A2_STRUCTURE":
-                raise ContractError("A2_STRUCTURE contract mismatch")
-            if struct.get("version") == 2 or self.cfg.send_as_c:
-                for attempt in range(3):
-                    try:
-                        struct, additions = prepare_structure(struct)
-                        self.log.save_json("manifests", f"A2_prepared_candidate_{attempt}", {
-                            "response_id": resp2_id, "structure": struct,
-                            "added_dependencies": additions,
-                        })
-                        validate_structure(struct)
-                        self.log.save_json("manifests", "A2_validated_structure", {
-                            "response_id": resp2_id, "structure": struct,
-                            "added_dependencies": additions,
-                        })
-                        break
-                    except ContractError as exc:
-                        if attempt == 2:
-                            raise
-                        self._check_stop()
-                        repair = copy.deepcopy(payload2)
-                        repair["previous_response_id"] = resp2_id
-                        repair["input"] = self._input_parts(
-                            f"Oprav všechny uvedené problémy celého A2 manifestu najednou:\n{exc}\n"
-                            "Pole provides a requires obsahují pouze přesná id z interfaces, "
-                            "dependencies pouze přesné cesty z files včetně poskytovatelů requires. "
-                            "Zachovej původní zadání i platné vazby. Aktuální manifest:\n"
-                            + json.dumps(struct, ensure_ascii=False), [], [])
-                        self.log.save_json("requests", f"A2_validation_{attempt}", {"payload": repair})
-                        resp2 = self._create_response(client, repair)
-                        resp2_id = str(resp2.get("id") or "")
-                        self.log.save_json("responses", f"A2_validation_{attempt}_{resp2_id}", resp2)
-                        struct = parse_json_strict(extract_text_from_response(resp2))
-            if self.cfg.send_as_c:
-                validate_structure(struct)
                 selected = [f["path"] for f in struct["files"]
                             if f["kind"] == "text" and os.path.splitext(f["path"])[1].lower() not in (self.cfg.skip_exts or [])
                             and f["path"] not in (self.cfg.skip_paths or [])]
-                manifest = build_batch_manifest(self.log.run_id, self.cfg.prompt, plan, struct, a3_model,
-                                          self.cfg.temperature if self._model_caps(a3_model).get("supports_temperature", False) else None, selected)
-                return self._submit_generate_batch(client, manifest)
+                if selected:
+                    manifest = build_batch_manifest(
+                        self.log.run_id, self.cfg.prompt, plan, struct, a3_model,
+                        self.cfg.temperature if self._model_caps(a3_model).get("supports_temperature", False) else None,
+                        selected, requirements=self._delivery_snapshot["requirements"],
+                        maximum_quality=self.cfg.maximum_quality)
+                    return self._submit_generate_batch(client, manifest)
+
             try:
                 self.log.save_json(
                     "manifests",
@@ -1274,6 +1232,8 @@ class RunWorker(QThread):
                 self._check_stop()
                 path = f.get("path")
                 if not isinstance(path, str) or not path:
+                    continue
+                if path in (self.cfg.skip_paths or []):
                     continue
                 ext = os.path.splitext(path)[1].lower()
                 if f.get("kind") == "binary" or ext in auto_skip_image_exts:
@@ -1323,6 +1283,7 @@ class RunWorker(QThread):
             self.subprogress.emit(int(idx * 100 / max(1, total_files)))
             self.progress_event.emit(ProgressEvent("A3", completed=idx, total=total_files, unit="souborů", detail=str(path)))
 
+        self._verify_completed_files()
         saved_map = self._save_out_files(out_files)
         missing_report = self._write_missing_files_report(skipped_a3_deliverables)
         missing_deliverables = [item.get("path") for item in skipped_a3_deliverables if item.get("path")]
@@ -1346,6 +1307,12 @@ class RunWorker(QThread):
 
     # Odeslání souborových úloh po živé přípravě.
     def _submit_generate_batch(self, client, manifest):
+        self._verify_completed_files()
+        completed = {path: value for path, value in (getattr(self.cfg, "completed_hashes", None) or {}).items()
+                     if path in (self.cfg.skip_paths or []) and path in manifest.get("omitted", [])}
+        if completed:
+            manifest["completed_hashes"] = completed
+            manifest["omitted"] = [path for path in manifest["omitted"] if path not in completed]
         encode_requests(manifest)
         for row in manifest["requests"]:
             client.validate_access(row["body"], batch=True)
@@ -1372,251 +1339,233 @@ class RunWorker(QThread):
         self.log.update_state({"batch_id": batch["id"], "status": "batch_pending", "submission_unknown": False,
                                "batch_records": {batch["id"]: batch}})
         self.log.save_json("manifests", "generate_batch_created", batch)
-        self._set(100, 0, "A1/A2 hotovo; A3 čeká na zpracování pracovní dávky.")
-        return {"mode": "GENERATE", "batch_id": batch["id"], "input_file_id": uploaded["id"],
+        self._set(100, 0, "Příprava dokončena; souborové úlohy čekají na zpracování dávky.", stage="Čekání na dávku")
+        return {"mode": manifest.get("mode", "GENERATE"), "batch_id": batch["id"], "input_file_id": uploaded["id"],
                 "status": "batch_pending", "files": len(manifest["expected"])}
 
     # Režim MODIFY.
     def _run_b_modify(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
         self._set(8, 0, "Skenuji a nahrávám vstupní projekt IN…", stage="Vstupní data")
         root = self.cfg.in_dir
-        root_name = os.path.basename(os.path.abspath(root))
+        context_path = self.log.find_json("manifests", "response_modify_context") if self._response_journal else None
+        if context_path:
+            context = json.loads(Path(context_path).read_text(encoding="utf-8"))
+            items = [SimpleNamespace(**item) for item in context["items"]]
+            up_items = [item for item in items if item.uploadable]
+            tools, supports_fs, vs_id = context["tools"], context["supports_fs"], context["vs_id"]
+            b_text, b_input_files, b_input_images = context["text"], context["input_files"], context["input_images"]
+            self._file_name_cache.update(context["file_names"])
+            self._fs_tools = tools
+        else:
+            root_name = os.path.basename(os.path.abspath(root))
 
-        items = scan_tree(
-            root,
-            root_name,
-            deny_dirs=[".git", "venv", ".venv", "LOG", "cache", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache"],
-            deny_exts=self.settings.security.deny_extensions_in,
-            allow_exts=self.settings.security.allow_extensions_in,
-            deny_globs=self.settings.security.deny_globs_in,
-            allow_globs=self.settings.security.allow_globs_in,
-            allow_sensitive=self.settings.security.allow_upload_sensitive,
-        )
-        manifest = build_manifest(root, items, extra={"project": self.cfg.project})
-        manifest_path = os.path.join(self.log.paths.manifests_dir, f"mirror_manifest_{ts_code()}.json")
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
+            items = scan_tree(
+                root,
+                root_name,
+                deny_dirs=[".git", "venv", ".venv", "LOG", "cache", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache"],
+                deny_exts=self.settings.security.deny_extensions_in,
+                allow_exts=self.settings.security.allow_extensions_in,
+                deny_globs=self.settings.security.deny_globs_in,
+                allow_globs=self.settings.security.allow_globs_in,
+                allow_sensitive=self.settings.security.allow_upload_sensitive,
+            )
+            manifest = build_manifest(root, items, extra={"project": self.cfg.project})
+            manifest_path = os.path.join(self.log.paths.manifests_dir, f"mirror_manifest_{ts_code()}.json")
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-        mf_up = with_retry(lambda: client.upload_file(manifest_path, purpose="user_data"), self.settings.retry, self.breaker)
-        manifest_file_id = mf_up["id"]
-        self._remember_file_name(manifest_file_id, os.path.basename(manifest_path))
-        self._log_debug(f"Mirror manifest uploaded: {manifest_file_id}")
+            mf_up = with_retry(lambda: client.upload_file(manifest_path, purpose="user_data"), self.settings.retry, self.breaker)
+            manifest_file_id = mf_up["id"]
+            self._remember_file_name(manifest_file_id, os.path.basename(manifest_path))
+            self._log_debug(f"Mirror manifest uploaded: {manifest_file_id}")
 
-        uploaded: List[Tuple[str, str]] = []
-        up_items = [it for it in items if it.uploadable]
-        for i, it in enumerate(up_items):
-            self._check_stop()
-            self._progress_stage = "Upload"
-            self.progress_event.emit(ProgressEvent("Upload", completed=i, total=len(up_items), unit="souborů", detail=it.rel_path))
-            self._log_debug(f"Upload mirror file: {it.rel_path}")
-            up = with_retry(lambda p=it.abs_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
-            uploaded.append((it.rel_path, up["id"]))
-            self.subprogress.emit(int((i + 1) * 100 / max(1, len(up_items))))
-            self.progress_event.emit(ProgressEvent("Upload", completed=i + 1, total=len(up_items), unit="souborů", detail=it.rel_path))
-            self._remember_file_name(up["id"], os.path.basename(it.abs_path))
-            try:
-                self.log.event("upload.mirror", {"path": it.rel_path, "abs": it.abs_path, "file_id": up["id"], "bytes": it.size})
-            except Exception:
-                pass
-
-        self.log.save_json("manifests", "mirror_manifest", {"manifest_file_id": manifest_file_id, "uploaded": uploaded, "manifest": manifest})
-
-        tools: Optional[List[Dict[str, Any]]] = None
-        vs_id: Optional[str] = None
-        vs_ids: List[str] = list(self._vector_store_ids or [])
-        supports_fs = bool(self.cfg.model_caps.get("supports_file_search", False)) and bool(self.cfg.use_file_search)
-
-        if supports_fs:
-            try:
-                self._set(18, 0, "Vytvářím a indexuji vector store pro file_search…", stage="Indexace")
-                vs = with_retry(lambda: client.create_vector_store(f"{(self.cfg.project or root_name)}{ts_code()}"), self.settings.retry, self.breaker)
-                vs_id = vs.get("id")
-                if vs_id:
-                    vs_file_ids: List[str] = []
-                    for rel, fid in uploaded[:2000]:
-                        self._check_stop()
-                        vs_file = with_retry(
-                        lambda v=vs_id, f=fid, r=rel: client.add_file_to_vector_store(v, f, attributes={"source_path": os.path.join(root, r)}),
-                            self.settings.retry,
-                            self.breaker,
-                        )
-                        try:
-                            vs_file_id = str(vs_file.get("id") or "")
-                            if vs_file_id:
-                                vs_file_ids.append(vs_file_id)
-                        except Exception:
-                            pass
-                    mf_vs_file = with_retry(lambda: client.add_file_to_vector_store(vs_id, manifest_file_id, attributes={"source": "mirror_manifest"}), self.settings.retry, self.breaker)
-                    try:
-                        mf_vs_id = str(mf_vs_file.get("id") or "")
-                        if mf_vs_id:
-                            vs_file_ids.append(mf_vs_id)
-                    except Exception:
-                        pass
-                    if vs_file_ids:
-                        self._wait_vector_store_files(client, vs_id, vs_file_ids)
-                    vs_ids.append(vs_id)
-                    self._vector_store_ids.append(vs_id)
-            except Exception as e:
-                supports_fs = bool(vs_ids)
-                tools = None
-                vs_id = None
+            uploaded: List[Tuple[str, str]] = []
+            up_items = [it for it in items if it.uploadable]
+            for i, it in enumerate(up_items):
+                self._check_stop()
+                self._progress_stage = "Upload"
+                self.progress_event.emit(ProgressEvent("Upload", completed=i, total=len(up_items), unit="souborů", detail=it.rel_path))
+                self._log_debug(f"Upload mirror file: {it.rel_path}")
+                up = with_retry(lambda p=it.abs_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
+                uploaded.append((it.rel_path, up["id"]))
+                self.subprogress.emit(int((i + 1) * 100 / max(1, len(up_items))))
+                self.progress_event.emit(ProgressEvent("Upload", completed=i + 1, total=len(up_items), unit="souborů", detail=it.rel_path))
+                self._remember_file_name(up["id"], os.path.basename(it.abs_path))
                 try:
-                    self.log.exception("vector_store", e)
-                    self.log.update_state({"modify_context": {
-                        "new_vector_store": "failed", "direct_inputs": True,
-                        "existing_vector_stores": list(vs_ids), "error": str(e),
-                    }})
+                    self.log.event("upload.mirror", {"path": it.rel_path, "abs": it.abs_path, "file_id": up["id"], "bytes": it.size})
                 except Exception:
                     pass
-                self.progress_event.emit(ProgressEvent(
-                    "Indexace", detail="Nová indexace selhala; aktuální IN zůstává připojen přímo jako vstupní soubory."
-                ))
 
-        if supports_fs and vs_ids:
-            seen = set()
-            uniq_ids: List[str] = []
-            for vid in vs_ids:
-                if vid and vid not in seen:
-                    uniq_ids.append(vid)
-                    seen.add(vid)
-            tools = [{"type": "file_search", "vector_store_ids": uniq_ids}]
-            if tools:
-                self._fs_tools = tools
+            self.log.save_json("manifests", "mirror_manifest", {"manifest_file_id": manifest_file_id, "uploaded": uploaded, "manifest": manifest})
 
-        self._set(24, 0, "B1: připravuji plán změn…", stage="B1")
-        b1_schema = (
-            '{"contract":"B1_PLAN","diagnosis":{"summary":"string","evidence":[{"path":"string","reason":"string"}],"likely_root_causes":["string"]},'
-            '"change_plan":{"goals":["string"],"files_to_modify":[{"path":"string","intent":"string"}],"files_to_add":[{"path":"string","intent":"string"}],"verification_steps":["string"]},'
-            '"missing_inputs":["string"]}'
-        )
-        instructions1 = (
-            "Jsi senior maintenance inženýr. Pokud je dostupné file_search, použij jej. "
-            "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
-            f"KONTRAKT B1_PLAN: {b1_schema}"
-        )
-        b1_text = (self.cfg.prompt or "") if len(self.cfg.prompt or "") <= 150_000 else "Použij ingested Zadání (A0) + přiložené soubory. Vrať B1 plan dle kontraktu."
-        note = self._in_dir_fallback_note()
-        if note:
-            b1_text = f"{b1_text}\n\n{note}"
-        b1_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids + [manifest_file_id] + [fid for _, fid in uploaded])
-        b1_input_files, b1_input_images = self._build_input_attachments(
-            client, self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded]
-        )
-        b1_text = self._append_io_reference(b1_text, b1_ref_files)
-        b1_text = self._with_diag_text(b1_text)
-        instructions1 = self._append_io_reference_instructions(instructions1, b1_ref_files)
-        payload1 = self._payload_base(
-            model=self.cfg.model,
-            instructions=instructions1,
-            input_parts=self._input_parts(
-                b1_text,
-                b1_input_files,
-                b1_input_images,
-            ),
-            prev_id=base_prev_id,
-        )
-        if supports_fs and tools:
-            payload1["tools"] = tools
-        self._log_request_attachments("B1", b1_ref_files, b1_input_files, b1_input_images, vs_ids, tools)
+            tools: Optional[List[Dict[str, Any]]] = None
+            vs_id: Optional[str] = None
+            vs_ids: List[str] = list(self._vector_store_ids or [])
+            supports_fs = bool(self.cfg.model_caps.get("supports_file_search", False)) and bool(self.cfg.use_file_search)
 
-        self.log.save_json(
-            "requests",
-            f"B1_request_{ts_code()}",
-            {
-                "payload": payload1,
-                "ui_state": self.cfg.__dict__,
-                "supports_file_search": supports_fs,
-                "vector_store_ids": vs_ids,
-            },
-        )
-        self._log_api_action("B1", "send", {"contract": "B1_PLAN", "model": self.cfg.model})
-        resp1 = self._create_response(client, payload1)
-        self.log.save_json("responses", f"B1_response_{resp1.get('id','NOID')}_{ts_code()}", resp1)
-        self._log_api_action("B1", "receive", {"response_id": resp1.get("id"), "status": resp1.get("status"), "contract": "B1_PLAN"})
+            if supports_fs:
+                try:
+                    self._set(18, 0, "Vytvářím a indexuji vector store pro file_search…", stage="Indexace")
+                    vs = with_retry(lambda: client.create_vector_store(f"{(self.cfg.project or root_name)}{ts_code()}"), self.settings.retry, self.breaker)
+                    vs_id = vs.get("id")
+                    if vs_id:
+                        vs_file_ids: List[str] = []
+                        for rel, fid in uploaded[:2000]:
+                            self._check_stop()
+                            vs_file = with_retry(
+                            lambda v=vs_id, f=fid, r=rel: client.add_file_to_vector_store(v, f, attributes={"source_path": os.path.join(root, r)}),
+                                self.settings.retry,
+                                self.breaker,
+                            )
+                            try:
+                                vs_file_id = str(vs_file.get("id") or "")
+                                if vs_file_id:
+                                    vs_file_ids.append(vs_file_id)
+                            except Exception:
+                                pass
+                        mf_vs_file = with_retry(lambda: client.add_file_to_vector_store(vs_id, manifest_file_id, attributes={"source": "mirror_manifest"}), self.settings.retry, self.breaker)
+                        try:
+                            mf_vs_id = str(mf_vs_file.get("id") or "")
+                            if mf_vs_id:
+                                vs_file_ids.append(mf_vs_id)
+                        except Exception:
+                            pass
+                        if vs_file_ids:
+                            self._wait_vector_store_files(client, vs_id, vs_file_ids)
+                        vs_ids.append(vs_id)
+                        self._vector_store_ids.append(vs_id)
+                except Exception as e:
+                    supports_fs = bool(vs_ids)
+                    tools = None
+                    vs_id = None
+                    try:
+                        self.log.exception("vector_store", e)
+                        self.log.update_state({"modify_context": {
+                            "new_vector_store": "failed", "direct_inputs": True,
+                            "existing_vector_stores": list(vs_ids), "error": str(e),
+                        }})
+                    except Exception:
+                        pass
+                    self.progress_event.emit(ProgressEvent(
+                        "Indexace", detail="Nová indexace selhala; aktuální IN zůstává připojen přímo jako vstupní soubory."
+                    ))
 
-        resp1_id = str(resp1.get("id") or "")
-        plan = parse_json_strict(extract_text_from_response(resp1))
-        if plan.get("contract") != "B1_PLAN":
-            raise ContractError("B1_PLAN contract mismatch")
+            if supports_fs and vs_ids:
+                seen = set()
+                uniq_ids: List[str] = []
+                for vid in vs_ids:
+                    if vid and vid not in seen:
+                        uniq_ids.append(vid)
+                        seen.add(vid)
+                tools = [{"type": "file_search", "vector_store_ids": uniq_ids}]
+                if tools:
+                    self._fs_tools = tools
 
-        self._set(36, 0, "B2: určuji soubory ke změně…", stage="B2")
-        b2_schema = '{"contract":"B2_STRUCTURE","touched_files":[{"path":"string","action":"modify|add","intent":"string"}],"invariants":["string"]}'
-        instructions2 = (
-            "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
-            f"KONTRAKT B2_STRUCTURE: {b2_schema}"
-        )
-        b2_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids + [manifest_file_id] + [fid for _, fid in uploaded])
-        b2_input_files, b2_input_images = self._build_input_attachments(
-            client, self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded]
-        )
-        instructions2 = self._append_io_reference_instructions(instructions2, b2_ref_files)
-        b2_text = self._append_io_reference("Vrať seznam touched_files pro implementaci B3.", b2_ref_files)
-        b2_text = self._with_diag_text(b2_text)
-        payload2 = self._payload_base(
-            model=self.cfg.model,
-            instructions=instructions2,
-            input_parts=self._input_parts(
-                b2_text,
-                b2_input_files,
-                b2_input_images,
-            ),
-            prev_id=resp1_id,
-        )
-        if supports_fs and tools:
-            payload2["tools"] = tools
-        self._log_request_attachments("B2", b2_ref_files, b2_input_files, b2_input_images, vs_ids, tools)
-
-        self.log.save_json(
-            "requests",
-            f"B2_request_{ts_code()}",
-            {
-                "payload": payload2,
-                "ui_state": self.cfg.__dict__,
-            },
-        )
-        self._log_api_action("B2", "send", {"contract": "B2_STRUCTURE", "model": self.cfg.model})
-        resp2 = self._create_response(client, payload2)
-        self.log.save_json("responses", f"B2_response_{resp2.get('id','NOID')}_{ts_code()}", resp2)
-        self._log_api_action("B2", "receive", {"response_id": resp2.get("id"), "status": resp2.get("status"), "contract": "B2_STRUCTURE"})
-
-        resp2_id = str(resp2.get("id") or "")
-        struct = parse_json_strict(extract_text_from_response(resp2))
-        if struct.get("contract") != "B2_STRUCTURE":
-            raise ContractError("B2_STRUCTURE contract mismatch")
+            b_text = (self.cfg.prompt or "") if len(self.cfg.prompt or "") <= 150_000 else "Použij celé zadání zavedené technickým A0."
+            b_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids + [manifest_file_id] + [fid for _, fid in uploaded])
+            b_input_files, b_input_images = self._build_input_attachments(
+                client, self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded])
+            b_text = self._with_diag_text(self._append_io_reference(b_text, b_ref_files))
+            if self._response_journal:
+                self.log.save_json("manifests", "response_modify_context", {
+                    "items": [vars(item) for item in items], "tools": tools, "supports_fs": supports_fs,
+                    "vs_id": vs_id, "text": b_text, "input_files": b_input_files,
+                    "input_images": b_input_images, "file_names": self._file_name_cache,
+                })
+        plan, struct, resp2_id = prepare_delivery(
+            self, client, "MODIFY", base_prev_id, b_text, b_input_files, b_input_images,
+            tools if supports_fs else None)
 
         touched_raw = struct.get("touched_files", []) or []
         validate_paths(touched_raw)
+        validate_modify_sources(struct, root, items, self.cfg.skip_paths or [])
         if any(item.get("action") not in ("add", "modify") for item in touched_raw):
             raise ContractError("B2: action musí být add nebo modify.")
         if not touched_raw:
+            self._verify_completed_files()
             self.log.update_state({"no_changes": True, "written_files": []})
             self.progress_event.emit(ProgressEvent("B2", detail="Nebyla navržena žádná změna; do OUT se nebude zapisovat."))
             return {
                 "mode": "MODIFY", "plan": plan, "structure": struct,
                 "saved": {"saved": []}, "written_files": [], "no_changes": True,
+                "status": "dry_run" if self.settings.dry_run_modify else "completed",
+                "dry_run": bool(self.settings.dry_run_modify),
                 "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
             }
         touched = []
+        omitted = []
         for tf in touched_raw:
             path = tf.get("path", "")
             if not path:
                 continue
+            if path in (self.cfg.skip_paths or []):
+                continue
             ext = os.path.splitext(path)[1].lower()
-            if ext in (self.cfg.skip_exts or []):
+            if tf.get("kind") == "binary" or ext in (self.cfg.skip_exts or []):
                 self._log_debug(f"B3: skipping due to extension {ext} ({path})")
+                omitted.append(path)
                 continue
             if path in (self.cfg.skip_paths or []):
                 self._log_debug(f"B3: skipping already completed {path}")
                 continue
             touched.append(tf)
 
+        originals = {}
+        source_items = {item.rel_path: item for item in up_items}
+        overwrite_hashes = {}
+        for file in touched:
+            path = file["path"]
+            if file["action"] == "modify" and path not in source_items:
+                raise ContractError(f"B3: měněný soubor není dostupný ve schváleném IN: {path}")
+            if file["action"] == "add" and os.path.lexists(safe_join_under_root(root, path)):
+                raise ContractError(f"B3: přidávaný soubor již existuje v IN: {path}")
+            relevant = {path, *file.get("dependencies", [])}
+            for source in relevant:
+                if source in (self.cfg.skip_paths or []):
+                    continue
+                item = source_items.get(source)
+                if item is None:
+                    continue
+                source_path = safe_join_under_root(root, source)
+                if sha256_file(source_path) != item.sha256:
+                    raise ContractError(f"IN se od skenu změnil: {source}")
+                with open(source_path, encoding="utf-8") as stream:
+                    originals[source] = stream.read()
+            target = safe_join_under_root(self.cfg.out_dir, path)
+            if os.path.isfile(target):
+                overwrite_hashes[path] = sha256_file(target)
+        originals_path = self.log.find_json("manifests", "response_modify_originals") if self._response_journal else None
+        if originals_path:
+            saved_originals = json.loads(Path(originals_path).read_text(encoding="utf-8"))
+            originals, overwrite_hashes = saved_originals["originals"], saved_originals["overwrite_hashes"]
+        elif self._response_journal:
+            self.log.save_json("manifests", "response_modify_originals", {
+                "originals": originals, "overwrite_hashes": overwrite_hashes,
+            })
+        self._delivery_originals = originals
+        self._delivery_overwrite_hashes = overwrite_hashes
+        if self.cfg.send_as_c and touched:
+            manifest = build_batch_manifest(
+                self.log.run_id, self.cfg.prompt, plan, struct, self.cfg.model,
+                self.cfg.temperature, [file["path"] for file in touched],
+                requirements=self._delivery_snapshot["requirements"],
+                maximum_quality=self.cfg.maximum_quality, mode="MODIFY", originals=originals)
+            manifest["overwrite_hashes"] = overwrite_hashes
+            manifest["dry_run"] = bool(self.settings.dry_run_modify)
+            manifest["versing"] = bool(self.cfg.versing)
+            return self._submit_generate_batch(client, manifest)
+
         total_files = len(touched)
         chain_prev_id = str(resp2_id or "")
         out_files: List[Dict[str, Any]] = []
-        for i, tf in enumerate(touched, start=1):
+        generation_order = [row for row in touched_raw if row in touched or row["path"] in (self.cfg.skip_paths or [])]
+        for i, tf in enumerate(generation_order, start=1):
             self._check_stop()
             path = tf.get("path", "")
+            if path in (self.cfg.skip_paths or []):
+                if self._response_journal and path in self._response_file_ids:
+                    chain_prev_id = self._response_file_ids[path]
+                continue
             action = tf.get("action", "modify")
             self._progress_stage = "B3"
             self.progress_event.emit(ProgressEvent("B3", completed=i - 1, total=total_files, unit="souborů", detail=str(path)))
@@ -1636,8 +1585,14 @@ class RunWorker(QThread):
             self.subprogress.emit(int(i * 100 / max(1, total_files)))
             self.progress_event.emit(ProgressEvent("B3", completed=i, total=total_files, unit="souborů", detail=str(path)))
 
+        self._verify_completed_files()
         saved_map = self._save_out_files(out_files)
-        return {"mode": "MODIFY", "plan": plan, "structure": struct, "saved": saved_map, "response_id": resp2_id, "vector_store_id": vs_id, "supports_file_search": supports_fs}
+        if omitted:
+            self.log.update_state({"missing_deliverables": omitted})
+        return {"mode": "MODIFY", "plan": plan, "structure": struct, "saved": saved_map,
+                "response_id": resp2_id, "vector_store_id": vs_id, "supports_file_search": supports_fs,
+                "status": "partial" if omitted else "dry_run" if saved_map.get("dry_run") else "completed",
+                "dry_run": bool(saved_map.get("dry_run")), "missing_deliverables": omitted}
 
     # Režim QA.
     def _run_qa(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
@@ -1777,90 +1732,6 @@ class RunWorker(QThread):
         saved_map = self._save_out_files(out_files)
         return {"mode": "QFILE", "response_id": str(resp.get("id") or ""), "saved": saved_map, "contract": parsed, "text": raw_text}
 
-    # Dávkové požadavky.
-    def _run_c_batch(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
-        self._set(10, 0, "Připravuji dávkový požadavek C_FILES_ALL…", stage="Příprava BATCH")
-        c_schema = (
-            '{"contract":"C_FILES_ALL","project":{"name":"string","target_os":"Windows 10/11","runtime":"string","language":"string"},'
-            '"root":"string","files":[{"path":"relative/path/file.ext","purpose":"string","content":"string"}],'
-            '"build_run":{"prerequisites":["string"],"commands":["string"],"verification":["string"]},"notes":["string"]}'
-        )
-        instructions = (
-            "Jsi senior programátor. OUTPUT: VRAŤ POUZE validní JSON dokument dle KONTRAKTU C_FILES_ALL. "
-            "ŽÁDNÝ markdown ani další text. "
-            f"KONTRAKT C_FILES_ALL: {c_schema}"
-        )
-        note = self._in_dir_fallback_note()
-        if note:
-            instructions = f"{instructions} {note}"
-
-        prompt_text = self.cfg.prompt or ""
-        if note:
-            prompt_text = f"{prompt_text}\n\n{note}"
-        c_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
-        c_input_files, c_input_images = self._build_input_attachments(client, self._input_file_ids())
-        prompt_text = self._append_io_reference(prompt_text, c_ref_files)
-        prompt_text = self._with_diag_text(prompt_text)
-        instructions = self._append_io_reference_instructions(instructions, c_ref_files)
-
-        body: Dict[str, Any] = {
-            "model": self.cfg.model,
-            "instructions": instructions,
-            "input": self._input_parts(prompt_text, c_input_files, c_input_images),
-        }
-        if self.cfg.model_caps.get("supports_temperature", True) and not uses_reasoning_defaults(self.cfg.model):
-            body["temperature"] = float(self.cfg.temperature)
-        self._log_request_attachments("C", c_ref_files, c_input_files, c_input_images, self._vector_store_ids, None)
-        self._log_api_action(
-            "C",
-            "prepare",
-            {
-                "prompt_len": len(prompt_text or ""),
-                "files": len(self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)),
-            },
-        )
-        body["text"] = builtin_format("C_FILES_ALL")
-        client.validate_access(body, batch=True)
-        req_line = {
-            "custom_id": f"{self.log.run_id}_C1",
-            "method": "POST",
-            "url": "/v1/responses",
-            "body": body,
-        }
-
-        jsonl_path = os.path.join(self.log.paths.requests_dir, f"C_batch_{ts_code()}.jsonl")
-        with open(jsonl_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps(req_line, ensure_ascii=False) + "\n")
-        try:
-            size = os.path.getsize(jsonl_path)
-        except Exception:
-            size = None
-        self._log_api_action("C", "jsonl", {"path": jsonl_path, "size": size})
-
-        self._set(20, 0, "Lokálně kontroluji a nahrávám pracovní dávkový soubor…", stage="Příprava BATCH")
-        self._log_debug("C: uploading work batch JSONL")
-        up = with_retry(lambda: client.upload_file(jsonl_path, purpose="batch"), self.settings.retry, self.breaker)
-        input_file_id = up["id"]
-        self._log_api_action("C", "upload", {"input_file_id": input_file_id, "retry": self.settings.retry.max_attempts if hasattr(self.settings.retry, 'max_attempts') else None})
-
-        self._set(25, 0, "Odesílám pracovní dávku…", stage="BATCH SUBMIT")
-        self._log_debug("C: creating work batch")
-        jsonl_digest = hashlib.sha256(open(jsonl_path, 'rb').read()).hexdigest()
-        self.log.update_state({
-            "submission_input_file_id": input_file_id,
-            "submission_endpoint": "/v1/responses",
-            "submission_jsonl_sha256": jsonl_digest,
-            "submission_unknown": True,
-        })
-        batch = submit_verified_batch(client, input_file_id, [req_line])
-        batch_id = str(batch.get("id") or "")
-        self.log.update_state({"batch_id": batch_id, "batch_records": {batch_id: batch}, "submission_unknown": False})
-        self.log.save_json("responses", f"C_batch_created_{batch_id}_{ts_code()}", batch)
-        self._log_api_action("C", "create", {"batch_id": batch_id, "status": batch.get("status")})
-
-        self._set(100, 0, f"Pracovní dávka byla odeslána ({batch_id}).", stage="BATCH SUBMIT")
-        self.log.event("batch.created", {"batch_id": batch_id, "input_file_id": input_file_id})
-        return {"mode": "C", "batch_id": batch_id, "status": batch.get("status"), "input_file_id": input_file_id}
 
     # Generování souborů A3/B3.
     def _gen_file_chunks(
@@ -1874,22 +1745,13 @@ class RunWorker(QThread):
         tools: Optional[List[Dict[str, Any]]] = None,
         model_override: Optional[str] = None,
     ) -> Tuple[str, str]:
-        if contract == "A3_FILE":
-            schema = '{"contract":"A3_FILE","path":"string","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string"}'
-        else:
-            schema = '{"contract":"B3_FILE","path":"string","action":"modify|add","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string","notes":["string"]}'
-        instructions = (
-            "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
-            "KRITICKÉ: content je vždy kompletní výsledné znění souboru (ne diff/patch). "
-            f"CHUNK: max 500 řádků. KONTRAKT: {schema}"
-        )
         gen_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
         if contract == "A3_FILE":
             gen_input_files, gen_input_images = [], []
         else:
             gen_input_files, gen_input_images = self._build_input_attachments(client, self._input_file_ids())
-            instructions = self._append_io_reference_instructions(instructions, gen_ref_files)
 
+        instructions = stage_instructions("A3" if contract == "A3_FILE" else "B3")
         chunk_index = 0
         parts: List[str] = []
         latest_response_id = str(prev_id or "")
@@ -1904,6 +1766,11 @@ class RunWorker(QThread):
             if contract != "A3_FILE":
                 prompt = self._append_io_reference(prompt, gen_ref_files)
             prompt = self._with_diag_text(prompt)
+            if getattr(self, "_delivery_snapshot", None):
+                prompt += "\n" + json.dumps({"specification": self._delivery_snapshot}, ensure_ascii=False)
+            if contract == "B3_FILE" and getattr(self, "_delivery_originals", None):
+                prompt += "\n" + json.dumps({"originals": self._delivery_originals}, ensure_ascii=False)
+            prompt += "\n" + json.dumps({"chunk_max_lines": 500}, ensure_ascii=False)
 
             payload = self._payload_base(
                 model=step_model,
@@ -1917,6 +1784,7 @@ class RunWorker(QThread):
             if step_model == self.cfg.model and self.cfg.model_caps.get("supports_temperature", True) and not uses_reasoning_defaults(step_model):
                 payload["temperature"] = 0.0
 
+            apply_quality(payload, self.cfg.maximum_quality)
             if tools:
                 payload["tools"] = tools
             vs_ids = []
@@ -1946,7 +1814,7 @@ class RunWorker(QThread):
             last_err: Optional[Exception] = None
             while attempt < max_attempts and parsed is None:
                 try:
-                    resp = self._create_response(client, payload)
+                    resp = self._create_response(client, payload, attempt=attempt)
                 except OutputContractError as exc:
                     self.log.save_json("responses", f"{contract}_invalid_{chunk_index}_{attempt}", exc.response)
                     last_err = exc
@@ -2037,4 +1905,7 @@ class RunWorker(QThread):
             if chunk_index > 5000:
                 raise ContractError("Chunk loop guard")
 
+        if self._response_journal:
+            self._response_file_ids[path] = latest_response_id
+            self.log.update_state({"response_file_ids": self._response_file_ids})
         return "".join(parts), latest_response_id

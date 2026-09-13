@@ -16,6 +16,25 @@ from ..core.progress import ProgressClock, ProgressEvent
 from .design import column, label, button, row, editor, card, FitDialog
 
 
+PREPARATION_STAGES = {
+    "A0": "Analýza zadání",
+    "A0R": "Profesionální requirements",
+    "A1": "Architektonický plán",
+    "A2": "Implementační struktura",
+    "A2Q": "Quality gate",
+    "A3": "Generování souborů",
+    "B0R": "Change requirements",
+    "B1": "Plán změny",
+    "B2": "Implementační struktura změny",
+    "B2Q": "Quality gate",
+    "B3": "Generování změněných souborů",
+}
+
+
+def stage_label(stage):
+    return PREPARATION_STAGES.get(stage.split("_", 1)[0], stage)
+
+
 class DetailDialog(FitDialog):
     def __init__(self, title, content, parent=None, details=None, question=False):
         super().__init__(parent)
@@ -158,6 +177,8 @@ def dialog_input_text(parent, title, message, value=""):
 
 
 STATES = {
+    "response_pending": "Sledování přerušeno · lze pokračovat",
+    "submission_unknown": "Výsledek odeslání není známý",
     "active": "Probíhá",
     "waiting": "Čekání na API",
     "completed": "Dokončeno",
@@ -171,7 +192,7 @@ STATES = {
     "finalizing": "Dokončuje se",
     "cancelling": "Ruší se zpracování",
     "expired": "Vypršel čas dávky",
-    "preflight_pending": "Čeká na ověření dávky",
+    "dry_run": "Změny ověřeny · OUT nezměněn (dry-run)",
 }
 
 
@@ -201,8 +222,12 @@ class ProgressDialog(FitDialog):
         layout.addWidget(self.txt_log, 1)
         self.chk_bzz = QCheckBox("Upozornit po dokončení")
         self.btn_stop = button("Zastavit běh", role="Danger")
+        self.btn_stop.setToolTip("Zastaví místní sledování. Vzdálená generace může pokračovat; navázat lze přes ReRun.")
+        self.btn_cancel_response = button("Zrušit generování", role="Danger")
+        self.btn_cancel_response.hide()
         self.btn_close = button("Skrýt průběh", self.hide)
-        layout.addWidget(row(self.chk_bzz, self.btn_stop, self.btn_close))
+        layout.addWidget(self.chk_bzz)
+        layout.addWidget(row(self.btn_stop, self.btn_cancel_response, self.btn_close))
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_eta)
         self.timer.start(1000)
@@ -223,7 +248,8 @@ class ProgressDialog(FitDialog):
 
     def on_progress_event(self, event):
         self.clock.update(event)
-        self.lbl_stage.setText(f"{event.stage} · {STATES.get(event.state, event.state)}")
+        self.btn_cancel_response.setEnabled(event.state == "waiting")
+        self.lbl_stage.setText(f"{stage_label(event.stage)} · {STATES.get(event.state, event.state)}")
         if event.detail:
             self.set_status(event.detail)
         if self.clock.total:
@@ -239,6 +265,7 @@ class ProgressDialog(FitDialog):
             self.pb_sub.setValue(self.clock.completed)
             self.btn_stop.setEnabled(False)
             self.btn_stop.hide()
+            self.btn_cancel_response.hide()
             self.chk_bzz.hide()
             self.btn_close.setText("OK")
             self.btn_close.setDefault(True)
@@ -323,7 +350,7 @@ class TaskProgressDialog(FitDialog):
         self.clock.update(event)
         if event.detail:
             self.lbl_status.setText(event.detail)
-        self.lbl_current.setText(f"{event.stage} · {STATES.get(event.state, event.state)}")
+        self.lbl_current.setText(f"{stage_label(event.stage)} · {STATES.get(event.state, event.state)}")
         if event.total:
             self.pb_sub.setVisible(True)
             self.pb_sub.setRange(0, event.total)

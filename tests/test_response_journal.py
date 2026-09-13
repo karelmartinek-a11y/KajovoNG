@@ -1,0 +1,357 @@
+"""Výpadky a obnova bez skutečných síťových nebo placených požadavků."""
+
+import json
+from pathlib import Path
+from unittest.mock import Mock, patch
+import copy
+import hashlib
+
+import pytest
+from PySide6.QtCore import QLockFile
+
+from kajovo.core.openai_client import OpenAIClient, OpenAIError
+from kajovo.core.response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
+from kajovo.core.request_rules import validate_response_payload
+from kajovo.core.runlog import RunLogger
+from kajovo.core.pipeline import RunWorker
+from kajovo.desktop.recovery import recover_run
+from test_workflows import make_worker, response
+from delivery_fixtures import delivery_payloads
+
+
+class Clock:
+    value = 0.0
+
+    def now(self):
+        return self.value
+
+    def sleep(self, seconds):
+        self.value += seconds
+
+
+@pytest.fixture
+def journal(tmp_path):
+    clock = Clock()
+    logger = RunLogger(str(tmp_path), "RUN_130920260100_TEST")
+    return ResponseJournal(logger, clock=clock.now, sleep=clock.sleep)
+
+
+def execute(journal, client, **kwargs):
+    return journal.execute(client, {"model": "gpt-5.4", "input": "test"},
+                           stopped=kwargs.get("stopped", lambda: False),
+                           cancelled=kwargs.get("cancelled", lambda: False), progress=Mock())
+
+
+def test_long_generation_and_restart_only_retrieve_same_id(journal):
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_long", "status": "queued"}
+    client.retrieve_response.side_effect = [{"id": "resp_long", "status": "in_progress"}] * 160 + [
+        {"id": "resp_long", "status": "completed", "output": []}]
+    result = execute(journal, client)
+    assert journal.clock() > 300
+    assert result["status"] == "completed"
+    body = client.create_response.call_args.args[0]
+    assert body["background"] is True and body["store"] is True
+    replay = ResponseJournal(journal.log)
+    assert execute(replay, client) == result
+    assert client.create_response.call_count == 1
+    assert all(call.args == ("resp_long",) for call in client.retrieve_response.call_args_list)
+
+
+def test_get_failure_preserves_id_and_resume(journal):
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_wait", "status": "queued"}
+    client.retrieve_response.side_effect = OpenAIError("Read timeout")
+    with pytest.raises(ResponsePending):
+        execute(journal, client)
+    assert client.retrieve_response.call_count == 4
+    replay = ResponseJournal(journal.log, clock=journal.clock, sleep=journal.sleep)
+    client.retrieve_response.side_effect = None
+    client.retrieve_response.return_value = {"id": "resp_wait", "status": "completed"}
+    assert execute(replay, client)["id"] == "resp_wait"
+    assert client.create_response.call_count == 1
+
+
+@pytest.mark.parametrize("error", [OpenAIError("timeout"), OSError("connection lost")])
+def test_unknown_submission_never_reposts(journal, error):
+    client = Mock()
+    client.create_response.side_effect = error
+    with pytest.raises(SubmissionUnknown):
+        execute(journal, client)
+    with pytest.raises(SubmissionUnknown):
+        execute(ResponseJournal(journal.log), client)
+    assert client.create_response.call_count == 1
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "incomplete", "unexpected"])
+def test_terminal_failure_cannot_be_consumed(journal, status):
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_bad", "status": status}
+    with pytest.raises(RuntimeError, match=status):
+        execute(journal, client)
+    client.retrieve_response.assert_not_called()
+
+
+def test_timeout_stop_and_cancel_have_distinct_effects(journal):
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_wait", "status": "queued"}
+    client.retrieve_response.return_value = {"id": "resp_wait", "status": "in_progress"}
+    journal.timeout_s = 3
+    with pytest.raises(ResponsePending, match="limit"):
+        execute(journal, client)
+    with pytest.raises(ResponsePending, match="zastaveno"):
+        execute(journal, client, stopped=lambda: True)
+    client.cancel_response.assert_not_called()
+    client.cancel_response.return_value = {"id": "resp_wait", "status": "cancelled"}
+    with pytest.raises(RuntimeError, match="cancelled"):
+        execute(journal, client, cancelled=lambda: True)
+    client.cancel_response.assert_called_once_with("resp_wait")
+
+
+def test_async_cancellation_is_sent_once_then_polled(journal):
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_wait", "status": "queued"}
+    client.cancel_response.return_value = {"id": "resp_wait", "status": "in_progress"}
+    client.retrieve_response.side_effect = [
+        {"id": "resp_wait", "status": "in_progress"}, {"id": "resp_wait", "status": "cancelled"}]
+    # Volba zrušení vznikne až po skutečném odeslání pracovní úlohy.
+    with pytest.raises(RuntimeError, match="cancelled"):
+        execute(journal, client, cancelled=lambda: bool(client.create_response.call_count))
+    client.cancel_response.assert_called_once_with("resp_wait")
+    assert client.retrieve_response.call_count == 2
+
+
+@pytest.mark.parametrize("sdk", [False, True])
+def test_client_background_does_not_validate_unfinished_output(sdk):
+    client = OpenAIClient("test")
+    client.validate_access = Mock()
+    client._policy = Mock()
+    result = {"id": "resp_test", "status": "queued", "output": []}
+    if sdk:
+        client._sdk = Mock()
+        client._sdk.responses.create.return_value.model_dump.return_value = result
+        client._sdk.responses.retrieve.return_value.model_dump.return_value = result
+        client._sdk.responses.cancel.return_value.model_dump.return_value = result
+        client._sdk.responses.create.return_value._request_id = None
+    else:
+        client._sdk = None
+        client._req = Mock(return_value=result)
+    assert client.create_response({"model": "gpt-5.4", "input": "x", "background": True, "store": True})["status"] == "queued"
+    assert client.retrieve_response("resp_test")["id"] == "resp_test"
+    assert client.cancel_response("resp_test")["id"] == "resp_test"
+
+
+def test_background_not_allowed_inside_batch():
+    with pytest.raises(ValueError):
+        validate_response_payload({"model": "gpt-5.4", "background": True, "store": True}, batch=True)
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+@pytest.mark.parametrize("pending_index", [0, 2, 3, 4])
+def test_worker_recovers_preparation_and_file_without_reposting(tmp_path, mode, pending_index):
+    worker = make_worker(tmp_path, mode)
+    if mode == "MODIFY":
+        source = tmp_path / "in"
+        source.mkdir()
+        worker.cfg.in_dir = str(source)
+    file = {"contract": "A3_FILE" if mode == "GENERATE" else "B3_FILE", "path": "hello.txt", "content": "hello\n",
+            "chunking": {"chunk_index": 0, "chunk_count": 1, "has_more": False, "next_chunk_index": None}}
+    if mode == "MODIFY":
+        file["action"] = "add"
+    results = [response(i, item) for i, item in enumerate([*delivery_payloads(mode), file])]
+    expected = "hello\n"
+    if pending_index == 4:
+        first = {**file, "content": "line\n" * 500,
+                 "chunking": {"chunk_index": 0, "chunk_count": 2, "has_more": True, "next_chunk_index": 1}}
+        last = {**file, "chunking": {"chunk_index": 1, "chunk_count": 2, "has_more": False, "next_chunk_index": None}}
+        results[-1:] = [response(3, first), response(4, last)]
+        expected = first["content"] + last["content"]
+    client = Mock()
+    client.upload_file.return_value = {"id": "file_test"}
+    client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 1}
+    client.create_response.side_effect = results[:pending_index] + [{"id": results[pending_index]["id"], "status": "queued"}]
+    worker.settings.response_poll_timeout_s = 0.001
+    # Přerušení ihned po přijetí ID bez čekání v reálném čase.
+    def stop_get(*args):
+        raise OpenAIError("offline", status_code=404)
+    client.retrieve_response.side_effect = stop_get
+    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(ResponseJournal, "_wait"):
+        worker.run()
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    assert state["status"] == "response_pending"
+    upload_count = client.upload_file.call_count
+    ui, _, _ = recover_run(worker.settings.log_dir, worker.log.run_id)
+    assert ui["prompt"] == worker.cfg.prompt
+    resumed = RunWorker(worker.cfg, worker.settings, "test", RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True))
+    resumed.settings.response_poll_timeout_s = 3600
+    client.retrieve_response.side_effect = None
+    client.retrieve_response.return_value = results[pending_index]
+    client.create_response.side_effect = results[pending_index + 1:]
+    errors = []
+    resumed.finished_err.connect(errors.append)
+    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(ResponseJournal, "_wait"):
+        resumed.run()
+    assert errors == []
+    assert (tmp_path / "out" / "hello.txt").read_text() == expected
+    assert client.create_response.call_count == len(results)
+    assert client.upload_file.call_count == upload_count
+
+
+def test_second_instance_does_not_change_run_state(tmp_path):
+    worker = make_worker(tmp_path, "GENERATE")
+    before = Path(worker.log.state_path).read_bytes()
+    lock = QLockFile(str(Path(worker.log.paths.run_dir) / "execution.lock"))
+    assert lock.tryLock(0)
+    try:
+        with patch("kajovo.core.pipeline.OpenAIClient") as client:
+            worker.run()
+        client.assert_not_called()
+        assert Path(worker.log.state_path).read_bytes() == before
+    finally:
+        lock.unlock()
+
+
+def test_corrupted_journal_cannot_submit_new_request(journal):
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_ok", "status": "completed"}
+    execute(journal, client)
+    path = Path(journal.log.find_json("manifests", "response_journal"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    next(iter(data["entries"].values()))["payload"]["input"] = "změna"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="hash"):
+        ResponseJournal(journal.log)
+    assert client.create_response.call_count == 1
+
+
+def test_missing_remote_id_is_not_recreated(journal):
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_missing", "status": "queued"}
+    client.retrieve_response.side_effect = OpenAIError("Not found", status_code=404)
+    with pytest.raises(ResponsePending):
+        execute(journal, client)
+    client.retrieve_response.assert_called_once()
+    assert client.create_response.call_count == 1
+
+
+@pytest.mark.parametrize("state", ["response_pending", "submission_unknown", "cancelled"])
+def test_progress_dialog_finishes_with_recoverable_status(qtbot, state):
+    from kajovo.desktop.dialogs import ProgressDialog
+    from kajovo.core.progress import ProgressEvent
+    dialog = ProgressDialog()
+    qtbot.addWidget(dialog)
+    dialog.btn_cancel_response.show()
+    dialog.on_progress_event(ProgressEvent("RUN", state, detail="Uložené ID"))
+    assert dialog.clock.finished is not None
+    assert dialog.btn_cancel_response.isHidden()
+    assert not dialog.timer.isActive()
+    assert dialog.pb.value() != 100
+
+
+def test_waiting_and_remote_cancellation_are_separate_controls(qtbot, tmp_path):
+    from kajovo.desktop.dialogs import ProgressDialog
+    from kajovo.core.progress import ProgressEvent
+    from PySide6.QtCore import Qt
+    worker = make_worker(tmp_path, "GENERATE")
+    dialog = ProgressDialog()
+    qtbot.addWidget(dialog)
+    dialog.btn_stop.clicked.connect(worker.request_stop)
+    dialog.btn_cancel_response.clicked.connect(worker.request_cancel_response)
+    dialog.btn_cancel_response.show()
+    dialog.on_progress_event(ProgressEvent("Upload"))
+    assert not dialog.btn_cancel_response.isEnabled()
+    dialog.on_progress_event(ProgressEvent("A0R", "waiting"))
+    assert dialog.btn_cancel_response.isEnabled()
+    qtbot.mouseClick(dialog.btn_cancel_response, Qt.LeftButton)
+    assert worker._cancel_response and not worker._stop
+    qtbot.mouseClick(dialog.btn_stop, Qt.LeftButton)
+    assert worker._stop
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_restart_after_first_output_write_keeps_files_and_response_chain(tmp_path, mode):
+    worker = make_worker(tmp_path, mode)
+    if mode == "MODIFY":
+        source = tmp_path / "out"
+        source.mkdir()
+        worker.cfg.in_dir = worker.cfg.out_dir
+        worker.cfg.in_equals_out = True
+    preparation = delivery_payloads(mode)
+    structure = preparation[-1]
+    key = "files" if mode == "GENERATE" else "touched_files"
+    second = copy.deepcopy(structure[key][0])
+    second["path"] = "world.txt"
+    structure[key].append(second)
+    files = [{"contract": "A3_FILE" if mode == "GENERATE" else "B3_FILE", "path": path, "content": path + "\n",
+              "chunking": {"chunk_index": 0, "chunk_count": 1, "has_more": False, "next_chunk_index": None}}
+             for path in ("hello.txt", "world.txt")]
+    if mode == "MODIFY":
+        for file in files:
+            file["action"] = "add"
+    client = Mock()
+    client.upload_file.return_value = {"id": "file_test"}
+    client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 1}
+    client.create_response.side_effect = [response(i, item) for i, item in enumerate([*preparation, *files])]
+    save = worker._save_out_files
+
+    def partial_save(rows):
+        save(rows[:1])
+        raise OSError("Pád po prvním zápisu")
+
+    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(worker, "_save_out_files", side_effect=partial_save):
+        worker.run()
+    assert (tmp_path / "out" / "hello.txt").is_file()
+    assert not (tmp_path / "out" / "world.txt").exists()
+    worker.cfg.skip_paths = ["hello.txt"]
+    worker.cfg.completed_hashes = {"hello.txt": hashlib.sha256((tmp_path / "out" / "hello.txt").read_bytes()).hexdigest()}
+    resumed = RunWorker(worker.cfg, worker.settings, "test", RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True))
+    errors = []
+    resumed.finished_err.connect(errors.append)
+    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+        resumed.run()
+    assert errors == []
+    assert client.create_response.call_count == 5
+    for path in ("hello.txt", "world.txt"):
+        assert (tmp_path / "out" / path).read_text() == path + "\n"
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_background_preparation_resumes_then_submits_only_file_batch(tmp_path, mode):
+    from test_delivery_pipeline import _scenario, _client, _run
+    worker, preparation, _ = _scenario(tmp_path, mode, True, True)
+    client, calls = _client(preparation[1:])
+    first = response(999, preparation[0])
+    client.create_response.side_effect = [{"id": first["id"], "status": "queued"}]
+    client.retrieve_response.side_effect = OpenAIError("offline", status_code=404)
+    with patch.object(ResponseJournal, "_wait"):
+        results, errors = _run(worker, client)
+    assert errors and not results
+    client.create_batch.assert_not_called()
+    resumed = RunWorker(worker.cfg, worker.settings, "test", RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True))
+    next_client, calls = _client(preparation[1:])
+    next_client.retrieve_response.return_value = first
+    with patch.object(ResponseJournal, "_wait"):
+        results, errors = _run(resumed, next_client)
+    assert errors == [] and results[0]["batch_id"] == "batch_work"
+    assert len(calls) == 3
+    assert all(body["background"] and body["store"] for body in calls)
+    rows = next_client.create_batch.call_args.kwargs["_prevalidated_rows"]
+    assert all(not row["body"].get("background") for row in rows)
+    next_client.create_batch.assert_called_once()
+
+
+def test_settings_expose_separate_generation_limit(qtbot, monkeypatch):
+    from kajovo.core.config import AppSettings
+    from kajovo.desktop.settings import SettingsPage
+    settings = AppSettings()
+    page = SettingsPage(settings, "")
+    qtbot.addWidget(page)
+    assert page.response_timeout.value() == 300
+    assert page.response_poll_timeout.value() == 3600
+    page.apply_state({"response_poll_timeout": 7200})
+    assert page.get_state()["response_poll_timeout"] == 7200
+    save = Mock()
+    monkeypatch.setattr("kajovo.desktop.settings.save_settings", save)
+    monkeypatch.setattr("kajovo.desktop.settings.msg_info", Mock())
+    page.save()
+    assert save.call_args.args[0].response_poll_timeout_s == 7200

@@ -1,0 +1,280 @@
+"""Regrese samostatných B3 dávek, obnovy a ochrany původního OUT."""
+
+import copy
+import hashlib
+import json
+from unittest.mock import Mock, patch
+
+import pytest
+
+from kajovo.core.batch_completion import complete_saved_batch, recover_unknown_submission
+from kajovo.core.batch_submit import submit_verified_batch
+from kajovo.core.contracts import ContractError
+from kajovo.core.generate_batch import build_manifest, digest, encode_requests, import_results, repeat_saved_batch
+from kajovo.core.requirements import stage_instructions
+from test_generate_batch import outputs, raw, specification
+
+
+def modify_manifest(model="gpt-4.1-nano", maximum_quality=False):
+    struct = specification()
+    struct["contract"] = "B2_STRUCTURE"
+    struct["touched_files"] = struct.pop("files")
+    for file, action in zip(struct["touched_files"], ("modify", "add"), strict=True):
+        file.update(action=action, intent="Dokončit změnu")
+    return build_manifest("run_modify", "změna", {"contract": "B1_PLAN"}, struct, model, 0.3,
+                          mode="MODIFY", originals={"maths.py": "původní\n" * 1000},
+                          maximum_quality=maximum_quality)
+
+
+def modify_outputs(manifest):
+    result = outputs(manifest)
+    for item, row in zip(result, manifest["requests"], strict=True):
+        payload = json.loads(item["response"]["body"]["output_text"])
+        context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
+        payload.update(contract="B3_FILE", action=context["file"]["action"])
+        item["response"]["body"]["output_text"] = json.dumps(payload)
+    return result
+
+
+def save_state(tmp_path, manifest):
+    run = tmp_path / "RUN_test"
+    run.mkdir()
+    (run / "requests").mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    original = "původní\n" * 1000
+    (out / "maths.py").write_text(original, encoding="utf-8", newline="")
+    manifest["overwrite_hashes"] = {"maths.py": hashlib.sha256(original.encode()).hexdigest()}
+    state = {"generate_batch": manifest, "batch_id": "batch_original", "out_dir": str(out)}
+    (run / "run_state.json").write_text(json.dumps(state), encoding="utf-8")
+    return run, out
+
+
+def test_modify_rows_include_full_original_and_action():
+    manifest = modify_manifest()
+    assert manifest["version"] == 2 and manifest["mode"] == "MODIFY"
+    assert manifest["snapshot"]["requirements"] is None
+    assert manifest["snapshot"]["maximum_quality"] is False
+    assert len(manifest["requests"]) == 2
+    for row, action in zip(manifest["requests"], ("modify", "add"), strict=True):
+        body = row["body"]
+        context = json.loads(body["input"])
+        assert body["instructions"] == stage_instructions("B3_FILE", batch=True)
+        assert "additionalProperties" not in body["instructions"]
+        assert context["original_content"] == ("původní\n" * 1000 if action == "modify" else "")
+        assert body["text"]["format"]["schema"]["properties"]["action"]["enum"] == [action]
+        assert "_B3_" in row["custom_id"]
+        assert context["originals"] == {"maths.py": "původní\n" * 1000}
+
+
+@pytest.mark.parametrize("model,effort", [("gpt-4.1-nano", None), ("gpt-5-mini", "high"), ("gpt-5.2", "xhigh")])
+def test_batch_quality_uses_model_matrix(model, effort):
+    manifest = modify_manifest(model, True)
+    assert manifest["snapshot"]["maximum_quality"] is True
+    for row in manifest["requests"]:
+        assert row["body"].get("reasoning", {}).get("effort") == effort
+        if effort:
+            assert "temperature" not in row["body"]
+
+
+def test_modify_requires_original_before_submission():
+    manifest = modify_manifest()
+    with pytest.raises(ContractError, match="původní obsah"):
+        build_manifest("r", "p", {}, manifest["snapshot"]["structure"], "gpt-4.1-nano", 0, mode="MODIFY")
+
+
+@pytest.mark.parametrize("fault", ["contract", "action", "path", "chunk"])
+def test_modify_import_validates_file_contract(tmp_path, fault):
+    manifest = modify_manifest()
+    rows = modify_outputs(manifest)
+    body = rows[0]["response"]["body"]
+    payload = json.loads(body["output_text"])
+    if fault == "chunk":
+        payload["chunking"]["has_more"] = True
+    else:
+        payload[fault] = {"contract": "A3_FILE", "action": "add", "path": "foreign.py"}[fault]
+    body["output_text"] = json.dumps(payload)
+    result = import_results(manifest, [raw(rows)], str(tmp_path))
+    assert result["status"] == "partial"
+    assert result["written"] == ["main.py"]
+    assert not (tmp_path / "maths.py").exists()
+
+
+def test_modify_completion_protects_original_and_reimport(tmp_path):
+    manifest = modify_manifest()
+    run, out = save_state(tmp_path, manifest)
+    client = Mock()
+    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    client.file_content.return_value = raw(modify_outputs(manifest))
+    for _ in range(2):
+        result = complete_saved_batch(client, run, "batch_original", None)
+        assert result["status"] == "files_complete_unverified"
+    (out / "maths.py").write_text("ruční změna", encoding="utf-8")
+    result = complete_saved_batch(client, run, "batch_original", None)
+    assert result["status"] == "partial"
+    assert (out / "maths.py").read_text(encoding="utf-8") == "ruční změna"
+    client.create_response.assert_not_called()
+    client.create_batch.assert_not_called()
+
+
+def test_modify_retry_keeps_source_manifest_and_original_hashes(tmp_path):
+    manifest = modify_manifest()
+    for row in manifest["requests"]:
+        row["body"]["instructions"] = stage_instructions("B3_FILE")
+    run, out = save_state(tmp_path, manifest)
+    original_manifest = copy.deepcopy(manifest)
+    client = Mock()
+    client.upload_file.return_value = {"id": "file_retry"}
+    client.create_batch.return_value = {"id": "batch_retry"}
+    repeat_saved_batch(client, run, "batch_original", ["maths.py"])
+    state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    assert state["generate_batch"] == original_manifest
+    retry = state["generate_batches"]["batch_retry"]
+    assert retry["requests"][0]["body"]["instructions"] == stage_instructions("B3_FILE", batch=True)
+    assert retry["base_hashes"] == manifest["overwrite_hashes"]
+    assert retry["snapshot"] == manifest["snapshot"]
+    assert "_B3_" in retry["requests"][0]["custom_id"]
+    encode_requests(state["generate_batch"])
+    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    client.file_content.return_value = raw(modify_outputs(retry))
+    (out / "maths.py").write_text("po odeslání", encoding="utf-8")
+    result = complete_saved_batch(client, run, "batch_retry", None)
+    assert result["errors"]
+    assert (out / "maths.py").read_text(encoding="utf-8") == "po odeslání"
+
+
+def test_unknown_retry_recovery_keeps_primary_batch(tmp_path):
+    manifest = modify_manifest()
+    run, _ = save_state(tmp_path, manifest)
+    client = Mock()
+    client.upload_file.return_value = {"id": "file_retry"}
+    client.create_batch.side_effect = TimeoutError("neurčitý submit")
+    with pytest.raises(TimeoutError):
+        repeat_saved_batch(client, run, "batch_original", ["maths.py"])
+    state_path = run / "run_state.json"
+    before = json.loads(state_path.read_text(encoding="utf-8"))
+    recover_unknown_submission(run, [{"id": "batch_recovered", "input_file_id": "file_retry"}])
+    after = json.loads(state_path.read_text(encoding="utf-8"))
+    assert after["batch_id"] == "batch_original"
+    assert after["generate_batches"]["batch_recovered"] == before["pending_batch_submission"]["manifest"]
+    assert after["submission_unknown"] is False
+
+
+def test_legacy_a3_manifest_import(tmp_path):
+    manifest = build_manifest("r", "p", {}, specification(), "gpt-4.1-nano", 0)
+    manifest["version"] = 1
+    manifest.pop("mode")
+    manifest["snapshot"].pop("requirements")
+    manifest["snapshot"].pop("maximum_quality")
+    manifest["snapshot_hash"] = digest(manifest["snapshot"])
+    for row in manifest["requests"]:
+        context = json.loads(row["body"]["input"])
+        context["specification"] = manifest["snapshot"]
+        row["body"]["input"] = json.dumps(context)
+    assert import_results(manifest, [raw(outputs(manifest))], str(tmp_path))["status"] == "files_complete_unverified"
+
+
+def test_submit_rejects_invalid_rows_without_network():
+    rows = modify_manifest()["requests"]
+    rows[1]["custom_id"] = rows[0]["custom_id"]
+    client = Mock()
+    with pytest.raises(ValueError, match="jedinečná"):
+        submit_verified_batch(client, "file_work", rows)
+    client.create_batch.assert_not_called()
+
+
+def test_modify_dry_run_validates_and_logs_without_out_writes(tmp_path):
+    manifest = modify_manifest()
+    manifest.update(dry_run=True, versing=True)
+    run, out = save_state(tmp_path, manifest)
+    before = (out / "maths.py").read_bytes()
+    client = Mock()
+    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    client.file_content.return_value = raw(modify_outputs(manifest))
+    result = complete_saved_batch(client, run, "batch_original", None)
+    assert result["dry_run"] and result["status"] == "dry_run"
+    assert result["written"] == [] and result["hashes"] == {}
+    assert {file["path"] for file in result["planned_files"]} == {"maths.py", "main.py"}
+    assert (out / "maths.py").read_bytes() == before
+    assert sorted(file.name for file in out.iterdir()) == ["maths.py"]
+    saved = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    assert saved["batch_imports"]["batch_original"]["planned_files"] == result["planned_files"]
+
+
+def test_modify_versing_copies_original_once_before_write(tmp_path):
+    manifest = modify_manifest()
+    manifest["versing"] = True
+    _, out = save_state(tmp_path, manifest)
+    before = (out / "maths.py").read_bytes()
+    result = import_results(manifest, [raw(modify_outputs(manifest))], str(out))
+    assert result["snapshot_dir"]
+    from pathlib import Path
+    snapshot = Path(result["snapshot_dir"])
+    assert (snapshot / "maths.py").read_bytes() == before
+    assert not (snapshot / "main.py").exists()
+    assert (out / "maths.py").read_text(encoding="utf-8") == "content\n"
+    again = import_results(manifest, [raw(modify_outputs(manifest))], str(out), result["hashes"])
+    assert again["snapshot_dir"] is None
+    assert len([file for file in out.iterdir() if file.is_dir()]) == 1
+
+
+def test_versing_does_not_snapshot_rejected_results(tmp_path):
+    manifest = modify_manifest()
+    manifest["versing"] = True
+    _, out = save_state(tmp_path, manifest)
+    result = import_results(manifest, [], str(out))
+    assert result["errors"] and result["snapshot_dir"] is None
+    assert sorted(file.name for file in out.iterdir()) == ["maths.py"]
+
+
+def test_enriched_generate_traceability_and_snapshot():
+    from delivery_fixtures import plan_payload
+    from kajovo.core.requirements import requirements_format
+
+    schema = requirements_format("GENERATE")["format"]["schema"]
+    requirements = {key: [] if value["type"] == "array" else "test"
+                    for key, value in schema["properties"].items()}
+    requirements["contract"] = "A0R_REQUIREMENTS"
+    requirements["explicit_requirements"] = [{"id": "R1", "description": "Součet"}]
+    plan = plan_payload(architecture_items=[
+        {"id": "component", "requirement_ids": ["R1"], "responsibility": "Součet"},
+    ])
+    struct = specification()
+    for file in struct["files"]:
+        file.update(requirement_ids=["R1"], architecture_item_ids=["component"])
+    manifest = build_manifest("r", "p", plan, struct, "gpt-4.1-nano", 0,
+                              requirements=requirements, maximum_quality=True)
+    assert manifest["snapshot"]["requirements"] == requirements
+    assert manifest["snapshot"]["structure"] == struct
+    assert manifest["snapshot"]["maximum_quality"] is True
+    requirements["explicit_requirements"].append({"id": "R2", "description": "Nepokryto"})
+    with pytest.raises(ContractError):
+        build_manifest("r", "p", plan, struct, "gpt-4.1-nano", 0, requirements=requirements)
+
+
+def test_modify_preserved_dependency_is_context_not_batch_task():
+    manifest = modify_manifest()
+    struct = manifest["snapshot"]["structure"]
+    struct["touched_files"] = [struct["touched_files"][1]]
+    struct["preserved_files"] = [{"path": "maths.py", "provides": ["add"]}]
+    prepared = build_manifest("r", "p", {}, struct, "gpt-4.1-nano", 0, mode="MODIFY",
+                              originals={"maths.py": "def add(a, b): return a + b"})
+    assert list(prepared["expected"].values()) == ["main.py"]
+    context = json.loads(prepared["requests"][0]["body"]["input"])
+    assert context["originals"] == {"maths.py": "def add(a, b): return a + b"}
+    assert prepared["omitted"] == []
+
+
+def test_versing_preserves_edit_made_during_snapshot(tmp_path):
+    manifest = modify_manifest()
+    manifest["versing"] = True
+    _, out = save_state(tmp_path, manifest)
+
+    def snapshot(_target):
+        (out / "maths.py").write_text("souběžná změna", encoding="utf-8")
+        return "snapshot"
+
+    with patch("kajovo.core.generate_batch._snapshot_before_import", side_effect=snapshot):
+        result = import_results(manifest, [raw(modify_outputs(manifest))], str(out))
+    assert result["errors"]
+    assert (out / "maths.py").read_text(encoding="utf-8") == "souběžná změna"

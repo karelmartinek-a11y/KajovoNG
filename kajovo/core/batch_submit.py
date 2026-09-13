@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from .request_rules import validate_response_payload
+
 
 def submit_verified_batch(
     client,
@@ -25,6 +27,19 @@ def submit_verified_batch(
     verified_rows = list(rows)
     if not verified_rows:
         raise ValueError("Pracovní dávka neobsahuje žádný lokálně ověřený požadavek.")
+    ids = set()
+    models = set()
+    for row in verified_rows:
+        cid = row.get("custom_id")
+        if not isinstance(cid, str) or not cid or cid in ids:
+            raise ValueError("Pracovní dávka vyžaduje jedinečná neprázdná ID úloh.")
+        ids.add(cid)
+        if row.get("method") != "POST" or row.get("url") != endpoint:
+            raise ValueError("Úloha dávky musí používat POST na její endpoint.")
+        validate_response_payload(row["body"], batch=True)
+        models.add(row["body"]["model"])
+    if len(models) != 1:
+        raise ValueError("Pracovní dávka vyžaduje jediný model.")
     # OpenAIClient dostane přesně řádky z pracovního JSONL, které již prošly
     # deterministickou lokální validací. create_batch proto neprovádí žádný
     # další placený test a zachovává jedinou veřejnou transportní cestu.

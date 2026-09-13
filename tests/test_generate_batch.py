@@ -14,6 +14,7 @@ from kajovo.core.generate_batch import (
     repeat_saved_batch,
 )
 from test_workflows import make_worker, response
+from delivery_fixtures import plan_payload, requirements_payload, structure_payload
 
 
 def specification():
@@ -122,9 +123,11 @@ def test_live_preparation_then_one_request_per_file(tmp_path):
     worker = make_worker(tmp_path, "GENERATE")
     worker.cfg.send_as_c = True
     client = Mock()
+    struct = structure_payload(files=specification()["files"], interfaces=specification()["interfaces"])
     client.create_response.side_effect = [
-        response(1, {"contract": "A1_PLAN"}),
-        response(2, specification()),
+        response(0, requirements_payload()),
+        response(1, plan_payload()),
+        response(2, struct),
     ]
     client.upload_file.return_value = {"id": "file_input"}
     client.create_batch.return_value = {"id": "batch_test"}
@@ -134,7 +137,7 @@ def test_live_preparation_then_one_request_per_file(tmp_path):
     with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
         worker.run()
     assert not errors
-    assert client.create_response.call_count == 2
+    assert client.create_response.call_count == 3
     rows = [
         json.loads(line)
         for line in Path(client.upload_file.call_args.args[0])
@@ -149,7 +152,7 @@ def test_live_preparation_then_one_request_per_file(tmp_path):
     assert not (tmp_path / "out" / "maths.py").exists()
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert state["status"] == "batch_pending"
-    assert state["generate_batch"]["snapshot"]["structure"] == specification()
+    assert state["generate_batch"]["snapshot"]["structure"] == struct
 
 
 @pytest.mark.parametrize(
@@ -244,18 +247,18 @@ def test_request_context_and_map_must_match():
 def test_invalid_preparation_never_submits_batch(tmp_path):
     worker = make_worker(tmp_path, "GENERATE")
     worker.cfg.send_as_c = True
-    bad = specification()
+    bad = structure_payload(files=specification()["files"], interfaces=specification()["interfaces"])
     bad["files"][1]["requires"] = ["unknown"]
     client = Mock()
-    client.create_response.side_effect = [response(0, {"contract": "A1_PLAN"})] + [
-        response(i + 1, bad) for i in range(3)
+    client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload())] + [
+        response(i + 2, bad) for i in range(3)
     ]
     errors = []
     worker.finished_err.connect(errors.append)
     with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
         worker.run()
     assert errors
-    assert client.create_response.call_count == 4
+    assert client.create_response.call_count == 5
     client.create_batch.assert_not_called()
 
 

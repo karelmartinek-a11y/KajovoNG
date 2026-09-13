@@ -18,8 +18,7 @@ def matrix_rows():
     for mode, flags in product(("GENERATE", "MODIFY", "QA", "QFILE"), product((False, True), repeat=8)):
         batch, previous, vector, file_search, win_in, ssh_in, win_out, ssh_out = flags
         expected = (not vector or file_search) and (
-            not batch or mode == "GENERATE" and not (win_out or ssh_out)
-            or mode == "MODIFY" and not any((previous, vector, win_in, ssh_in, win_out, ssh_out))
+            not batch or mode in ("GENERATE", "MODIFY") and not (win_out or ssh_out)
         )
         cfg = SimpleNamespace(
             mode=mode, model="gpt-4.1-nano", prompt="test", send_as_c=batch,
@@ -49,7 +48,7 @@ def main():
     rows = list(matrix_rows())
     if args.output:
         with args.output.open("w", encoding="utf-8", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
             writer.writeheader()
             writer.writerows(rows)
     print(f"Ověřeno kombinací: {len(rows)}; povoleno: {sum(row['allowed'] for row in rows)}")

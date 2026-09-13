@@ -1,0 +1,137 @@
+"""Trvalá evidence pracovních odpovědí a obnovitelné sledování generace."""
+
+import copy
+import json
+import time
+from pathlib import Path
+
+from .delivery_preparation import digest
+from .openai_client import OpenAIError
+
+
+class ResponsePending(RuntimeError):
+    """Sledování skončilo, vzdálená odpověď zůstává dohledatelná."""
+
+
+class SubmissionUnknown(RuntimeError):
+    """Odeslání nemá potvrzené ID a nesmí být automaticky opakováno."""
+
+
+class ResponseCancelled(RuntimeError):
+    """API potvrdilo zrušení vzdálené generace."""
+
+
+class ResponseJournal:
+    def __init__(self, logger, timeout_s=3600, *, clock=time.monotonic, sleep=time.sleep):
+        self.log = logger
+        self.timeout_s = timeout_s
+        self.clock, self.sleep = clock, sleep
+        self.entries = {}
+        path = logger.find_json("manifests", "response_journal")
+        if path:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            if data.get("version") != 1 or not isinstance(data.get("entries"), dict):
+                raise ValueError("Neplatná evidence odpovědí; nelze bezpečně pokračovat.")
+            self.entries = data["entries"]
+            for key, entry in self.entries.items():
+                if not isinstance(entry, dict) or digest(entry.get("payload")) != key:
+                    raise ValueError("Evidence požadavku má neplatný hash; automatické pokračování je zablokováno.")
+
+    def save(self):
+        self.log.save_json("manifests", "response_journal", {"version": 1, "entries": self.entries})
+
+    def execute(self, client, payload, *, stopped, cancelled, progress):
+        body = copy.deepcopy(payload)
+        body.update(background=True, store=True)
+        key = digest(body)
+        entry = self.entries.get(key)
+        reused = entry is not None
+        if entry is None:
+            if stopped() or cancelled():
+                raise RuntimeError("STOP_REQUESTED")
+            if any(e.get("status") in ("submitting", "queued", "in_progress") for e in self.entries.values()):
+                raise SubmissionUnknown("Rozpracovaný požadavek se liší od obnoveného zadání. Nové generování nebylo odesláno.")
+            entry = {"payload": body, "status": "submitting", "created_at": time.time()}
+            self.entries[key] = entry
+            self.save()
+            self.log.update_state({"response_pending": {"hash": key, **entry}})
+            self.log.event("response.submit", {"hash": key, "model": body.get("model")})
+            try:
+                response = client.create_response(body)
+            except Exception as exc:
+                if getattr(exc, "request_sent", None) is False or getattr(exc, "status_code", None) in (400, 401, 403, 404, 422, 429):
+                    entry["status"] = "rejected"
+                    self.save()
+                    self.log.clear_state_keys("response_pending")
+                    raise
+                raise SubmissionUnknown("Výsledek odeslání není známý; API nepotvrdilo ID odpovědi. Požadavek se automaticky neopakuje.") from exc
+            if not isinstance(response, dict) or not response.get("id"):
+                raise SubmissionUnknown("API nepotvrdilo ID odpovědi; výsledek odeslání není známý.")
+            entry["id"] = response["id"]
+            self._record(key, entry, response)
+        elif entry.get("status") == "submitting":
+            raise SubmissionUnknown("Předchozí odeslání nemá potvrzené ID. Automatické opakování je zablokováno.")
+        elif entry.get("status") == "rejected":
+            raise RuntimeError("API tento požadavek odmítlo. Opravte zadání nebo nastavení a spusťte nový běh.")
+        response = entry.get("response", {})
+        if reused and entry["status"] == "completed":
+            self.log.event("response.reuse", {"hash": key, "response_id": entry["id"]})
+        start = self.clock()
+        failures = 0
+        cancel_sent = entry.get("cancel_requested", False)
+        while entry["status"] in ("queued", "in_progress"):
+            if stopped():
+                raise ResponsePending("Sledování zastaveno. Vzdálená generace může pokračovat; použijte ReRun.")
+            if self.clock() - start >= self.timeout_s:
+                raise ResponsePending("Vypršel limit sledování generace. Odpověď zůstává uložená pod svým ID; pokračujte přes ReRun.")
+            progress("cancelling" if cancel_sent else entry["status"], int(self.clock() - start))
+            try:
+                if cancelled() and not cancel_sent:
+                    response = client.cancel_response(entry["id"])
+                    cancel_sent = True
+                    entry["cancel_requested"] = True
+                else:
+                    self._wait(2, stopped, lambda sent=cancel_sent: cancelled() and not sent)
+                    if stopped() or cancelled() and not cancel_sent:
+                        continue
+                    response = client.retrieve_response(entry["id"])
+                if response.get("id") != entry["id"]:
+                    raise OpenAIError("API vrátilo jiné ID odpovědi.")
+                self._record(key, entry, response)
+                failures = 0
+            except OpenAIError as exc:
+                failures += 1
+                progress("connection_error", int(self.clock() - start))
+                code = getattr(exc, "status_code", None)
+                self.log.event("response.poll_error", {
+                    "response_id": entry["id"], "status_code": code,
+                    "request_id": getattr(exc, "request_id", None), "attempt": failures,
+                    "error_type": type(exc.__cause__ or exc).__name__,
+                })
+                if failures >= 4 or code is not None and code != 429 and not 500 <= code < 600:
+                    raise ResponsePending(f"Stav odpovědi nelze ověřit: {exc}. ID je zachováno; nové generování se neodeslalo.") from exc
+                self._wait(min(8, 0.8 * 2 ** (failures - 1)), stopped, lambda: False)
+        self.log.clear_state_keys("response_pending")
+        if entry["status"] == "cancelled":
+            raise ResponseCancelled("Vzdálená generace byla zrušena (cancelled).")
+        if entry["status"] != "completed":
+            raise RuntimeError(f"Vzdálená generace skončila stavem {entry['status']}: {response.get('error') or response.get('incomplete_details') or ''}")
+        client._known_responses.add(entry["id"])
+        return copy.deepcopy(response)
+
+    def _record(self, key, entry, response):
+        old_status = entry.get("status")
+        entry.update(status=response.get("status", "unknown"), response=response, checked_at=time.time())
+        self.save()
+        self.log.update_state({"response_pending": {
+            "hash": key, "id": entry["id"], "status": entry["status"],
+            "created_at": entry["created_at"], "checked_at": entry["checked_at"],
+        }})
+        if old_status != entry["status"]:
+            self.log.event("response.status", {"response_id": entry["id"], "status": entry["status"],
+                                               "request_id": response.get("_request_id")})
+
+    def _wait(self, seconds, stopped, cancelled):
+        end = self.clock() + seconds
+        while self.clock() < end and not stopped() and not cancelled():
+            self.sleep(min(0.1, max(0, end - self.clock())))

@@ -443,6 +443,8 @@ class BatchPanel(QWidget):
             )
             if "written" in result:
                 message += f"\nZapsáno souborů: {len(result['written'])}"
+            if result.get("dry_run"):
+                message += "\nDry-run: OUT zůstává beze změny."
             if result.get("written"):
                 message += "\nFunkčnost souborů ověřte sestavením a testy."
             msg_info(self, "Výsledek operace BATCH", message, result)

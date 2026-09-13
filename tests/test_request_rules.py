@@ -121,7 +121,7 @@ def test_workflow_combination_matrix(mode, batch, previous, vector, diagnostics)
                           response_id="resp_test" if previous else "", attached_vector_store_ids=["vs_test"] if vector else [],
                           diag_windows_in=diagnostics, diag_ssh_in=False, diag_windows_out=False, diag_ssh_out=False,
                           model_caps={"ok_basic": True, "supports_file_search": True}, available_models=["gpt-4.1-nano"])
-    valid = not batch or mode == "GENERATE" or mode == "MODIFY" and not (previous or vector or diagnostics)
+    valid = not batch or mode in ("GENERATE", "MODIFY")
     if valid:
         validate_run_options(cfg)
     else:

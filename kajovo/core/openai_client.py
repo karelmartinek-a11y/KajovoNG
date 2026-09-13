@@ -63,7 +63,7 @@ class OpenAIClient:
             return ""
         return text[:max_chars]
 
-    def _req(self, method: str, path: str, json_body: Optional[Dict[str, Any]]=None, files=None, timeout: Optional[float]=None) -> Any:
+    def _req(self, method: str, path: str, json_body: Optional[Dict[str, Any]]=None, files=None, timeout: Optional[float]=None, max_attempts=None) -> Any:
         url = self.base_url + path
         req_timeout = float(timeout if timeout is not None else self.timeout_s)
         last_error: Optional[str] = None
@@ -73,6 +73,8 @@ class OpenAIClient:
             if hasattr(stream, "tell") and hasattr(stream, "seek"):
                 file_positions.append((stream, stream.tell()))
         attempts = 1 if method == "POST" and path in ("/responses", "/batches") else self.max_attempts
+        if max_attempts is not None:
+            attempts = min(attempts, max_attempts)
         for attempt in range(1, attempts + 1):
             for stream, position in file_positions:
                 stream.seek(position)
@@ -288,6 +290,7 @@ class OpenAIClient:
         """Připraví lokální modelové capability snímky bez placeného probe volání."""
         from .structured_output import text_format
         from .request_rules import uses_reasoning_defaults
+        from .requirements import apply_quality
 
         models = [cfg.model]
         if cfg.mode == "GENERATE":
@@ -305,9 +308,7 @@ class OpenAIClient:
             payload = {"model": model, "input": "lokální kontrola", "text": text_format()}
             if not uses_reasoning_defaults(model):
                 payload["temperature"] = cfg.temperature
-            if cfg.mode in ("GENERATE", "MODIFY") and not (
-                cfg.send_as_c and cfg.mode == "MODIFY"
-            ):
+            if cfg.mode in ("GENERATE", "MODIFY"):
                 # Placeholder je pouze pro lokální kontrolu tvaru payloadu;
                 # nikdy se neodesílá na /responses.
                 payload["previous_response_id"] = "resp_local_validation"
@@ -315,6 +316,8 @@ class OpenAIClient:
                 payload["tools"] = [
                     {"type": "file_search", "vector_store_ids": cfg.attached_vector_store_ids}
                 ]
+            if cfg.mode in ("GENERATE", "MODIFY"):
+                apply_quality(payload, getattr(cfg, "maximum_quality", False))
             self.validate_prepared_payload(payload)
             spec = self._policy.model_spec(model)
             caps_by_model[model] = {
@@ -350,12 +353,36 @@ class OpenAIClient:
             exc.request_sent = False
             raise
         response = self._send_response(payload)
+        if payload.get("background"):
+            return response
         try:
             validate_output(response, payload)
         except ContractError as exc:
             exc.response = response
             raise
         return response
+
+    def _response_operation(self, response_id, *, cancel=False):
+        self._validate_resource_id(response_id)
+        if self._sdk is None:
+            return self._req("POST" if cancel else "GET", f"/responses/{response_id}" + ("/cancel" if cancel else ""), max_attempts=1)
+        try:
+            method = self._sdk.responses.cancel if cancel else self._sdk.responses.retrieve
+            obj = method(response_id)
+            result = obj.model_dump()
+            if getattr(obj, "_request_id", None):
+                result["_request_id"] = obj._request_id
+            return result
+        except Exception as exc:
+            error = OpenAIError(str(exc), status_code=getattr(exc, "status_code", None))
+            error.request_id = getattr(exc, "request_id", None)
+            raise error from exc
+
+    def retrieve_response(self, response_id):
+        return self._response_operation(response_id)
+
+    def cancel_response(self, response_id):
+        return self._response_operation(response_id, cancel=True)
 
     def _send_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         from .structured_output import prepare_payload

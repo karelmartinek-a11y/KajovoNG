@@ -8,16 +8,23 @@ Matice popisuje rozhraní implementované aplikací. Sdílené podmínky jsou v 
 
 | Volba | GENERATE | MODIFY | QA | QFILE | KASKÁDA |
 |---|---|---|---|---|---|
-| Synchronní Responses | A1 → A2 → A3 | B1 → B2 → B3 | Text | Jeden soubor | Definované kroky |
-| Batch | A1/A2 živě → N úloh A3_FILE | C_FILES_ALL | Nepovoleno | Nepovoleno | Nepovoleno |
+| Synchronní Responses | A0R → A1 → A2 → případně A2Q → A3 | B0R → B1 → B2 → případně B2Q → B3 | Text | Jeden soubor | Definované kroky |
+| Batch | A0R/A1/A2 a případně A2Q živě → N úloh A3_FILE | B0R/B1/B2 a případně B2Q živě → N úloh B3_FILE | Nepovoleno | Nepovoleno | Nepovoleno |
+| Maximum Quality | A2Q a nejvyšší podporovaný reasoning | B2Q a nejvyšší podporovaný reasoning | Nepoužívá se | Nepoužívá se | Nepoužívá se |
 | Návaznost | Mezi kroky, volitelný počátek | Mezi kroky, volitelný počátek | Volitelná | Volitelná | Výraz každého kroku |
 | Modely dílčích kroků | A1/A2/A3 | Hlavní model | Hlavní model | Hlavní model | Model každého kroku |
 | Výstupní soubory | Manifest | Manifest změn | Bez zápisu | Souborový kontrakt | JSON manifest a expected_out_files |
 | Přílohy | Dokument/obrázek | Dokument/obrázek a IN | Dokument/obrázek | Dokument/obrázek | Strukturované části a lokální soubory |
 
-GENERATE BATCH přijímá response_id, připojené vector stores a diagnostiku IN pro živou přípravu A1/A2. Dávkové A3 má samostatný společný kontext, bez návaznosti a nástrojů. MODIFY BATCH tyto volby nepřijímá. Diagnostika OUT není součástí odeslání žádné dávky. Připojený vector store vyžaduje file search podporovaný pevnou maticí u modelů přípravy. Automatické přepínání teploty se řídí skutečným modelem požadavku.
+MODIFY vyžaduje existující IN pro LIVE i BATCH; jde o lokální kontrolu před uploady a pracovními voláními. Dry-run MODIFY validuje výstupy a eviduje návrh v LOG bez zápisu do OUT. ReRun vyžaduje pro přeskočené soubory platné SHA-256 důkazy; nedodané položky a změněné dokončené soubory nejsou úspěšným úplným výstupem.
 
-GENERATE BATCH ponechává aktivní modely A1/A2/A3, návaznost a diagnostiku IN; vypíná a odznačí diagnostiku OUT. MODIFY BATCH vypíná také návaznost a diagnostiku IN. Editor kaskády vypíná teplotu u modelů s výchozím reasoning. Externí Response ID lze zadat už v prvním kroku. Neplatný krok se neukládá ani částečně.
+GENERATE i MODIFY BATCH přijímá response_id, přílohy, připojené vector stores/file search a diagnostiku IN pro živou přípravu včetně případného technického A0. Dávkové A3/B3 má samostatný společný kontext, bez návaznosti a nástrojů. Diagnostika OUT není součástí odeslání žádné dávky. Připojený vector store vyžaduje file search podporovaný pevnou maticí u modelů přípravy; MODIFY vyžaduje návaznost i Batch podporu hlavního modelu. Automatické přepínání teploty se řídí skutečným modelem požadavku. `C_FILES_ALL` je pouze kompatibilní import starších dávek.
+
+GENERATE BATCH ponechává aktivní modely A1/A2/A3. Oba souborové režimy BATCH ponechávají návaznost a diagnostiku IN; vypínají a odznačí diagnostiku OUT. Editor kaskády vypíná teplotu u modelů s výchozím reasoning. Externí Response ID lze zadat už v prvním kroku. Neplatný krok se neukládá ani částečně.
+
+Standard (`maximum_quality=false`) zahrnuje A0R/B0R a zachovává běžnou politiku reasoning bez quality gate. Maximum Quality přidává živý A2Q/B2Q, jehož opravená struktura je kanonická pro soubory, a volí nejvyšší effort podporovaný konkrétním řádkem modelové matice. Nepodporovaný reasoning se neposílá a sampling musí zůstat kompatibilní. A0R sdílí model A1, A2Q model A2; všechny B fáze používají hlavní model MODIFY. Osm boolean os CSV nezahrnuje Maximum Quality; tato volba a pořadí fází mají samostatné testy v `tests/test_requirements.py` a `tests/test_modify_batch.py`.
+
+Technický příjem zadání zachovává práh více než 150 000 znaků a A0 části po 20 000 znacích. LIVE A3/B3 zachovává instrukci 500 řádků na chunk a dosavadní návaznost částí; souborové Batch úlohy nadále vyžadují celý soubor v jediné části. Přípravný checkpoint verze 1 a souborový manifest verze 2 s `mode` mají odlišné účely; jejich pole a pravidla ReRun uvádí [SSOT](SSOT.md).
 
 ## Úplná matice parametrů aplikace
 
@@ -42,7 +49,7 @@ Každá volba musí současně projít lokálním kontraktem, řádkem konkrétn
 | reasoning.mode | standard/pro jen doložené novější modely | Stejné | Samostatná osa vůči effort; žádné odvozování z prefixu |
 | max_output_tokens | Celé číslo 16 až maximum modelu | Stejné | Vstup + rezervovaný výstup nepřekročí kontext; kontroluje se i samostatný vstupní limit |
 | text.format | json_schema, strict=true | Stejné, povinně již v JSONL | Název 1–64 znaků; podporovaná uzavřená podmnožina schémat; pracovní payload se kvůli validaci neposílá dvakrát |
-| tools | Seznam implementovaných file_search nástrojů | Stejná modelová pravidla | Pracovní GENERATE A3 a MODIFY Batch mají navíc vlastní omezení pracovního postupu |
+| tools | Seznam implementovaných file_search nástrojů | Stejná modelová pravidla | Souborové A3/B3 Batch nástroje nepoužívá; file_search je dostupný v živé přípravě |
 | tools[].vector_store_ids | Neprázdný seznam platných ID | Stejné | Model musí umět file_search; úložiště musí být completed, bez chybné či nedokončené indexace |
 | tools[].max_num_results | Celé číslo 1–50 | Stejné | Bool nepovolen |
 | tool_choice | auto/none/required nebo {type:file_search} | Stejné | Vynucení vyžaduje tools; validační vrstva hodnotu nepřepisuje |
@@ -62,7 +69,8 @@ Každá volba musí současně projít lokálním kontraktem, řádkem konkrétn
 | Batch endpoint / metoda | — | /v1/responses / POST | Další API endpointy katalog uvádí informativně, aplikace je negeneruje |
 | completion_window | — | 24h | Nejvýše 50 000 řádků a 200 MB; unikátní neprázdné custom_id |
 | Vector file attributes | Nejvýše 16 hodnot | Správa úložiště mimo dávku | Klíč do 64 znaků; text do 512, jinak konečné číslo či boolean |
-| GENERATE A1/A2/A3 | Každý krok vlastní model | A1/A2 live, A3 Batch | Tentýž model může mít současně oba kontexty; dávkové A3 nedědí nástroje a návaznost A1/A2 |
+| GENERATE A1/A2/A3 | Samostatné volby modelů; A0R sdílí A1 a A2Q sdílí A2 | Příprava LIVE, pouze A3 Batch | Tentýž model může mít současně oba kontexty; dávkové A3 nedědí nástroje a návaznost přípravy |
+| maximum_quality | Boolean; výchozí false | Stejné; quality gate vždy LIVE | Jen GENERATE/MODIFY; maximum reasoning podle modelové matice; ukládá se do konfigurace a checkpointu ReRun |
 | MODIFY, QA, QFILE, KASKÁDA | Dle workflow matice | MODIFY podporován, QA/QFILE/KASKÁDA ne | Diagnostika a IN/OUT se řídí existujícími pracovními kontrakty |
 
 Zdroje pravidel: [Responses](https://developers.openai.com/api/reference/resources/responses/methods/create), [Batch](https://developers.openai.com/api/docs/guides/batch), [File inputs](https://developers.openai.com/api/docs/guides/file-inputs), [File search](https://developers.openai.com/api/docs/guides/tools-file-search), [Reasoning](https://developers.openai.com/api/docs/guides/reasoning), [Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), [modelové stránky](MODEL_MATRIX.md). Pevný JSON nese verzi, zdroje i SHA-256 načtených dokumentů. Změna dokumentace za běhu aplikace pravidla nezmění.
