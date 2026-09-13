@@ -1,0 +1,47 @@
+name: cascade-contract-compat-once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/cascade-contract-compat-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch cascade compatibility checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('kajovo/desktop/cascades.py')
+          source = path.read_text(encoding='utf-8')
+
+          old = '''        self.ed_prev_resp = text()\n        self.ed_prev_resp.setEnabled(True)\n        self.schema_kind = combo(["Bez schématu", "manifest", "prompts", "custom"])\n\n        self.refresh_saved_list()'''
+          new = '''        self.ed_prev_resp = text()\n        self.ed_prev_resp.setEnabled(True)\n        self.schema_kind = combo(["Bez schématu", "manifest", "prompts", "custom"])\n        self.expected_files = editor(height=80)\n\n        self.refresh_saved_list()'''
+          if old not in source:
+              raise SystemExit('compat init anchor not found')
+          source = source.replace(old, new, 1)
+
+          old = '''            if self.schema_kind.currentText() == "custom":\n                raise ValueError(\n                    "V deterministické kaskádě se výstupní kontrakt vytváří automaticky podle definovaných výstupů."\n                )\n            step.temperature = ('''
+          new = '''            if self.schema_kind.currentText() == "custom":\n                raise ValueError(\n                    "V deterministické kaskádě se výstupní kontrakt vytváří automaticky podle definovaných výstupů."\n                )\n            if self.expected_files.toPlainText().strip():\n                raise ValueError(\n                    "Výstupní soubory definujte jako pojmenované výstupy typu Soubor, ne jako volný seznam cest."\n                )\n            if "{{step." in self.txt_input_text.toPlainText():\n                raise ValueError(\n                    "Deterministické návaznosti vybírejte v záložce Vstupy; ruční odkazy {{step...}} nejsou v novém editoru povoleny."\n                )\n            step.temperature = ('''
+          if old not in source:
+              raise SystemExit('save validation anchor not found')
+          source = source.replace(old, new, 1)
+
+          path.write_text(source, encoding='utf-8')
+          PY
+          python -m compileall -q kajovo/desktop/cascades.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add kajovo/desktop/cascades.py
+          if ! git diff --cached --quiet; then
+            git commit -m "Doplnit kompatibilní validaci editoru KASKÁDY"
+            git push origin HEAD:main
+          fi
