@@ -164,6 +164,8 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
             payload["tools"] = tools
         for attempt in range(3 if index >= 2 else 1):
             worker._check_stop()
+            if attempt:
+                payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
             worker._set(10 + index * 8, 0, labels[index] + ": ověřuji kapacitu vstupu…", stage=stage)
             prepare_payload(payload)
             measurement = preparation_measurement(payload, client)
