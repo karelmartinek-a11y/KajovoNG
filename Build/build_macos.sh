@@ -36,6 +36,7 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS"
   --collect-data kajovo.core \
   --add-data "resources/app_icon.png:resources" \
   --add-data "resources/Kajovo_new.png:resources" \
+  --add-data "resources/studio-symbol.png:resources" \
   --add-data "resources/montserrat_regular.ttf:resources" \
   --add-data "resources/montserrat_bold.ttf:resources" \
   kajovo/app/main.py

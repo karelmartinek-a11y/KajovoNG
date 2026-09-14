@@ -1,0 +1,455 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+    paths:
+      - '.github/workflows/release.yml'
+      - 'Build/build_windows.ps1'
+      - 'Build/build_macos.sh'
+      - 'Build/generate_icons.py'
+      - 'Build/assets/**'
+      - 'pyproject.toml'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'resources/**'
+      - '.gitattributes'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Resolve release identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      target_sha: ${{ steps.meta.outputs.target_sha }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      version: ${{ steps.meta.outputs.version }}
+      production: ${{ steps.meta.outputs.production }}
+      tag: ${{ steps.meta.outputs.tag }}
+      asset_stem: ${{ steps.meta.outputs.asset_stem }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Resolve exact SHA and version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          production=false
+          tag=""
+
+          if [[ "$GITHUB_REF" =~ ^refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            production=true
+            tag="${BASH_REMATCH[1]}"
+            tag_version="${tag#v}"
+            if [[ "$tag_version" != "$project_version" ]]; then
+              echo "::error::Tag $tag neodpovídá project.version=$project_version v pyproject.toml."
+              exit 1
+            fi
+            target_sha="$(git rev-parse "${GITHUB_REF}^{commit}")"
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$target_sha" origin/main; then
+              echo "::error::Produkční tag $tag ukazuje na commit $target_sha, který nepatří do main."
+              exit 1
+            fi
+          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" && "$GITHUB_EVENT_NAME" != "push" ]]; then
+              echo "::error::Nepodporovaný spouštěcí event $GITHUB_EVENT_NAME."
+              exit 1
+            fi
+            target_sha="$(git rev-parse HEAD)"
+          else
+            echo "::error::Release candidate lze sestavit pouze z main; produkce pouze z tagu vX.Y.Z."
+            exit 1
+          fi
+
+          short_sha="${target_sha:0:12}"
+          if [[ "$production" == "true" ]]; then
+            asset_stem="KajovoNG-v${project_version}"
+          else
+            asset_stem="KajovoNG-v${project_version}-${short_sha}"
+          fi
+
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "version=$project_version" >> "$GITHUB_OUTPUT"
+          echo "production=$production" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "asset_stem=$asset_stem" >> "$GITHUB_OUTPUT"
+          echo "Release target: $target_sha; version: $project_version; production: $production"
+
+  ci_gate:
+    name: Exact SHA CI gate
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_SHA: ${{ needs.metadata.outputs.target_sha }}
+    steps:
+      - name: Require successful ci.yml for exact SHA on main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find_run() {
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs" \
+              -f branch=main \
+              -f event=push \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=100 \
+              --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml" and .name == "ci" and .head_sha == env.TARGET_SHA and .head_branch == "main" and .event == "push")] | sort_by(.created_at) | last // empty'
+          }
+
+          run_json=""
+          for attempt in $(seq 1 12); do
+            run_json="$(find_run)"
+            if [[ -n "$run_json" ]]; then
+              break
+            fi
+            echo "CI pro SHA $TARGET_SHA zatím není registrované (pokus $attempt/12)."
+            sleep 10
+          done
+
+          if [[ -z "$run_json" ]]; then
+            echo "::error::Pro SHA $TARGET_SHA neexistuje CI běh ci.yml z main/push; release je zablokován."
+            exit 1
+          fi
+
+          run_id="$(jq -r '.id' <<< "$run_json")"
+          run_url="$(jq -r '.html_url' <<< "$run_json")"
+          echo "Gate používá CI run $run_id: $run_url"
+
+          for attempt in $(seq 1 240); do
+            current="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            head_sha="$(jq -r '.head_sha' <<< "$current")"
+            head_branch="$(jq -r '.head_branch' <<< "$current")"
+            event="$(jq -r '.event' <<< "$current")"
+            path="$(jq -r '.path' <<< "$current")"
+            status="$(jq -r '.status' <<< "$current")"
+            conclusion="$(jq -r '.conclusion // ""' <<< "$current")"
+
+            if [[ "$head_sha" != "$TARGET_SHA" || "$head_branch" != "main" || "$event" != "push" || "$path" != ".github/workflows/ci.yml" ]]; then
+              echo "::error::CI run změnil nebo nesplňuje identitu gate: sha=$head_sha branch=$head_branch event=$event path=$path."
+              exit 1
+            fi
+
+            echo "CI $run_id: status=$status conclusion=${conclusion:-pending} (kontrola $attempt/240)"
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" == "success" ]]; then
+                echo "CI gate PASS pro přesný SHA $TARGET_SHA."
+                exit 0
+              fi
+              echo "::error::CI $run_id pro SHA $TARGET_SHA skončilo conclusion=$conclusion. Release je zablokován."
+              exit 1
+            fi
+            sleep 15
+          done
+
+          echo "::error::CI $run_id nedokončilo běh v 60minutovém pollovacím okně. Release je zablokován."
+          exit 1
+
+  build_windows:
+    name: Build Windows distribution
+    needs: [metadata, ci_gate]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.target_sha }}
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Verify Git LFS checkout
+        shell: pwsh
+        run: |
+          git lfs pull
+          if ($LASTEXITCODE -ne 0) { throw "git lfs pull selhal." }
+          git lfs fsck
+          if ($LASTEXITCODE -ne 0) { throw "Git LFS fsck selhal." }
+      - name: Build with canonical Windows script
+        shell: pwsh
+        run: .\Build\build_windows.ps1 -Python "python" -AppName "Kajovo"
+      - name: Validate, archive and checksum Windows build
+        shell: pwsh
+        env:
+          ASSET_STEM: ${{ needs.metadata.outputs.asset_stem }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+          TARGET_SHA: ${{ needs.metadata.outputs.target_sha }}
+          SHORT_SHA: ${{ needs.metadata.outputs.short_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = Get-Item "dist/Kajovo/Kajovo.exe" -ErrorAction Stop
+          if ($exe.Length -le 0) { throw "dist/Kajovo/Kajovo.exe má nulovou velikost." }
+          $files = @(Get-ChildItem "dist/Kajovo" -File -Recurse)
+          if ($files.Count -lt 2) { throw "Distribuční adresář dist/Kajovo neobsahuje očekávanou onedir strukturu." }
+
+          $releaseDir = Join-Path $PWD "release"
+          New-Item -ItemType Directory -Force $releaseDir | Out-Null
+          $archiveName = "$env:ASSET_STEM-windows-x64.zip"
+          $archivePath = Join-Path $releaseDir $archiveName
+          Push-Location "dist"
+          try {
+            Compress-Archive -Path "Kajovo" -DestinationPath $archivePath -CompressionLevel Optimal -Force
+          } finally {
+            Pop-Location
+          }
+          $archive = Get-Item $archivePath -ErrorAction Stop
+          if ($archive.Length -le 0) { throw "Windows ZIP má nulovou velikost." }
+
+          $hash = (Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLowerInvariant()
+          $checksumPath = "$archivePath.sha256"
+          "$hash  $archiveName" | Set-Content -Path $checksumPath -Encoding utf8NoBOM
+          $expected = ((Get-Content $checksumPath -Raw).Trim() -split '\s+')[0]
+          $actual = (Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) { throw "Zpětné ověření SHA-256 Windows ZIP selhalo." }
+
+          $pythonVersion = (python -c "import platform; print(platform.python_version())").Trim()
+          $manifest = [ordered]@{
+            application = "KájovoNG"
+            version = $env:VERSION
+            git_sha = $env:TARGET_SHA
+            short_sha = $env:SHORT_SHA
+            platform = "windows-x64"
+            python_version = $pythonVersion
+            built_at_utc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            archive = $archiveName
+            sha256 = $hash
+          } | ConvertTo-Json
+          $manifest | Set-Content -Path "$archivePath.manifest.json" -Encoding utf8NoBOM
+          Get-ChildItem $releaseDir | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.metadata.outputs.short_sha }}-windows-x64
+          path: release/*
+          if-no-files-found: error
+          retention-days: 30
+
+  build_macos:
+    name: Build macOS distribution
+    needs: [metadata, ci_gate]
+    runs-on: macos-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.target_sha }}
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Verify Git LFS checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git lfs pull
+          git lfs fsck
+      - name: Build with canonical macOS script
+        shell: bash
+        env:
+          PYTHON_BIN: python
+          APP_NAME: Kajovo
+        run: ./Build/build_macos.sh
+      - name: Validate, archive and checksum macOS build
+        shell: bash
+        env:
+          ASSET_STEM: ${{ needs.metadata.outputs.asset_stem }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+          TARGET_SHA: ${{ needs.metadata.outputs.target_sha }}
+          SHORT_SHA: ${{ needs.metadata.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          test -d dist/Kajovo.app
+          test -s dist/Kajovo.app/Contents/MacOS/Kajovo
+
+          case "$(uname -m)" in
+            arm64) platform="macos-arm64" ;;
+            x86_64) platform="macos-x64" ;;
+            *) echo "Nepodporovaná architektura: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          mkdir -p release
+          archive_name="${ASSET_STEM}-${platform}.zip"
+          archive_path="release/${archive_name}"
+          ditto -c -k --sequesterRsrc --keepParent dist/Kajovo.app "$archive_path"
+          test -s "$archive_path"
+          hash="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+          printf '%s  %s\n' "$hash" "$archive_name" > "${archive_path}.sha256"
+          (cd release && shasum -a 256 -c "${archive_name}.sha256")
+
+          export PLATFORM="$platform" ARCHIVE_NAME="$archive_name" HASH="$hash"
+          python - <<'PY'
+          import json
+          import os
+          import platform
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          archive = Path("release") / os.environ["ARCHIVE_NAME"]
+          data = {
+              "application": "KájovoNG",
+              "version": os.environ["VERSION"],
+              "git_sha": os.environ["TARGET_SHA"],
+              "short_sha": os.environ["SHORT_SHA"],
+              "platform": os.environ["PLATFORM"],
+              "python_version": platform.python_version(),
+              "built_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "archive": archive.name,
+              "sha256": os.environ["HASH"],
+          }
+          Path(f"{archive}.manifest.json").write_text(
+              json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+          ls -lh release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.metadata.outputs.short_sha }}-macos
+          path: release/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    needs: [metadata, ci_gate, build_windows, build_macos]
+    if: ${{ always() && needs.metadata.outputs.production == 'true' && needs.ci_gate.result == 'success' && needs.build_windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_SHA: ${{ needs.metadata.outputs.target_sha }}
+      VERSION: ${{ needs.metadata.outputs.version }}
+      TAG: ${{ needs.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Revalidate tag and downloaded asset integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin main "refs/tags/${TAG}:refs/tags/${TAG}"
+          current_tag_sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          if [[ "$current_tag_sha" != "$TARGET_SHA" ]]; then
+            echo "::error::Tag $TAG se během workflow změnil na $current_tag_sha; očekáváno $TARGET_SHA."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TARGET_SHA" origin/main; then
+            echo "::error::Commit $TARGET_SHA už není dosažitelný z main."
+            exit 1
+          fi
+
+          shopt -s nullglob
+          archives=(release-assets/*.zip)
+          if (( ${#archives[@]} == 0 )); then
+            echo "::error::Nebyl stažen žádný distribuční ZIP."
+            exit 1
+          fi
+          for archive in "${archives[@]}"; do
+            checksum="${archive}.sha256"
+            manifest="${archive}.manifest.json"
+            test -s "$checksum"
+            test -s "$manifest"
+            expected="$(awk '{print $1}' "$checksum" | tr -d '\r\n')"
+            actual="$(sha256sum "$archive" | awk '{print $1}')"
+            if [[ "$expected" != "$actual" ]]; then
+              echo "::error::SHA-256 nesouhlasí pro $(basename "$archive")."
+              exit 1
+            fi
+            manifest_sha="$(jq -r '.git_sha' "$manifest")"
+            manifest_version="$(jq -r '.version' "$manifest")"
+            manifest_hash="$(jq -r '.sha256' "$manifest")"
+            if [[ "$manifest_sha" != "$TARGET_SHA" || "$manifest_version" != "$VERSION" || "$manifest_hash" != "$actual" ]]; then
+              echo "::error::Manifest neodpovídá release identitě pro $(basename "$archive")."
+              exit 1
+            fi
+          done
+      - name: Create or safely update GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Distribuční build KájovoNG v${VERSION}.
+
+          Commit: \`${TARGET_SHA}\`
+          CI: \`.github/workflows/ci.yml\` úspěšně dokončeno pro tentýž commit na \`main\`.
+          Distribuční archivy obsahují samostatný SHA-256 soubor a strojově čitelný manifest.
+
+          <!-- kajovong-release-sha:${TARGET_SHA} -->
+          EOF
+
+          if release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null)"; then
+            body="$(jq -r '.body // ""' <<< "$release_json")"
+            marker="$(grep -oE 'kajovong-release-sha:[0-9a-f]{40}' <<< "$body" | head -n 1 | cut -d: -f2 || true)"
+            if [[ -z "$marker" ]]; then
+              echo "::error::Existující Release $TAG nemá marker této pipeline; odmítám jej tiše přepsat."
+              exit 1
+            fi
+            if [[ "$marker" != "$TARGET_SHA" ]]; then
+              echo "::error::Existující Release $TAG je svázán s SHA $marker, nikoli $TARGET_SHA."
+              exit 1
+            fi
+            gh release edit "$TAG" \
+              --title "KájovoNG v${VERSION}" \
+              --notes-file release-notes.md \
+              --draft=false \
+              --prerelease=false
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --target "$TARGET_SHA" \
+              --title "KájovoNG v${VERSION}" \
+              --notes-file release-notes.md
+          fi
+
+          assets=(release-assets/*)
+          if (( ${#assets[@]} == 0 )); then
+            echo "::error::Nejsou dostupné žádné release assets."
+            exit 1
+          fi
+          gh release upload "$TAG" "${assets[@]}" --clobber
