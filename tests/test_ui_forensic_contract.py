@@ -70,12 +70,19 @@ def test_active_ui_has_no_stale_paid_preflight_or_redaction_claims():
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "kajovo" / "desktop").glob("*.py"))
     )
-    assert "placená zkouška" not in source.lower()
+    assert "žádná samostatná placená zkouška" in source.lower()
     assert "redakce známých tajných polí je vždy aktivní" not in source.lower()
     assert "kanonická evidence běhů se v tomto důvěrném prostředí obsahově nerediguje" in source.lower()
 
 
-def test_real_feature_installers_are_wired_into_application_entrypoint():
+def test_real_feature_installers_are_wired_into_application_entrypoint(qtbot, tmp_path):
     entry = (ROOT / "kajovo" / "app" / "main.py").read_text(encoding="utf-8")
-    assert "install_history_run_explorer(window)" in entry
-    assert "install_photo_studio(window)" in entry
+    assert "window = create_window(settings, api_key=api_key)" in entry
+    from kajovo.app.main import create_window
+    from kajovo.core.config import AppSettings
+    from kajovo.studio.history import HistoryPage
+    from kajovo.studio.photos import PhotosPage
+    window = create_window(AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache")))
+    qtbot.addWidget(window)
+    assert isinstance(window.pages["history"], HistoryPage)
+    assert isinstance(window.pages["photos"], PhotosPage)

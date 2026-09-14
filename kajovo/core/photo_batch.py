@@ -199,6 +199,42 @@ def image_edit_row(item, *, model, prompt, quality, size, output_format) -> dict
     }
 
 
+def image_edit_options(model: str) -> dict:
+    """Lokální omezení podle oficiální specifikace rodiny GPT Image."""
+    if not _is_image_edit_model(model):
+        raise ValueError("Vybraný model nepodporuje dávkové úpravy fotografií.")
+    modern = model.startswith("gpt-image-2")
+    extended = model.startswith("gpt-image-2.5-")
+    return {
+        "quality": ["auto", "low", "medium", "high", *(["xhigh", "max"] if extended else [])],
+        "sizes": ["auto", "1024x1024", "1536x1024", "1024x1536",
+                  *(["2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840"] if modern else [])],
+        "custom_size": modern,
+        "source": "https://developers.openai.com/api/docs/guides/image-generation",
+    }
+
+
+def validate_image_edit_parameters(model, quality, size, output_format):
+    options = image_edit_options(model)
+    if quality not in options["quality"]:
+        raise ValueError("Zvolená kvalita není podporována vybraným obrazovým modelem.")
+    if output_format not in {"png", "jpeg", "webp"}:
+        raise ValueError("Zvolený formát fotografie není podporován.")
+    if size == "auto":
+        return
+    if not options["custom_size"]:
+        if size not in options["sizes"]:
+            raise ValueError("Zvolené rozměry nejsou podporovány vybraným obrazovým modelem.")
+        return
+    if not isinstance(size, str) or not re.fullmatch(r"\d{2,5}x\d{2,5}", size):
+        raise ValueError("Rozměry zadejte jako šířkaxvýška v pixelech.")
+    width, height = map(int, size.split("x"))
+    if not (width % 16 == 0 and height % 16 == 0 and max(width, height) <= 3840
+            and max(width, height) <= 3 * min(width, height)
+            and 655360 <= width * height <= 8294400):
+        raise ValueError("Rozměry musí být násobky šestnácti, nejvýše 3840 pixelů na hranu, s poměrem nejvýše tři ku jedné a plochou 655 360 až 8 294 400 pixelů.")
+
+
 def validate_image_edit_rows(rows: Iterable[dict]) -> list[dict]:
     rows = list(rows)
     ids: set[str] = set()
@@ -235,6 +271,7 @@ def validate_image_edit_rows(rows: Iterable[dict]) -> list[dict]:
         if not _is_image_edit_model(model):
             raise ValueError(f"{model}: pevná matice nepovoluje Image Edit BATCH model.")
         models.add(model)
+        validate_image_edit_parameters(model, body["quality"], body["size"], body["output_format"])
         images = body["images"]
         if (
             not isinstance(images, list)
@@ -304,6 +341,7 @@ def new_job(
         raise ValueError("Prompt je prázdný.")
     if not _is_image_edit_model(image_model):
         raise ValueError(f"{image_model}: model není povolený pro Image Edit BATCH.")
+    validate_image_edit_parameters(image_model, quality, size, output_format)
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     stamp = _now()
@@ -363,6 +401,7 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
 
 
 def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
+    validate_image_edit_parameters(job.image_model, job.quality, job.size, job.output_format)
     def report(text: str, pct: int) -> None:
         if reporter:
             reporter(text)

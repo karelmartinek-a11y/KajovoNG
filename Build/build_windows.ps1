@@ -26,6 +26,7 @@ $pyinstallerArgs = @(
     "--icon", $iconPath
     "--add-data", "$runtimeIcon;resources"
     "--add-data", "resources/Kajovo_new.png;resources"
+    "--add-data", "resources/studio-symbol.png;resources"
     "--add-data", "resources/montserrat_regular.ttf;resources"
     "--add-data", "resources/montserrat_bold.ttf;resources"
     "kajovo/app/main.py"

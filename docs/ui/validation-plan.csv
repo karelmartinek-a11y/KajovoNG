@@ -1,0 +1,19 @@
+id,oblast,pravidlo,implementace,ověření,zdroj
+UI-01,Uložené zadání,Přesné parametry; heslo se neukládá,kajovo/studio/workbench.py,tests/test_studio.py,docs/UI_VALIDATION_MATRIX.csv
+UI-02,Nedostupný model,Zachovat hodnotu a zakázat spuštění,kajovo/studio/components.py;workbench.py,tests/test_studio.py;tests/test_studio_cascades.py,https://developers.openai.com/api/docs/models
+UI-03,Souborová dávka,Pouze GENERATE/MODIFY; odznačit výstupní diagnostiku,kajovo/core/request_rules.py,tests/test_studio.py,docs/REQUEST_MATRIX.md
+UI-04,Souběžný zápis,Zákaz překryvu výstupních adresářů do konce vlákna,kajovo/studio/operations.py,tests/test_studio.py,https://doc.qt.io/qtforpython-6/PySide6/QtCore/QThread.html
+UI-05,Konec operace,Zachovat dílčí výsledek; dávka a čekání nejsou dokončení,kajovo/studio/operations.py,tests/test_studio.py,https://doc.qt.io/qtforpython-6/PySide6/QtCore/QThread.html
+UI-06,Přístupový klíč,Aktivovat až po ověřené persistenci,kajovo/core/secret_store.py,tests/test_studio.py,docs/SSOT.md
+UI-07,Obrazová dávka,Parametry ověřit před prvním uploadem,kajovo/core/photo_batch.py,tests/test_photo_parameter_limits.py,https://developers.openai.com/api/docs/guides/image-generation
+UI-08,GPT Image 2 rozměry,Násobek 16; hrana nejvýše 3840; poměr nejvýše 3; plocha 655360 až 8294400,kajovo/core/photo_batch.py,tests/test_photo_parameter_limits.py,https://developers.openai.com/api/docs/guides/image-generation
+UI-09,Starší obrazové modely,auto;1024x1024;1536x1024;1024x1536,kajovo/core/photo_batch.py,tests/test_photo_parameter_limits.py,https://developers.openai.com/api/docs/guides/image-generation
+UI-10,Chybové kódy,Konkrétní kód a řetězec příčin; neznámou příčinu neodhadovat,kajovo/core/user_errors.py,tests/test_user_errors.py,https://developers.openai.com/api/docs/guides/error-codes
+UI-11,Síť a systém,Windows kód nebo errno; samotný timeout neprokazuje stav odeslání,kajovo/core/user_errors.py,tests/test_user_errors.py,https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes
+UI-12,Pošta,Zachovat původní výjimku pro skutečnou příčinu,kajovo/core/notifications.py,tests/test_studio_notifications.py,https://docs.python.org/3/library/smtplib.html
+UI-13,Git editor,Cesta pod kořenem; před zápisem porovnat otisk,kajovo/core/project_git.py,tests/test_studio.py,docs/SSOT.md
+UI-14,Převod textů,Skutečná záloha před převodem; izolované testovací soubory,utf8nobom/app.py,tests/test_studio_converter.py;tests/test_utf8nobom.py,docs/SSOT.md
+UI-15,Kaskádové odkazy,Výběr existujícího zdroje; při duplikaci přemapovat vnitřní odkazy,kajovo/studio/cascade_items.py;cascades.py,tests/test_studio.py;tests/test_studio_cascades.py,docs/SSOT.md
+UI-16,Malé okno a samostatná sekce,Dosažitelná hlavní akce; vrácení stejného stavu,kajovo/studio/application.py,tests/test_studio.py;scripts/render_studio.py,https://doc.qt.io/qtforpython-6/PySide6/QtWidgets/QScrollArea.html
+UI-17,Animace,Pouze viditelný aktivní stav; respektovat omezený pohyb,kajovo/studio/components.py,tests/test_studio.py,https://doc.qt.io/qtforpython-6/PySide6/QtCore/QPropertyAnimation.html
+UI-18,Kontrast,Normální text nejméně 4.5:1; fokus odlišit i tvarem,kajovo/studio/components.py,scripts/render_studio.py,https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html

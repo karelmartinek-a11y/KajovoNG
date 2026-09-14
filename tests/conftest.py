@@ -22,6 +22,7 @@ def isolated_api_key_store(monkeypatch):
     def blocked(*args, **kwargs):
         raise AssertionError("Test musí nahradit trvalé ukládání API klíče.")
     monkeypatch.setattr("kajovo.desktop.settings.persist_api_key", blocked)
+    monkeypatch.setattr("kajovo.studio.settings.persist_api_key", blocked)
 
 
 @pytest.fixture(autouse=True)

@@ -1,111 +1,53 @@
-# Návrh a smlouva desktopového rozhraní
+# Řídicí studio Kájovo NG
 
-## Inventura rozhraní
+Produkční sestavu vytváří `kajovo.studio.application.create_window`; stejnou továrnu používají testy a snímkovací nástroj. Rozhraní neimportuje `kajovo.desktop`. Starší implementace zůstává pro regresní porovnání, není záložní cestou spouštěče. Samostatný převodník používá Qt a společné komponenty.
 
-[Úplný inventář](UI_INVENTORY.json) zachycuje AST aktuálních modulů `kajovo/desktop`: třídy, metody, konstrukce ovládacích prvků a propojení signálů s odkazy do zdrojových souborů. Zahrnuje i pomocné konstrukce; nejde o počet současně viditelných polí.
+## Vizuální pravidla
 
-## Informační architektura
+Tmavá plocha `#0B1220`, karty `#131F30`, zvýrazněné plochy `#1B2C41`, text `#F3F7FC`, vedlejší text `#B8C7D9`, akcent `#5EEAD4`, fokus `#7DBBFF`, úspěch `#79E2B0`, upozornění `#FFD080`, chyba `#FF9DAB`. Písmo Montserrat 11 bodů. Pole, výběr cesty, karty, posuvné formuláře, detail a průběh pocházejí ze společných komponent. Barva doprovází textový stav.
 
-| Sekce | Obsah a akce |
-|---|---|
-| Zadání | Projekt, GENERATE/MODIFY/QA/QFILE/KASKADA, LIVE/BATCH, model, prompt a výsledek, Maximum Quality, připojené zdroje, IN/OUT, návaznost response_id, teplota, modely A1/A2/A3, snapshot, diagnostika Windows/SSH, Nový/Uložit/Načíst/Spustit/Zastavit/ReRun |
-| Fotografie | Photo Studio: vstupní fotografie, náhledy, prompt a šablony, textové „Vylepšit prompt“ přes Responses a vlastní úpravy fotografií pouze přes Image Edit BATCH |
-| Kaskády | Knihovna definic, vytvoření/uložení/uložení pod jiným názvem/načtení, přidání/duplikace/odstranění/přesun kroků, model, teplota, instrukce, text/JSON vstup, soubory API i lokální, proměnné předchozích kroků, návaznost, text/JSON výstup, manifest/prompts/vlastní schéma, očekávané cesty a OUT |
-| Zdroje | Soubory API: obnovit, nahrát, smazat vybrané/vše, připojit/odpojit; úložiště: vytvořit/smazat vybrané/vše, seznam souborů, přidání podle ID/z API, odebrání, podrobnosti a atributy JSON, připojit/odpojit |
-| Dávky | Projekt, místní datum odeslání pracovní dávky, oddělený stav API a uložení do OUT, Dokončit, seznam/počty/poslední a příští kontrola, interval a konec sledování, stažení raw i souborového výstupu, částečné chyby, zrušení, opakování vybraných cest a oprava s připomínkou |
-| Historie | Run Explorer: časové a obsahové filtry, přehled běhu, timeline kroků, lidské i raw odpovědi, artefakty, události, lineage, technický detail a integrita; Dokončit u nepřevzatého BATCH; Pokračovat/ReRun/Opravit z bezpečného checkpointu, Klonovat a znovu použít archivované artefakty vždy do nového běhu |
-| Verze | Lokální adresář a Git, založení, stav, remote/push/pull, milníky vytvořit/obnovit/odstranit, odstranění repozitáře, strom, editor, porovnání s milníkem |
-| Nastavení | Klíč zobrazit/uložit/smazat, výchozí model a teplota, bezpečnost vstupů, deny přípony/globy, timeouty API/BATCH, SMTP host/port/login/heslo/TLS/SSL/odesílatel/příjemce/uložit/test, SSH |
-| Modely a nápověda | Katalog účtu, hledání a filtry schopností, výchozí a aktivní model, pevná matice, návody a vysvětlení režimů |
+Logo `resources/studio-symbol.png` doprovází větvený symbol kreslený Qt. Animace značí místní aktivní operaci, nikoli potvrzenou aktivitu serveru. Volba Omezit animace se ukládá v Nastavení. Pod šířkou 1000 logických bodů se navigace otevírá tlačítkem Sekce. Minimum hlavního okna je 640 × 360. Dlouhé formuláře a skupiny tlačítek mají posuv; spuštění Zadání zůstává mimo posuvný obsah. Sekci lze oddělit do okna a zavřením vrátit se stejnými hodnotami.
 
-Aktuální UI neobsahuje workflow pro zkušební generativní Responses ani zkušební BATCH dávky. Historická preflight data ze starších LOGů mohou být čitelná kvůli zpětné kompatibilitě, ale nesmějí vytvářet aktivní akci, která by odeslala placenou zkoušku.
+## Funkční mapa
 
-### Historie — Run Explorer
+| Sekce | Implementace v `kajovo/studio` | Backend |
+|---|---|---|
+| Zadání | `workbench.py` | `RunWorker`, `UiRunConfig`, `validate_run_options`, `RunLogger` |
+| Fotografie | `photos.py` | `photo_templates`, `photo_prompt`, `photo_batch`; skutečné dávky a převzetí |
+| Kaskády | `cascades.py`, `cascade_items.py` | `CascadeDefinition`, `validate_cascade_definition`, `CascadeRunWorker` |
+| Zdroje | `resources.py` | Files a Vector Stores `OpenAIClient`, přílohy běhu |
+| Dávky | `batches.py` | `list_batches`, `complete_saved_batch`, `repeat_saved_batch`, `cancel_batch` |
+| Historie | `history.py`, `evidence.py` | `HistoryIndex`, `LegacyRunAdapter`, checkpoint, SHA-256, lineage |
+| Verze | `versions.py` | `core/project_git.py`, Git a editor s kontrolou souběžných změn |
+| Modely | `application.py` | Účtový katalog, pevná matice, uložený výchozí model |
+| Nastavení | `settings.py` | `save_settings`, `persist_api_key`, SMTP |
+| Převod textů | `converter.py` | `utf8nobom.app`, zálohy a převod souborů i archivů |
 
-Historie není plochá tabulka logů. `history_run_explorer.py` používá odvozený `HistoryIndex` pro rychlé filtrování a nad vybraným Run Bundle zobrazuje záložky **Přehled, Průběh, Odpovědi, Soubory, Události, Návaznosti a Technické**. Dvojklik na krok otevře detail kroku s jeho vstupy, odpověďmi, artefakty, validacemi, událostmi a raw technickými údaji. Technický detail ani Run Bundle neprovádějí obsahovou redakci důkazních dat.
+## Průběh a souběh
 
-Akce z Historie nikdy nepřepisují zdrojový běh. `Pokračovat`, `ReRun` a `Opravit` vyžadují explicitní bezpečný checkpoint; `Klonovat` načte pouze přesně uložené zadání a nastavení; `Použít v novém běhu` ověří archivovaný artefakt přes SHA-256. Nový běh dostane explicitní LineageRecord. Legacy běh je read-only, chybějící fakta se nevymýšlejí a bez explicitního checkpointu se nenabízí bezpečné pokračování. Podrobný kontrakt je v [HISTORY_RUN_EXPLORER.md](HISTORY_RUN_EXPLORER.md) a [RUN_BUNDLE_SPEC.md](RUN_BUNDLE_SPEC.md).
+Správce operací vlastní pracovní vlákno až do signálu `finished`. Skrytí dialogu operaci nezastavuje. Zastavit je dostupné jen s bezpečným ukončením backendu. Průběh uvádí etapu, doložené jednotky, stáří zprávy, uplynulý čas a dostupný odhad. Neznámý postup je neurčitý.
 
-## Validační matice
+Dokončeno, částečný výsledek, zastavení, předání dávky, čekání na odpověď, neznámý výsledek odeslání a návrh bez zápisu jsou odlišné. Přehled operací otevírá vybraný průběh. Pravidelné sledování dávek používá jeden dialog. Překrývající se zapisující adresáře jsou rezervované do skutečného konce pracovníka.
 
-API pravidla zůstávají centrálně v `core/request_rules.py`, `core/model_registry.py` a `core/response_policy.py`. `response_policy.py` je neplacená validační hranice: lokální kontrola plus ne-generativní čtení katalogu/metadat existujících prostředků. UI zobrazuje důvod lokálního zákazu a předává stejný snímek nastavení do backendu. Změna dostupnosti nesmí tiše vybrat jiný model.
+## Validace
 
-| Volba / situace | Pravidlo a reakce |
-|---|---|
-| Model | Přesný identifikátor pevné matice a dostupnost v katalogu účtu; neznámý zůstává viditelný jako nedostupný |
-| Režim × model × přílohy | [Matice modelů](MODEL_MATRIX.md), [matice požadavků](REQUEST_MATRIX.md), [1024 kombinací](REQUEST_COMBINATIONS.csv) |
-| BATCH | Jen GENERATE/MODIFY; requirements, plán, struktura a případný quality gate běží LIVE; pouze A3/B3 soubory BATCH; před pracovní dávkou lokální validace, žádná zkušební dávka |
-| Maximum Quality | Výchozí vypnuto; dostupné jen pro GENERATE/MODIFY v LIVE i BATCH; A2Q/B2Q a nejvyšší reasoning podporovaný maticí skutečného modelu kroku |
-| Teplota | 0–2 pouze v podporovaném režimu modelu; jinak neposílat |
-| response_id | Podpora návaznosti modelu; dostupné i pro živou přípravu GENERATE/MODIFY BATCH; samostatné souborové položky dávky návaznost nepoužívají |
-| Files / vector stores | Validní ID, typ a velikost souborů, schopnosti modelu, pravidla file_search a BATCH; stav existujícího prostředku lze ověřit ne-generativním čtením, nikdy pomocným placeným Response |
-| MODIFY | Existující IN pro LIVE i BATCH přípravu; zapisující režimy vyžadují OUT; souběžné zapisující běhy nesmějí mít překrývající se OUT |
-| IN = OUT | OUT sleduje IN; snapshot a bezpečné cesty platí i při přepisu |
-| Diagnostika | GENERATE/MODIFY BATCH ponechá IN a vypne i odznačí OUT; SSH vyžaduje spojení a případný pin; spuštění oprav vždy s existujícím potvrzením obsahu/cíle/hash |
-| Kaskáda | Neprázdné kroky, přesné modely, JSON objekt/seznam vstupu, validní schéma, JSON výstup při schématu, bezpečné relativní očekávané cesty, proměnné pouze známých kroků |
-| Síť / průběh | Operace ve workeru, neznámá doba jako neurčitý průběh; procenta jen z doložených jednotek; zavření nesmí zahodit běžící worker |
-| Nastavení | Rozsahy podle `core/config.py`; SMTP TLS a SSL se vylučují; hesla nepatří do uloženého JSON |
-| Git a zápis | Bezpečné cesty, ochrana vyloučených adresářů/tajemství, potvrzení destruktivních operací |
-| Historie / checkpoint | Continue/ReRun/Repair pouze z explicitního `safe_to_continue` checkpointu po kontrole integrity; zdrojový run je neměnný |
-| Historie / legacy | Read-only adaptér; neznámé hodnoty zůstávají „Není evidováno“; žádný domýšlený checkpoint ani provenance |
+[Původní matice](UI_VALIDATION_MATRIX.csv) zachycuje datové parametry. [Validační plán studia](ui/validation-plan.csv) doplňuje nové kontrakty, zdroje a testy. Modely a kombinace zůstávají v [matici požadavků](REQUEST_MATRIX.md). Nedostupná uložená hodnota není tiše nahrazena. Maximální propracovanost přidává nezávislou kontrolu návrhu pro vytváření a úpravu projektu a může zvýšit cenu i dobu práce.
 
-Podrobné řádky všech datových parametrů a rozsahů nových ovladačů jsou v [UI validační matici](UI_VALIDATION_MATRIX.csv). Sloupec druhu rozlišuje datový kontrakt a omezení ovladače; interní nastavení nemají vlastní přepínač. API kombinace se záměrně odkazují na jednu centrální matici, aby se pravidla nerozcházela.
+`core/user_errors.py` klasifikuje konkrétní kód a řetězec příčin. Samotné HTTP 429 nerozlišuje kredit a rychlost; timeout nepotvrzuje přijetí požadavku. Neznámá příčina zůstává výslovně neznámá. Technické podrobnosti jsou dostupné. Stoprocentní určení kořenové příčiny bez důkazů není součástí kontraktu.
 
-Pod promptem je checkbox „Maximum Quality — maximální propracovanost“ s doprovodným textem: „Přidá nezávislou kontrolu návrhu před generováním souborů a použije nejvyšší úroveň reasoning, kterou zvolený model pro daný krok podporuje. Zvyšuje kvalitu, cenu a dobu běhu.“ Standard používá requirements a běžnou politiku reasoning; checkbox přidává kontrolní průchod a maximum podporované modelem. Nevznikají nové modelové comboboxy: A0R sdílí A1, A2Q sdílí A2, B fáze používají hlavní model MODIFY. Pro QA/QFILE/KASKÁDU se do běhu předává `maximum_quality=false`.
+[Procházet galerii všech výsledných snímků](ui/gallery.html).
 
-Uložení a načtení zadání zachovává Maximum Quality a přípravný snapshot. ReRun načte checkpoint vybraného běhu, ověří jeho integritu a obnoví fázi i kvalitu. Checkpoint A0R/B0R pokračuje plánem, A1/B1 strukturou, A2/B2 případným quality gate a A2Q/B2Q soubory. Pokud nový běh checkpoint nemá, obnova odstraní převzaté podklady a začne přípravu znovu. Změněné zadání, kvalita nebo poškozený checkpoint nesmí tiše použít starou specifikaci. Podrobnosti verze 1 `preparation_snapshot` a dávkového manifestu jsou v [SSOT](SSOT.md).
+## Reprodukce
 
-## Vizuální návrh
+[Výchozí snímky](ui/before/manifest.json), [statický inventář studia](ui/studio-inventory.json) a manifesty výsledných snímků obsahují konstrukce, vlastnosti, vazby a skutečné instance s popisky, souřadnicemi a dostupností. Statická vazba sama nedokazuje úspěšnost vzdálené operace.
 
-Klidná světlá pracovní plocha s trvalou tmavou navigací. Jedna hlavní akce na obrazovce, běžné a pokročilé parametry oddělené. Konzistentní pole, jednotně zarovnané popisky, české názvy a viditelné jednotky. Tabulky mají čitelné hlavičky, výběr řádku a vodorovné posouvání. Obsah se posouvá svisle, hlavní navigace a přístup k aktivním běhům zůstávají dosažitelné.
+```powershell
+.venv\Scripts\python.exe scripts/audit_studio.py
+.venv\Scripts\python.exe scripts/render_studio.py --native --size 1366,900 --output docs/ui/after/1366x900
+.venv\Scripts\python.exe scripts/render_studio.py --native --size 640,360 --output docs/ui/after/640x360
+.venv\Scripts\python.exe scripts/render_studio.py --native --size 911,480 --scale 1.5 --output docs/ui/after/911x480-150
+```
 
-## Oponentura z pohledu uživatele a zapracované požadavky
+Snímkování používá dočasné ukázkové podklady, blokuje síť a čtení skutečných klíčů. Zelený testovací obrázek slouží geometrii galerie. Automatické funkční testy nahrazují vzdálené služby a pracují se skutečnými dočasnými soubory. Snímky neprokazují úspěšnost placené operace u poskytovatele.
 
-1. „Nevím, co nastavit jako první.“ Zadání začíná projektem, cílem, modelem a promptem. Pokročilé parametry jsou označené a neblokují čtení zadání.
-3. „Nevím, co posílám.“ Připojené soubory a úložiště mají souhrn přímo u zadání a odkaz na správu zdrojů.
-4. „Zavřel jsem průběh a nevím, zda běží.“ Aktivní běhy mají trvalý seznam a tlačítko znovu otevřít. Skrytí neznamená zastavení.
-5. „V malém okně se nevejdou tlačítka.“ Hlavní akce zůstávají dostupné; formuláře mají posuv a žádné rozložení se po sestavení nepřestavuje přemísťováním starých prvků.
-6. „Změna modelu mi přepíše volbu.“ Nedostupný uložený model se označí a zablokuje spuštění; náhradu volí uživatel.
-7. „Dávka je hotová, ale nemám soubory.“ Stav API, stažení a ověření souborů jsou odlišné stavy s vlastním souhrnem chyb.
-8. „Omylem jsem něco smazal.“ Mazání na serveru, odstranění Git, obnova milníku a spuštění oprav zachovávají potvrzovací dialogy.
-9. „Nechci platit za automatickou zkoušku před skutečnou prací.“ UI ani backend nesmí automaticky spustit samostatný generativní test kompatibility; placený generativní požadavek vzniká pouze jako skutečná pracovní operace zvolená uživatelem.
-10. „Chci pochopit starý běh a navázat na něj.“ Run Explorer ukazuje timeline, odpovědi, artefakty, události a lineage; bezpečné pokračování je dostupné jen z explicitního checkpointu a vždy vytváří nový běh.
-
-## Dialogový kontrakt
-
-Nové dialogy zachovají titul, účel, všechny informační položky, potvrzení/zrušení a technické podrobnosti zaznamenané v inventáři. Průběh běhu obsahuje stav/fázi, čas, ETA nebo její nedostupnost, stáří poslední aktivity, dvě úrovně průběhu, log, Stop, upozornění po dokončení a Skrytí. Hromadná operace obsahuje stav, počty, log a dostupné zavření až po dokončení. Upload obsahuje aktuální soubor, počet/průběh, log a kooperativní zrušení; ESC/X neruší životnost workeru.
-
-Příprava GENERATE zobrazuje „Profesionální requirements“, „Architektonický plán“ a „Implementační struktura“; MODIFY „Change requirements“, „Plán změny“ a „Implementační struktura změny“. „Quality gate“ se objeví pouze při Maximum Quality. Technický A0 pro dlouhé zadání je samostatná operace. Následuje skutečné generování A3/B3 nebo odeslání souborových úloh, čekání na dávku, import/validace a zápis. Předání do Batch ani stav API `completed` nesmí zobrazovat úspěšné uložení souborů; import má vlastní výsledek včetně částečných chyb a dry-run. „Soubory kompletní, funkčnost neověřena“ neznamená ověřenou funkčnost kódu.
-
-## Ověření implementace
-
-Funkční inventář se porovná s novými akcemi a testy. Skript `scripts/render_ui.py` pořizuje snímky hlavních sekcí a druhů dialogů ze skutečně vykresleného Qt rozhraní, v běžném i menším okně. Kontrola zahrnuje ořez, kontrast, jednotky, tab pořadí, prázdné/chybové stavy a dostupnost hlavních akcí. Backendové testy, desktopové testy, Ruff, zákaz placené preflight vrstvy a konzistence závislostí jsou povinné před zápisem na main.
-
-## Implementační mapa
-
-| Oblast inventáře | Nový modul |
-|---|---|
-| Hlavní okno, navigace, běhy, ReRun, modely | `desktop/application.py`, `desktop/recovery.py` |
-| Photo Studio | `desktop/photos.py`, `core/photo_*.py` |
-| Soubory a vector stores | `desktop/resources.py` |
-| Kaskády | `desktop/cascades.py` |
-| Dávky a bezpečný import | `desktop/batches.py` |
-| Run Explorer a akce Historie | `desktop/history_run_explorer.py`, `desktop/history_actions_impl.py`, `core/run_bundle.py`, `core/runlog.py` |
-| Git a editor | `desktop/versions.py` |
-| API klíč, provoz, bezpečnost, SMTP | `desktop/settings.py` |
-| Průběhy, potvrzení, souborové a textové dialogy | `desktop/dialogs.py` |
-| Samostatná okna, výběr modelu, splash | `desktop/windows.py` |
-| Vizuální prvky a asynchronní úlohy | `desktop/design.py`, `desktop/jobs.py` |
-
-Původní moduly nejsou importovány ani zachovány jako záložní cesta. Backendové kontrakty API, souborů a běhů zůstávají společné. Snímkovací skript pokrývá také aktivní, dokončený, zastavený a chybový průběh, detail, samostatné sekce a výběr souboru. Vizuální kontrola se zaměřuje na dostupnost patiček při 150% škálování; navigace a dlouhé formuláře používají posuv. Nativní systémové dialogy vyžadují ověření na Windows.
-
-## Snímky rozhraní
-
-Skutečně vykreslené Qt rozhraní s izolovanými ukázkovými daty. Zadání je z plochy 1366 × 900; dialogy z logické plochy 911 × 480 při 150% škálování.
-
-![Zadání](ui/zadani.png)
-
-![Průběh na malé ploše](ui/prubeh.png)
-
-
-Souborové GENERATE/MODIFY používá [Context Compiler a rozpočet](CONTEXT_COMPILER.md). Průběh ukazuje odhad vstupu, model, reasoning a output budget; úplný rozpad a usage jsou v lokálním cost_context_report.json. Modelová matice zůstává zdrojem kapacit; klasifikace souboru ji nemění.
+![Zadání řídicího studia](ui/after/1366x900/run.png)

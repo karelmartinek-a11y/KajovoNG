@@ -1,0 +1,93 @@
+{
+  "sources": {
+    "openai": "https://developers.openai.com/api/docs/guides/error-codes",
+    "windows": "https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes",
+    "errno": "https://docs.python.org/3/library/errno.html",
+    "smtp": "https://docs.python.org/3/library/smtplib.html",
+    "ssh": "https://docs.paramiko.org/en/stable/api/ssh_exception.html",
+    "http": "https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml"
+  },
+  "openai": {
+    "credit_balance_exhausted": [
+      "Předplacený kredit organizace byl vyčerpán.",
+      "Doplňte kredit organizace u poskytovatele."
+    ],
+    "organization_spend_limit_exceeded": [
+      "Organizace dosáhla nastaveného rozpočtového limitu.",
+      "Ověřte rozpočet organizace u poskytovatele."
+    ],
+    "project_spend_limit_exceeded": [
+      "Projekt dosáhl nastaveného rozpočtového limitu.",
+      "Ověřte rozpočet projektu u poskytovatele."
+    ],
+    "organization_usage_limit_exceeded": [
+      "Organizace dosáhla limitu využití přiděleného poskytovatelem.",
+      "Požádejte poskytovatele o zvýšení přiděleného limitu."
+    ],
+    "slow_down": [
+      "Rychlost odesílání požadavků rostla příliš rychle.",
+      "Snižte rychlost a respektujte dobu čekání oznámenou službou."
+    ],
+    "server_is_overloaded": [
+      "Vybraný model je dočasně přetížený.",
+      "Ověřte stav původního požadavku a dobu čekání oznámenou službou."
+    ],
+    "invalid_api_key": [
+      "Přístupový klíč služba odmítla.",
+      "Zkontrolujte klíč v Nastavení."
+    ],
+    "insufficient_quota": [
+      "Služba odmítla požadavek kvůli vyčerpanému kreditu nebo přidělenému rozpočtu.",
+      "Ověřte kredit a rozpočet projektu u poskytovatele."
+    ],
+    "rate_limit_exceeded": [
+      "Požadavek překročil povolenou rychlost zpracování služby.",
+      "Vyčkejte podle informace služby a ověřte stav původního požadavku."
+    ],
+    "context_length_exceeded": [
+      "Vstup překročil kontextovou kapacitu vybraného modelu.",
+      "Zmenšete zadání nebo zvolte kompatibilní model s větší kapacitou."
+    ],
+    "model_not_found": [
+      "Vybraný model není dostupný pro tento požadavek.",
+      "Ověřte přesný model a přístup projektu v katalogu."
+    ],
+    "unsupported_parameter": [
+      "Vybraný model nepodporuje odeslaný parametr.",
+      "Zkontrolujte parametr uvedený v technických podrobnostech."
+    ],
+    "invalid_parameter": [
+      "Služba odmítla neplatnou hodnotu parametru.",
+      "Opravte parametr uvedený v technických podrobnostech."
+    ],
+    "content_policy_violation": [
+      "Služba odmítla obsah podle svých pravidel.",
+      "Zkontrolujte zadání a přiložené soubory."
+    ]
+  },
+  "errno": {
+    "2": "Požadovaný soubor nebo adresář neexistuje.",
+    "13": "Systém nepovolil přístup k souboru nebo adresáři.",
+    "1": "Systém nepovolil požadovanou operaci.",
+    "28": "Na cílovém úložišti není dostatek volného místa.",
+    "30": "Cílové úložiště umožňuje pouze čtení.",
+    "17": "V cílovém umístění již existuje soubor nebo adresář stejného názvu.",
+    "20": "Zadaná cesta neoznačuje adresář.",
+    "21": "Zadaná cesta označuje adresář místo souboru.",
+    "38": "Zadaná cesta je pro souborový systém příliš dlouhá.",
+    "10061": "Cílový počítač odmítl spojení.",
+    "10054": "Navázané spojení bylo přerušeno protistranou.",
+    "10060": "Spojení se nepodařilo dokončit v časovém limitu."
+  },
+  "windows": {
+    "2": "Požadovaný soubor nebo adresář neexistuje.",
+    "3": "Zadaná cesta neexistuje.",
+    "5": "Systém nepovolil přístup k souboru nebo adresáři.",
+    "32": "Soubor používá jiný proces a nyní jej nelze změnit.",
+    "33": "Požadovanou část souboru uzamkl jiný proces.",
+    "112": "Na cílovém úložišti není dostatek volného místa.",
+    "123": "Zadaná cesta obsahuje nepovolený název.",
+    "206": "Zadaná cesta je pro souborový systém příliš dlouhá."
+  },
+  "poznámka": "Číselník dokumentovaných kategorií; žádný kód nedoplňuje nedoloženou hlubší příčinu."
+}

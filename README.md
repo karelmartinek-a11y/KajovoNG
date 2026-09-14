@@ -2,6 +2,8 @@
 
 Desktopová aplikace v Pythonu a PySide6 pro práci s OpenAI Responses API, soubory, vlastními kaskádami, dávkami a hromadnými úpravami fotografií.
 
+Řídicí studio má jednotné tmavé rozhraní, přehled operací a možnost otevřít sekci v samostatném okně. Malé okno zpřístupní navigaci tlačítkem Sekce; delší formuláře i řady akcí lze posouvat. Animace lze omezit v Nastavení. Samostatný Převod textů používá stejné ovládání.
+
 Kanonická specifikace systému: [SSOT](docs/SSOT.md).
 
 Kombinace režimů, modelů, parametrů a příloh: [matice požadavků](docs/REQUEST_MATRIX.md).

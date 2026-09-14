@@ -130,6 +130,7 @@ class CascadeRunWorker(QThread):
     logline = Signal(str)
     finished_ok = Signal(dict)
     finished_err = Signal(str)
+    failure_detail = Signal(object)
 
     STEP_ATTEMPTS = 3
 
@@ -1165,6 +1166,7 @@ class CascadeRunWorker(QThread):
                     "result": result,
                 }
             )
+            self.progress_event.emit(ProgressEvent("RUN", "completed"))
             self.finished_ok.emit(result)
         except Exception as ex:
             if str(ex) in ("STOPPED", "STOP_REQUESTED"):
@@ -1189,6 +1191,7 @@ class CascadeRunWorker(QThread):
                         ),
                     }
                 )
+                self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
                 self.finished_err.emit(str(ex))
                 return
 
@@ -1236,4 +1239,7 @@ class CascadeRunWorker(QThread):
                     ),
                 }
             )
+            from .user_errors import describe_error
+            self.failure_detail.emit(describe_error(ex))
+            self.progress_event.emit(ProgressEvent("RUN", "failed"))
             self.finished_err.emit(human)

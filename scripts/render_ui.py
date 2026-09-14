@@ -56,6 +56,11 @@ patches = [
 for guard in patches:
     guard.start()
 window = MainWindow(settings)
+from kajovo.desktop.history_actions import install_history_run_explorer
+from kajovo.desktop.photos import install_photo_studio
+
+install_history_run_explorer(window)
+install_photo_studio(window)
 window.resize(*map(int, args.size.split(",")))
 window.all_models = ["gpt-4.1", "gpt-5.2", "gpt-6-astra"]
 window.cb_model.addItems(window.all_models)

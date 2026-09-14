@@ -9,7 +9,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_ASSETS = ROOT / "Build" / "assets"
 RESOURCES = ROOT / "resources"
-SOURCE_LOGO = RESOURCES / "Kajovo_new.png"
+SOURCE_LOGO = RESOURCES / "studio-symbol.png"
 
 
 def _square_crop(img: Image.Image) -> Image.Image:

@@ -1,0 +1,450 @@
+[
+  {
+    "name": "run",
+    "file": "run.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "run_section0_0",
+    "file": "run_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "run_section0_1",
+    "file": "run_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "run_section0_2",
+    "file": "run_section0_2.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "run_section0_3",
+    "file": "run_section0_3.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "run_lower",
+    "file": "run_lower.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "cascade",
+    "file": "cascade.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "cascade_section0_0",
+    "file": "cascade_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "cascade_section0_1",
+    "file": "cascade_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "cascade_section0_2",
+    "file": "cascade_section0_2.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "cascade_section0_3",
+    "file": "cascade_section0_3.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "cascade_section0_4",
+    "file": "cascade_section0_4.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "cascade_lower",
+    "file": "cascade_lower.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "resources",
+    "file": "resources.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "resources_section0_0",
+    "file": "resources_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "resources_section0_1",
+    "file": "resources_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "resources_section0_1_section0_0",
+    "file": "resources_section0_1_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "resources_section0_1_section0_1",
+    "file": "resources_section0_1_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "resources_section0_1_section0_2",
+    "file": "resources_section0_1_section0_2.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "batch",
+    "file": "batch.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history",
+    "file": "history.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0",
+    "file": "history_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_0",
+    "file": "history_section0_0_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_1",
+    "file": "history_section0_0_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_2",
+    "file": "history_section0_0_section0_2.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_2_section0_0",
+    "file": "history_section0_0_section0_2_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_2_section0_1",
+    "file": "history_section0_0_section0_2_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_3",
+    "file": "history_section0_0_section0_3.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_4",
+    "file": "history_section0_0_section0_4.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_5",
+    "file": "history_section0_0_section0_5.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_6",
+    "file": "history_section0_0_section0_6.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_6_section0_0",
+    "file": "history_section0_0_section0_6_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_6_section0_1",
+    "file": "history_section0_0_section0_6_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_6_section0_2",
+    "file": "history_section0_0_section0_6_section0_2.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_0_section0_6_section0_3",
+    "file": "history_section0_0_section0_6_section0_3.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_section0_1",
+    "file": "history_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "history_lower",
+    "file": "history_lower.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "versions",
+    "file": "versions.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "versions_section0_0",
+    "file": "versions_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "versions_section0_1",
+    "file": "versions_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "models",
+    "file": "models.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "settings",
+    "file": "settings.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "settings_section0_0",
+    "file": "settings_section0_0.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "settings_section0_1",
+    "file": "settings_section0_1.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "settings_section0_2",
+    "file": "settings_section0_2.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "settings_section0_3",
+    "file": "settings_section0_3.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "help",
+    "file": "help.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "photos",
+    "file": "photos.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "photos_lower",
+    "file": "photos_lower.png",
+    "width": 1366,
+    "height": 900,
+    "scale": "1"
+  },
+  {
+    "name": "progress_active",
+    "file": "progress_active.png",
+    "width": 760,
+    "height": 580,
+    "scale": "1"
+  },
+  {
+    "name": "progress_waiting",
+    "file": "progress_waiting.png",
+    "width": 760,
+    "height": 580,
+    "scale": "1"
+  },
+  {
+    "name": "progress_preflight_pending",
+    "file": "progress_preflight_pending.png",
+    "width": 760,
+    "height": 580,
+    "scale": "1"
+  },
+  {
+    "name": "progress_batch_pending",
+    "file": "progress_batch_pending.png",
+    "width": 760,
+    "height": 580,
+    "scale": "1"
+  },
+  {
+    "name": "progress_completed",
+    "file": "progress_completed.png",
+    "width": 760,
+    "height": 580,
+    "scale": "1"
+  },
+  {
+    "name": "progress_failed",
+    "file": "progress_failed.png",
+    "width": 760,
+    "height": 580,
+    "scale": "1"
+  },
+  {
+    "name": "dialog_task",
+    "file": "dialog_task.png",
+    "width": 700,
+    "height": 500,
+    "scale": "1"
+  },
+  {
+    "name": "dialog_upload",
+    "file": "dialog_upload.png",
+    "width": 700,
+    "height": 500,
+    "scale": "1"
+  },
+  {
+    "name": "dialog_message",
+    "file": "dialog_message.png",
+    "width": 700,
+    "height": 520,
+    "scale": "1"
+  },
+  {
+    "name": "dialog_model_picker",
+    "file": "dialog_model_picker.png",
+    "width": 700,
+    "height": 570,
+    "scale": "1"
+  },
+  {
+    "name": "dialog_splash",
+    "file": "dialog_splash.png",
+    "width": 460,
+    "height": 250,
+    "scale": "1"
+  },
+  {
+    "name": "window_settings",
+    "file": "window_settings.png",
+    "width": 1000,
+    "height": 740,
+    "scale": "1"
+  },
+  {
+    "name": "window_batch",
+    "file": "window_batch.png",
+    "width": 1000,
+    "height": 740,
+    "scale": "1"
+  },
+  {
+    "name": "dialog_file",
+    "file": "dialog_file.png",
+    "width": 800,
+    "height": 550,
+    "scale": "1"
+  },
+  {
+    "name": "dialog_input",
+    "file": "dialog_input.png",
+    "width": 354,
+    "height": 280,
+    "scale": "1"
+  }
+]

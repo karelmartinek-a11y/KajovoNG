@@ -9,7 +9,7 @@ from .config import SMTPSettings
 
 
 def send_smtp_notification(
-    smtp: SMTPSettings, subject: str, body: str
+    smtp: SMTPSettings, subject: str, body: str, *, raise_errors: bool = False
 ) -> Tuple[bool, str]:
     """Odešle zprávu podle nastavení SMTP.
 
@@ -17,6 +17,8 @@ def send_smtp_notification(
     host = (smtp.host or "").strip()
     to_email = (smtp.to_email or "").strip()
     if not host or not to_email:
+        if raise_errors:
+            raise ValueError("Vyplňte poštovní server a příjemce oznámení.")
         return False, "SMTP server or recipient is not configured."
 
     try:
@@ -45,4 +47,6 @@ def send_smtp_notification(
             server.send_message(msg)
         return True, "Notification sent."
     except Exception as exc:  # pragma: no cover - záložní záznam chyby
+        if raise_errors:
+            raise
         return False, f"SMTP send failed: {exc}"

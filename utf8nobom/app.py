@@ -7,14 +7,11 @@ import os
 import queue
 import shutil
 import tempfile
-import threading
 import time
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from tkinter import END, BOTH, DISABLED, NORMAL, StringVar, Tk, filedialog, messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 from typing import Callable, Iterable, List, Sequence
 
 
@@ -466,143 +463,8 @@ def run_job(
         emit({"type": "error", "message": f"Chyba: {exc}"})
 
 
-class Utf8NoBomApp:
-    def __init__(self) -> None:
-        self.root = Tk()
-        self.root.title("UTF-8 bez BOM")
-        self.root.geometry("980x720")
-        self.root.minsize(860, 620)
-
-        self.directory_vars = [StringVar() for _ in range(5)]
-        self.backup_var = StringVar()
-        self.status_var = StringVar(value="Připraveno.")
-        self.summary_var = StringVar(value="0 % | uplynulo 0 s | ETA 0 s")
-        self.queue: queue.Queue[dict] = queue.Queue()
-        self.worker: threading.Thread | None = None
-
-        self._build_ui()
-        self.root.after(150, self._drain_queue)
-
-    def _build_ui(self) -> None:
-        container = ttk.Frame(self.root, padding=16)
-        container.pack(fill=BOTH, expand=True)
-
-        ttk.Label(container, text="Adresáře ke kontrole", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        ttk.Label(
-            container,
-            text="Vyplňte 1 až 5 adresářů. Program je nejdřív zazálohuje a potom opraví textové soubory i ZIPy.",
-        ).pack(anchor="w", pady=(4, 12))
-
-        for index, variable in enumerate(self.directory_vars, start=1):
-            row = ttk.Frame(container)
-            row.pack(fill="x", pady=4)
-            ttk.Label(row, text=f"Adresář {index}", width=14).pack(side="left")
-            ttk.Entry(row, textvariable=variable).pack(side="left", fill="x", expand=True, padx=(0, 8))
-            ttk.Button(row, text="Vybrat", command=lambda var=variable: self._pick_directory(var)).pack(side="left")
-
-        backup_row = ttk.Frame(container)
-        backup_row.pack(fill="x", pady=(14, 6))
-        ttk.Label(backup_row, text="Backup", width=14).pack(side="left")
-        ttk.Entry(backup_row, textvariable=self.backup_var).pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ttk.Button(backup_row, text="Vybrat", command=lambda: self._pick_directory(self.backup_var)).pack(side="left")
-
-        action_row = ttk.Frame(container)
-        action_row.pack(fill="x", pady=(14, 8))
-        self.start_button = ttk.Button(action_row, text="Spustit kontrolu", command=self._start)
-        self.start_button.pack(side="left")
-
-        self.progress = ttk.Progressbar(container, mode="determinate", maximum=100)
-        self.progress.pack(fill="x", pady=(8, 4))
-
-        ttk.Label(container, textvariable=self.status_var).pack(anchor="w")
-        ttk.Label(container, textvariable=self.summary_var).pack(anchor="w", pady=(0, 10))
-
-        self.log_widget = ScrolledText(container, height=24, state=DISABLED, font=("Consolas", 10))
-        self.log_widget.pack(fill=BOTH, expand=True)
-
-    def _pick_directory(self, variable: StringVar) -> None:
-        chosen = filedialog.askdirectory(parent=self.root)
-        if chosen:
-            variable.set(chosen)
-
-    def _append_log(self, message: str) -> None:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_widget.configure(state=NORMAL)
-        self.log_widget.insert(END, f"{timestamp} | {message}\n")
-        self.log_widget.see(END)
-        self.log_widget.configure(state=DISABLED)
-
-    def _set_running(self, running: bool) -> None:
-        self.start_button.configure(state=DISABLED if running else NORMAL)
-
-    def _start(self) -> None:
-        if self.worker and self.worker.is_alive():
-            return
-        try:
-            targets, backup_dir = validate_input_paths(
-                [variable.get() for variable in self.directory_vars],
-                self.backup_var.get(),
-            )
-        except ValueError as exc:
-            messagebox.showerror("Neplatné zadání", str(exc), parent=self.root)
-            return
-
-        self.progress["value"] = 0
-        self.status_var.set("Spouštím úlohu...")
-        self.summary_var.set("0 % | uplynulo 0 s | ETA 0 s")
-        self._append_log("Zahajuji kontrolu a opravu kódování.")
-        self._set_running(True)
-        self.worker = threading.Thread(target=run_job, args=(targets, backup_dir, self.queue), daemon=False)
-        self.worker.start()
-
-    def _drain_queue(self) -> None:
-        try:
-            while True:
-                event = self.queue.get_nowait()
-                self._handle_event(event)
-        except queue.Empty:
-            pass
-        self.root.after(150, self._drain_queue)
-
-    def _handle_event(self, event: dict) -> None:
-        event_type = event.get("type")
-        if event_type == "progress":
-            percent = float(event.get("percent", 0.0))
-            elapsed = int(event.get("elapsed", 0.0))
-            eta = int(event.get("eta", 0.0))
-            phase = str(event.get("phase", "Běh"))
-            detail = str(event.get("detail", ""))
-            self.progress["value"] = max(0.0, min(percent, 100.0))
-            self.status_var.set(f"{phase}: {detail}")
-            self.summary_var.set(
-                f"{percent:.1f} % | hotovo {event.get('done_units', 0)} / {event.get('total_units', 0)} | "
-                f"uplynulo {elapsed} s | ETA {eta} s"
-            )
-            return
-        if event_type == "status":
-            self.status_var.set(str(event.get("message", "")))
-            return
-        if event_type == "log":
-            self._append_log(str(event.get("message", "")))
-            return
-        if event_type == "done":
-            self._append_log(str(event.get("message", "")))
-            self.status_var.set("Hotovo.")
-            self.progress["value"] = 100
-            self.summary_var.set("100 % | úloha dokončena")
-            self._set_running(False)
-            messagebox.showinfo("Hotovo", str(event.get("message", "")), parent=self.root)
-            return
-        if event_type == "error":
-            self._append_log(str(event.get("message", "")))
-            self.status_var.set("Běh skončil chybou.")
-            self._set_running(False)
-            messagebox.showerror("Chyba", str(event.get("message", "")), parent=self.root)
-
-    def run(self) -> None:
-        self.root.mainloop()
-
-
 def main() -> None:
-    app = Utf8NoBomApp()
-    app.run()
+    """Spustí samostatné Qt rozhraní nad převodníkem."""
+    from kajovo.studio.converter import main as start_converter
+
+    start_converter()

@@ -44,7 +44,7 @@ namespaces = false
 "kajovo.core" = ["openai_model_matrix.json"]
 
 [tool.setuptools.data-files]
-"resources" = ["resources/Kajovo_new.png", "resources/montserrat_regular.ttf", "resources/montserrat_bold.ttf"]
+"resources" = ["resources/studio-symbol.png", "resources/Kajovo_new.png", "resources/montserrat_regular.ttf", "resources/montserrat_bold.ttf"]
 
 [tool.ruff]
 line-length = 100

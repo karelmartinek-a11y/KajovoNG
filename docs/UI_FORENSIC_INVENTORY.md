@@ -1,4 +1,6 @@
-# Forenzní inventář a backendový kontrakt desktopového UI
+# Výchozí forenzní inventář desktopového UI
+
+Tento dokument zachycuje výchozí rozhraní `kajovo/desktop`. Produkční implementaci `kajovo/studio`, její backendové vazby a ověření popisuje [UI_DESIGN.md](UI_DESIGN.md). Výchozí snímky jsou v `docs/ui/before`; inventář studia v `docs/ui/studio-inventory.json`.
 
 ## Účel
 

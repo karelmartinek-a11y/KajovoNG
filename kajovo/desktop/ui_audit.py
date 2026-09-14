@@ -335,6 +335,50 @@ def audit_desktop(root: str | Path) -> dict[str, Any]:
         for path in sorted(desktop.glob("*.py"))
         if path.name != "ui_audit.py"
     ]
+    # Vazba na zděděnou metodu je platná pouze po dohledání skutečného předka.
+    trees = {path.stem: ast.parse(path.read_text(encoding="utf-8"))
+             for path in sorted(desktop.glob("*.py"))}
+    known = {}
+    for module_name, tree in trees.items():
+        imports = {}
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    imports[alias.asname or alias.name] = (node.module or "", alias.name)
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                known[(module_name, node.name)] = (node, imports)
+
+    def resolves(module_name, class_name, method, visited=None):
+        visited = set() if visited is None else visited
+        identity = (module_name, class_name)
+        if identity in visited:
+            return False
+        visited.add(identity)
+        item = known.get(identity)
+        if item is None:
+            return False
+        node, imports = item
+        if any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method
+               for child in node.body):
+            return True
+        for base in node.bases:
+            if not isinstance(base, ast.Name):
+                continue
+            source, name = imports.get(base.id, (module_name, base.id))
+            if source == "PySide6.QtWidgets":
+                from PySide6 import QtWidgets
+                qt_class = getattr(QtWidgets, name, None)
+                if qt_class is not None and callable(getattr(qt_class, method, None)):
+                    return True
+            elif resolves(source.rsplit(".", 1)[-1], name, method, visited):
+                return True
+        return False
+
+    for module in modules:
+        module_name = Path(module["source"]).stem
+        module["unresolved"] = [issue for issue in module["unresolved"]
+                                if not resolves(module_name, issue["class"], issue["target"].split(".")[-1])]
     totals = {
         "modules": len(modules),
         "classes": sum(len(module["classes"]) for module in modules),

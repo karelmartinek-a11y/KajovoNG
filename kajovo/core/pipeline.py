@@ -103,6 +103,7 @@ class RunWorker(QThread):
     logline = Signal(str)
     finished_ok = Signal(dict)
     finished_err = Signal(str)
+    failure_detail = Signal(object)
 
     def __init__(
         self,
@@ -428,6 +429,7 @@ class RunWorker(QThread):
             else:
                 self.log.clear_state_keys("completed_at")
                 self.log.update_state({"status": final_status})
+            self.progress_event.emit(ProgressEvent("RUN", final_status))
             self.finished_ok.emit(result)
         except BaseException as e:
             measurement = getattr(e, "context_report", None)
@@ -442,12 +444,15 @@ class RunWorker(QThread):
             if isinstance(e, (ResponsePending, SubmissionUnknown)):
                 state = "response_pending" if isinstance(e, ResponsePending) else "submission_unknown"
                 self.log.update_state({"status": state, "error": str(e)})
+                self.progress_event.emit(ProgressEvent("RUN", state, detail=str(e)))
                 self.finished_err.emit(str(e))
             elif isinstance(e, ResponseCancelled):
                 self.log.update_state({"status": "cancelled", "error": str(e)})
+                self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
                 self.finished_err.emit(str(e))
             elif str(e) == "STOP_REQUESTED":
                 self.log.update_state({"status": "stopped", "stopped_at": time.time()})
+                self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
                 self.finished_err.emit("STOPPED")
             else:
                 try:
@@ -455,6 +460,9 @@ class RunWorker(QThread):
                 except Exception:
                     pass
                 self.log.update_state({"status": "failed", "failed_at": time.time(), "error": str(e)})
+                from .user_errors import describe_error
+                self.failure_detail.emit(describe_error(e))
+                self.progress_event.emit(ProgressEvent("RUN", "failed"))
                 self.finished_err.emit(msg)
         finally:
             lock.unlock()

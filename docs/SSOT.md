@@ -25,15 +25,15 @@ Před každým spuštěním ověří pip (chybějící doplní přes `ensurepip`
 | Spuštění | `kajovo/app`, `kajovong` | Inicializace a společný vstupní bod |
 | Běžné běhy | `pipeline.py` | GENERATE, MODIFY, QA, QFILE, batch, přílohy a výstupy |
 | Vlastní kaskády | `cascade_types.py`, `cascade_pipeline.py`, `cascade_log.py` | Kroky, substituce, schémata, soubory a evidence |
-| Photo Studio | `photo_types.py`, `photo_templates.py`, `photo_prompt.py`, `photo_batch.py`, `photo_results.py`, `desktop/photos.py` | Promptové šablony, profesionální přeformulování zadání a úpravy fotografií pouze přes Image Edit BATCH |
+| Photo Studio | `photo_types.py`, `photo_templates.py`, `photo_prompt.py`, `photo_batch.py`, `photo_results.py`, `studio/photos.py` | Promptové šablony, profesionální přeformulování zadání a úpravy fotografií pouze přes Image Edit BATCH |
 | API | `openai_client.py`, `response_policy.py`, `retry.py`, `compat.py`, `model_capabilities.py` | SDK/REST, neplacená validační politika, chyby, stránkování, opakování a schopnosti modelů |
 | Souborové hranice | `contracts.py`, `filescan.py`, `utils.py` | Kontrakty, sken vstupu, validace cest, hashe a zápisy |
 | Evidence | `runlog.py`, `run_bundle.py`, `recoverable_artifacts.py` | Runtime stav, bezeztrátová kanonická evidence, request/response, kroky, artefakty, checkpointy, lineage a integrita |
-| Historie | `desktop/history_run_explorer.py`, `desktop/history_actions_impl.py` | Run Explorer, filtry, timeline, odpovědi, artefakty, události, návaznosti a bezpečné navazující akce |
+| Historie | `studio/history.py`, `studio/evidence.py` | Run Explorer, filtry, timeline, odpovědi, artefakty, události, návaznosti a bezpečné navazující akce |
 | Nastavení | `config.py`, `secret_store.py`, `resources.py` | Konfigurace, hesla a prostředky |
 | Diagnostika | `diagnostics/windows.py`, `diagnostics/ssh.py`, `notifications.py` | Sběr diagnostiky a SMTP |
-| Desktop | `kajovo/desktop` | Hlavní okno, panely, dialogy a workery Qt |
-| Převod textů | `utf8nobom/app.py`, `utf8nobom/py.py` | Tk rozhraní, zálohy a převod souborů i položek ZIP |
+| Desktop | `kajovo/studio` | Hlavní okno, panely, dialogy a workery Qt |
+| Převod textů | `utf8nobom/app.py`, `utf8nobom/py.py` | Qt rozhraní v `studio/converter.py`, zálohy a převod souborů i položek ZIP |
 
 Názvy modulů bez adresáře označují soubory pod `kajovo/core`.
 
@@ -41,7 +41,9 @@ Názvy modulů bez adresáře označují soubory pod `kajovo/core`.
 
 Hlavní navigace obsahuje Zadání, Fotografie, Kaskády, Zdroje, Dávky, Historii, Verze projektu, Modely, Nastavení a Nápovědu. Zadání odděluje prompt, parametry a adresáře, diagnostiku a výsledek. Spustit, Zastavit a přístup k aktivním běhům zůstávají mimo posuvný obsah. Teplota běhu a výchozí teplota mají samostatné ovladače. Nastavení a Dávky lze otevřít i v samostatném okně se stejným obsahem a stavem. [Inventář a návrh UI](UI_DESIGN.md) popisuje pokrytí funkcí a odkazy na validační matice.
 
-Rozhraní v `kajovo/desktop` používá světlou pracovní plochu, tmavou navigaci a Montserrat 10 bodů. Formuláře a navigace dovolují posouvání i na malé logické ploše při zvýšeném DPI; hlavní akce Zadání zůstávají dosažitelné. Dialogy přizpůsobují velikost dostupnému oknu, podrobnosti mají posuv a společný přepínač technických podkladů. Tabulky mají čitelné jednotky, kopírování výběru a vodorovný posuv. Nové rozhraní je samostatná implementace; balík `kajovo/ui` se nedistribuuje.
+Rozhraní v `kajovo/studio` používá tmavou pracovní plochu, azurový akcent a Montserrat 11 bodů. Produkční továrna `create_window` je společná testům a snímkování a neimportuje předchozí UI. Formuláře, navigace i skupiny vedlejších akcí dovolují posuv na malé logické ploše; hlavní akce Zadání zůstávají dosažitelné. Samostatná okna vracejí stejné widgety a jejich stav do studia. Skrytí průběhu nemění životnost pracovníka. Správce operací rezervuje překrývající se výstupní adresáře až do skutečného ukončení vlákna.
+
+České chybové sdělení vychází z doloženého kódu či konkrétní výjimky; bez důkazu uvádí neznámou příčinu. Vzdálené dokončení dávky neznamená místní převzetí. Historie nepovolí nové pokračování z běhu s již odeslanou dávkou. Opětovné použití artefaktu vyžaduje povolení a správný otisk a vytváří izolovaný vstupní adresář. Klon nepřebírá identifikátor předchozí odpovědi.
 
 `ProgressEvent` přenáší etapu, stav, dokončený počet, celkový počet, jednotku, detail a monotónní čas události. Text logu ani pevně vážená procenta neurčují dokončení. A3/B3 započítávají soubor po získání a ověření celého obsahu; zápis na disk je samostatná etapa. Kaskáda započítává dokončené kroky. API bez měřitelného postupu používá neurčitý indikátor. Trvání a stáří poslední události se obnovují každou sekundu; tato obnova nedokazuje aktivitu poskytovatele. ETA vzniká po třech dokončených srovnatelných jednotkách z mediánu posledních pěti dob, pouze pro aktuální etapu. Změna etapy vzorky resetuje. Ukončení, chyba, zrušení a předání do Batch mají odlišné stavy; koncové indikátory již neanimují práci.
 
@@ -242,7 +244,7 @@ Zrušení zpracování je dostupné pro `validating`, `in_progress` a `finalizin
 
 ## Převodník UTF-8
 
-`python -m utf8nobom.py` spouští samostatné Tk rozhraní. Převodník vytváří kopie a ZIP zálohy mimo vstupní adresáře. Překrývající se vstupy deduplikuje, stejně pojmenované adresáře rozlišuje v názvech záloh a existující zálohu nepřepisuje. Git metadata a odkazy nekonvertuje. ZIP s traversal položkou odmítne beze změny; při přepisu zachovává komentář archivu a metadata položek. Oprava kódování je heuristická a výsledek je třeba posoudit podle konkrétních dat; originál zůstává v záloze.
+`python -m utf8nobom.py` spouští samostatné Qt rozhraní. Převodník vytváří kopie a ZIP zálohy mimo vstupní adresáře. Překrývající se vstupy deduplikuje, stejně pojmenované adresáře rozlišuje v názvech záloh a existující zálohu nepřepisuje. Git metadata a odkazy nekonvertuje. ZIP s traversal položkou odmítne beze změny; při přepisu zachovává komentář archivu a metadata položek. Oprava kódování je heuristická a výsledek je třeba posoudit podle konkrétních dat; originál zůstává v záloze.
 
 ## Distribuce a ověření
 
@@ -275,3 +277,8 @@ Povinné kontroly jsou `python -m pytest -q`, `python -m ruff check --select F,B
 ## Kontext a náklady souborového dodání
 
 Nové LIVE A3/B3 používá FileContext stejně jako Batch v3. První chunk nemá historii přípravy ani přílohy celého IN; pokračování navazuje jen uvnitř souboru a používá hash kontextu/prefixu. Globální zdroje zůstávají v přesných obnovitelných artefaktech a kanonickém bezeztrátovém Run Bundle; evidence se obsahově nerediguje. Requesty se měří lokálně, pokračování může použít ne-generativní input token count. Placený generativní preflight není povolen. Lokální `cost_context_report.json` eviduje odhady, rozpočet, usage a incomplete důvody. Podrobný kontrakt, omezení integrační validace a scheduleru jsou v [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).
+
+
+### Parametry obrazové editace
+
+Společná validace `photo_batch.validate_image_edit_parameters` probíhá před vytvořením úlohy i před prvním uploadem. Model musí podporovat editaci v pracovní dávce podle pevné matice. GPT Image 2 dovoluje vlastní rozměry dělitelné 16, nejvýše 3840 bodů na hranu, poměr stran nejvýše 3 : 1 a plochu 655360 až 8294400 bodů. Starší modely používají automatickou velikost, 1024 × 1024, 1536 × 1024 nebo 1024 × 1536. Formáty jsou png, jpeg a webp. Hodnota uvedená poskytovatelem sama neobchází lokální zákaz dávkového modelu. Zdroje a validační důkazy jsou v `docs/ui/validation-plan.csv`.

@@ -100,6 +100,7 @@ class AppSettings:
     default_model: str = ""
     default_temperature: float = 0.2
     dry_run_modify: bool = False
+    ui_reduced_motion: bool = False
 
 def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
     raw = {}
