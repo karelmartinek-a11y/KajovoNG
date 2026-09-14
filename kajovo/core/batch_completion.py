@@ -85,6 +85,7 @@ def batch_ids(state):
             for bid in [
                 *([state["batch_id"]] if state.get("batch_id") else []),
                 *(state.get("generate_batches") or {}),
+                *(state.get("comic_batch_ids") or []),
             ]
             if isinstance(bid, str) and bid
         )
@@ -101,7 +102,7 @@ def pending_batch_ids(state):
         if imports.get(bid, {}).get(
             "import_status", imports.get(bid, {}).get("status")
         )
-        not in {"files_complete_unverified", "dry_run"}
+        not in {"files_complete_unverified", "dry_run", "comic_completed"}
     ]
 
 
@@ -428,6 +429,16 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
     state = read_state(run_dir)
     if batch_id not in batch_ids(state):
         raise ContractError("Dávka nepatří k tomuto běhu nebo chybí jeho podklady.")
+    if state.get("mode") == "COMIC":
+        import copy
+        from .comic_service import ComicService
+        config = copy.deepcopy(settings)
+        config.comic_library_dir = state["comic_library_dir"]
+        service = ComicService(config, client, emit=progress)
+        operation = service.store.get("operations", state["comic_operation_id"])
+        if operation["run_id"] != Path(run_dir).name:
+            raise ContractError("Evidence komiksu nepatří k tomuto běhu.")
+        return service.run(operation["id"], allow_submit=False)
     bundle = _bundle_if_present(run_dir)
     if bundle:
         bundle.update_run({"status": "importing"})

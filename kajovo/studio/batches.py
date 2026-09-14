@@ -162,6 +162,9 @@ class BatchesPage(QWidget):
         record = self.selected()
         if not record or not record["run_dir"]:
             return
+        if record["state"].get("mode") == "COMIC":
+            self.notice.setText("Opakování konkrétních panelů a editace jsou dostupné v Komiks → Historie a Panely.")
+            return
         paths = ValueDialog("Vybrat soubory", "Relativní cesty souborů jako seznam JSON; opakování vytvoří placenou dávku", "[]", self, structured=True)
         if paths.exec() != QDialog.Accepted:
             return

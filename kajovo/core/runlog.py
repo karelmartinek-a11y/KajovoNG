@@ -176,6 +176,7 @@ class RunLogger:
         project_name: str = "",
         *,
         resume: bool = False,
+        comic_operation_id: str = "",
     ):
         root_dir = os.path.abspath(os.curdir)
         if not base_log_dir:
@@ -197,11 +198,12 @@ class RunLogger:
                 state.get("response_transport") == "background"
                 and state.get("status") != "submission_unknown"
             )
+            resumable_comic = bool(comic_operation_id) and state.get("mode") == "COMIC" and state.get("comic_operation_id") == comic_operation_id
             if (
                 (not state.get("generate_batch") and not resumable_response)
                 or state.get("batch_id")
                 or state.get("submission_unknown")
-            ):
+            ) and not resumable_comic:
                 raise ValueError("Běh nemá dávku bezpečně připravenou k pokračování.")
         else:
             os.makedirs(run_dir, exist_ok=False)

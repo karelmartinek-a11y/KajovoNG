@@ -51,3 +51,8 @@ Dokončeno, částečný výsledek, zastavení, předání dávky, čekání na 
 Snímkování používá dočasné ukázkové podklady, blokuje síť a čtení skutečných klíčů. Zelený testovací obrázek slouží geometrii galerie. Automatické funkční testy nahrazují vzdálené služby a pracují se skutečnými dočasnými soubory. Snímky neprokazují úspěšnost placené operace u poskytovatele.
 
 ![Zadání řídicího studia](ui/after/1366x900/run.png)
+
+
+## Komiks
+
+Sekce `comics` používá skutečný ComicsPage a existující Operations. Karty Panely, Postavy, Prostředí, Styl / Bible a Historie sdílejí trvalou knihovnu. Akce mají prefix `comic.*`; atomické tokeny a editovatelné textové vrstvy zajišťuje `comic_editor.py`. Uložení, validace, generování, retry, zrušení, schválení verze i export mají doménový protějšek. Kontrakty, obsluha a konkrétní testy jsou v [COMICS.md](COMICS.md).

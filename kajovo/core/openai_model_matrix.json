@@ -1,5 +1,5 @@
 {
-  "version": "2026-09-10.1",
+  "version": "2026-09-14.1",
   "checked_at": "2026-09-10",
   "sources": {
     "batch": {
@@ -6372,7 +6372,50 @@
       ],
       "notes": [
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
-      ]
+      ],
+      "image_capabilities": {
+        "endpoints": [
+          "/v1/images/generations",
+          "/v1/images/edits"
+        ],
+        "batch": true,
+        "max_references": 16,
+        "max_input_bytes": 49999999,
+        "input_formats": [
+          "PNG",
+          "JPEG",
+          "WEBP"
+        ],
+        "max_input_pixels": 64000000,
+        "max_prompt_chars": 32000,
+        "quality": [
+          "auto",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "background": [
+          "auto",
+          "opaque",
+          "transparent"
+        ],
+        "input_fidelity": [],
+        "min_pixels": 655360,
+        "max_pixels": 8294400,
+        "max_edge": 3840,
+        "multiple": 16,
+        "max_ratio": 3,
+        "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
+        "verified_on": "2026-09-14",
+        "standard_pixels": 3686400
+      }
     },
     "gpt-image-2.5-flare-2026-09-08": {
       "source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare",
@@ -6415,7 +6458,50 @@
       ],
       "notes": [
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
-      ]
+      ],
+      "image_capabilities": {
+        "endpoints": [
+          "/v1/images/generations",
+          "/v1/images/edits"
+        ],
+        "batch": true,
+        "max_references": 16,
+        "max_input_bytes": 49999999,
+        "input_formats": [
+          "PNG",
+          "JPEG",
+          "WEBP"
+        ],
+        "max_input_pixels": 64000000,
+        "max_prompt_chars": 32000,
+        "quality": [
+          "auto",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "background": [
+          "auto",
+          "opaque",
+          "transparent"
+        ],
+        "input_fidelity": [],
+        "min_pixels": 655360,
+        "max_pixels": 8294400,
+        "max_edge": 3840,
+        "multiple": 16,
+        "max_ratio": 3,
+        "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
+        "verified_on": "2026-09-14",
+        "standard_pixels": 3686400
+      }
     },
     "gpt-image-2.5-sunburst": {
       "source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst",
@@ -6458,7 +6544,50 @@
       ],
       "notes": [
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
-      ]
+      ],
+      "image_capabilities": {
+        "endpoints": [
+          "/v1/images/generations",
+          "/v1/images/edits"
+        ],
+        "batch": true,
+        "max_references": 16,
+        "max_input_bytes": 49999999,
+        "input_formats": [
+          "PNG",
+          "JPEG",
+          "WEBP"
+        ],
+        "max_input_pixels": 64000000,
+        "max_prompt_chars": 32000,
+        "quality": [
+          "auto",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "background": [
+          "auto",
+          "opaque",
+          "transparent"
+        ],
+        "input_fidelity": [],
+        "min_pixels": 655360,
+        "max_pixels": 8294400,
+        "max_edge": 3840,
+        "multiple": 16,
+        "max_ratio": 3,
+        "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
+        "verified_on": "2026-09-14",
+        "standard_pixels": 3686400
+      }
     },
     "gpt-image-2.5-sunburst-2026-09-08": {
       "source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst",
@@ -6501,7 +6630,50 @@
       ],
       "notes": [
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
-      ]
+      ],
+      "image_capabilities": {
+        "endpoints": [
+          "/v1/images/generations",
+          "/v1/images/edits"
+        ],
+        "batch": true,
+        "max_references": 16,
+        "max_input_bytes": 49999999,
+        "input_formats": [
+          "PNG",
+          "JPEG",
+          "WEBP"
+        ],
+        "max_input_pixels": 64000000,
+        "max_prompt_chars": 32000,
+        "quality": [
+          "auto",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "background": [
+          "auto",
+          "opaque",
+          "transparent"
+        ],
+        "input_fidelity": [],
+        "min_pixels": 655360,
+        "max_pixels": 8294400,
+        "max_edge": 3840,
+        "multiple": 16,
+        "max_ratio": 3,
+        "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
+        "verified_on": "2026-09-14",
+        "standard_pixels": 3686400
+      }
     },
     "gpt-live-transcribe": {
       "source": "https://developers.openai.com/api/docs/models/gpt-live-transcribe",

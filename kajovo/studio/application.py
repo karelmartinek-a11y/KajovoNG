@@ -19,6 +19,7 @@ from .context import StudioContext
 from .history import HistoryPage
 from .operations import Operations
 from .photos import PhotosPage
+from .comics import ComicsPage
 from .resources import ResourcesPage
 from .settings import SettingsPage
 from .versions import VersionsPage
@@ -176,6 +177,7 @@ class StudioWindow(QMainWindow):
         self.cascades = CascadesPage(self.context)
         self.resources = ResourcesPage(self.context)
         self.photos = PhotosPage(self.context)
+        self.comics = ComicsPage(self.context)
         self.batches = BatchesPage(self.context)
         self.history = HistoryPage(self.context, self.workbench)
         self.versions = VersionsPage(self.context)
@@ -200,6 +202,7 @@ class StudioWindow(QMainWindow):
         )
         for key, title, page in (
             ("run", "Zadání", self.workbench), ("photos", "Fotografie", self.photos),
+            ("comics", "Komiks", self.comics),
             ("cascade", "Kaskády", self.cascades), ("resources", "Zdroje", self.resources),
             ("batch", "Dávky", self.batches), ("history", "Historie", self.history),
             ("versions", "Verze projektu", self.versions), ("models", "Modely", self.models),
@@ -219,9 +222,20 @@ class StudioWindow(QMainWindow):
         side.addWidget(action("converter.open", "Převod textů", self.open_converter))
         self.operations.changed.connect(self.update_activity)
         self.history.activate_workbench.connect(lambda: self.select_page("run"))
+        self.history.activate_comic.connect(self.open_comic_operation)
         self.shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
         self.shortcut.activated.connect(self.start_current)
         self.select_page("run")
+
+    def open_comic_operation(self, identifier):
+        try:
+            operation = self.comics.service.store.get("operations", identifier)
+            self.comics.project_id = operation["project_id"]
+            self.comics.refresh_projects()
+            self.comics.tabs.setCurrentIndex(4)
+            self.select_page("comics")
+        except ValueError as error:
+            self.history.notice.setText(str(error))
 
     def select_page(self, key):
         self.stack.setCurrentIndex(list(self.pages).index(key))
@@ -298,6 +312,10 @@ class StudioWindow(QMainWindow):
             event.ignore()
             self.operations.show_all()
         else:
+            if not self.comics.save_pending():
+                self.select_page("comics")
+                event.ignore()
+                return
             for dialog in list(self.detached.values()):
                 dialog.reject()
             for record in self.operations.records.values():

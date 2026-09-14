@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 venv/
 LOG/
+COMICS/
 cache/
 /diagnostics/
 RUN_*/

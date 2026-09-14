@@ -99,6 +99,20 @@ def main():
                 window.photos.job_list.addItem(item)
                 window.photos.job_list.setCurrentItem(item)
 
+                comic = window.comics
+                comic.timer.stop()
+                project = comic.service.store.project("Ukázka rozhraní – Večer v kanceláři")
+                karel = comic.service.store.entity(project, "character", "Karel", "Ukázková entita bez generované reference")
+                room = comic.service.store.entity(project, "environment", "Kancelář", "Ukázkové prostředí bez generované reference")
+                panel = comic.service.store.panel(project, "Příchod do kanceláře")
+                record = comic.service.store.get("panels", panel)
+                comic.service.store.save_panel(panel, record["revision"], record["name"], {"version": 1, "nodes": [
+                    {"type": "character_ref", "entity_id": karel}, {"type": "text", "text": " otevírá dveře do "},
+                    {"type": "environment_ref", "entity_id": room}, {"type": "text", "text": ". Večerní světlo, klidná atmosféra."},
+                ]}, record["format"], [])
+                comic.project_id = project
+                comic.refresh_projects()
+
                 def capture(widget, name, include_scroll=True):
                     if isinstance(widget, QDialog):
                         width, height = map(int, args.size.split(","))

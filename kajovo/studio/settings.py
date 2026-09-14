@@ -14,6 +14,7 @@ from .components import Form, action, actions, caption, confirm, scroll, vertica
 
 
 LABELS = {
+    "comic_library_dir": "Adresář knihovny komiksů",
     "log_dir": "Adresář evidence", "cache_dir": "Adresář pracovní paměti",
     "batch_poll_interval_s": "Interval kontroly dávky v sekundách",
     "batch_timeout_s": "Místní limit sledování dávky v sekundách",

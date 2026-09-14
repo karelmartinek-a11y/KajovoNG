@@ -84,6 +84,11 @@ def _chain(error: BaseException) -> list[BaseException]:
 def describe_error(error: BaseException, *, operation: str = "Operaci") -> UserError:
     """Neznámou příčinu nedoplňuje odhadem ani podle podobnosti volného textu."""
     chain = _chain(error)
+    from .comic_types import ComicError
+    for item in chain:
+        if isinstance(item, ComicError):
+            return UserError("comic", item.code, str(item), True, str(item),
+                             "Opravte uvedené zadání nebo obnovte uloženou operaci.", item.retryable)
     detail = "\n\n".join(f"{type(item).__name__}: {item}" for item in chain)
     for item in chain:
         if isinstance(item, subprocess.CalledProcessError):

@@ -28,6 +28,9 @@ def rows():
             "prompt_cache_retention": ",".join(spec["cache_retention"]), "prompt_cache_options": spec["cache_options"],
             "all_documented_features": ",".join(spec["features"]),
             "all_documented_endpoints": ",".join(route for _,route in spec["endpoints"]),
+            "comic_image_batch": bool(spec.get("image_capabilities", {}).get("batch")),
+            "comic_image_references": spec.get("image_capabilities", {}).get("max_references", ""),
+            "comic_image_qualities": ",".join(spec.get("image_capabilities", {}).get("quality", [])),
             "notes": " ".join(spec["notes"]), "source": spec["source"], "source_sha256": spec["source_sha256"],
         }
 
@@ -49,7 +52,8 @@ def export(root):
         "Prázdný seznam effort znamená parametr vynechat. Dostupnost pro konkrétní účet, region a aktuální stav prostředků ověřuje API.", "",
         "Modelová stránka GPT-5.2 Pro a GPT-5.4 Pro nepotvrzuje Batch ani strict Structured Outputs. "
         "Tyto modely aplikace konzervativně blokuje. Přímé soubory vycházejí také z [File inputs](https://developers.openai.com/api/docs/guides/file-inputs); PDF vyžaduje vision. "
-        "Ostatní nástroje a endpointy OpenAI uvádí CSV informativně; aplikace implementuje generování pouze přes Responses a nástroj file_search.", "",
+        "Komiks používá také přímé Image API; sloupce comic_image_* vycházejí ze společného obrazového kontraktu. "
+        "Obrazové limity a jejich použití popisuje [Komiks](COMICS.md). Ostatní endpointy jsou informativní.", "",
         "| Model | LIVE | BATCH | Effort | Sampling | Soubor / obrázek / file search | Maximum výstupu |",
         "|---|---|---|---|---|---|---|"]
     flag = lambda x: "ano" if x else "ne"

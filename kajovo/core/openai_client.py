@@ -126,6 +126,34 @@ class OpenAIClient:
             f"{method} {path} failed: {self._safe_err_excerpt(last_error or 'unknown error')}"
         )
 
+    def create_image(self, endpoint, body):
+        """Jediný pracovní obrazový POST; neurčitý výsledek se neopakuje."""
+        from .image_runtime import validate_image_request
+        validate_image_request(endpoint, body)
+        return self._req("POST", endpoint.removeprefix("/v1"), json_body=body, max_attempts=1)
+
+    def create_image_batch(self, input_file_id, rows):
+        from .image_runtime import validate_image_request
+        self._validate_resource_id(input_file_id)
+        ids, models, endpoints = set(), set(), set()
+        if not 1 <= len(rows) <= 50000:
+            raise ValueError("Obrazová dávka vyžaduje 1 až 50 000 položek.")
+        for row in rows:
+            cid = row.get("custom_id")
+            self._validate_resource_id(cid)
+            if cid in ids or row.get("method") != "POST":
+                raise ValueError("Neplatná nebo duplicitní položka dávky.")
+            ids.add(cid)
+            validate_image_request(row["url"], row["body"])
+            endpoints.add(row["url"])
+            models.add(row["body"]["model"])
+        if len(models) != 1 or len(endpoints) != 1:
+            raise ValueError("Dávka musí mít jeden model a endpoint.")
+        return self._req("POST", "/batches", json_body={
+            "input_file_id": input_file_id, "endpoint": next(iter(endpoints)),
+            "completion_window": "24h", "output_expires_after": {"anchor": "created_at", "seconds": 2592000},
+        }, max_attempts=1)
+
     def list_models(self) -> List[Dict[str, Any]]:
         if self._sdk is not None:
             try:
@@ -558,6 +586,25 @@ class OpenAIClient:
         ]
         if not 1 <= len(rows) <= 50000:
             raise ValueError("Dávka vyžaduje 1 až 50000 požadavků.")
+        image_endpoints = {"/v1/images/generations", "/v1/images/edits"}
+        if any(isinstance(row, dict) and row.get("url") in image_endpoints for row in rows):
+            from .image_runtime import image_capability, validate_image_request
+            ids, endpoints, image_models = set(), set(), set()
+            for row in rows:
+                if not isinstance(row, dict) or set(row) != {"custom_id", "method", "url", "body"}:
+                    raise ValueError("Neplatný řádek obrazové dávky.")
+                self._validate_resource_id(row["custom_id"])
+                if row["custom_id"] in ids or row["method"] != "POST" or row["url"] not in image_endpoints:
+                    raise ValueError("Neplatné ID nebo endpoint obrazové dávky.")
+                validate_image_request(row["url"], row["body"])
+                if not image_capability(row["body"]["model"])["batch"]:
+                    raise ValueError("Model nepodporuje obrazový Batch.")
+                ids.add(row["custom_id"])
+                endpoints.add(row["url"])
+                image_models.add(row["body"]["model"])
+            if len(endpoints) != 1 or len(image_models) != 1:
+                raise ValueError("Obrazový dávkový soubor vyžaduje jeden endpoint a model.")
+            return rows
         seen = set()
         models = set()
         for row in rows:

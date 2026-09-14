@@ -282,3 +282,19 @@ Nové LIVE A3/B3 používá FileContext stejně jako Batch v3. První chunk nem�
 ### Parametry obrazové editace
 
 Společná validace `photo_batch.validate_image_edit_parameters` probíhá před vytvořením úlohy i před prvním uploadem. Model musí podporovat editaci v pracovní dávce podle pevné matice. GPT Image 2 dovoluje vlastní rozměry dělitelné 16, nejvýše 3840 bodů na hranu, poměr stran nejvýše 3 : 1 a plochu 655360 až 8294400 bodů. Starší modely používají automatickou velikost, 1024 × 1024, 1536 × 1024 nebo 1024 × 1536. Formáty jsou png, jpeg a webp. Hodnota uvedená poskytovatelem sama neobchází lokální zákaz dávkového modelu. Zdroje a validační důkazy jsou v `docs/ui/validation-plan.csv`.
+
+## Komiks
+
+Desktopové studio obsahuje samostatnou sekci Komiks. Projekt má uložené nastavení stylu, explicitní typografická pravidla, bubliny, SFX, paletu, obrazové podklady, verzovanou strict bibli, knihovnu postav a prostředí, nezávislé panely a historii. Technický transport zůstává v existujícím `kajovo.core.openai_client`; nevzniká paralelní poskytovatel ani webové IPC. Doménové příkazy `ComicService` používají existující Operations, ProgressEvent, ResponseJournal, RunLogger a Run Bundle. Úplný kontrakt a konkrétní vazby na testy jsou v [COMICS.md](COMICS.md).
+
+`ComicStore` ukládá metadata do vlastní knihovny SQLite a neměnné obrázky do souborů. Migrace 1 je atomická, zapíná FK; revize chrání souběžné změny a OS zámek vlastnictví operace. Historické podklady se nepřepisují. Projekt má vratný koš. Prompt je verzované AST s textem a atomickými odkazy na entity; backend kontroluje jejich typ, příslušnost a stav. Žádná entita není povinná.
+
+Bible a canonical descriptory používají skutečné Responses se strict schématem. Explicitní volby mají přednost před odvozenými pravidly. Reference postav/prostředí vznikají živou editací. Hotové panely i následná editace používají skutečné Image Batch API. Modely, limity a syntaxe vycházejí z pevné capability matice. Výchozí obrazový model je `gpt-image-2.5-sunburst-2026-09-08`, kvalita `max`; textový `gpt-6-astra`. Dokumentovaná dostupnost se nezaměňuje s oprávněním konkrétního účtu.
+
+Každý panel má vlastní cílové rozměry a nezávislý custom_id. Aplikační operace se dělí pouze podle endpointu a limitů API. Snapshoty a stav přežijí restart. Neurčitý submit se nesmí slepě opakovat. Stažené výsledky se archivují před parsováním a mapují podle custom_id; úspěšné panely přežijí částečné selhání. Opakování chyb neposílá úspěšné položky. Progress uvádí skutečnou etapu a známé počty, nikoli odhadovaná procenta.
+
+Nativní generovací rozměr a finální raster jsou odlišné pojmy. Finální canvas vzniká deterministickým crop/pad/resize bez protažení, papírové formáty mají výchozích 300 DPI. Přesné texty jsou samostatné editovatelné Qt vrstvy; stejný renderer vytváří náhled i export. Přetečený text blokuje export. Obrazová editace vytváří kandidátní verzi, schválení a obnova jsou explicitní. Textová i canvas editace vytvářejí verze bez API volání. Vizuální identita je podporována referencemi a bibli, nikoli zaručena determinismem modelu.
+
+Upload ověřuje obsah a limity, originál uchovává v místní knihovně, pracovní kopie normalizuje orientaci a metadata. Žádné veřejné anonymní URL ani klientské klíče nevznikají. Base64 obrázky nepatří do textových logů; přesná provider evidence může být bezeztrátový binární archiv s hashovaným odkazem. Usage a cena se evidují jen v rozsahu doložených dat. Neznámá cena není nula.
+
+Placená ruční akceptace Komiksu je oddělený výslovně spuštěný pracovní scénář, nikoli preflight ani součást běžných testů. Testovací PASS nelze použít místo dokladu dokončené živé operace nebo vizuální kontroly. Produkční distribuce zůstává desktopové sestavení podle `Build/README.md`; nevzniká ad-hoc serverové nasazení.

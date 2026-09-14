@@ -131,3 +131,8 @@ Vzdálený stav Batch `completed` znamená pouze, že provider dokončil dávku.
 ## Immutabilita a pokračování
 
 Prohlížení Historie zdrojový běh nemění. `Pokračovat`, `ReRun`, `Opravit`, `Klonovat` a `Použít v novém běhu` vytvářejí nový běh nebo pouze připraví UI pro vznik nového běhu. Nový běh dostane LineageRecord. Odeslaný Batch se nikdy neklonuje druhým submittem; dokončuje se ve svém původním běhu.
+
+
+## Obrazová evidence Komiksu
+
+Režim `COMIC` ukládá `comic_operation_id`, `comic_library_dir` a `comic_batch_ids`. Obnova RunLogger je povolena jen pro totožné ID komiksové operace. Obrázkové odpovědi používají `image_evidence_version=1`: `b64_json` je reprezentováno přesným binárním artefaktem a údaji `binary_artifact.asset_id`, `artifact_id`, `encoding=base64`. Kompletní stažený provider soubor je bezeztrátový gzip binární artefakt. Textové logy neobsahují base64. Requesty, usage, provider IDs, snapshoty a hashe zůstávají trasovatelné. Místní knihovna drží normalizovaná metadata a výsledné verze; Historie nabízí návrat do Komiksu.

@@ -34,7 +34,7 @@ def studio(qtbot, tmp_path, monkeypatch):
 
 
 def test_factory_installs_all_production_pages_without_remote_reads(studio):
-    assert set(studio.pages) == {"run", "photos", "cascade", "resources", "batch", "history", "versions", "models", "settings", "help"}
+    assert set(studio.pages) == {"run", "photos", "comics", "cascade", "resources", "batch", "history", "versions", "models", "settings", "help"}
     assert not studio.context.client().mock_calls
     for page in studio.pages.values():
         assert type(page).__module__.startswith(("kajovo.studio", "PySide6"))

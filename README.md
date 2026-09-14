@@ -38,7 +38,9 @@ Testy používají náhrady API a nevyžadují skutečný klíč. Standardní CI
 
 ## Práce s aplikací
 
-V levé navigaci jsou **Zadání, Fotografie, Kaskády, Zdroje, Dávky, Historie, Verze projektu, Modely, Nastavení a Nápověda**. [Úplný inventář a návrh](docs/UI_DESIGN.md) obsahuje mapu funkcí, parametrů a validačních pravidel.
+V levé navigaci jsou **Zadání, Fotografie, Komiks, Kaskády, Zdroje, Dávky, Historie, Verze projektu, Modely, Nastavení a Nápověda**. [Úplný inventář a návrh](docs/UI_DESIGN.md) obsahuje mapu funkcí, parametrů a validačních pravidel.
+
+V **Komiksu** založte projekt, nastavte styl a sestavte bibli. Přidejte referenční fotografie postav a prostředí, vytvořte jejich komiksové reference a vkládejte je do zadání panelů jako nedělitelné tokeny. Vybrané panely se generují v obnovitelných dávkách. Každý má vlastní rozměry, editovatelné textové bubliny, historii verzí a export. Následná úprava kresby zachová původní verzi. Knihovnu `COMICS` zálohujte celou; cestu lze změnit v Nastavení. [Podrobná obsluha, limity API a obnova](docs/COMICS.md).
 
 V **Zadání** vyplňte projekt, režim, model a prompt. GENERATE vytváří soubory, MODIFY upravuje existující IN, QA vrací text a QFILE jeden úplný soubor. Adresáře a pokročilé volby mají vlastní kartu; diagnostika a výsledek také. Připojené zdroje jsou vidět v souhrnu zadání. **Spustit**, **Zastavit** a **Aktivní běhy** zůstávají pod pracovní plochou.
 

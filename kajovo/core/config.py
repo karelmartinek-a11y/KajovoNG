@@ -86,6 +86,7 @@ class SSHSettings:
 
 @dataclass
 class AppSettings:
+    comic_library_dir: str = "COMICS"
     log_dir: str = "LOG"
     cache_dir: str = "cache"
     retry: RetryPolicy = field(default_factory=RetryPolicy)

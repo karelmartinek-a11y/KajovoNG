@@ -1,6 +1,6 @@
 # Pevná matice modelů OpenAI
 
-Verze 2026-09-10.1. 169 přesných identifikátorů a snapshotů; 65 povolených pro pracovní Responses.
+Verze 2026-09-14.1. 169 přesných identifikátorů a snapshotů; 65 povolených pro pracovní Responses.
 
 Úplná pole obsahuje [CSV](MODEL_MATRIX.csv); kombinace pracovních postupů [matice požadavků](REQUEST_MATRIX.md). Pravidla jsou součástí balíčku `kajovo/core/openai_model_matrix.json`. Za běhu se nestahují ani neodvozují z názvů modelů.
 
@@ -8,7 +8,7 @@ LIVE/BATCH v této tabulce znamená použitelnost v aplikaci (vždy strict JSON 
 
 Sampling: `always` = temperature 0–2 a top_p 0–1; `explicit_none` = stejné rozsahy pouze s explicitním reasoning.effort=none; `omit` = aplikace parametr nepovoluje. U variant bez jednoznačné dokumentace jde o konzervativní omezení aplikace, nikoli důkaz, že OpenAI odmítá každou hodnotu. Prázdný seznam effort znamená parametr vynechat. Dostupnost pro konkrétní účet, region a aktuální stav prostředků ověřuje API.
 
-Modelová stránka GPT-5.2 Pro a GPT-5.4 Pro nepotvrzuje Batch ani strict Structured Outputs. Tyto modely aplikace konzervativně blokuje. Přímé soubory vycházejí také z [File inputs](https://developers.openai.com/api/docs/guides/file-inputs); PDF vyžaduje vision. Ostatní nástroje a endpointy OpenAI uvádí CSV informativně; aplikace implementuje generování pouze přes Responses a nástroj file_search.
+Modelová stránka GPT-5.2 Pro a GPT-5.4 Pro nepotvrzuje Batch ani strict Structured Outputs. Tyto modely aplikace konzervativně blokuje. Přímé soubory vycházejí také z [File inputs](https://developers.openai.com/api/docs/guides/file-inputs); PDF vyžaduje vision. Komiks používá také přímé Image API; sloupce comic_image_* vycházejí ze společného obrazového kontraktu. Obrazové limity a jejich použití popisuje [Komiks](COMICS.md). Ostatní endpointy jsou informativní.
 
 | Model | LIVE | BATCH | Effort | Sampling | Soubor / obrázek / file search | Maximum výstupu |
 |---|---|---|---|---|---|---|
@@ -181,6 +181,3 @@ Modelová stránka GPT-5.2 Pro a GPT-5.4 Pro nepotvrzuje Batch ani strict Struct
 | [tts-1](https://developers.openai.com/api/docs/models/tts-1) | ne | ne | — | omit | ne / ne / ne | — |
 | [tts-1-hd](https://developers.openai.com/api/docs/models/tts-1-hd) | ne | ne | — | omit | ne / ne / ne | — |
 | [whisper-1](https://developers.openai.com/api/docs/models/whisper-1) | ne | ne | — | omit | ne / ne / ne | — |
-
-
-Souborové GENERATE/MODIFY používá [Context Compiler a rozpočet](CONTEXT_COMPILER.md). Průběh ukazuje odhad vstupu, model, reasoning a output budget; úplný rozpad a usage jsou v lokálním cost_context_report.json. Modelová matice zůstává zdrojem kapacit; klasifikace souboru ji nemění.

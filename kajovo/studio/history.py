@@ -23,6 +23,7 @@ from .evidence import EvidenceView, VALUES
 
 class HistoryPage(QWidget):
     activate_workbench = Signal()
+    activate_comic = Signal(str)
 
     def __init__(self, context, workbench, parent=None):
         super().__init__(parent)
@@ -67,9 +68,20 @@ class HistoryPage(QWidget):
                                action("history.rerun", "Znovu spustit od checkpointu", lambda: self.resume(relation="rerun")),
                                action("history.repair", "Opravit od checkpointu", lambda: self.resume(relation="repair"))))
         root.addWidget(actions(action("history.step", "Detail kroku", self.step_detail),
+                               action("history.comic", "Otevřít komiks", self.open_comic),
                                action("history.artifact", "Otevřít nebo exportovat soubor", self.artifact),
                                action("history.reuse", "Použít soubor v novém zadání", lambda: self.artifact(reuse=True)),
                                action("history.integrity", "Ověřit integritu", self.verify)))
+
+    def open_comic(self):
+        if not self.adapter:
+            self.notice.setText("Nejprve vyberte běh komiksu.")
+            return
+        state = read_state(self.adapter.root)
+        if state.get("mode") != "COMIC" or not state.get("comic_operation_id"):
+            self.notice.setText("Vybraný běh nepatří komiksu.")
+            return
+        self.activate_comic.emit(state["comic_operation_id"])
 
     def refresh(self):
         root = self.context.settings.log_dir
