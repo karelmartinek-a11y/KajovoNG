@@ -71,6 +71,9 @@ def test_complete_offline_workflow(tmp_path, mode, maximum_quality):
         canonical[key][0]["behavior"] = "Úplný obsah po nezávislé kontrole návrhu."
         payloads.insert(-1, canonical)
     client = Mock()
+    from kajovo.core.context_compiler import content_hash
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 1000, "request_hash": content_hash(payload)}
     client.upload_file.return_value = {"id": "file_test"}
     client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 100}
     client.create_response.side_effect = [response(index, item) for index, item in enumerate(payloads)]
@@ -232,6 +235,9 @@ def test_batch_uses_only_supported_jsonl_fields(tmp_path):
     in_dir.mkdir()
     worker.cfg.in_dir = str(in_dir)
     client = Mock()
+    from kajovo.core.context_compiler import content_hash
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 1000, "request_hash": content_hash(payload)}
     client.create_response.side_effect = [response(i, value) for i, value in enumerate(delivery_payloads("MODIFY"))]
     client.upload_file.return_value = {"id": "file_batch"}
     client.retrieve_file.return_value = {"id": "file_batch", "filename": "input.txt", "bytes": 100}

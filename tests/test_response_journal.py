@@ -167,6 +167,9 @@ def test_worker_recovers_preparation_and_file_without_reposting(tmp_path, mode, 
         results[-1:] = [response(3, first), response(4, last)]
         expected = first["content"] + last["content"]
     client = Mock()
+    from kajovo.core.context_compiler import content_hash
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 1000, "request_hash": content_hash(payload)}
     client.upload_file.return_value = {"id": "file_test"}
     client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 1}
     client.create_response.side_effect = results[:pending_index] + [{"id": results[pending_index]["id"], "status": "queued"}]
@@ -291,6 +294,9 @@ def test_restart_after_first_output_write_keeps_files_and_response_chain(tmp_pat
         for file in files:
             file["action"] = "add"
     client = Mock()
+    from kajovo.core.context_compiler import content_hash
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 1000, "request_hash": content_hash(payload)}
     client.upload_file.return_value = {"id": "file_test"}
     client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 1}
     client.create_response.side_effect = [response(i, item) for i, item in enumerate([*preparation, *files])]
