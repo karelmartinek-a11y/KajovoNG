@@ -7,7 +7,7 @@ from ..core.model_registry import selectable
 from ..core.config import save_settings, DEFAULT_SETTINGS_FILE
 from ..core.secret_store import persist_api_key, APIKeyStoreError
 from ..core.notifications import send_smtp_notification
-from .design import column, row, label, button, form, text, number, editor, scroll, combo
+from .design import column, row, label, button, form, text, number, editor, scroll, combo, notice
 from .dialogs import msg_info, msg_warning
 from .jobs import Jobs
 
@@ -72,9 +72,10 @@ class SettingsPage(QWidget):
         self.allow_sensitive.setChecked(settings.security.allow_upload_sensitive)
         sl.addWidget(self.allow_sensitive)
         sl.addWidget(
-            label(
-                "Redakce známých tajných polí je vždy aktivní. Šifrování logů není dostupné; chraňte adresář LOG.",
-                "Hint",
+            notice(
+                "Kanonická evidence běhů se v tomto důvěrném prostředí obsahově nerediguje. Chraňte přístup k adresáři LOG a Run Bundle; omezení uploadu vstupních souborů zůstává samostatnou bezpečnostní vrstvou.",
+                "warning",
+                "Forenzní evidence",
             )
         )
         self.deny_ext = editor("\n".join(settings.security.deny_extensions_in or []))
