@@ -88,9 +88,7 @@ def test_complete_offline_workflow(tmp_path, mode, maximum_quality):
         calls = [call.args[0] for call in client.create_response.call_args_list]
         assert all(CORE_INSTRUCTIONS in call["instructions"] for call in calls)
         assert all("reasoning" not in call for call in calls)
-        assert [call.get("previous_response_id") for call in calls[1:]] == [
-            *[f"resp_{index}" for index in range(len(calls) - 2)], None
-        ]
+        assert all("previous_response_id" not in call for call in calls)
         state = json.loads((tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(encoding="utf-8"))
         snapshot = state["preparation_snapshot"]
         assert snapshot["requirements"] == payloads[0]

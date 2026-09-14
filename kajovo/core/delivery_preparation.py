@@ -15,6 +15,8 @@ from .requirements import (
     requirements_format, stage_instructions, validate_traceability,
 )
 from .utils import safe_join_under_root, sha256_file
+from .context_budget import preparation_measurement
+from .structured_output import prepare_payload
 
 
 def validate_modify_sources(structure, root, items, completed_paths=()):
@@ -131,9 +133,10 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
         payload = worker._payload_base(
             model=model, instructions=stage_instructions(stage),
             input_parts=worker._input_parts(json.dumps(context, ensure_ascii=False),
-                                            input_files if index == 0 or mode == "MODIFY" else [],
-                                            input_images if index == 0 or mode == "MODIFY" else []),
-            prev_id=previous_id,
+                                            input_files, input_images),
+            # Pouze první syntéza může mít explicitní vnější historii.
+            # Další fáze dostávají úplný kanonický kontext právě jednou.
+            prev_id=previous_id if index == 0 else None,
             supports_temperature=worker._model_caps(model).get("supports_temperature", False),
         )
         payload["text"] = fmt
@@ -161,9 +164,16 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
             payload["tools"] = tools
         for attempt in range(3 if index >= 2 else 1):
             worker._check_stop()
+            worker._set(10 + index * 8, 0, labels[index] + ": ověřuji kapacitu vstupu…", stage=stage)
+            prepare_payload(payload)
+            measurement = preparation_measurement(payload, client)
+            worker._set(10 + index * 8, 0,
+                        f"{labels[index]} · vstup {'=' if measurement['input_tokens_exact'] else '~'}"
+                        f"{measurement['input_tokens']:,} tokenů · výstupní rezerva {measurement['output_budget']:,}",
+                        stage=stage)
             worker.log.save_json("requests", f"{stage}_request_{attempt}", {"payload": payload, "ui_state": worker.cfg.__dict__})
             worker._log_api_action(stage, "send", {"contract": fmt["format"]["name"], "model": model})
-            response = worker._create_response(client, payload)
+            response = worker._create_response(client, payload, measurement=measurement)
             worker.log.save_json("responses", f"{stage}_response_{response.get('id', 'NOID')}", response)
             previous_id = str(response.get("id") or "")
             if not previous_id:
@@ -182,9 +192,8 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
             except ContractError as exc:
                 if attempt == 2:
                     raise
-                payload["previous_response_id"] = previous_id
                 repair_context = {**context, "structure": value, "validation_errors": str(exc)}
-                payload["input"] = worker._input_parts(json.dumps(repair_context, ensure_ascii=False), [], [])
+                payload["input"] = worker._input_parts(json.dumps(repair_context, ensure_ascii=False), input_files, input_images)
         snapshot[("requirements", "plan", "structure", "structure")[index]] = value
         snapshot.update(canonical_stage=stage, response_id=previous_id)
         snapshot.pop("snapshot_hash", None)

@@ -163,3 +163,42 @@ def enforce_budget(report):
         error.context_report = report
         raise error
     return report
+
+
+def checked_measurement(payload, client, **kwargs):
+    """Při nejisté kapacitě změří skutečný vstup bez generativního požadavku."""
+    report = measure_request(payload, **kwargs)
+    unresolved = set(report["unknown_components"]) - {"budoucí retrieval"}
+    if report["blockers"] or unresolved:
+        try:
+            measured = client.count_input_tokens(payload)
+            if (not isinstance(measured, dict)
+                    or measured.get("request_hash") != content_hash(payload)
+                    or type(measured.get("input_tokens")) is not int
+                    or measured["input_tokens"] < 0):
+                raise ValueError("Měření tokenů není platné pro tento požadavek.")
+        except Exception as exc:
+            report["blockers"].append("Kapacitu vstupu nelze bezpečně ověřit; ne-generativní měření tokenů selhalo.")
+            report["status"] = "blocked"
+            error = ContractError(report["blockers"][-1])
+            error.context_report = report
+            raise error from exc
+        report = measure_request(payload, exact_input_tokens=measured["input_tokens"], **kwargs)
+    return enforce_budget(report)
+
+
+def preparation_measurement(payload, client):
+    """Globální příprava má rozpočet modelu; limit jednoho souboru se nepřenáší."""
+    spec = model_spec(payload["model"])
+    window, output = spec["context_window"], spec["max_output_tokens"]
+    if not window or not output:
+        raise ContractError("Pro přípravu chybí doložená kapacita zvoleného modelu.")
+    payload["max_output_tokens"] = output
+    payload["truncation"] = "disabled"
+    hard = min(window - math.ceil(window * 0.10) - output, spec.get("max_input_tokens") or window)
+    if hard <= 0:
+        raise ContractError("Výstup a bezpečnostní rezerva vyčerpávají kapacitu modelu.")
+    return checked_measurement(payload, client, policy=BudgetPolicy(
+        soft_input_tokens=min(80000, hard), hard_input_tokens=hard,
+        long_context_threshold=PRICES.get(payload["model"], {}).get("long_context_threshold")),
+        justification="Globální příprava vyžaduje úplné zadání a kanonické podklady; bez opakované historie.")

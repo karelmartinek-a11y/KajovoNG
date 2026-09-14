@@ -86,6 +86,10 @@ Výchozí retry má šest pokusů, počáteční prodlevu 0,8 s, strop 20 s, jit
 
 Dlouhé zadání se ukládá přesně lokálně jako obnovitelný artefakt. Technický A0 neposílá generativní potvrzení částí; celý vstup přijímá pracovní A0R/B0R. Návaznost přípravy a její kanonické artefakty zůstávají zachované.
 
+Přípravné fáze A1/A2/A2Q a B1/B2/B2Q jsou samostatné požadavky bez `previous_response_id`. Obsahují úplné původní zadání, přílohy a aktuální kanonické podklady právě jednou, bez připojené serverové historie. Pouze A0R/B0R může převzít explicitní vnější response návaznost. Oprava struktury nahrazuje kandidáta v samostatném kontextu a zachovává přílohy; nenabaluje předchozí pokusy. Checkpoint v1 zůstává čitelný a při obnovení A1/B1 se použijí uložené requirements a plán, nikoli jejich starý response řetězec.
+
+Každý přípravný požadavek včetně oprav před odesláním projde `context_budget.preparation_measurement`. Zachová zvolený model a quality policy, rezervuje doložený maximální výstup modelu a 10 % kontextového okna, respektuje samostatný vstupní limit a zakazuje truncation. Globální příprava používá zbývající kapacitu modelu, nikoli provozní limit jednoho souboru 200k; důvod a varování pro široký vstup jsou v reportu. Při nevyhovující lokální horní mezi, přílohách nebo vnější historii je povinné ne-generativní měření skutečného vstupu vázané na hash požadavku. Nedostupné, neplatné nebo nadlimitní měření blokuje generování. Budoucí obsah retrievalu nelze přesně předem změřit; zůstává označenou nejistotou s rezervou, nikoli garancí dokončení.
+
 Žádný samostatný placený preflight se před pracovní operací neposílá. Lokální validace, čtení existujících metadat a samostatné ne-generativní měření tokenů nejsou generativní sondou.
 
 ### Requirements, kvalita a obnova přípravy
@@ -228,7 +232,7 @@ Zdrojový běh je v Historii neměnný. `Pokračovat`, `ReRun`, `Opravit`, `Klon
 
 Vzdálený Batch `completed` znamená pouze dokončení dávky poskytovatelem. Projekt není `completed`, dokud neproběhne požadovaný import a validace lokálního výsledku. Stejně tak Response se stavem `incomplete`, error nebo odmítnutím není úspěšná odpověď a nesmí být v Historii zobrazena jako `completed`.
 
-Aplikace neprovádí cenění, předběžné počítání tokenů, finanční kalkulace, potvrzování rozpočtů ani cenové audity mimo explicitně definovaný `cost_context_report` pro souborové dodání. Odpovědi API včetně původních metadat se ukládají do LOG bez změny důkazního obsahu. Zároveň platí tvrdý nákladový invariant: automatická validace nesmí přidávat samostatné generativní požadavky nebo dávky, jejichž jediným účelem je ověřit budoucí pracovní požadavek. Existující provozní databáze a cache se nemažou ani nemigrují; neznámé položky starého nastavení se při načtení ignorují.
+Aplikace neprovádí cenění, předběžné počítání tokenů, finanční kalkulace, potvrzování rozpočtů ani cenové audity mimo explicitně definovaný `cost_context_report` pro přípravu a souborové dodání. Odpovědi API včetně původních metadat se ukládají do LOG bez změny důkazního obsahu. Zároveň platí tvrdý nákladový invariant: automatická validace nesmí přidávat samostatné generativní požadavky nebo dávky, jejichž jediným účelem je ověřit budoucí pracovní požadavek. Existující provozní databáze a cache se nemažou ani nemigrují; neznámé položky starého nastavení se při načtení ignorují.
 
 ## Dokončení uložených dávek a výchozí model
 
@@ -276,7 +280,7 @@ Povinné kontroly jsou `python -m pytest -q`, `python -m ruff check --select F,B
 
 ## Kontext a náklady souborového dodání
 
-Nové LIVE A3/B3 používá FileContext stejně jako Batch v3. První chunk nemá historii přípravy ani přílohy celého IN; pokračování navazuje jen uvnitř souboru a používá hash kontextu/prefixu. Globální zdroje zůstávají v přesných obnovitelných artefaktech a kanonickém bezeztrátovém Run Bundle; evidence se obsahově nerediguje. Requesty se měří lokálně, pokračování může použít ne-generativní input token count. Placený generativní preflight není povolen. Lokální `cost_context_report.json` eviduje odhady, rozpočet, usage a incomplete důvody. Podrobný kontrakt, omezení integrační validace a scheduleru jsou v [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).
+Nové LIVE A3/B3 používá FileContext stejně jako Batch v3. První chunk nemá historii přípravy ani přílohy celého IN; pokračování navazuje jen uvnitř souboru a používá hash kontextu/prefixu. Globální zdroje zůstávají v přesných obnovitelných artefaktech a kanonickém bezeztrátovém Run Bundle; evidence se obsahově nerediguje. Requesty se měří lokálně, pokračování vyžaduje ne-generativní input token count se shodným hashem požadavku. Placený generativní preflight není povolen. Lokální `cost_context_report.json` eviduje odhady, rozpočet, usage a incomplete důvody. Podrobný kontrakt, omezení integrační validace a scheduleru jsou v [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).
 
 
 ### Parametry obrazové editace

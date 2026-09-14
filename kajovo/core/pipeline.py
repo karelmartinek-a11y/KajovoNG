@@ -1086,7 +1086,7 @@ class RunWorker(QThread):
         self._log_debug(f"A3: wrote missing files report -> {report_path} ({len(skipped_files)} entries)")
         return report_path
 
-    def _create_response(self, client, payload, *, attempt=0):
+    def _create_response(self, client, payload, *, attempt=0, measurement=None):
         from .cost_context_report import CostContextReport
         if attempt:
             payload = copy.deepcopy(payload)
@@ -1096,7 +1096,10 @@ class RunWorker(QThread):
             apply_quality(payload, self.cfg.maximum_quality)
         cost_report = CostContextReport(self.log.paths.run_dir)
         cost_payload = {**payload, "background": True, "store": True} if self._response_journal is not None else payload
-        cost_report.record(cost_payload, status="submitting")
+        if measurement is not None:
+            from .context_compiler import content_hash
+            measurement = {**measurement, "request_hash": content_hash(cost_payload)}
+        cost_report.record(cost_payload, measurement=measurement, status="submitting")
         self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
         self.progress_event.emit(ProgressEvent(self._progress_stage, "waiting", detail="Čekám na odpověď API."))
         try:
@@ -1748,7 +1751,7 @@ class RunWorker(QThread):
         model_override: Optional[str] = None,
     ) -> Tuple[str, str]:
         from .context_compiler import ContextCompiler, canonical
-        from .context_budget import configure_file_request, enforce_budget, measure_request
+        from .context_budget import configure_file_request, checked_measurement
         if not getattr(self, "_delivery_snapshot", None):
             raise ContractError("Souborová generace vyžaduje úplnou kanonickou přípravu FileContext.")
         compiler = ContextCompiler(self._delivery_snapshot)
@@ -1792,12 +1795,10 @@ class RunWorker(QThread):
                 payload["temperature"] = 0.0
 
             routing = configure_file_request(payload, compiled, maximum_quality=self.cfg.maximum_quality)
-            token_count = None
-            if parts:
-                measured = client.count_input_tokens(payload)
-                if isinstance(measured, dict):
-                    token_count = measured["input_tokens"]
-            report = enforce_budget(measure_request(payload, compiled=compiled, exact_input_tokens=token_count))
+            if tools:
+                payload["tools"] = tools
+            prepare_payload(payload)
+            report = checked_measurement(payload, client, compiled=compiled)
             self.progress_event.emit(ProgressEvent(contract[:2], detail=
                 f"{path} · vstup ~{report['input_tokens']:,} tokenů · {step_model} · "
                 f"reasoning {payload.get('reasoning', {}).get('effort', 'bez reasoning')} · "
@@ -1833,7 +1834,7 @@ class RunWorker(QThread):
             last_err: Optional[Exception] = None
             while attempt < max_attempts and parsed is None:
                 try:
-                    resp = self._create_response(client, payload, attempt=attempt)
+                    resp = self._create_response(client, payload, attempt=attempt, measurement=report)
                 except OutputContractError as exc:
                     self.log.save_json("responses", f"{contract}_invalid_{chunk_index}_{attempt}", exc.response)
                     last_err = exc
@@ -1841,7 +1842,7 @@ class RunWorker(QThread):
                               "invalid_output": extract_text_from_response(exc.response),
                               "instruction": "Oprav konkrétní chybu a vrať úplný platný chunk podle původního kontraktu."}
                     payload["input"] = self._input_parts(prompt + "\n" + canonical({"repair": repair}), [], [])
-                    enforce_budget(measure_request(payload, compiled=compiled))
+                    report = checked_measurement(payload, client, compiled=compiled)
                     attempt += 1
                     continue
                 resp_id = str(resp.get("id") or "")

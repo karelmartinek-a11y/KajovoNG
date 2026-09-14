@@ -45,6 +45,9 @@ def _scenario(tmp_path, mode, batch, maximum_quality):
 
 def _client(payloads):
     client = Mock()
+    from kajovo.core.context_compiler import content_hash
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 1000, "request_hash": content_hash(payload)}
     client.upload_file.return_value = {"id": "file_input"}
     client.retrieve_file.return_value = {"id": "file_input", "filename": "input.txt", "bytes": 100}
     client.create_batch.return_value = {"id": "batch_work"}
@@ -92,7 +95,7 @@ def test_delivery_eight_variants_use_canonical_preparation(tmp_path, mode, batch
     assert all(CORE_INSTRUCTIONS in call["instructions"] for call in calls)
     assert all("reasoning" not in call for call in calls)
     for index in range(1, len(preparation)):
-        assert calls[index]["previous_response_id"] == f"resp_{index - 1}"
+        assert "previous_response_id" not in calls[index]
         context = _input(calls[index])
         assert context["requirements"] == preparation[0]
         if index >= 2:
@@ -158,7 +161,7 @@ def test_partial_checkpoint_resumes_only_missing_stages(tmp_path, mode, maximum_
     results, errors = _run(resumed, next_client)
     assert not errors and len(results) == 1
     assert len(next_calls) == len(preparation) - completed_stages + 1
-    assert next_calls[0]["previous_response_id"] == checkpoint["response_id"]
+    assert "previous_response_id" not in next_calls[0]
     expected = preparation[completed_stages]["contract"]
     assert next_calls[0]["text"]["format"]["schema"]["properties"]["contract"]["enum"] == [expected]
     assert (tmp_path / "resumed" / "out" / "hello.txt").read_text(encoding="utf-8") == file["content"]
@@ -393,6 +396,12 @@ def test_live_file_chunks_keep_order_content_and_canonical_context(tmp_path, mod
     assert not errors and results[0]["status"] == "completed"
     assert Path(worker.cfg.out_dir, file["path"]).read_text(encoding="utf-8") == first["content"] + last["content"]
     assert calls[-1]["previous_response_id"] == f"resp_{len(preparation)}"
+    report = json.loads((Path(worker.log.paths.run_dir) / "cost_context_report.json").read_text("utf-8"))
+    rows = list(report["requests"].values())
+    assert len(rows) == len(calls)
+    continued = next(row for row in rows if row.get("response_id") == f"resp_{len(calls) - 1}")
+    assert continued["input_tokens_exact"] and continued["input_tokens"] == 1000
+    assert continued["status"] == "completed" and not continued["blockers"]
     for index, call in enumerate(calls[-2:]):
         assert "500 řádků" in call["instructions"]
         text = "".join(part["text"] for message in call["input"] for part in message["content"]
