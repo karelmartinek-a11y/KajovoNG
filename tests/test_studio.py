@@ -314,6 +314,11 @@ def test_history_resumes_partial_preparation_without_structure(studio, monkeypat
     assert studio.workbench.resume["resume_files"] == []
     assert studio.workbench.pending_lineage == {"source_run_id": "RUN_source", "relation_type": relation, "source_checkpoint_id": "safe"}
     assert studio.workbench.config().preparation_snapshot == saved
+    prefix = "A" if mode == "GENERATE" else "B"
+    assert studio.workbench.start_button.text() == "Pokračovat od " + prefix + ("1" if stage == "0R" else "2")
+    assert "RUN_source" in studio.workbench.resume_notice.text()
+    assert "Checkpoint: safe" in studio.workbench.resume_notice.text()
+    assert "Převezmu bez nové generace: " + prefix + "0R" in studio.workbench.resume_notice.text()
     assert checkpoint == original
     assert not studio.context.client().mock_calls
 

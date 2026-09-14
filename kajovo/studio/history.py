@@ -197,6 +197,8 @@ class HistoryPage(QWidget):
             self.workbench.resume = {"preparation_snapshot": snapshot, "completed_hashes": hashes, "skip_paths": list(hashes),
                                      "resume_prev_id": previous, "resume_files": copy.deepcopy(files), "response_id": previous}
             self.workbench.pending_lineage = {"source_run_id": self.adapter.run_id, "relation_type": relation, "source_checkpoint_id": dialog.value}
+            self.workbench.tabs.setCurrentIndex(0)
+            self.workbench.validate()
         except (ValueError, KeyError, OSError) as error:
             self.notice.setText(str(error))
             return
