@@ -83,10 +83,12 @@ def main():
             service.store.save_panel(panel, 2, f"Akceptace {index + 1}", {"version": 1, "nodes": nodes}, asdict(PanelFormat(1024 if index != 5 else 731, 1024 if index != 5 else 987)), [])
             state["panels"].append(panel)
         save()
-    if not run_once("batch", lambda: service.start_panels(project, state["panels"])):
+    panels_complete = run_once("batch", lambda: service.start_panels(project, state["panels"]))
+    panel = state["panels"][0]
+    if not service.store.get("panels", panel)["active_version"]:
         return
-    panel = state["panels"][-1]
-    if not run_once("edit", lambda: service.start_panels(project, [panel], "Změň kulaté hodiny na zelené. Ostatní zachovej.")):
+    edit_complete = run_once("edit", lambda: service.start_panels(project, [panel], "Změň barvu hrnku v ruce ženy na světle modrou. Ostatní zachovej."))
+    if not panels_complete or not edit_complete:
         return
     versions = service.store.rows("panel_versions", "panel_id=?", (panel,))
     service.store.restore_version(panel, versions[-1]["id"])

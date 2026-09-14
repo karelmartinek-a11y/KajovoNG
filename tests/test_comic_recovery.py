@@ -174,3 +174,18 @@ def test_reference_removal_preserves_historical_assets(comic, tmp_path):
     assert service.store.get("entities", entity)["active_revision"] is None
     assert service.store.asset_path(asset).is_file()
     assert len(service.store.rows("entity_revisions")) == 1
+
+
+def test_completed_panel_can_be_edited_while_other_group_runs(comic, tmp_path):
+    service, client, project = comic
+    entity = make_entity(service, project, tmp_path)
+    first = make_panel(service, project)
+    second = make_panel(service, project, [entity])
+    operation = service.start_panels(project, [first, second])
+    service.run(operation)
+    generation = next(b for b in service.store.rows("batches") if b["endpoint"].endswith("generations"))
+    client.complete(generation["provider_id"])
+    assert service.run(operation)["status"] == "batch_pending"
+    edit = service.start_panels(project, [first], "Změň barvu hrnku.")
+    assert service.store.get("operations", edit)["kind"] == "edit"
+    assert service.store.rows("batch_items", "panel_id=?", (second,))[0]["status"] == "submitted"
