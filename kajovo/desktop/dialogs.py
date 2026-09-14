@@ -258,7 +258,7 @@ class ProgressDialog(FitDialog):
             self.pb_sub.setFormat(f"%v / %m {self.clock.unit}")
         else:
             self.pb_sub.setRange(0, 0)
-        if self.clock.finished is not None:
+        if self.clock.finished is not None or (event.stage == "RUN" and event.state == "files_complete_unverified"):
             self.pb.setRange(0, 100)
             self.pb.setValue(100 if event.state == "completed" else 0)
             self.pb_sub.setRange(0, max(1, self.clock.total or 1))
@@ -378,7 +378,14 @@ class TaskProgressDialog(FitDialog):
             self.pb.setRange(0, 100)
             self.pb.setValue(0)
         self.btn_close.setEnabled(True)
+        self.btn_close.setText("OK")
+        self.btn_close.setDefault(True)
+        self.btn_close.setFocus()
         self.btn_cancel.setEnabled(False)
+        self.btn_cancel.hide()
+        if self.pb_sub.maximum() == 0:
+            self.pb_sub.setRange(0, 100)
+            self.pb_sub.setValue(0)
         self.timer.stop()
         self._tick()
 
