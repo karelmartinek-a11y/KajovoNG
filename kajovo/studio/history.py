@@ -192,7 +192,7 @@ class HistoryPage(QWidget):
             evidence = verified_output_evidence(self.adapter.root, ui.get("out_dir"))
             hashes = {row["path"]: row["sha256"] for row in evidence if row.get("sha256")}
             previous = snapshot.get("response_id") if snapshot else state.get("last_response_id")
-            structure = snapshot.get("structure", {}) if snapshot else {}
+            structure = (snapshot.get("structure") or {}) if snapshot else {}
             files = structure.get("touched_files" if ui.get("mode") == "MODIFY" else "files", [])
             self.workbench.resume = {"preparation_snapshot": snapshot, "completed_hashes": hashes, "skip_paths": list(hashes),
                                      "resume_prev_id": previous, "resume_files": copy.deepcopy(files), "response_id": previous}

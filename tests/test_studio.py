@@ -277,6 +277,47 @@ def test_history_does_not_resubmit_existing_batch(studio, monkeypatch, tmp_path)
     assert "duplicitní" in studio.history.notice.text()
 
 
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+@pytest.mark.parametrize("stage", ["0R", "1"])
+@pytest.mark.parametrize("relation", ["continue", "rerun", "repair"])
+def test_history_resumes_partial_preparation_without_structure(studio, monkeypatch, tmp_path, mode, stage, relation):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from PySide6.QtWidgets import QDialog
+    from kajovo.core.generate_batch import digest
+    from test_preparation_snapshot import snapshot
+
+    ui = studio.workbench.state()
+    ui.update(mode=mode, prompt="test", maximum_quality=False)
+    saved = snapshot(mode, stage=("A" if mode == "GENERATE" else "B") + stage)
+    saved["structure"] = None
+    if stage == "0R":
+        saved["plan"] = None
+    saved.pop("snapshot_hash")
+    saved["snapshot_hash"] = digest(saved)
+    checkpoint = {"state_snapshot": {"ui_state": ui, "preparation_snapshot": saved}}
+    original = deepcopy(checkpoint)
+    bundle = Mock()
+    bundle.validate_checkpoint.return_value = checkpoint
+    studio.history.adapter = SimpleNamespace(root=tmp_path, bundle=bundle, run_id="RUN_source")
+    studio.history.payload = {"checkpoints": [{"checkpoint_id": "safe", "safe_to_continue": True}]}
+    monkeypatch.setattr("kajovo.studio.history.ValueDialog", lambda *args, **kwargs: SimpleNamespace(exec=lambda: QDialog.Accepted, value="safe"))
+    monkeypatch.setattr("kajovo.studio.history.read_state", lambda root: {})
+    activated = Mock()
+    studio.history.activate_workbench.connect(activated)
+
+    studio.history.resume(relation=relation)
+
+    activated.assert_called_once_with()
+    bundle.validate_checkpoint.assert_called_once_with("safe")
+    assert studio.workbench.resume["preparation_snapshot"] == saved
+    assert studio.workbench.resume["resume_files"] == []
+    assert studio.workbench.pending_lineage == {"source_run_id": "RUN_source", "relation_type": relation, "source_checkpoint_id": "safe"}
+    assert studio.workbench.config().preparation_snapshot == saved
+    assert checkpoint == original
+    assert not studio.context.client().mock_calls
+
+
 def test_photo_submission_uses_only_explicit_selection(studio, monkeypatch, tmp_path):
     from PySide6.QtCore import Qt
     page = studio.photos
