@@ -67,7 +67,7 @@ class Operation:
     identifier: str
     title: str
     worker: QThread
-    dialog: "OperationDialog"
+    dialog: "OperationDialog | None"
     result: object = None
     error: UserError | None = None
     terminal: str = ""
@@ -235,6 +235,50 @@ class Operations(QObject):
         worker = Task(function, self)
         return self.adopt(title, worker, receive, cancellable=cancellable, popup=popup, output_dir=output_dir, identifier=identifier)
 
+    def start_read(self, title, function, receive=None, *, popup=False, identifier=None):
+        """Krátké lokální čtení bez konstrukce a uchovávání progresového dialogu.
+
+        Skutečné pracovní běhy používají nadále start/adopt, progres a zámky.
+        Čtení zůstává vlastněno managerem až do dokončení vlákna.
+        """
+        identifier = identifier or uuid4().hex
+        if identifier in self.records and not self.records[identifier].terminal:
+            return self.records[identifier]
+        worker = Task(function, self)
+        record = Operation(identifier, title, worker, None)
+        self.records[identifier] = record
+        worker.value.connect(lambda value: setattr(record, "result", value))
+        worker.failure.connect(lambda error: setattr(record, "error", error))
+
+        def finish():
+            record.terminal = "failed" if record.error else "completed"
+            if not record.error and receive:
+                try:
+                    receive(record.result)
+                except Exception as error:
+                    record.error = describe_error(error)
+                    record.terminal = "failed"
+            if self.records.get(identifier) is record:
+                self.records.pop(identifier, None)
+            self.completed.emit(identifier, record.result)
+            record.result = None
+            worker.deleteLater()
+            if record.error:
+                dialog = record.dialog or OperationDialog(title, self.parent(), self.reduced_motion)
+                dialog.finish("failed", record.error)
+                dialog.setAttribute(Qt.WA_DeleteOnClose)
+                dialog.show()
+            elif record.dialog:
+                record.dialog.finish("completed")
+                record.dialog.close()
+                record.dialog.deleteLater()
+            self.changed.emit()
+
+        worker.finished.connect(finish)
+        worker.start()
+        self.changed.emit()
+        return record
+
     def adopt(self, title, worker, receive=None, *, cancellable=True, popup=True, identifier=None, output_dir=None):
         self.assert_output_available(output_dir)
         identifier = identifier or uuid4().hex
@@ -351,6 +395,11 @@ class Operations(QObject):
     def open_selected(self, *_):
         item = self.listing.currentItem()
         if item:
-            dialog = self.records[item.data(Qt.UserRole)].dialog
+            record = self.records.get(item.data(Qt.UserRole))
+            if record is None:
+                return
+            if record.dialog is None:
+                record.dialog = OperationDialog(record.title, self.parent(), self.reduced_motion)
+            dialog = record.dialog
             dialog.show()
             dialog.raise_()

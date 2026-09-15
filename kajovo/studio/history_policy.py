@@ -17,6 +17,7 @@ DIRECT_MODES = {"GENERATE", "MODIFY", "QA", "QFILE", "KASKADA"}
 class ActionDecision:
     enabled: bool
     reason: str
+    visible: bool = True
 
 
 class ActionAvailabilityPolicy:
@@ -36,7 +37,7 @@ class ActionAvailabilityPolicy:
         exact_ui = isinstance(ui, dict) and bool(ui)
         safe = [
             row for row in checkpoints
-            if row.get("safe_to_continue") and row.get("_availability_valid", True)
+            if row.get("safe_to_continue") and row.get("_availability_valid", False)
         ]
         submitted = batch_ids(state)
         pending = pending_batch_ids(state)
@@ -58,6 +59,8 @@ class ActionAvailabilityPolicy:
             direct_reason = "Tento typ běhu používá vlastní doménovou akci a nemá přímý Run Studio launcher."
         elif legacy:
             direct_reason = "Legacy běh nemá doložený bezpečný checkpoint."
+        elif status == "submission_unknown":
+            direct_reason = "Výsledek odeslání není potvrzen. Nový požadavek by mohl zdvojit placené zpracování."
         elif pending:
             direct_reason = "Běh má nedokončený místní import BATCH; použijte původní dávku a nevytvářejte druhý submit."
         elif not safe:
@@ -66,19 +69,20 @@ class ActionAvailabilityPolicy:
             direct_reason = ""
         direct_ok = not direct_reason
         return {
-            "rerun": ActionDecision(direct_ok, direct_reason or "Vytvoří nový běh od bezpečného bodu."),
+            "rerun": ActionDecision(direct_ok, direct_reason or "Vytvoří nový běh od bezpečného bodu.", mode in DIRECT_MODES),
             "repair": ActionDecision(
                 direct_ok and has_error,
-                direct_reason or ("Oprava je dostupná pouze pro doloženou chybu nebo částečný výsledek." if not has_error else "Vytvoří opravnou větev."),
+                direct_reason or ("Oprava je dostupná pouze pro doloženou chybu nebo částečný výsledek." if not has_error else "Vytvoří opravnou větev."), mode in DIRECT_MODES and has_error,
             ),
             "continue": ActionDecision(
                 direct_ok and nonterminal,
-                direct_reason or ("Dokončený běh nemá smysluplné pokračování." if not nonterminal else "Pokračuje v nové větvi."),
+                direct_reason or ("Dokončený běh nemá smysluplné pokračování." if not nonterminal else "Pokračuje v nové větvi."), mode in DIRECT_MODES and nonterminal,
             ),
             "edit_branch": ActionDecision(
-                direct_ok and mode == "QA",
-                direct_reason or ("Upravené zadání je podporováno pouze pro QA checkpoint před prvním requestem."
-                                  if mode != "QA" else "Upraví pouze nově prováděný QA request v nové větvi."),
+                direct_ok and mode == "QA" and any(row.get("checkpoint_type") == "input_ready" for row in safe),
+                direct_reason or ("Upravené zadání vyžaduje ověřený bod před prvním QA požadavkem."
+                                  if not any(row.get("checkpoint_type") == "input_ready" for row in safe)
+                                  else "Upraví pouze nově prováděný QA request v nové větvi."), mode == "QA",
             ),
             "clone": ActionDecision(exact_ui, "Běh nemá přesně uložený ui_state." if not exact_ui else "Otevře upravitelné nové Zadání."),
             "clone_artifact": ActionDecision(
@@ -91,13 +95,21 @@ class ActionAvailabilityPolicy:
                 bool(remote_completed),
                 ("Žádná již odeslaná dávka nečeká na místní převzetí." if not pending
                  else "Poslední doložený vzdálený stav ještě není completed." if not remote_completed
-                 else "Převezme existující dávku bez nového submitu."),
+                 else "Převezme existující dávku bez nového submitu."), bool(submitted),
             ),
-            "open_batch": ActionDecision(bool(submitted), "Běh nemá související dávku." if not submitted else "Otevře související dávku."),
+            "open_batch": ActionDecision(bool(submitted), "Otevře související dávku.", bool(submitted)),
+            "comic": ActionDecision(mode == "COMIC" and bool(state.get("comic_operation_id")),
+                                    "Otevře uloženou komiksovou operaci.", mode == "COMIC"),
+            "parent": ActionDecision(bool(run.get("parent_run_id")), "Otevře zdrojový běh.", bool(run.get("parent_run_id"))),
+            "detail": ActionDecision(True, "Zadání, výsledky a průběh běhu."),
+            "integrity": ActionDecision(not legacy, "Ověří soubory proti otiskům.", not legacy),
+            "bundle_open": ActionDecision(True, "Otevře složku se záznamem běhu."),
+            "bundle_export": ActionDecision(True, "Uloží kopii záznamu běhu jako ZIP."),
         }
 
 
 def apply_decision(button, decision: ActionDecision) -> None:
+    button.setVisible(decision.visible)
     button.setEnabled(decision.enabled)
     button.setToolTip(decision.reason)
     button.setAccessibleDescription(decision.reason)

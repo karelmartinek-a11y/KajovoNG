@@ -4,7 +4,7 @@ Sekce **Historie** je produkční Run Studio nad `HistoryIndex`, `RunBundle` a `
 
 ## Hlavní plocha
 
-Jeden běh je jedna horizontální DAW-like stopa. Virtuální `RunTableModel` a malovaný `TrackDelegate` nevytvářejí QWidget pro každý segment, takže seznam zůstává použitelný pro tisíce běhů. Stopu tvoří výhradně skutečné `StepRecord`; legacy záznam bez kroků ukazuje `Kroky nejsou evidovány`.
+Jeden běh je jedna horizontální časová stopa. Virtuální `RunTableModel` a malovaný `TrackDelegate` nevytvářejí QWidget pro každý segment. Stopu tvoří skutečné pracovní `StepRecord`; transportní kopie background/provider/received zůstávají pouze v technické evidenci standardního workflow. Legacy záznam bez kroků ukazuje, že podrobný průběh nebyl uložen.
 
 Metadata řádku zahrnují mode, projekt, Run ID, čas, doložené trvání, stav, LIVE/BATCH, modely a počty vstupů, výstupů a chyb. Segment má lidský název, stage, text/ikonu/barvu stavu, trvání a počty response, artefaktů a chyb. Chybějící timestamp neprodukuje odhad trvání.
 
@@ -14,7 +14,33 @@ Filtry:
 - datum od/do, projekt, mode, stav, LIVE/BATCH a model;
 - jen chybové a pokročilé příznaky BATCH/checkpoint/výstup/lineage.
 
-Zoom mění ergonomickou šířku segmentů; Přizpůsobit vrací kompaktní měřítko. Výběr segmentu nastaví `Vybraná fáze: <stage> · <název>` a centrální politika akcí přepočítá dostupnost. Lineage se v přehledu ukazuje kompaktně; vybraný běh zvýrazní parent/children body, úplná evidence zůstává v detailu.
+Časové měřítko a mezery vycházejí z timestampů. Zoom zvětšuje pracovní plochu, Přizpůsobit vychází ze skutečné šířky okna. Chybějící konec znamená neurčené trvání; součet překrývajících se fází nenahrazuje celkový čas. Tooltip zpřístupňuje celý název krátkého segmentu a klávesové šipky vybírají fáze. Vybraná fáze určuje kontext a dostupné akce. Spojnice větví se kreslí jen pro vybraný běh a přímé návaznosti s doloženým bodem větvení; chybějící checkpoint se nenahrazuje bodem na konci řádku.
+
+### Matice obrazovek a vazeb
+
+| Předloha | Produkční pohled | Skutečná data a obsluha |
+|---|---|---|
+| Hlavní Historie | `HistoryPage`, `RunTableModel`, `RunTrackView` | index, lokální filtry, virtuální stopy, kontext fáze, centrální politika, detail a sekundární nabídka |
+| GENERATE | `RunDetailView`, `PhaseInspector`, `TextCard` | uložené zadání, výstupy vybrané fáze, unikátní odpovědi, oddělený vzdálený/místní BATCH stav, skutečné převzetí |
+| MODIFY | `ModifyMap` | manifest, uložené vstupy a výstupy; asynchronní dvě verze se zvýrazněnými změnami; neexistující výsledek není automaticky chyba |
+| QA | `TextCard`, metadata odpovědi | lidský text, kopírování/TXT skutečného obsahu, přílohy, přímé opakování a upravená větev od vstupu |
+| QFILE | `ArtifactBrowser` | ověřený lokální text/obrázek/PDF, stránkování a zoom, export, oddělené souborové a obsahové ověření |
+| KASKADA | `CascadeTimeline`, `PhaseInspector` | skutečné časové intervaly, vybraný krok a jeho závislosti, návazné běhy a přímá oprava |
+| Kompozér opravy | `BranchComposer` | zdrojová chyba, technický detail, bezpečný bod, zachované soubory, nový pokyn, lokální první placená operace a potvrzení |
+
+Technická evidence obsahuje původní kroky, požadavky, odpovědi, validace, události, návaznosti, checkpointy a stav. Nemění kanonické záznamy. Detaily i hlavní plocha mají skutečné akce; doménové možnosti se nezobrazují mimo svůj kontext. Klon a převzetí dávky vždy používají přesný zdroj otevřeného detailu, nikoli náhodně vybraný řádek v pozadí.
+
+### Výkon a validace
+
+Výběr řádku nečte plné request/response a nehashuje celý bundle. Obsah detailu se načítá lokálním pracovníkem; cache je omezená počtem položek i paměťovým rozpočtem a invalidovaná změnami souborů. Kontrola checkpointů běží zvlášť, sdílí načtené response a hashe v rámci jedné kontroly a teprve po úspěchu povolí spuštění. Kompletní integrita zůstává samostatnou skutečnou akcí a součástí přímého spuštění. Vyhledávání od tisíce řádků běží mimo GUI thread; starší výsledek nepřepisuje novější filtr.
+
+Samotné otevření `RunBundle` nečte deník událostí a nevytváří chybějící adresáře. `Operations.start_read` vlastní lokální pracovní vlákno bez vytváření skrytého progresového dialogu; po dokončení neuchovává výsledek ani operaci. Nezměněná odpověď při pollingu nevyvolává opakovaný zápis celého response journalu. Toto nemění intervaly, limity, obsah modelových požadavků ani síťovou obnovu.
+
+Po potvrzení větve probíhá kontrola integrity, checkpointu a rekonstrukce IN mimo GUI v operaci „Příprava nové větve“. Ta rezervuje výstupní adresář; po jejím dokončení přebírá stejný zámek skutečný doménový worker přes `Operations.adopt`. Stejné potvrzení nelze použít dvakrát. ZIP export ověřuje místní artefakty a zveřejní archiv atomicky, až když je celý dopsán.
+
+Na hlavní ploše zůstává hledání, projekt, druh a stav. Datum, model, transport a pokročilé příznaky se nastavují v „Další filtry“. Technická evidence uchovává i chybějící metadata; hlavní přehled nevyplňuje prázdné hodnoty opakovanými stavovými větami.
+
+`tests/test_history_forensic.py` používá skutečný logger a ResponseJournal pro kontrolu vazeb transportu, bezsíťového načítání, invalidace cache, dostupnosti doménových akcí, asynchronního výběru, klávesnice, integrity a obnoveného IN. `scripts/render_studio.py` vytváří všech sedm stavů z dočasných kanonických záznamů včetně opravné větve a normalizuje časy fixture. Produkční UI neobsahuje jejich data.
 
 ## Typové detaily
 

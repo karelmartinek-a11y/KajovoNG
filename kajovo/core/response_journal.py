@@ -194,6 +194,16 @@ class ResponseJournal:
     def _record(self, key, entry, response):
         from .cost_context_report import CostContextReport
 
+        # GET request ID není změna pracovního výsledku. Opakovaná stejná
+        # odpověď nesmí při pollingu přepisovat celý deník, stav a jeho přílohy.
+        previous = dict(entry.get("response") or {})
+        current = dict(response)
+        previous.pop("_request_id", None)
+        current.pop("_request_id", None)
+        if previous == current:
+            entry["checked_at"] = time.time()
+            return
+
         CostContextReport(self.log.paths.run_dir).record(
             entry["payload"],
             response=response,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -13,8 +13,8 @@ from .history_state import PresentedState, present_state
 
 STAGE_TITLES = {
     "A0R": "Upřesnění požadavků", "A1": "Plán řešení", "A2": "Struktura projektu",
-    "A2Q": "Quality gate", "A3": "Výsledné soubory", "B0R": "Upřesnění změn",
-    "B1": "Plán změn", "B2": "Struktura změn", "B2Q": "Quality gate",
+    "A2Q": "Kontrola návrhu", "A3": "Výsledné soubory", "B0R": "Upřesnění změn",
+    "B1": "Plán změn", "B2": "Struktura změn", "B2Q": "Kontrola změn",
     "B3": "Výsledné soubory", "QA": "Odpověď", "QFILE": "Výsledný soubor",
     "BATCH": "BATCH", "Upload": "Nahrání podkladů", "RUN": "Běh",
 }
@@ -78,8 +78,8 @@ class RunView:
         start, end = _timestamp(self.created_at), _timestamp(self.finished_at)
         if start is not None and end is not None and end >= start:
             return end - start
-        values = [stage.duration for stage in self.stages if stage.duration is not None]
-        return sum(values) if values else None
+        # Trvání fází se může překrývat a nenahrazuje čas celého běhu.
+        return None
 
 
 def build_stage(record: dict[str, Any], *, errors: set[str] | None = None) -> StageView:
@@ -90,7 +90,8 @@ def build_stage(record: dict[str, Any], *, errors: set[str] | None = None) -> St
     return StageView(
         step_id=step_id,
         stage=stage,
-        title=str(record.get("title") or STAGE_TITLES.get(stage) or stage or "Není evidováno"),
+        title=str((STAGE_TITLES.get(stage) or stage or "Není evidováno")
+                  if record.get("title") in (None, "", stage) else record["title"]),
         status=present_state(record.get("status")),
         started=started,
         finished=finished,
@@ -119,7 +120,13 @@ def build_run(
         str(row.get("step_id") or "") for row in events
         if str(row.get("severity") or "").lower() == "error" and row.get("step_id")
     }
-    stages = tuple(build_stage(row, errors=failed_steps) for row in (steps or []))
+    # Transportní záznamy zůstávají v technickém inspektoru. Nejsou fázemi workflow.
+    standard = summary.get("mode") in {"GENERATE", "MODIFY", "QA", "QFILE"}
+    stages = tuple(build_stage(row, errors=failed_steps) for row in (steps or [])
+                   if not (standard and row.get("stage") in {"background", "provider", "received"}))
+    if present_state(summary.get("status")).terminal:
+        stages = tuple(replace(stage, status=present_state("unfinished_record"))
+                       if stage.status.key in {"running", "created", "preparing"} else stage for stage in stages)
     batches = summary.get("related_batch_ids") or state.get("generate_batches") or []
     if state.get("batch_id"):
         batches = [*batches, state["batch_id"]]
@@ -137,6 +144,10 @@ def build_run(
         and remote_records[identifier].get("status") == "completed"
         for identifier in batches
     )
+    if pending_import and remote_complete:
+        stages = tuple(replace(stage, status=present_state("completed", batch_import_pending=True))
+                       if stage.stage in {"A3", "B3", "BATCH"} and stage.status.key in {"batch_pending", "batch_prepared"}
+                       else stage for stage in stages)
     artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), list) else []
     input_count = sum(1 for row in artifacts or [] if row.get("role") in {"user_input", "attached_file", "in_project_file", "input"})
     output_count = sum(1 for row in artifacts or [] if row.get("role") in {"generated_file", "modified_file", "batch_output", "log_export"})
@@ -225,10 +236,14 @@ class RunTableModel(QAbstractTableModel):
         self.endResetModel()
 
     def apply_filters(self, values: dict[str, Any]):
+        self.set_filtered(self.filter_runs(self._all, values))
+
+    @staticmethod
+    def filter_runs(runs, values):
         query = str(values.get("search") or "").casefold().strip()
         lower, upper = values.get("date_from"), values.get("date_to")
         rows = []
-        for run in self._all:
+        for run in runs:
             created = _timestamp(run.created_at)
             if query and query not in (run.search_text or " ".join((run.run_id, run.project, run.mode)).casefold()):
                 continue
@@ -255,6 +270,9 @@ class RunTableModel(QAbstractTableModel):
             if created is not None and ((lower is not None and created < lower) or (upper is not None and created > upper)):
                 continue
             rows.append(run)
+        return rows
+
+    def set_filtered(self, rows):
         self.beginResetModel()
         self._rows = rows
         self.endResetModel()

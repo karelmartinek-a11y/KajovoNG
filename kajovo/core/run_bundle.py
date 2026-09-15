@@ -20,7 +20,7 @@ from typing import Any, Iterable
 
 BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_COMPATIBILITY_VERSION = 1
-INDEX_SCHEMA_VERSION = 2
+INDEX_SCHEMA_VERSION = 3
 
 RUN_STATUSES = {
     "created",
@@ -379,7 +379,8 @@ class RunBundle:
     ):
         self.root = Path(run_dir)
         self.run_id = str(run_id or self.root.name)
-        self.root.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.root.mkdir(parents=True, exist_ok=True)
         self.requests_dir = self.root / "requests"
         self.responses_dir = self.root / "responses"
         self.validations_dir = self.root / "validations"
@@ -396,9 +397,11 @@ class RunBundle:
             self.manifests_dir,
             self.reports_dir,
         ):
-            directory.mkdir(parents=True, exist_ok=True)
+            if create:
+                directory.mkdir(parents=True, exist_ok=True)
         for bucket in ARTIFACT_BUCKETS:
-            (self.artifacts_dir / bucket).mkdir(parents=True, exist_ok=True)
+            if create:
+                (self.artifacts_dir / bucket).mkdir(parents=True, exist_ok=True)
         self.events_path = self.root / "events.jsonl"
         self.steps_path = self.root / "steps.jsonl"
         self.artifact_index_path = self.artifacts_dir / "records.jsonl"
@@ -406,12 +409,10 @@ class RunBundle:
         self.run_path = self.root / "run.json"
         self.lineage_path = self.root / "lineage.json"
         self.checksums_path = self.root / "checksums.json"
-        self._event_sequence = max(
-            [int(item.get("sequence") or 0) for item in _read_jsonl(self.events_path)] or [0]
-        )
-        self._step_sequence = max(
-            [int(item.get("sequence") or 0) for item in _read_jsonl(self.steps_path)] or [0]
-        )
+        # Čtení metadat neprochází celý proud událostí. Čítač je zapotřebí
+        # teprve při prvním skutečném zápisu do znovu otevřeného bundle.
+        self._event_sequence = None
+        self._step_sequence = None
         if create and not self.bundle_path.exists():
             bundle = {
                 "schema_version": BUNDLE_SCHEMA_VERSION,
@@ -471,6 +472,8 @@ class RunBundle:
         related_response_id: str = "",
         related_artifact_ids: Iterable[str] = (),
     ) -> dict[str, Any]:
+        if self._event_sequence is None:
+            self._event_sequence = max([int(item.get("sequence") or 0) for item in _read_jsonl(self.events_path)] or [0])
         self._event_sequence += 1
         timestamp_epoch = time.time()
         record = asdict(
@@ -520,6 +523,8 @@ class RunBundle:
         for record in reversed(self.steps()):
             if record.get("stage") == stage and record.get("status") not in {"failed", "cancelled"}:
                 return record
+        if self._step_sequence is None:
+            self._step_sequence = max([int(item.get("sequence") or 0) for item in self.steps()] or [0])
         self._step_sequence += 1
         record = asdict(
             StepRecord(
@@ -583,7 +588,7 @@ class RunBundle:
         reasoning_effort = str(reasoning.get("effort") or "") if isinstance(reasoning, dict) else ""
         projected_output = payload.get("max_output_tokens") if isinstance(payload, dict) else None
         stage = self._stage_from_name(name)
-        if not step_id:
+        if not step_id and request_role != "transport":
             step = self.ensure_step(stage, title=stage, kind="api", model=model, reasoning_effort=reasoning_effort)
             step_id = str(step["step_id"])
         identifier = "req_" + uuid.uuid4().hex
@@ -611,7 +616,8 @@ class RunBundle:
         )
         path = self.requests_dir / f"_record_{identifier}.json"
         _atomic_json(path, record)
-        self.update_step(step_id, request_ids=[identifier], model=model or None, reasoning_effort=reasoning_effort or None)
+        if step_id:
+            self.update_step(step_id, request_ids=[identifier], model=model or None, reasoning_effort=reasoning_effort or None)
         self.append_event(
             "request.sent",
             {"endpoint": endpoint, "method": method, "model": model, "payload_sha256": record["payload_sha256"]},
@@ -642,7 +648,7 @@ class RunBundle:
         if isinstance(incomplete, dict):
             incomplete_reason = str(incomplete.get("reason") or "")
         stage = self._stage_from_name(name)
-        if not step_id:
+        if not step_id and not name.startswith(("provider_", "received_")):
             step = self.ensure_step(stage, title=stage, kind="api")
             step_id = str(step["step_id"])
         identifier = "res_" + uuid.uuid4().hex
@@ -672,13 +678,14 @@ class RunBundle:
         )
         path = self.responses_dir / f"_record_{identifier}.json"
         _atomic_json(path, record)
-        self.update_step(
-            step_id,
-            response_ids=[identifier],
-            status="completed" if status == "completed" else status,
-            finished_at=_now_iso() if status not in {"queued", "in_progress"} else "",
-            progress=100 if status == "completed" else 0,
-        )
+        if step_id:
+            self.update_step(
+                step_id,
+                response_ids=[identifier],
+                status="completed" if status == "completed" else status,
+                finished_at=_now_iso() if status not in {"queued", "in_progress"} else "",
+                progress=100 if status == "completed" else 0,
+            )
         self.append_event(
             "response.received",
             {"response_id": response_id, "status": status, "incomplete_reason": incomplete_reason},
@@ -943,7 +950,11 @@ class RunBundle:
                 values.append(value)
         return sorted(values, key=lambda item: str(item.get("created_at") or ""))
 
-    def validate_checkpoint(self, checkpoint_id: str) -> dict[str, Any]:
+    def validate_checkpoint(self, checkpoint_id: str, *, artifacts=None, responses=None, hash_cache=None) -> dict[str, Any]:
+        from .utils import safe_join_under_root
+
+        if not checkpoint_id or Path(checkpoint_id).name != checkpoint_id or "\\" in checkpoint_id:
+            raise ValueError("Neplatný identifikátor checkpointu.")
         path = self.checkpoints_dir / f"{checkpoint_id}.json"
         record = _read_json(path, {})
         if not isinstance(record, dict) or record.get("checkpoint_id") != checkpoint_id:
@@ -955,23 +966,33 @@ class RunBundle:
         snapshot = record.get("state_snapshot")
         if _sha256_bytes(_json_bytes(snapshot)) != record.get("state_hash"):
             raise ValueError("Checkpoint má neplatný hash stavu.")
-        artifacts = {item.get("artifact_id"): item for item in self.artifacts()}
+        artifacts = {item.get("artifact_id"): item for item in (self.artifacts() if artifacts is None else artifacts)}
+        hash_cache = {} if hash_cache is None else hash_cache
         for identifier in record.get("required_artifact_ids") or []:
             artifact = artifacts.get(identifier)
             if not artifact:
                 raise ValueError(f"Checkpointu chybí artefakt {identifier}.")
             relative = artifact.get("path_in_bundle")
-            if relative:
-                target = self.root / relative
-                if not target.is_file() or _sha256_file(target) != artifact.get("sha256"):
-                    raise ValueError(f"Artefakt checkpointu {identifier} není integritní.")
-        response_ids = {
-            item.get("response_record_id")
-            for item in LegacyRunAdapter(self.root).responses()
-        }
-        missing = set(record.get("required_response_ids") or []) - response_ids
+            if not relative or artifact.get("available_local") is False:
+                raise ValueError(f"Artefakt checkpointu {identifier} není místně dostupný.")
+            target = Path(safe_join_under_root(str(self.root), relative))
+            if not target.is_file():
+                raise ValueError(f"Artefakt checkpointu {identifier} není integritní.")
+            stat = target.stat()
+            key = (str(target), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            if key not in hash_cache:
+                hash_cache[key] = _sha256_file(target)
+            if hash_cache[key] != artifact.get("sha256"):
+                raise ValueError(f"Artefakt checkpointu {identifier} není integritní.")
+        response_records = {item.get("response_record_id"): item
+                            for item in (LegacyRunAdapter(self.root).responses() if responses is None else responses)}
+        missing = set(record.get("required_response_ids") or []) - response_records.keys()
         if missing:
             raise ValueError("Checkpointu chybí požadované response záznamy: " + ", ".join(sorted(missing)))
+        for identifier in record.get("required_response_ids") or []:
+            response = response_records[identifier]
+            if _sha256_bytes(_json_bytes(response.get("full_response"))) != response.get("response_sha256"):
+                raise ValueError("Odpověď checkpointu nemá platný hash: " + identifier)
         return record
 
     def record_lineage(
@@ -1165,7 +1186,8 @@ class LegacyRunAdapter:
 
     def _evidence_records(self, directory: Path, key: str) -> list[dict[str, Any]]:
         records = []
-        for path in sorted(directory.glob("*.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0):
+        pattern = "*.json" if self.legacy else "_record_*.json"
+        for path in sorted(directory.glob(pattern)):
             value = _read_json(path, None)
             if isinstance(value, dict) and value.get(key):
                 records.append(value)
@@ -1182,7 +1204,7 @@ class LegacyRunAdapter:
                     "status": str(value.get("status") or "unknown") if key == "response_record_id" else "unknown",
                     "output_text": _response_text(value) if key == "response_record_id" else "",
                 })
-        return records
+        return sorted(records, key=lambda item: str(item.get("created_at") or item.get("received_at") or ""))
 
     def requests(self) -> list[dict[str, Any]]:
         return self._evidence_records(self.root / "requests", "request_record_id")
@@ -1349,12 +1371,15 @@ class HistoryIndex:
                 if str(event.get("severity") or "").lower() == "error"
             ),
             "checkpoints": len(checkpoints),
+            "checkpoint_markers": [{key: item.get(key) for key in ("checkpoint_id", "checkpoint_type", "step_id")}
+                                   for item in checkpoints],
             "has_checkpoint": bool(checkpoints),
             "has_error": has_error,
-            "has_batch": bool(run.get("related_batch_ids")) or bool(adapter.state().get("batch_id") or adapter.state().get("generate_batches")),
+            "has_batch": bool(run.get("related_batch_ids")) or bool(state.get("batch_id") or state.get("generate_batches")),
             "has_output": any(item.get("role") in {"generated_file", "modified_file", "batch_output", "log_export"} for item in artifacts),
             "has_lineage": bool(lineage or run.get("parent_run_id")),
             "parent_run_id": str(run.get("parent_run_id") or (lineage[-1].get("source_run_id") if lineage else "")),
+            "lineage_records": lineage,
             "related_batch_ids": list(run.get("related_batch_ids") or []),
             "batch_imports": state.get("batch_imports") if isinstance(state.get("batch_imports"), dict) else {},
             "batch_records": state.get("batch_records") if isinstance(state.get("batch_records"), dict) else {},
@@ -1369,6 +1394,7 @@ class HistoryIndex:
     def refresh(self, *, force: bool = False) -> list[dict[str, Any]]:
         index = self._load()
         runs = index["runs"]
+        changed = not self.path.exists()
         existing = set()
         for directory in sorted(self.log_dir.glob("RUN_*")):
             if not directory.is_dir():
@@ -1378,10 +1404,14 @@ class HistoryIndex:
             mtime = self._source_mtime(directory)
             if force or run_id not in runs or int(runs[run_id].get("source_mtime_ns") or 0) != mtime:
                 runs[run_id] = self._summary(directory)
+                changed = True
         for stale in set(runs) - existing:
             runs.pop(stale, None)
-        index["updated_at"] = _now_iso()
-        _atomic_json(self.path, index)
+            changed = True
+        if changed:
+            index["updated_at"] = _now_iso()
+            _atomic_json(self.path, index)
+        self._current_records = list(runs.values())
         return sorted(runs.values(), key=lambda item: (str(item.get("created_at") or ""), item["run_id"]), reverse=True)
 
     def rebuild(self) -> list[dict[str, Any]]:
@@ -1391,10 +1421,8 @@ class HistoryIndex:
 
     def reverse_lineage(self) -> dict[str, list[dict[str, Any]]]:
         result: dict[str, list[dict[str, Any]]] = {}
-        for directory in self.log_dir.glob("RUN_*"):
-            if not directory.is_dir():
-                continue
-            for record in LegacyRunAdapter(directory).lineage():
+        for run in getattr(self, "_current_records", None) or self.refresh():
+            for record in run.get("lineage_records") or []:
                 source = str(record.get("source_run_id") or "")
                 if source:
                     result.setdefault(source, []).append(record)

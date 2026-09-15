@@ -37,6 +37,8 @@ _STATES = {
     "closed": ("Dokončeno", "✓", "success", True),
     "corrupt_state": ("Chyba evidence", "!", "danger", True),
     "unknown": ("Neznámý výsledek", "?", "warning", False),
+    "unfinished_record": ("Konec fáze nezapsán", "?", "muted", True),
+    "ready_to_import": ("K převzetí", "⇩", "warning", False),
     "skipped": ("Přeskočeno", "»", "muted", True),
     "blocked": ("Blokováno", "▣", "muted", True),
     "not_started": ("Blokováno", "▣", "muted", False),

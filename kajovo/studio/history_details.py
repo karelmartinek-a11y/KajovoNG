@@ -9,13 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QDialog, QPlainTextEdit, QSplitter, QTabWidget, QTableWidget,
-    QTableWidgetItem, QWidget,
+    QTableWidgetItem, QTextEdit, QWidget,
 )
 
-from .components import action, actions, caption, panel, scroll, vertical
+from .components import action, actions, caption, scroll, vertical
 from .evidence import EvidenceView
 from .history_artifacts import ArtifactBrowser, ArtifactGuard, TEXT_DIFF_LIMIT
 from .history_models import RunView, format_duration
@@ -34,7 +34,7 @@ def classify_modify_files(payload: dict[str, Any], state: dict[str, Any]) -> lis
     structure = snapshot.get("structure") if isinstance(snapshot.get("structure"), dict) else {}
     touched = {str(row.get("path")): row for row in structure.get("touched_files") or [] if isinstance(row, dict) and row.get("path")}
     preserved = {str(row.get("path")) for row in structure.get("preserved_files") or [] if isinstance(row, dict) and row.get("path")}
-    skipped = set(state.get("completed_hashes") or {}) | set((state.get("ui_state") or {}).get("skip_paths") or [])
+    skipped = set(state.get("_verified_skip_paths") or [])
     failed = {str(row.get("path")) for row in state.get("missing_deliverables") or [] if isinstance(row, dict) and row.get("path")}
     artifacts = {}
     for record in payload.get("artifacts") or []:
@@ -49,14 +49,14 @@ def classify_modify_files(payload: dict[str, Any], state: dict[str, Any]) -> lis
         if path in failed:
             kind = "chybové"
         elif path in skipped:
-            kind = "přeskočené / reused"
+            kind = "přeskočené · hash ověřen"
         elif record:
             metadata = record.get("metadata") or {}
-            kind = "nové" if spec.get("action") == "add" or metadata.get("before_sha256") in (None, "") else "změněné"
+            kind = "nové" if spec.get("action") == "add" else "změněné" if spec.get("action") == "modify" or metadata.get("before_sha256") else "klasifikace nezapsána"
         elif state.get("dry_run"):
             kind = "návrh nového · dry-run" if spec.get("action") == "add" else "návrh změny · dry-run"
         else:
-            kind = "chybové"
+            kind = "výsledek nezapsán"
         rows.append(FileChange(path, kind, record))
     rows.extend(FileChange(path, "zachované") for path in sorted(preserved))
     for event in payload.get("events") or []:
@@ -66,26 +66,6 @@ def classify_modify_files(payload: dict[str, Any], state: dict[str, Any]) -> lis
     return sorted(rows, key=lambda row: (row.classification, row.path.casefold()))
 
 
-class TimelineEvidence(QWidget):
-    def __init__(self, run: RunView, parent=None):
-        super().__init__(parent)
-        root = vertical(self, 0)
-        table = QTableWidget(len(run.stages), 7)
-        table.setHorizontalHeaderLabels(["#", "Fáze", "Název", "Stav", "Trvání", "Model", "Důkazy"])
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.setAccessibleName("Skutečné fáze běhu")
-        for row, stage in enumerate(run.stages):
-            values = [
-                str(row + 1), stage.stage or "Není evidováno", stage.title, stage.status.label,
-                format_duration(stage.duration) if stage.duration is not None else "Není evidováno",
-                stage.model or "Není evidováno",
-                f"{stage.response_count} odpovědí · {stage.artifact_count} artefaktů · {stage.error_count} chyb",
-            ]
-            for column, value in enumerate(values):
-                table.setItem(row, column, QTableWidgetItem(value))
-        table.resizeColumnsToContents()
-        root.addWidget(table, 1)
 
 
 class ModifyMap(QWidget):
@@ -110,13 +90,40 @@ class ModifyMap(QWidget):
         self.diff = QPlainTextEdit("Vyberte textový změněný soubor a zvolte Zobrazit diff.")
         self.diff.setReadOnly(True)
         self.diff.setAccessibleName("Side-by-side diff původní a nové verze")
-        splitter.addWidget(self.diff)
+        versions = QSplitter(Qt.Horizontal)
+        self.before = QPlainTextEdit()
+        self.before.setReadOnly(True)
+        self.before.setAccessibleName("Původní verze souboru")
+        self.diff.setAccessibleName("Nová verze souboru")
+        for title, editor in (("Původní verze", self.before), ("Nová verze", self.diff)):
+            box = QWidget()
+            layout = vertical(box, 0)
+            layout.addWidget(caption(title, "section"))
+            layout.addWidget(editor, 1)
+            versions.addWidget(box)
+        self.before.verticalScrollBar().valueChanged.connect(self.diff.verticalScrollBar().setValue)
+        self.diff.verticalScrollBar().valueChanged.connect(self.before.verticalScrollBar().setValue)
+        splitter.addWidget(versions)
         splitter.setStretchFactor(1, 2)
         splitter.setSizes([470, 780])
         root.addWidget(splitter, 1)
-        root.addWidget(actions(action("history.modify.diff", "Zobrazit diff", self.load_diff)))
+        counts = {}
+        for change in self.changes:
+            counts[change.classification] = counts.get(change.classification, 0) + 1
+        root.addWidget(caption(" · ".join(f"{count} {kind}" for kind, count in counts.items()), "muted"))
+        if state.get("error"):
+            root.addWidget(caption(str(state["error"]), "error"))
+        self.generation = 0
+        self.table.currentCellChanged.connect(lambda *_: self.load_diff())
+        if self.changes:
+            self.table.setCurrentCell(0, 0)
 
     def load_diff(self):
+        self.generation += 1
+        generation = self.generation
+        self.before.clear()
+        self.before.setExtraSelections([])
+        self.diff.setExtraSelections([])
         row = self.table.currentRow()
         if not 0 <= row < len(self.changes):
             return
@@ -126,22 +133,59 @@ class ModifyMap(QWidget):
             return
         inputs = [record for record in self.payload.get("artifacts") or [] if record.get("role") == "in_project_file"
                   and str((record.get("metadata") or {}).get("relative_path") or record.get("reconstruction_role") or "") == change.path]
-        if not inputs:
+        is_new = change.classification == "nové"
+        if not inputs and not is_new:
             self.diff.setPlainText("Původní verze není v Run Bundle evidována; falešný diff se nevytváří.")
             return
-        before, after = inputs[-1], change.artifact
+        before, after = inputs[-1] if inputs else None, change.artifact
 
         def calculate(task):
             guard = ArtifactGuard(self.bundle_root)
-            paths = [guard.resolve(before), guard.resolve(after)]
+            paths = [guard.resolve(after)] + ([guard.resolve(before)] if before else [])
             if any(path.stat().st_size > TEXT_DIFF_LIMIT for path in paths):
                 return "Soubor je větší než 5 MiB; zobrazuji pouze metadata a SHA-256.\n\n" + json.dumps(
-                    {"původní": before.get("sha256"), "nový": after.get("sha256")}, ensure_ascii=False, indent=2)
-            old = paths[0].read_text(encoding="utf-8")
-            new = paths[1].read_text(encoding="utf-8")
-            return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), fromfile="Původní", tofile="Nový")) or "Obsah je totožný."
+                    {"původní": (before or {}).get("sha256"), "nový": after.get("sha256")}, ensure_ascii=False, indent=2)
+            try:
+                old = paths[1].read_text(encoding="utf-8") if before else ""
+                new = paths[0].read_text(encoding="utf-8")
+            except UnicodeError:
+                return "Binární soubor · textové porovnání není dostupné.\n" + json.dumps({"původní": before, "nový": after}, ensure_ascii=False, indent=2)
+            if "\x00" in old or "\x00" in new:
+                return "Binární obsah · SHA-256 původní: " + str((before or {}).get("sha256")) + "\nNový: " + str(after.get("sha256"))
+            left, right = old.splitlines(), new.splitlines()
+            if len(left) + len(right) > 30000:
+                return "Porovnání přesahuje 30 000 řádků. Použijte export obou souborů."
+            return old, new, difflib.SequenceMatcher(None, left, right).get_opcodes()
 
-        self.context.operations.start("Výpočet diffu", calculate, self.diff.setPlainText, popup=False)
+        def safe_calculate(task):
+            try:
+                return calculate(task)
+            except (ValueError, OSError) as error:
+                return str(error)
+
+        def show(value):
+            if generation != self.generation:
+                return
+            if isinstance(value, str):
+                self.diff.setPlainText(value)
+                return
+            old, new, opcodes = value
+            self.before.setPlainText(old)
+            self.diff.setPlainText(new)
+            for editor, side, color in ((self.before, 1, "#56323D"), (self.diff, 3, "#214A42")):
+                selections = []
+                for opcode in opcodes:
+                    if opcode[0] == "equal":
+                        continue
+                    for line in range(opcode[side], opcode[side + 1]):
+                        selection = QTextEdit.ExtraSelection()
+                        selection.cursor = QTextCursor(editor.document().findBlockByNumber(line))
+                        selection.format.setBackground(QColor(color))
+                        selection.format.setProperty(QTextFormat.FullWidthSelection, True)
+                        selections.append(selection)
+                editor.setExtraSelections(selections)
+
+        self.context.operations.start_read("Porovnání verzí souboru", safe_calculate, show, popup=False)
 
 
 class CascadeStepsView(QWidget):
@@ -149,173 +193,281 @@ class CascadeStepsView(QWidget):
 
     def __init__(self, run, state, payload, parent=None):
         super().__init__(parent)
+        from .history_cascade import CascadeTimeline
+        from .history_overview import PhaseInspector
         self.run, self.state, self.payload = run, state, payload
         definition = state.get("cascade_definition") if isinstance(state.get("cascade_definition"), dict) else {}
         definitions = {str(row.get("id") or ""): row for row in definition.get("steps") or [] if isinstance(row, dict)}
-        root = vertical(self, 0)
-        splitter = QSplitter(Qt.Horizontal)
-        self.table = QTableWidget(len(run.stages), 8)
-        self.table.setHorizontalHeaderLabels(["#", "Krok", "Model", "Stav", "Trvání", "Vstupy", "Výstupy", "Závislosti"])
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.dependencies = []
-        for row, stage in enumerate(run.stages):
+        for stage in run.stages:
             spec = definitions.get(stage.stage, {})
             deps = sorted({str(item.get("source_step_id")) for item in spec.get("inputs") or []
                            if isinstance(item, dict) and item.get("source") == "output" and item.get("source_step_id")})
             self.dependencies.append(deps)
-            values = [str(row + 1), stage.title, stage.model or "Není evidováno", stage.status.label,
-                      format_duration(stage.duration) if stage.duration is not None else "Není evidováno",
-                      str(len(spec.get("inputs") or [])), str(len(spec.get("outputs") or [])), ", ".join(deps) or "—"]
-            for column, value in enumerate(values):
-                self.table.setItem(row, column, QTableWidgetItem(value))
-        self.table.resizeColumnsToContents()
-        self.inspector = QPlainTextEdit()
-        self.inspector.setReadOnly(True)
-        self.inspector.setAccessibleName("Inspektor vybraného kroku kaskády")
-        self.table.currentCellChanged.connect(self.select_step)
+        root = vertical(self, 0)
+        splitter = QSplitter(Qt.Horizontal)
+        self.table = CascadeTimeline(run.stages)
+        self.inspector = PhaseInspector(run, payload)
+        self.dependency_label = caption("", "muted")
+        self.inspector.body.insertWidget(2, self.dependency_label)
+        self.table.step_selected.connect(self.select_step)
         splitter.addWidget(self.table)
         splitter.addWidget(self.inspector)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([760, 480])
+        splitter.setSizes([680, 340])
         root.addWidget(splitter, 1)
         if run.stages:
-            self.table.setCurrentCell(0, 0)
+            failed = next((i for i, stage in enumerate(run.stages) if stage.status.key == "failed"), 0)
+            self.table.setCurrentCell(failed, 0)
 
-    def select_step(self, row, _column, *_):
+    def select_step(self, row, *_):
         if not 0 <= row < len(self.run.stages):
             return
-        stage = self.run.stages[row]
-        deps = set(self.dependencies[row])
-        for index, candidate in enumerate(self.run.stages):
-            color = QColor("#213F5A") if candidate.stage in deps else QColor("transparent")
-            for column in range(self.table.columnCount()):
-                item = self.table.item(index, column)
-                if item:
-                    item.setBackground(color)
-        related = {}
-        for key in ("requests", "responses", "validations", "artifacts", "events"):
-            related[key] = [item for item in self.payload.get(key) or [] if item.get("step_id") == stage.step_id]
-        self.inspector.setPlainText(json.dumps({"step": stage.technical, "dependencies": sorted(deps), **related},
-                                               ensure_ascii=False, indent=2, default=str))
+        deps = self.dependencies[row]
+        self.table.highlight_dependencies(deps)
+        self.inspector.select(self.run.stages[row])
+        titles = {stage.stage: stage.title for stage in self.run.stages}
+        self.dependency_label.setText("Navazuje na: " + (", ".join(titles.get(value, value) for value in deps) or "bez uložených závislostí"))
 
 
 class RunDetailView(QWidget):
     def __init__(self, context, adapter, payload: dict[str, Any], state: dict[str, Any], run: RunView, parent=None):
         super().__init__(parent)
+        from .history_overview import PhaseInspector, TextCard, human_answer
+        from .history_models import RunTableModel
+        from .history_timeline import RunTrackView
+
         self.context, self.adapter, self.payload, self.state, self.run = context, adapter, payload, state, run
+        self.phase_text = None
         root = vertical(self)
         root.addWidget(caption(f"{run.mode} · {run.project}", "heading"))
-        duration = "Není evidováno" if run.duration is None else format_duration(run.duration)
-        root.addWidget(caption(
-            f"{run.run_id} · {run.status.symbol} {run.status.label} · {run.transport} · {duration} · "
-            f"{' / '.join(run.models) or 'model není evidován'}", "muted"))
+        duration = format_duration(run.duration) if run.duration is not None else "Celkový čas nebyl uložen"
+        root.addWidget(caption(f"{run.run_id}  ·  {run.status.symbol} {run.status.label}  ·  {run.transport}  ·  {duration}", "muted"))
         if run.legacy:
-            root.addWidget(caption("Legacy běh je pouze ke čtení; chybějící kroky, checkpointy a provenance nejsou doplněny.", "error"))
-        self.tabs = QTabWidget()
-        self.tabs.setAccessibleName("Detail běhu")
-        self.tabs.addTab(TimelineEvidence(run), "Časová osa")
-        self._add_mode_overview()
-        if run.mode == "MODIFY":
-            self.tabs.addTab(ModifyMap(context, adapter.root, payload, state), "Mapa změn")
-        if run.mode == "KASKADA":
-            self.tabs.addTab(CascadeStepsView(run, state, payload), "Kroky a závislosti")
-        artifacts = ArtifactBrowser(context=self.context)
-        artifacts.set_artifacts(adapter.root, payload.get("artifacts") or [])
-        self.tabs.addTab(artifacts, "Artefakty a náhled")
-        for key, title in (("responses", "Odpovědi"), ("requests", "Requesty"), ("validations", "Validace"),
-                           ("events", "Události"), ("lineage", "Lineage"), ("checkpoints", "Checkpointy")):
-            view = EvidenceView(title)
-            view.set_value(payload.get(key) or [])
-            self.tabs.addTab(view, title)
-        technical = EvidenceView("Technická evidence")
-        technical.set_value({"run": payload.get("summary"), "state": state,
-                             "integrity": payload.get("integrity") or {"status": "Není evidováno"}})
-        self.tabs.addTab(technical, "Technické")
-        root.addWidget(self.tabs, 1)
+            root.addWidget(caption("Starší záznam · pouze pro čtení. Podrobný průběh nebyl uložen.", "muted"))
+        if state.get("dry_run") or run.status.key == "dry_run":
+            root.addWidget(caption("Dry-run · návrh změn. Do projektové složky nebyly zapsány soubory.", "error"))
+        self.timeline = RunTrackView()
+        self.timeline_model = RunTableModel(self)
+        self.timeline_model.set_runs([run])
+        self.timeline.setModel(self.timeline_model)
+        self.timeline.setColumnHidden(0, True)
+        self.timeline.setColumnWidth(1, 200)
+        self.timeline.setFixedHeight(168)
+        self.timeline.horizontalHeader().setStretchLastSection(True)
+        self.timeline.setAccessibleName("Časová osa vybraného běhu")
+        root.addWidget(self.timeline)
+        self.phase_label = caption("Vyberte fázi na časové ose.", "muted")
+        root.addWidget(self.phase_label)
 
-    def _add_mode_overview(self):
-        mode = self.run.mode
-        page = QWidget()
-        layout = vertical(page)
-        prompt = str((self.state.get("ui_state") or {}).get("prompt") or self.run.raw.get("input_summary") or "Není evidováno")
-        box, body = panel("Původní zadání")
-        body.addWidget(caption(prompt))
-        layout.addWidget(box)
-        if mode in {"GENERATE", "MODIFY"}:
-            snapshot = self.state.get("preparation_snapshot") or {}
-            box, body = panel("LIVE příprava a BATCH hranice" if self.run.transport == "BATCH" else "Přípravné fáze")
-            evidenced_stage = next((stage.stage for stage in reversed(self.run.stages)
-                                     if stage.stage not in {"A3", "B3", "BATCH"}), "")
-            body.addWidget(caption(
-                f"Kanonická/doložená fáze: {snapshot.get('canonical_stage') or evidenced_stage or 'Není evidováno'} · "
-                f"BATCH ID: {', '.join(self.state.get('generate_batches') or ([self.state['batch_id']] if self.state.get('batch_id') else [])) or 'Není evidováno'}"
-            ))
-            if self.run.transport == "BATCH":
-                body.addWidget(caption("Vzdálený stav a místní převzetí jsou oddělené. Remote-only výstupy nelze otevřít před importem.", "muted"))
-            layout.addWidget(box)
-            responses = [row for row in self.payload.get("responses") or [] if row.get("response_record_id")]
-            input_tokens = sum(int(row.get("input_tokens") or 0) for row in responses)
-            output_tokens = sum(int(row.get("output_tokens") or 0) for row in responses)
-            reasoning_tokens = sum(int(row.get("reasoning_tokens") or 0) for row in responses)
-            retries = sum(1 for row in self.payload.get("events") or []
-                          if "attempt_failed" in str(row.get("event_type") or ""))
-            cost = self.state.get("cost")
-            box, body = panel("Request / response a spotřeba")
-            body.addWidget(caption(
-                f"Tokeny vstup/výstup/reasoning: {input_tokens if responses else 'Není evidováno'} / "
-                f"{output_tokens if responses else 'Není evidováno'} / {reasoning_tokens if responses else 'Není evidováno'} · "
-                f"retry: {retries} · cena: {cost if isinstance(cost, (int, float)) else 'Není evidováno'}"
-            ))
-            layout.addWidget(box)
-        elif mode == "QA":
-            responses = self.payload.get("responses") or []
-            response = next((row for row in reversed(responses) if row.get("response_record_id")), {})
-            answer = str(response.get("output_text") or "Není evidováno")
-            box, body = panel("Odpověď")
-            body.addWidget(caption(answer))
-            layout.addWidget(box)
-            box, body = panel("Technická metadata odpovědi")
-            body.addWidget(caption(
-                f"Response ID: {response.get('response_id') or 'Není evidováno'} · "
-                f"status: {response.get('status') or 'Není evidováno'} · "
-                f"tokeny vstup/výstup/reasoning: {response.get('input_tokens') if response.get('input_tokens') is not None else 'Není evidováno'} / "
-                f"{response.get('output_tokens') if response.get('output_tokens') is not None else 'Není evidováno'} / "
-                f"{response.get('reasoning_tokens') if response.get('reasoning_tokens') is not None else 'Není evidováno'} · "
-                f"incomplete: {response.get('incomplete_reason') or '—'}"
-            ))
-            layout.addWidget(box)
-        elif mode == "QFILE":
-            passed = any(row.get("status") == "passed" and row.get("target_type") in {"file", "file_contract", "batch_import", "output"}
-                         for row in self.payload.get("validations") or [])
-            box, body = panel("Výsledný soubor")
-            body.addWidget(caption("Souborový kontrakt platný" if passed else "Souborový kontrakt: Není evidováno"))
-            body.addWidget(caption("Obsah ověřen" if self.state.get("human_verified") is True else "Obsah: Neověřeno", "muted"))
-            layout.addWidget(box)
-        elif mode == "KASKADA":
-            box, body = panel("Kaskádová evidence")
-            body.addWidget(caption(
-                f"Kroků: {len(self.run.stages)} · selhaný krok: {self.state.get('failed_step_number') or 'Není evidováno'} · "
-                f"závislosti jsou zvýrazněny pouze pro vybraný krok."
-            ))
-            layout.addWidget(box)
-        elif mode == "COMIC":
-            box, body = panel("Komiksová operace")
-            body.addWidget(caption(f"Operation ID: {self.state.get('comic_operation_id') or 'Není evidováno'}"))
-            layout.addWidget(box)
+        self.tabs = QTabWidget()
+        self.tabs.setAccessibleName("Výsledky a soubory běhu")
+        overview = QWidget()
+        from PySide6.QtWidgets import QSizePolicy
+        overview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        overview.setMinimumHeight(400 if run.mode in {"QFILE", "KASKADA"} else 340)
+        body = vertical(overview, 0)
+        columns = QSplitter(Qt.Horizontal)
+        prompt = str((state.get("ui_state") or {}).get("prompt") or run.raw.get("input_summary") or "")
+        left = QWidget()
+        left_body = vertical(left, 0)
+        left_body.addWidget(TextCard("Původní zadání", prompt, adapter.root), 2)
+        if run.mode == "QFILE" and human_answer(payload):
+            left_body.addWidget(TextCard("Doprovodný text", human_answer(payload), adapter.root), 1)
+        inputs = [row for row in payload.get("artifacts") or []
+                  if row.get("role") in {"user_input", "attached_file", "in_project_file", "input"}]
+        if inputs:
+            input_browser = ArtifactBrowser(context=context)
+            input_browser.set_artifacts(adapter.root, inputs)
+            input_browser.table.setMaximumHeight(110)
+            left_body.addWidget(input_browser, 1)
+        columns.addWidget(left)
+        self.inspector = PhaseInspector(run, payload)
+        if run.mode in {"QA", "QFILE"}:
+            if run.mode == "QA":
+                columns.addWidget(TextCard("Odpověď", human_answer(payload), adapter.root))
+            else:
+                output = ArtifactBrowser(context=context)
+                records = [row for row in payload.get("artifacts") or []
+                           if row.get("role") in {"generated_file", "modified_file", "batch_output", "output", "log_export"}]
+                output.set_artifacts(adapter.root, records)
+                output.table.setMaximumHeight(110)
+                if len(records) == 1:
+                    output.table.hide()
+                    output.layout().insertWidget(0, caption(str(records[0].get("display_name") or "Výsledný soubor"), "section"))
+                columns.addWidget(output)
+                passed = any(row.get("status") == "passed" and row.get("target_type") in
+                             {"file", "file_contract", "output", "batch_import"} for row in payload.get("validations") or [])
+                body.addWidget(caption(("✓ Souborový kontrakt platný" if passed else "Souborový kontrakt: neověřeno")
+                                       + "  ·  " + ("Obsah ověřen" if state.get("human_verified") is True else "Obsah nebyl člověkem ověřen"), "muted"))
+            columns.setSizes([480, 760])
+        elif run.mode == "KASKADA":
+            cascade = CascadeStepsView(run, state, payload)
+            columns.addWidget(cascade)
+            columns.setSizes([350, 850])
         else:
-            box, body = panel("Generický detail")
-            body.addWidget(caption("Tento typ běhu nemá speciální renderer; všechny kanonické záznamy zůstávají dostupné v záložkách."))
-            layout.addWidget(box)
-        layout.addStretch()
-        self.tabs.addTab(scroll(page), "Přehled")
+            phases = QWidget()
+            phases_body = vertical(phases, 0)
+            phases_body.addWidget(caption("Výstupy přípravných fází" if run.mode in {"GENERATE", "MODIFY"}
+                                         else "Výstup fáze", "section"))
+            phase_text = TextCard("Výstup vybrané fáze", "", adapter.root)
+            self.phase_text = phase_text
+            phases_body.addWidget(phase_text, 1)
+            columns.addWidget(phases)
+            columns.addWidget(self.inspector)
+            columns.setSizes([380, 400, 390])
+        body.addWidget(columns, 1)
+        if run.transport == "BATCH":
+            rows = []
+            imports = state.get("batch_imports") or {}
+            for identifier, remote in (state.get("batch_records") or {}).items():
+                local = imports.get(identifier) or {}
+                counts = remote.get("request_counts") or {}
+                from .history_state import present_state
+                rows.append(f"{identifier} · Vzdáleně: {present_state(remote.get('status')).label}"
+                            f" · Převzetí: {present_state(local.get('import_status')).label if local else 'Soubory nepřevzaty'}"
+                            + (f" · Hotovo {counts.get('completed', 0)} / {counts.get('total', 0)}" if counts else ""))
+            body.insertWidget(0, caption("\n".join(rows) or "Dávka je evidována; vzdálený stav nebyl uložen.", "muted"))
+        self.tabs.addTab(scroll(overview), "Přehled")
+        if run.mode == "MODIFY":
+            self.tabs.addTab(ModifyMap(context, adapter.root, payload, state), "Mapa změn a porovnání")
+            self.tabs.setCurrentIndex(1)
+        artifacts = ArtifactBrowser(context=context)
+        artifacts.set_artifacts(adapter.root, payload.get("artifacts") or [])
+        self.tabs.addTab(artifacts, "Soubory")
+        root.addWidget(self.tabs, 1)
+        if run.mode in {"QA", "QFILE"}:
+            from .history_data import unique_responses
+            responses = unique_responses(payload.get("responses") or [])
+            tokens = []
+            for key, label in (("input_tokens", "Vstup"), ("output_tokens", "Výstup"), ("reasoning_tokens", "Uvažování")):
+                values = [row[key] for row in responses if isinstance(row.get(key), int)]
+                if values:
+                    tokens.append(f"{label}: {sum(values)} tokenů")
+            ids = [row.get("response_id") for row in responses if row.get("response_id")]
+            if tokens or ids:
+                root.addWidget(caption(" · ".join(tokens) + ("\nOdpověď: " + ", ".join(ids) if ids else ""), "muted"))
+        self.selected_stage = run.stages[-1] if run.stages else None
+        self.timeline.stage_selected.connect(self.select_stage)
+        if self.selected_stage:
+            self.timeline.select_stage(run.run_id, self.selected_stage.step_id)
+            self.select_stage(run, self.selected_stage)
+        root.addWidget(actions(action("history.detail.evidence", "Technická evidence", self.open_evidence)))
+        if run.mode in {"QA", "QFILE"}:
+            self.inspector.setParent(self)
+            self.inspector.hide()
+
+    def select_stage(self, _run, stage):
+        self.selected_stage = stage
+        self.inspector.select(stage)
+        if self.phase_text:
+            from .history_overview import human_answer
+            text = human_answer(self.payload, stage.step_id)
+            self.phase_text.text = text
+            self.phase_text.editor.setPlainText(text[:1024 * 1024] or (
+                "Výstup je ve vzdálené dávce. Nejprve převezměte soubory."
+                if stage.status.key == "ready_to_import" else "Text této fáze nebyl uložen."))
+            self.phase_text.copy_button.setEnabled(bool(text))
+            self.phase_text.save_button.setEnabled(bool(text))
+        self.phase_label.setText(f"Vybraná fáze: {stage.title} · {stage.stage} · {stage.status.label}"
+                                + (f" · {stage.model}" if stage.model else ""))
+
+    def open_evidence(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Technická evidence běhu")
+        dialog.resize(1000, 700)
+        tabs = QTabWidget()
+        for key, title in (("steps", "Záznamy kroků"), ("responses", "Odpovědi"),
+                           ("requests", "Požadavky"), ("validations", "Validace"),
+                           ("events", "Události"), ("lineage", "Návaznosti"),
+                           ("checkpoints", "Body obnovy")):
+            view = EvidenceView(title)
+            view.set_value(self.payload.get(key) or [])
+            tabs.addTab(view, title)
+        view = EvidenceView("Stav běhu")
+        view.set_value({"run": self.payload.get("summary"), "state": self.state})
+        tabs.addTab(view, "Stav běhu")
+        vertical(dialog).addWidget(tabs)
+        dialog.exec()
 
 
 class RunDetailDialog(QDialog):
     def __init__(self, context, adapter, payload, state, run, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Run Studio · {run.run_id}")
-        self.resize(1280, 820)
+        self.resize(1360, 960)
         self.setMinimumSize(640, 360)
-        vertical(self, 0).addWidget(RunDetailView(context, adapter, payload, state, run))
+        from .history_data import checked_checkpoints
+        from .history_launcher import HistoryBranchLauncher
+        from .history_policy import ActionAvailabilityPolicy, apply_decision
+
+        self.context, self.adapter, self.state = context, adapter, state
+        self.page = parent if hasattr(parent, "clone_source") else getattr(parent, "history", None)
+        self.launcher = HistoryBranchLauncher(context, self.page.refresh if self.page else None)
+        self.checkpoints = payload.get("checkpoints") or []
+        root = vertical(self, 0)
+        self.view = RunDetailView(context, adapter, payload, state, run)
+        root.addWidget(self.view, 1)
+        if self.page:
+            lineage = payload.get("lineage") or []
+            children = self.page.reverse_lineage.get(run.run_id, [])
+            if lineage or children:
+                branches = QWidget()
+                branch_body = vertical(branches)
+                branch_body.addWidget(caption("Návaznosti běhu", "section"))
+                for record in lineage + children:
+                    related = record.get("source_run_id") if record in lineage else record.get("target_run_id")
+                    if related and related != run.run_id:
+                        relation = {"repair": "Opravná větev", "rerun": "Opakované spuštění", "continue": "Pokračování", "clone": "Nové zadání"}.get(record.get("relation_type"), "Navazující běh")
+                        branch_body.addWidget(caption(f"{relation} · {record.get('source_checkpoint_id') or 'Bod větvení nebyl uložen'}", "muted"))
+                        branch_body.addWidget(action("history.related.open", str(related),
+                            lambda _checked=False, identifier=related: self.page.open_related(identifier)))
+                branch_body.addStretch()
+                self.view.tabs.addTab(branches, "Větve")
+        self.branch_buttons = {
+            "rerun": action("history.detail.rerun", "Znovu spustit", lambda: self.branch("rerun")),
+            "repair": action("history.detail.repair", "Opravit", lambda: self.branch("repair"), "primary"),
+            "continue": action("history.detail.continue", "Pokračovat", lambda: self.branch("continue")),
+            "edit_branch": action("history.detail.edit", "Upravit zadání nové větve", lambda: self.branch("rerun", True)),
+            "clone": action("history.detail.clone", "Klonovat jako nové zadání", self.clone),
+            "complete_batch": action("history.detail.batch", "Převzít soubory", self.complete_batch, "primary"),
+        }
+        root.addWidget(actions(*self.branch_buttons.values()))
+
+        def update(checkpoints):
+            self.checkpoints = checkpoints
+            decisions = ActionAvailabilityPolicy().evaluate(payload.get("summary") or {}, state, checkpoints,
+                                                            legacy=adapter.legacy)
+            for name, button in self.branch_buttons.items():
+                apply_decision(button, decisions[name])
+                if name in {"clone", "complete_batch"} and not self.page:
+                    button.setEnabled(False)
+                    button.setToolTip("Tato akce vyžaduje otevření detailu z Historie aplikace.")
+
+        update([])
+        if adapter.bundle and payload.get("checkpoints"):
+            context.operations.start_read("Ověření bodů obnovy",
+                lambda task: checked_checkpoints(adapter, payload.get("checkpoints") or [], payload.get("artifacts") or []),
+                update, popup=False)
+
+    def branch(self, relation, edit_input=False):
+        from .history_composer import BranchComposer
+        stage = self.view.selected_stage
+        composer = BranchComposer(self.launcher, self.adapter, self.checkpoints, relation,
+                                  stage.stage if stage else "", self, edit_input=edit_input)
+        if composer.exec() == QDialog.Accepted and composer.preview:
+            try:
+                self.launcher.launch_async(self.adapter, composer.preview, composer.repair_instruction(),
+                                           receive=lambda record: self.page.focus_new_branch(record.identifier) if self.page else None)
+                self.accept()
+            except (ValueError, OSError, KeyError) as error:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Větev nebyla spuštěna", str(error))
+
+    def clone(self):
+        if self.page:
+            self.page.clone_source(self.adapter, self.state)
+            self.accept()
+
+    def complete_batch(self):
+        if self.page:
+            self.page.complete_batch_source(self.adapter, self.state)

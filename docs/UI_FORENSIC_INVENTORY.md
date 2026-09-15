@@ -93,6 +93,13 @@ UI odděluje stav OpenAI Batch od lokálního převzetí výsledků. `completed`
 
 Produkční Run Studio obsahuje:
 
+- `history_data.py`: oddělená metadata/detail, invalidovaná omezená cache a kontrola checkpointů bez GUI I/O;
+- `history_overview.py`: skutečné textové výstupy a lidský inspektor fáze;
+- `history_cascade.py`: model a malovaný časový průběh kaskády se zvýrazněním skutečných závislostí;
+- všechny primární i sekundární akce pod jednotnou politikou, včetně Komiksu, Dávky a zdrojového běhu;
+- samostatný technický inspektor zachovávající i původní transportní záznamy, které nejsou uživatelskými fázemi;
+- přímé akce v detailu navázané na jeho zdroj, nikoli na jiný řádek historie v pozadí.
+
 - virtuální seznam běhů s malovanými DAW stopami skutečných StepRecordů;
 - fulltextový HistoryIndex a časové/projektové/režimové/stavové/transport/modelové filtry;
 - zoom, Fit, výběr fáze a kompaktní parent/children overlay;

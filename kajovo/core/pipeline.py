@@ -1222,7 +1222,7 @@ class RunWorker(QThread):
                         self.log.run_id, self.cfg.prompt, plan, struct, a3_model,
                         self.cfg.temperature if self._model_caps(a3_model).get("supports_temperature", False) else None,
                         selected, requirements=self._delivery_snapshot["requirements"],
-                        maximum_quality=self.cfg.maximum_quality)
+                        maximum_quality=self.cfg.maximum_quality, recovery_instruction=self.cfg.recovery_instruction)
                     return self._submit_generate_batch(client, manifest)
 
             try:
@@ -1575,7 +1575,8 @@ class RunWorker(QThread):
                 self.log.run_id, self.cfg.prompt, plan, struct, self.cfg.model,
                 self.cfg.temperature, [file["path"] for file in touched],
                 requirements=self._delivery_snapshot["requirements"],
-                maximum_quality=self.cfg.maximum_quality, mode="MODIFY", originals=originals)
+                maximum_quality=self.cfg.maximum_quality, mode="MODIFY", originals=originals,
+                recovery_instruction=self.cfg.recovery_instruction)
             manifest["overwrite_hashes"] = overwrite_hashes
             manifest["dry_run"] = bool(self.settings.dry_run_modify)
             manifest["versing"] = bool(self.cfg.versing)

@@ -150,7 +150,8 @@ def validate_batch_model(model):
 
 
 def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=None, *,
-                   requirements=None, maximum_quality=False, mode="GENERATE", originals=None):
+                   requirements=None, maximum_quality=False, mode="GENERATE", originals=None,
+                   recovery_instruction=""):
     from .requirements import apply_quality, stage_instructions, validate_traceability
 
     if mode not in {"GENERATE", "MODIFY"}:
@@ -208,6 +209,8 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
             raise ContractError(f"Chybí úplný původní obsah souboru {file['path']}.")
         compiled = compiler.compile(file["path"], originals=originals)
         context = {"file_context": compiled, "file": file}
+        if recovery_instruction:
+            context["recovery_instruction"] = str(recovery_instruction)
         fmt = file_response_format(stage, file["path"], 0, action=action)
         chunk = fmt["format"]["schema"]["properties"]["chunking"]["properties"]
         chunk["chunk_count"] = {"type": "integer", "enum": [1]}
@@ -240,6 +243,8 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
                 "cost_context_reports": reports, "dependency_waves": compiler.graph,
                 "expected": {row["custom_id"]: file["path"] for row, file in zip(rows, selected, strict=True)},
                 "omitted": [f["path"] for f in files if f not in selected]}
+    if recovery_instruction:
+        manifest["recovery_instruction"] = str(recovery_instruction)
     encode_requests(manifest)
     return manifest
 

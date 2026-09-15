@@ -39,6 +39,12 @@ Dokončeno, částečný výsledek, zastavení, předání dávky, čekání na 
 
 ## Historie / Run Studio
 
+Hlavní plocha má jednu časovou stopu na běh, relativní časové měřítko, kreslené segmenty, posuv a zoom. Časy i mezery vycházejí z uložených timestampů; neukončená fáze nemá vymyšlenou délku. Segment ukazuje lidský název, pod ním kód a trvání, a textový stav. Celý název a evidence jsou dostupné v tooltipu a kontextu výběru; šipky vlevo/vpravo vybírají fáze z klávesnice.
+
+Pod stopami je kontext vybrané fáze se stavem, modelem, trváním a soubory/chybou. Primární lišta obsahuje Detail, relevantní pracovní akce a převzetí dávky. Nabídka Další možnosti obsahuje klon, doménové přechody, ověření integrity a export. Otevření komiksu existuje pouze v kontextu komiksového běhu. Neověřený bezpečný bod není oprávněním ke spuštění.
+
+Detail zobrazuje identitu a časovou osu vždy nahoře. GENERATE má sloupce zadání, výstupu fáze a inspektoru. MODIFY přidává mapu doložených změn a dvě souběžné textové verze se zvýrazněním změn. QA má zadání a lidskou odpověď vedle sebe. QFILE má skutečný MIME náhled souboru, ovládání PDF a oddělenou souborovou/obsahovou validaci. Kaskáda má chronologické časové pruhy a lidský inspektor kroku se zvýrazněnými závislostmi. Důkazní tabulky a raw data se otevírají sekundární akcí Technická evidence. Kompozér větve odděluje zdrojovou chybu a zachované soubory od bodu obnovy, nového pokynu a první placené operace.
+
 Run Studio nahrazuje starý list/tab pohled pouze v sekci Historie. Používá virtuální dvousloupcový model a custom painted DAW stopu; jeden řádek je jeden run a segmenty jsou skutečné StepRecordy. Detail se načítá lazy a má typové pohledy GENERATE, MODIFY, QA, QFILE, KASKADA a COMIC plus generický renderer. Hlavní toolbar zachovává fulltext, čas, projekt, mode, stav, transport, model a pokročilé příznaky.
 
 Centrální `ActionAvailabilityPolicy` řídí viditelné důvody disabled stavů. Continue/Rerun/Repair otevírají lokální composer a po potvrzení přímo spouštějí nový worker přes Operations; Workbench neotevírají. Clone je jediná rodina akcí otevírající Zadání. Remote BATCH stav a místní import jsou oddělené a převzetí používá stejný backend jako Dávky.

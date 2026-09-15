@@ -326,7 +326,8 @@ class StudioWindow(QMainWindow):
             for dialog in list(self.detached.values()):
                 dialog.reject()
             for record in self.operations.records.values():
-                record.dialog.close()
+                if record.dialog is not None:
+                    record.dialog.close()
             if self.operations.overview:
                 self.operations.overview.hide()
             if self.converter:

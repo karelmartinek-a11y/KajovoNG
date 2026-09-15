@@ -7,8 +7,11 @@ import difflib
 import mimetypes
 from pathlib import Path
 import shutil
+import os
+import tempfile
+import zipfile
 
-from PySide6.QtCore import QUrl, Qt
+from PySide6.QtCore import QUrl, Qt, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog, QLabel, QPlainTextEdit, QStackedWidget, QTableWidget, QTableWidgetItem, QWidget,
@@ -21,6 +24,33 @@ from .components import action, actions, caption, vertical
 
 TEXT_PREVIEW_LIMIT = 1024 * 1024
 TEXT_DIFF_LIMIT = 5 * 1024 * 1024
+
+
+def export_run_bundle(adapter, destination):
+    """Ověřený export se zveřejní až po úplném dopsání archivu."""
+    root, target = adapter.root.resolve(), Path(destination).resolve()
+    if target == root or root in target.parents:
+        raise ValueError("Export nesmí přepsat zdrojový Run Bundle.")
+    if adapter.bundle and adapter.bundle.verify_integrity().get("status") == "changed":
+        raise ValueError("Run Bundle neprošel kontrolou integrity.")
+    guard = ArtifactGuard(root)
+    for record in adapter.artifacts():
+        if record.get("available_local") is not False and record.get("sha256"):
+            guard.resolve(record)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=".run-export-", suffix=".zip", dir=target.parent)
+    os.close(descriptor)
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in root.rglob("*"):
+                if path.is_file():
+                    if root not in path.resolve().parents:
+                        raise ValueError("Souborový odkaz vede mimo zdrojový Run Bundle.")
+                    archive.write(path, path.relative_to(root.parent))
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return str(target)
 
 
 class ArtifactGuard:
@@ -66,6 +96,8 @@ class ArtifactBrowser(QWidget):
         self.bundle_root: Path | None = None
         self.artifacts: list[dict] = []
         self.guard: ArtifactGuard | None = None
+        self._checks = {}
+        self._text_ready = False
         root = vertical(self, 0)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["Soubor", "Role", "MIME", "Velikost", "Integrita"])
@@ -95,12 +127,25 @@ class ArtifactBrowser(QWidget):
             self.pdf_document = QPdfDocument(self)
             self.pdf_preview = QPdfView()
             self.pdf_preview.setDocument(self.pdf_document)
+            self.pdf_preview.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             self.preview_stack.addWidget(self.pdf_preview)
         except ImportError:
             self.pdf_preview = None
         self.pdf_supported = self.pdf_document is not None and self.pdf_preview is not None
-        self.preview_stack.setMinimumHeight(180)
+        self.preview_stack.setMinimumHeight(120)
         root.addWidget(self.preview_stack, 1)
+        self.pdf_previous = action("history.pdf.previous", "Předchozí stránka", lambda: self.pdf_page(-1))
+        self.pdf_next = action("history.pdf.next", "Další stránka", lambda: self.pdf_page(1))
+        self.pdf_controls = actions(
+            self.pdf_previous, self.pdf_next,
+            action("history.pdf.fit", "Celá stránka", self.pdf_fit),
+            action("history.pdf.zoom.in", "+", lambda: self.pdf_zoom(1.25)),
+            action("history.pdf.zoom.out", "−", lambda: self.pdf_zoom(0.8)))
+        self.pdf_controls.hide()
+        root.addWidget(self.pdf_controls)
+        if self.pdf_supported:
+            self.pdf_document.pageCountChanged.connect(self._pdf_availability)
+            self.pdf_preview.pageNavigator().currentPageChanged.connect(self._pdf_availability)
         self.notice = caption("Vyberte skutečný místní artefakt.", "muted")
         root.addWidget(self.notice)
         self.buttons = {
@@ -115,6 +160,7 @@ class ArtifactBrowser(QWidget):
         root.addWidget(actions(*self.buttons.values()))
 
     def set_artifacts(self, root: str | Path, records: list[dict]):
+        self._checks.clear()
         self.bundle_root = Path(root)
         self.guard = ArtifactGuard(root)
         self.artifacts = list(records)
@@ -123,7 +169,9 @@ class ArtifactBrowser(QWidget):
             mime = str(record.get("mime_type") or mimetypes.guess_type(str(record.get("display_name") or ""))[0] or "application/octet-stream")
             values = [
                 str(record.get("display_name") or "Není evidováno"),
-                str(record.get("role") or "Není evidováno"),
+                {"generated_file": "Výsledek", "modified_file": "Upravený soubor", "batch_output": "Výstup dávky",
+                 "in_project_file": "Vstupní soubor", "attached_file": "Příloha", "user_input": "Zadání",
+                 "manifest": "Podklady", "intermediate_file": "Průběžný výstup"}.get(record.get("role"), str(record.get("role") or "Není evidováno")),
                 mime,
                 str(record.get("size_bytes") if record.get("size_bytes") is not None else "Není evidováno"),
                 "SHA-256" if record.get("sha256") else "Neověřeno",
@@ -150,17 +198,24 @@ class ArtifactBrowser(QWidget):
 
     def _availability(self):
         record = self.selected()
-        local = bool(record and record.get("available_local") is not False and record.get("path_in_bundle") and record.get("sha256"))
+        local = bool(record and self._checks.get(record.get("artifact_id") or record.get("path_in_bundle")))
         for key in ("open", "save", "export"):
             self.buttons[key].setEnabled(local)
             self.buttons[key].setToolTip("Akce vyžaduje existující místní bytes a platný SHA-256." if not local else "")
-        textual = local and str((record or {}).get("mime_type") or "").startswith("text/")
+        textual = local and self._text_ready
+        for key in ("copy", "txt"):
+            self.buttons[key].setVisible(textual)
+        self.buttons["compare"].setVisible(len(self.artifacts) > 1)
         self.buttons["copy"].setEnabled(textual)
         self.buttons["txt"].setEnabled(textual)
         self.buttons["metadata"].setEnabled(bool(record))
-        self.buttons["compare"].setEnabled(len(self.table.selectionModel().selectedRows()) == 2)
+        rows = self.table.selectionModel().selectedRows()
+        self.buttons["compare"].setEnabled(len(rows) == 2 and all(
+            self._checks.get(self.artifacts[index.row()].get("artifact_id") or self.artifacts[index.row()].get("path_in_bundle"))
+            for index in rows))
 
     def preview(self):
+        self._text_ready = False
         self._availability()
         record = self.selected()
         if not record:
@@ -169,7 +224,7 @@ class ArtifactBrowser(QWidget):
         generation = self.preview_generation
         self.notice.setText("Ověřuji integritu a připravuji místní náhled…")
         if self.context:
-            self.context.operations.start(
+            self.context.operations.start_read(
                 "Příprava náhledu artefaktu",
                 lambda task: self._prepare_preview(record),
                 lambda value: self._show_preview(value) if generation == self.preview_generation else None,
@@ -200,6 +255,11 @@ class ArtifactBrowser(QWidget):
 
     def _show_preview(self, prepared):
         kind = prepared["kind"]
+        self.pdf_controls.setVisible(kind == "pdf")
+        record = self.selected() or {}
+        self._checks[record.get("artifact_id") or record.get("path_in_bundle")] = kind != "error"
+        self._text_ready = kind == "text"
+        self._availability()
         if kind == "text":
             self.text_preview.setPlainText(prepared["value"] + (
                 "\n\n[Náhled je omezen na 1 MiB; kanonický soubor zůstal úplný.]" if prepared["clipped"] else ""
@@ -217,6 +277,7 @@ class ArtifactBrowser(QWidget):
         elif kind == "pdf":
             self.pdf_document.load(prepared["path"])
             self.preview_stack.setCurrentWidget(self.pdf_preview)
+            self._pdf_availability()
         else:
             self.meta_preview.setPlainText(prepared["value"])
             self.preview_stack.setCurrentWidget(self.meta_preview)
@@ -224,6 +285,32 @@ class ArtifactBrowser(QWidget):
             self.notice.setText(prepared["error"])
         else:
             self.notice.setText("Náhled je read-only; kanonický artefakt se nemění.")
+
+    def pdf_page(self, delta):
+        if self.pdf_supported and self.pdf_document.pageCount():
+            navigator = self.pdf_preview.pageNavigator()
+            page = max(0, min(self.pdf_document.pageCount() - 1, navigator.currentPage() + delta))
+            from PySide6.QtCore import QPointF
+            navigator.jump(page, QPointF(), self.pdf_preview.zoomFactor())
+            self._pdf_availability()
+
+    @Slot()
+    def _pdf_availability(self):
+        from shiboken6 import isValid
+        if self.pdf_supported and isValid(self.pdf_document) and isValid(self.pdf_preview):
+            page = self.pdf_preview.pageNavigator().currentPage()
+            self.pdf_previous.setEnabled(page > 0)
+            self.pdf_next.setEnabled(page + 1 < self.pdf_document.pageCount())
+
+    def pdf_fit(self):
+        if self.pdf_supported:
+            self.pdf_preview.setZoomMode(self.pdf_preview.ZoomMode.FitInView)
+
+    def pdf_zoom(self, factor):
+        if self.pdf_supported:
+            value = self.pdf_preview.zoomFactor()
+            self.pdf_preview.setZoomMode(self.pdf_preview.ZoomMode.Custom)
+            self.pdf_preview.setZoomFactor(max(0.05, min(8.0, value * factor)))
 
     @staticmethod
     def _metadata_text(record):
@@ -236,6 +323,11 @@ class ArtifactBrowser(QWidget):
             self.preview_stack.setCurrentWidget(self.meta_preview)
 
     def open(self):
+        record, guard = self.selected(), self.guard
+        if self.context and record and guard:
+            self.context.operations.start_read("Ověření souboru před otevřením", lambda task: str(guard.resolve(record)),
+                lambda path: QDesktopServices.openUrl(QUrl.fromLocalFile(path)), popup=False)
+            return
         try:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._path())))
         except (ValueError, OSError) as error:
@@ -247,6 +339,12 @@ class ArtifactBrowser(QWidget):
             return
         destination, _ = QFileDialog.getSaveFileName(self, "Exportovat ověřený artefakt", str(record.get("display_name") or "artefakt"))
         if destination:
+            if self.context:
+                guard = self.guard
+                self.context.operations.start_read("Uložení ověřené kopie souboru",
+                    lambda task: guard.export(record, destination),
+                    lambda _value: self.notice.setText("Ověřená kopie artefaktu byla uložena."), popup=False)
+                return
             try:
                 self.guard.export(record, destination)
                 self.notice.setText("Ověřená kopie artefaktu byla uložena.")
@@ -260,8 +358,12 @@ class ArtifactBrowser(QWidget):
         destination, _ = QFileDialog.getSaveFileName(self, "Uložit textový náhled", "nahled.txt", "Text (*.txt)")
         if destination:
             try:
-                Path(destination).write_text(self.text_preview.toPlainText(), encoding="utf-8")
-            except OSError as error:
+                target = Path(destination).resolve()
+                source = self.bundle_root.resolve()
+                if target == source or source in target.parents:
+                    raise ValueError("Uložení nesmí přepsat zdrojový Run Bundle.")
+                target.write_text(self.text_preview.toPlainText(), encoding="utf-8")
+            except (OSError, ValueError) as error:
                 self.notice.setText(str(error))
 
     def compare(self):
@@ -269,31 +371,43 @@ class ArtifactBrowser(QWidget):
         if len(rows) != 2 or not self.guard:
             self.notice.setText("Pro porovnání vyberte právě dva artefakty.")
             return
-        records = [self.artifacts[row] for row in rows]
-        try:
-            paths = [self.guard.resolve(record) for record in records]
-            if any(path.stat().st_size > TEXT_DIFF_LIMIT for path in paths):
-                value = (
-                    "Velký nebo binární obsah se neporovnává synchronně.\n\n"
-                    f"{records[0].get('display_name')}: {records[0].get('sha256')}\n"
-                    f"{records[1].get('display_name')}: {records[1].get('sha256')}"
-                )
-            else:
+        records, guard = [self.artifacts[row] for row in rows], self.guard
+        self.preview_generation += 1
+        generation = self.preview_generation
+        self.notice.setText("Porovnávám ověřené místní soubory…")
+
+        def calculate(task):
+            try:
+                paths = [guard.resolve(record) for record in records]
+                if any(path.stat().st_size > TEXT_DIFF_LIMIT for path in paths):
+                    raise ValueError("Soubor přesahuje limit 5 MiB pro textové porovnání.")
                 old = paths[0].read_text(encoding="utf-8")
                 new = paths[1].read_text(encoding="utf-8")
-                value = "".join(
-                    difflib.unified_diff(
-                        old.splitlines(True),
-                        new.splitlines(True),
-                        fromfile=str(records[0].get("display_name") or "Původní"),
-                        tofile=str(records[1].get("display_name") or "Nový"),
-                    )
-                ) or "Obsah je totožný."
-            self.text_preview.setPlainText(value)
-            self.preview_stack.setCurrentWidget(self.text_preview)
-        except (ValueError, OSError, UnicodeError) as error:
-            self.meta_preview.setPlainText(
-                self._metadata_text(records[0]) + "\n\n---\n\n" + self._metadata_text(records[1])
-                + "\n\nTextový diff není dostupný: " + str(error)
-            )
-            self.preview_stack.setCurrentWidget(self.meta_preview)
+                if "\x00" in old or "\x00" in new:
+                    raise ValueError("Binární obsah nemá textový diff.")
+                left, right = old.splitlines(True), new.splitlines(True)
+                if len(left) + len(right) > 30000:
+                    raise ValueError("Porovnání přesahuje 30 000 řádků.")
+                value = "".join(difflib.unified_diff(left, right,
+                    fromfile=str(records[0].get("display_name") or "Původní"),
+                    tofile=str(records[1].get("display_name") or "Nový"))) or "Obsah je totožný."
+                return "text", value
+            except (ValueError, OSError, UnicodeError) as error:
+                return "metadata", self._metadata_text(records[0]) + "\n\n" + self._metadata_text(records[1]) + "\n\n" + str(error)
+
+        def receive(result):
+            if generation != self.preview_generation:
+                return
+            kind, value = result
+            editor = self.text_preview if kind == "text" else self.meta_preview
+            editor.setPlainText(value)
+            self.preview_stack.setCurrentWidget(editor)
+            self.pdf_controls.hide()
+            self._text_ready = kind == "text"
+            self._availability()
+            self.notice.setText("Porovnání je připravené; oba zdrojové soubory zůstaly beze změny.")
+
+        if self.context:
+            self.context.operations.start_read("Porovnání souborů", calculate, receive)
+        else:
+            receive(calculate(None))

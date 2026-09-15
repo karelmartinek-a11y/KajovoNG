@@ -169,6 +169,8 @@ class SettingsPage(QWidget):
             setattr(self.context.settings, field.name, getattr(settings, field.name))
         self.context.operations.reduced_motion = settings.ui_reduced_motion
         for record in self.context.operations.records.values():
+            if record.dialog is None:
+                continue
             record.dialog.reduced_motion = settings.ui_reduced_motion
             record.dialog.mark.set_running(not record.terminal, settings.ui_reduced_motion)
         self.notice.setText("Nastavení bylo uloženo.")

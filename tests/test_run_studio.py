@@ -83,7 +83,7 @@ def test_action_policy(status, legacy, checkpoint, batch, rerun, repair, continu
     if batch:
         state["batch_id"] = "batch_1"
         state["batch_records"] = {"batch_1": {"status": "completed"}}
-    checkpoints = [{"safe_to_continue": True, "_availability_valid": checkpoint}] if checkpoint else []
+    checkpoints = [{"safe_to_continue": True, "_availability_valid": checkpoint, "checkpoint_type": "input_ready"}] if checkpoint else []
     decisions = ActionAvailabilityPolicy().evaluate(
         {"mode": "QA", "status": status}, state, checkpoints, legacy=legacy
     )
@@ -269,8 +269,10 @@ def test_modify_classification_uses_manifest_hash_and_explicit_events():
         "completed_hashes": {"skip.py": "hash"}, "missing_deliverables": [{"path": "failed.py"}],
     }
     values = {row.path: row.classification for row in classify_modify_files(payload, state)}
-    assert values == {"changed.py": "změněné", "new.py": "chybové", "skip.py": "přeskočené / reused",
+    assert values == {"changed.py": "změněné", "new.py": "výsledek nezapsán", "skip.py": "výsledek nezapsán",
                       "failed.py": "chybové", "same.py": "zachované", "old.py": "odstraněné"}
+    state["_verified_skip_paths"] = ["skip.py"]
+    assert next(row for row in classify_modify_files(payload, state) if row.path == "skip.py").classification == "přeskočené · hash ověřen"
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY", "QA", "QFILE"])

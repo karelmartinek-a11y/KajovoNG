@@ -22,4 +22,9 @@ UI-20,Přímá historická větev,Nové Run ID; source immutable; lineage; Opera
 UI-21,Clone,Exact ui_state bez Response/resume metadata; lineage až při startu,kajovo/studio/history.py;kajovo/studio/workbench.py,tests/test_studio.py;tests/test_workbench_resume_intent.py,docs/SSOT.md
 UI-22,BATCH v Historii,Remote completed oddělit od místního importu; převzít původní batch,kajovo/core/batch_completion.py;kajovo/studio/history.py,tests/test_run_studio.py;tests/test_batch_completion_ui.py,docs/RUN_BUNDLE_SPEC.md
 UI-23,Artefakty,Path pod bundle; SHA; remote-only blokace; bezpečný export; omezený náhled,kajovo/studio/history_artifacts.py,tests/test_run_studio.py,docs/HISTORY_RUN_EXPLORER.md
+UI-24,Transportní evidence,Background a provider zůstávají ve skutečné fázi; kopie nezvyšují spotřebu,kajovo/core/runlog.py;kajovo/core/response_journal.py,tests/test_history_forensic.py,docs/RUN_BUNDLE_SPEC.md
+UI-25,Rychlost historie,Metadata bez velkých odpovědí; neměnný index bez zápisu; invalidace cache,kajovo/studio/history_data.py;kajovo/core/run_bundle.py,tests/test_history_forensic.py,docs/HISTORY_RUN_EXPLORER.md
+UI-26,Kontextové akce,Komiks pouze pro COMIC; dávky pouze při vazbě; neověřený bod blokován,kajovo/studio/history_policy.py,tests/test_history_forensic.py,docs/UI_DESIGN.md
+UI-27,Výběr fáze,Kliknutí i klávesnice; asynchronní odpověď zachová vybraný segment,kajovo/studio/history_timeline.py;kajovo/studio/history.py,tests/test_history_forensic.py,docs/UI_DESIGN.md
+UI-28,Obnova vstupů,Úplný archiv a rekonstrukce izolovaného IN; původní zdroj beze změn,kajovo/core/runlog.py;kajovo/studio/history_launcher.py,tests/test_history_forensic.py,docs/RUN_BUNDLE_SPEC.md
 UI-24,Sedm vizuálních stavů,Offline deterministické fixture Run Bundles bez klíče a s kontrolou clippingu,scripts/render_studio.py,scripts/render_studio.py,docs/UI_DESIGN.md

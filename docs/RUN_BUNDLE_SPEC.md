@@ -120,7 +120,7 @@ Legacy adapter:
 
 ## Derived History index
 
-`HistoryIndex` verze 2 zapisuje `LOG/history_index.json`. Je to odvozený read-model s metadata běhu, kompaktními poli skutečných StepRecordů pro DAW stopu, searchable textem, response IDs, modely, oddělenými Batch/import údaji a booleany error/Batch/checkpoint/output/lineage. Aktualizace používá mtime relevantních zdrojů a nenačítá plný obsah všech request/response souborů při každém stisku filtru.
+`HistoryIndex` verze 3 zapisuje `LOG/history_index.json`. Je to odvozený read-model s metadaty běhu, kompaktními poli skutečných StepRecordů pro časovou stopu, vyhledávatelným textem, response IDs, modely, oddělenými Batch/import údaji a příznaky error/Batch/checkpoint/output/lineage. Obsahuje také `lineage_records` pro odvození opačných návazností bez druhého skenu LOG. Aktualizace používá mtime relevantních zdrojů a nenačítá plný obsah všech request/response souborů při každém stisku filtru. Nezměněný index se nepřepisuje.
 
 Index není kanonická evidence. Lze jej smazat a kompletně znovu sestavit z Run Bundle/legacy adresářů.
 
@@ -133,6 +133,12 @@ Vzdálený stav Batch `completed` znamená pouze, že provider dokončil dávku.
 Prohlížení Historie zdrojový běh nemění. `Pokračovat`, `ReRun` a `Opravit` po lokálním preview vytvoří nové Run ID, target-only LineageRecord a ihned spustí existující worker přes Operations; Workbench se neplní. `Klonovat` jako jediné otevře Zadání a LineageRecord zapíše až při jeho startu. Odeslaný Batch se nikdy neklonuje druhým submittem; dokončuje se ve svém původním běhu stejným `complete_saved_batch` jako v Dávkách.
 
 Nové standardní běhy zapisují checkpoint `input_ready` před prvním síťovým requestem. GENERATE/MODIFY dále používají přípravné checkpointy. KASKADA zapisuje `cascade_input_ready` a `cascade_step_completed` se serializovanou definicí, step signatures, runtime hodnotami a required response/artifact ID. Recovery instruction patří pouze novému run state/configu a LineageRecordu a je vložena jen do requestů prováděných za safe boundary.
+
+Stav standardního běhu obsahuje `input_archive = {version: 1, complete, in_dir, artifact_ids}`. Neúplná archivace vylučuje safe checkpoint. Přípravné checkpointy rovněž uvádějí archivované vstupy v `required_artifact_ids`. Launcher rekonstruuje IN z archivu, nikoli z aktuálního obsahu původní složky. Starší bod s adresářovým vstupem bez důkazu úplnosti archivu není automaticky povýšen na bezpečný.
+
+Validátor checkpointu odmítá cestu mimo adresář checkpointů, vzdálený nebo chybějící povinný artefakt, cestu mimo bundle a neplatný hash odpovědi. Při kontrole více checkpointů lze sdílet lokální cache hashů podle cesty, velikosti, mtime a ctime souboru. Nové spuštění znovu ověřuje zdroj.
+
+Transportní request/response záznamy si zachovávají plný obsah i vlastní ID. Logger je váže na explicitní pracovní `step_id`; názvy transportních souborů samy neoznačují novou pracovní fázi. Kanonický adapter čte `_record_*.json`, nikoli znovu i totožné raw kopie. Legacy adapter nadále čte původní formáty.
 
 
 ## Obrazová evidence Komiksu

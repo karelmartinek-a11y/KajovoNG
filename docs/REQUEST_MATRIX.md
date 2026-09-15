@@ -30,6 +30,10 @@ Technický příjem delšího zadání uloží přesný lokální artefakt bez p
 
 Prohlížení Historie, filtrování přes `HistoryIndex`, ověření integrity Run Bundle, otevření request/response, náhled/porovnání artefaktů, export Run Bundle a zobrazení lineage jsou čistě lokální operace a nevytvářejí OpenAI požadavek.
 
+Opakovaná stejná odpověď při background pollingu nezpůsobuje opakované ukládání celého deníku. GET request ID se při porovnání ignoruje; změna pracovního stavu nebo obsahu se uloží. Počet submitů, interval pollingu, timeout a obnova vzdáleného ID se nemění.
+
+Při explicitní opravě nové souborové dávky `build_manifest(..., recovery_instruction=...)` vloží pokyn do kontextu každého nově prováděného souborového requestu a do nového manifestu. Původní snapshot a jeho hash se nemění. GENERATE/MODIFY stále provádějí přípravu LIVE a v BATCH pouze soubory. Chunkování, velikostní limity a návaznost uvnitř souboru zůstávají zachované.
+
 Akce **Pokračovat**, **ReRun** a **Opravit** nikdy neposílají skrytý generativní preflight. Po čistě lokálním preview vytvoří nové Run ID a `LineageRecord` a okamžitě spustí správný existující worker přes Operations přímo v Historii. Vyžadují explicitní `CheckpointRecord` s `safe_to_continue=true` a ověřenou integritu požadovaných artefaktů/response. Opravný pokyn se přidá pouze do skutečně nově prováděných requestů. **Klonovat jako nové zadání** jako jediné otevře Workbench; lineage `clone` vznikne až při následném startu. Zdrojový Run Bundle se nemění.
 
 Akce **Dokončit** u již odeslané dávky používá čtení stavu existujícího Batch a stažení/import jeho výstupu. Nevytváří nový generativní submit. Pokud zdrojový běh již obsahuje odeslaný Batch, Run Explorer nepovolí pokračování, které by mohlo vytvořit duplicitní pracovní dávku; dokončení probíhá v původním běhu.

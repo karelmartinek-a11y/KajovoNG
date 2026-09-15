@@ -65,10 +65,20 @@ def main():
 
         def stage(logger, token, title, sequence, status="completed"):
             row = logger.bundle.ensure_step(token, title=title, kind="api", model="gpt-4.1")
+            if logger.bundle.run_record().get("mode") in {"GENERATE", "MODIFY", "KASKADA"}:
+                logger.save_json("requests", token + "_request", {"payload": {
+                    "model": "gpt-4.1", "input": "Zpracuj uložené zadání: " + title}}, step_id=row["step_id"])
+                if status == "completed":
+                    logger.save_json("responses", token + "_response", {
+                        "id": "resp_fixture_" + token, "status": "completed",
+                        "output_text": title + "\n\nZpracované podklady: autentizace, ukládání dat a přístupnost.\n"
+                                       "Výstup obsahuje rozhraní, konkrétní soubory a postup ověření.",
+                        "usage": {"input_tokens": 1200 + sequence * 340, "output_tokens": 560 + sequence * 210}},
+                        step_id=row["step_id"])
             logger.bundle.update_step(
                 row["step_id"], status=status, progress=100 if status == "completed" else 62,
                 started_at=f"2026-09-15T10:{sequence:02d}:00+00:00",
-                finished_at=f"2026-09-15T10:{sequence:02d}:0{min(sequence + 1, 9)}+00:00",
+                finished_at=f"2026-09-15T10:{sequence:02d}:52+00:00" if status != "batch_pending" else "",
                 technical_summary="Timeout při validaci" if status == "failed" else "",
             )
             return row["step_id"]
@@ -124,9 +134,13 @@ def main():
         writer.setTitle("Deterministický QFILE výsledek")
         painter = QPainter(writer)
         font = painter.font()
-        font.setPointSize(24)
+        font.setPointSize(14)
         painter.setFont(font)
-        painter.drawText(120, 180, "QFILE · validní souborový kontrakt · obsah neověřen")
+        from PySide6.QtCore import QRect, Qt
+        painter.drawText(QRect(300, 300, writer.width() - 600, writer.height() - 600), Qt.TextWordWrap,
+                         "Souhrn projektu\n\nVýsledný report připravený jako PDF.\n\n"
+                         "Souborový kontrakt prošel automatickou kontrolou. "
+                         "Obsah tohoto dokumentu dosud nebyl schválen člověkem.")
         painter.end()
         artifact = logger.bundle.archive_artifact(result, role="generated_file", kind="output_file", step_id=step_id,
                                                   reconstruction_role="report.pdf")
@@ -167,6 +181,14 @@ def main():
         logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00", "finished_at": "2026-09-15T10:02:03+00:00"})
         logger.bundle.seal()
         fixtures["cascade"] = logger.paths.run_dir
+        source_cascade = LegacyRunAdapter(logger.paths.run_dir)
+        child, _ui, _ = base("RUN_150920261005_REPAIR", "Release 2.4 · oprava", "KASKADA")
+        child.record_lineage(source_cascade.run_id, "repair",
+                             source_checkpoint_id=source_cascade.checkpoints()[-1]["checkpoint_id"],
+                             notes="Doplň chybějící validovaný výstup.")
+        stage(child, "validation", "Opravená validace", 0)
+        child.update_state({"status": "completed", "cascade_definition": cascade.to_dict()})
+        fixtures["cascade_repair"] = child.paths.run_dir
 
         logger, _ui, _ = base("RUN_150920261006_COMIC", "Komiks", "COMIC")
         stage(logger, "COMIC", "Komiksová operace", 0)
@@ -174,6 +196,19 @@ def main():
         logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00", "finished_at": "2026-09-15T10:00:01+00:00"})
         logger.bundle.seal()
         fixtures["comic"] = logger.paths.run_dir
+        # Veškeré záznamy vznikají reálným loggerem; čas fixture je následně
+        # normalizován, aby snímek nezávisel na čase běhu rendereru.
+        for day, directory in enumerate(fixtures.values()):
+            bundle = LegacyRunAdapter(directory).bundle
+            date = f"2026-09-{15 - day:02d}"
+            bundle.update_run({"created_at": f"{date}T10:00:00+00:00"})
+            rows = bundle.steps()
+            for sequence, row in enumerate(rows):
+                bundle.update_step(row["step_id"], started_at=f"{date}T10:{sequence:02d}:00+00:00",
+                    finished_at=f"{date}T10:{sequence:02d}:52+00:00" if row["status"] != "batch_pending" else "")
+            if bundle.run_record().get("status") != "batch_pending":
+                bundle.update_run({"finished_at": f"{date}T10:{max(0, len(rows) - 1):02d}:52+00:00"})
+            bundle.seal()
         return fixtures
 
     QCoreApplication.setAttribute(Qt.AA_DontUseNativeDialogs, True)
@@ -321,6 +356,7 @@ def main():
                     QTest.qWait(10)
                 if window.history.run and window.history.run.stages:
                     window.history._stage_selected(window.history.run, window.history.run.stages[-1])
+                window.history.tracks.scrollToTop()
                 capture(window, "run_studio_main")
 
                 def run_detail(key, tab_name=None):
@@ -359,13 +395,19 @@ def main():
                     dialog.hide()
 
                 run_detail("generate", "Přehled")
-                run_detail("modify", "Mapa změn")
+                run_detail("modify", "Mapa změn a porovnání")
                 run_detail("qa", "Přehled")
-                run_detail("qfile", "Artefakty a náhled")
-                run_detail("cascade", "Kroky a závislosti")
+                run_detail("qfile", "Přehled")
+                run_detail("cascade", "Přehled")
                 cascade_adapter = LegacyRunAdapter(fixtures["cascade"])
                 repair = BranchComposer(window.history.launcher, cascade_adapter, cascade_adapter.checkpoints(),
                                         "repair", "validation", window)
+                repair.show()
+                for _ in range(200):
+                    app.processEvents(QEventLoop.AllEvents, 25)
+                    if not window.context.operations.active:
+                        break
+                    QTest.qWait(10)
                 capture(repair, "run_studio_repair", include_scroll=False)
                 repair.hide()
                 for key, page in window.pages.items():

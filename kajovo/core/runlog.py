@@ -351,7 +351,9 @@ class RunLogger:
         checkpoint_type = ""
         safe = False
         reason = ""
-        required_artifacts: list[str] = []
+        required_artifacts: list[str] = [str(row.get("artifact_id")) for row in self.bundle.artifacts()
+            if row.get("available_local", True) and row.get("role") in
+            {"user_input", "attached_file", "in_project_file", "input"} and row.get("artifact_id")]
         if "ui_state" in patch and isinstance(state.get("ui_state"), dict):
             mode = str(state["ui_state"].get("mode") or "")
             if mode in {"GENERATE", "MODIFY", "QA", "QFILE"}:
@@ -398,6 +400,10 @@ class RunLogger:
             reason = "Běh skončil úspěšně a jeho evidence je uzavřená."
         if not checkpoint_type:
             return
+        archive = state.get("input_archive")
+        if isinstance(archive, dict) and not archive.get("complete"):
+            safe = False
+            reason = "Vstupní soubory se nepodařilo úplně archivovat; opakování není bezpečné."
         state_hash = hashlib.sha256(
             json.dumps(
                 state,
@@ -437,6 +443,7 @@ class RunLogger:
             for item in self.bundle.artifacts()
         }
         in_dir = str(ui.get("in_dir") or "").strip()
+        complete = not in_dir or Path(in_dir).is_dir()
         if in_dir and Path(in_dir).is_dir():
             root = Path(in_dir).resolve()
             for source in sorted(root.rglob("*")):
@@ -458,6 +465,7 @@ class RunLogger:
                     )
                     known_originals.add(key)
                 except (OSError, ValueError) as exc:
+                    complete = False
                     self.bundle.append_event(
                         "artifact.archive_error",
                         {"path": str(source), "error": str(exc)},
@@ -467,6 +475,9 @@ class RunLogger:
                         human_message=f"Vstupní soubor {source.name} nebylo možné archivovat.",
                         technical_message=str(exc),
                     )
+        state["input_archive"] = {"version": 1, "complete": complete, "in_dir": in_dir,
+            "artifact_ids": [row["artifact_id"] for row in self.bundle.artifacts()
+                             if row.get("role") == "in_project_file" and row.get("artifact_id")]}
         existing_external = {
             str(item.get("original_path") or "")
             for item in self.bundle.artifacts()
@@ -506,11 +517,11 @@ class RunLogger:
         except Exception:
             state = {"status": "corrupt_state"}
         state.update(patch)
-        self._write_state(state)
-        self.bundle.update_run(self._bundle_patch_from_state(state))
         # Archivace musí předcházet checkpointu, aby checkpoint mohl uvést
         # přesné kanonické ArtifactRecord závislosti.
         self._archive_run_inputs(patch, state)
+        self._write_state(state)
+        self.bundle.update_run(self._bundle_patch_from_state(state))
         self.event(
             "state.updated", {"patch": patch, "status": state.get("status")}
         )
@@ -607,8 +618,14 @@ class RunLogger:
         path = self._json_path(kind, name)
         self._atomic_write_json(path, obj)
         relative = Path(path).relative_to(Path(self.paths.run_dir)).as_posix()
+        transport = name.startswith(("background_response_", "provider_", "received_"))
+        if transport and not step_id:
+            step_id = getattr(self, "_active_request_step_id", "")
         if kind == "requests":
-            self.bundle.record_request(obj, name=name, step_id=step_id, source_path=relative)
+            record = self.bundle.record_request(obj, name=name, step_id=step_id, source_path=relative,
+                                                request_role="transport" if transport else "work")
+            if not transport:
+                self._active_request_step_id = record["step_id"]
         elif kind == "responses":
             self.bundle.record_response(obj, name=name, step_id=step_id, source_path=relative)
         else:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import shutil
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Callable
@@ -33,6 +34,7 @@ class BranchPreview:
     source_error: str
     technical_error: str
     impact: str
+    output_dir: str = ""
 
 
 def first_paid_operation(mode: str, checkpoint: dict[str, Any], selected_stage: str = "") -> str:
@@ -49,7 +51,9 @@ def first_paid_operation(mode: str, checkpoint: dict[str, Any], selected_stage: 
             return stages[index] if index < len(stages) else prefix + "3"
         return prefix + "0R"
     if mode == "KASKADA":
-        return selected_stage or str(state.get("next_step_id") or "První krok kaskády")
+        definition = state.get("cascade_definition") or {}
+        steps = definition.get("steps") or []
+        return str(state.get("next_step_id") or (steps[0].get("id") if steps else "První krok kaskády"))
     return mode or "Není evidováno"
 
 
@@ -58,6 +62,16 @@ class HistoryBranchLauncher:
         self.context = context
         self.refreshed = refreshed or (lambda: None)
         self._launched: set[tuple[str, str, str]] = set()
+
+    @staticmethod
+    def _source_state(adapter):
+        state = read_state(adapter.root)
+        if pending_batch_ids(state):
+            raise ValueError("Zdrojový běh již odeslal BATCH; dokončete jej v původním běhu.")
+        pending = state.get("response_pending") or {}
+        if state.get("status") == "submission_unknown" or pending.get("status") == "submitting" and not pending.get("id"):
+            raise ValueError("Výsledek původního odeslání není potvrzen; nový submit je zablokován.")
+        return state
 
     def preview(self, adapter, checkpoint_id: str, relation: str, selected_stage: str = "") -> BranchPreview:
         if relation not in {"continue", "rerun", "repair"}:
@@ -71,9 +85,10 @@ class HistoryBranchLauncher:
         state = checkpoint.get("state_snapshot")
         if not isinstance(state, dict):
             raise ValueError("Checkpoint nemá platný stavový snímek.")
-        if pending_batch_ids(read_state(adapter.root)):
-            raise ValueError("Zdrojový běh již odeslal BATCH; dokončete jej v původním běhu.")
+        self._source_state(adapter)
         ui = state.get("ui_state") if isinstance(state.get("ui_state"), dict) else {}
+        if ui.get("in_dir") and not (state.get("input_archive") or {}).get("complete"):
+            raise ValueError("Bod obnovy nedokládá úplný archiv vstupního adresáře. Použijte klon a zkontrolujte jeho podklady.")
         mode = str(ui.get("mode") or state.get("mode") or adapter.run_record().get("mode") or "")
         if mode not in SUPPORTED_DIRECT_MODES:
             raise ValueError("Tento typ běhu nemá bezpečný přímý launcher; použijte jeho doménovou obrazovku.")
@@ -88,33 +103,88 @@ class HistoryBranchLauncher:
             inherited = [str(value) for value in runtime.get("executed_step_ids") or [] if value]
         evidence = verified_output_evidence(adapter.root, ui.get("out_dir")) if mode in {"GENERATE", "MODIFY"} else []
         skipped = tuple(sorted(row["path"] for row in evidence if row.get("path") and row.get("sha256")))
-        error = str(state.get("human_error") or state.get("error") or adapter.run_record().get("output_summary") or "Není evidováno")
-        technical_error = str(state.get("technical_error") or state.get("error") or "Není evidováno")
+        source_state = read_state(adapter.root)
+        error = str(source_state.get("human_error") or source_state.get("error") or adapter.run_record().get("output_summary") or "Popis chyby nebyl uložen.")
+        technical_error = str(source_state.get("technical_error") or source_state.get("error") or "Technický detail nebyl uložen.")
         return BranchPreview(
             relation, adapter.run_id, checkpoint_id, str(checkpoint.get("checkpoint_type") or ""),
             selected_stage, tuple(inherited), skipped,
             first_paid_operation(mode, checkpoint, selected_stage), error, technical_error,
             "Zdrojový běh zůstane neměnný; vznikne nový Run ID a nová lineage větev.",
+            str(self._output_dir(mode, state, ui) or ""),
         )
 
-    def launch(self, adapter, preview: BranchPreview, repair_instruction: str = ""):
+    @staticmethod
+    def _output_dir(mode, state, ui):
+        value = state.get("out_dir") if mode == "KASKADA" else (
+            ui.get("out_dir") if mode != "QA" and not ui.get("send_as_c") else None)
+        return Path(str(value)).resolve() if value else None
+
+    def launch_async(self, adapter, preview, repair_instruction="", receive=None):
         key = (preview.source_run_id, preview.checkpoint_id, preview.relation)
         if key in self._launched:
+            raise ValueError("Tato potvrzovací akce již byla spuštěna.")
+        if not self.context.api_key:
+            raise ValueError("Přímé spuštění vyžaduje uložený přístupový klíč.")
+        self._launched.add(key)
+        operations = self.context.operations
+
+        def prepare(task):
+            try:
+                result = self.launch(adapter, preview, repair_instruction, _prepare_only=True)
+                result[1].moveToThread(operations.thread())
+                return result
+            except Exception:
+                self._launched.discard(key)
+                raise
+
+        def prepared(result):
+            run_id, worker, output_dir, project = result
+            try:
+                record = self._adopt(preview, run_id, worker, output_dir, project)
+            except Exception:
+                worker.deleteLater()
+                self._launched.discard(key)
+                raise
+            preparation.result = {"run_id": run_id, "status": "started"}
+            preparation.dialog.hide()
+            if receive:
+                receive(record)
+
+        try:
+            preparation = operations.start("Příprava nové větve", prepare, prepared,
+                                           output_dir=preview.output_dir or None)
+            return preparation
+        except Exception:
+            self._launched.discard(key)
+            raise
+
+    def _adopt(self, preview, run_id, worker, output_dir, project):
+        record = self.context.operations.adopt(
+            f"{preview.relation.upper()} · {project}", worker,
+            receive=lambda value: self.refreshed(), identifier=run_id, output_dir=output_dir)
+        record.worker.finished.connect(self.refreshed)
+        return record
+
+    def launch(self, adapter, preview: BranchPreview, repair_instruction: str = "", *, _prepare_only=False):
+        key = (preview.source_run_id, preview.checkpoint_id, preview.relation)
+        if key in self._launched and not _prepare_only:
             raise ValueError("Tato potvrzovací akce již byla spuštěna; její druhý submit je zablokován.")
         if not self.context.api_key:
             raise ValueError("Přímé spuštění vyžaduje uložený přístupový klíč.")
+        if adapter.bundle.verify_integrity().get("status") == "changed":
+            raise ValueError("Zdrojový běh se změnil; kontrola integrity spuštění zablokovala.")
         checkpoint = adapter.bundle.validate_checkpoint(preview.checkpoint_id)
         state = copy.deepcopy(checkpoint["state_snapshot"])
         ui = copy.deepcopy(state.get("ui_state") or {})
         mode = str(ui.get("mode") or state.get("mode") or adapter.run_record().get("mode") or "")
-        if pending_batch_ids(read_state(adapter.root)):
-            raise ValueError("BATCH již byl odeslán; nový submit je zablokován.")
-        if mode == "KASKADA":
-            reserved_output = Path(str(state.get("out_dir"))).resolve() if state.get("out_dir") else None
+        self._source_state(adapter)
+        reserved_output = self._output_dir(mode, state, ui)
+        if _prepare_only:
+            if str(reserved_output or "") != preview.output_dir:
+                raise ValueError("Výstupní adresář se od potvrzeného náhledu změnil.")
         else:
-            reserved_output = (Path(str(ui.get("out_dir"))).resolve()
-                               if ui.get("out_dir") and not ui.get("send_as_c") and mode != "QA" else None)
-        self.context.operations.assert_output_available(reserved_output)
+            self.context.operations.assert_output_available(reserved_output)
         run_id = new_run_id()
         self._launched.add(key)
         try:
@@ -124,12 +194,9 @@ class HistoryBranchLauncher:
                 )
             else:
                 worker, output_dir, project = self._standard_worker(run_id, adapter, ui, state, preview, repair_instruction)
-            record = self.context.operations.adopt(
-                f"{preview.relation.upper()} · {project}", worker,
-                receive=lambda value: self.refreshed(), identifier=run_id, output_dir=output_dir,
-            )
-            record.worker.finished.connect(self.refreshed)
-            return record
+            if _prepare_only:
+                return run_id, worker, output_dir, project
+            return self._adopt(preview, run_id, worker, output_dir, project)
         except Exception:
             self._launched.discard(key)
             raise
@@ -138,6 +205,28 @@ class HistoryBranchLauncher:
         from .workbench import default_state
 
         merged = {**default_state(self.context.settings), **ui}
+        if merged.get("in_dir"):
+            from kajovo.core.utils import safe_join_under_root
+            from .history_artifacts import ArtifactGuard
+            archive = state.get("input_archive") or {}
+            if not archive.get("complete"):
+                raise ValueError("Chybí úplný archiv vstupů pro nový běh.")
+            artifacts = {row.get("artifact_id"): row for row in adapter.artifacts()}
+            staging = Path(self.context.settings.cache_dir).resolve() / "history_inputs" / run_id
+            staging.mkdir(parents=True, exist_ok=False)
+            guard = ArtifactGuard(adapter.root)
+            for identifier in archive.get("artifact_ids") or []:
+                record = artifacts.get(identifier)
+                if not record:
+                    raise ValueError("Chybí archivovaný vstup: " + identifier)
+                source = guard.resolve(record)
+                relative = (record.get("metadata") or {}).get("relative_path") or record.get("reconstruction_role")
+                if not relative:
+                    raise ValueError("Vstup nemá evidovanou relativní cestu.")
+                destination = Path(safe_join_under_root(str(staging), relative))
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, destination)
+            merged["in_dir"] = str(staging)
         merged["recovery_instruction"] = repair_instruction
         merged["source_checkpoint_id"] = preview.checkpoint_id
         snapshot = state.get("preparation_snapshot")

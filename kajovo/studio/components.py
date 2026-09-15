@@ -102,6 +102,9 @@ class WrappedLabel(QLabel):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.wordWrap():
+            # QLabel při heightForWidth respektuje i dříve nastavené minimum.
+            # Po rozšíření panelu nesmí zůstat výška úzkého zalomení uzamčena.
+            self.setMinimumHeight(0)
             required = max(0, self.heightForWidth(self.width()))
             if self.minimumHeight() != required:
                 self.setMinimumHeight(required)
