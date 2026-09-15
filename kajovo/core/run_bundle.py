@@ -1048,7 +1048,8 @@ class RunBundle:
         return [item for item in (records or []) if isinstance(item, dict)]
 
     def _checksum_files(self) -> list[Path]:
-        ignored = {self.bundle_path.resolve(), self.checksums_path.resolve()}
+        ignored = {self.bundle_path.resolve(), self.checksums_path.resolve(),
+                   (self.root / "execution.lock").resolve()}
         files: list[Path] = []
         for path in self.root.rglob("*"):
             if not path.is_file():
@@ -1093,6 +1094,9 @@ class RunBundle:
         errors: list[str] = []
         files = expected["files"]
         for relative, digest in files.items():
+            # Provozní QLockFile se po ukončení pracovníka odstraní; není důkazním artefaktem.
+            if relative == "execution.lock":
+                continue
             target = self.root / relative
             if not target.is_file():
                 errors.append(f"Chybí {relative}.")

@@ -222,6 +222,8 @@ Textový kontrakt odmítá nedokončené a chybové odpovědi, odmítnutí model
 
 ## Logy, Run Bundle a Historie
 
+Kořenový `execution.lock` je dočasný provozní zámek, nikoli historický artefakt. Nové integritní manifesty jej neobsahují; ověření staršího manifestu ignoruje pouze existenci a obsah tohoto zámku, bez přepisování manifestu či souhrnného hashe. Všechny trvalé podklady a stejně pojmenované soubory v podadresářích nadále podléhají plné kontrole integrity.
+
 `run_state.json` zůstává kompatibilním mutable runtime stavem pracovního workflow, ale není kanonickou historickou pravdou. Každý nový běh má vlastní Run Bundle v adresáři `RUN_*`: `bundle.json`, `run.json`, `steps.jsonl`, `events.jsonl`, `requests/`, `responses/`, `validations/`, `checkpoints/`, `artifacts/`, `manifests/`, `reports/`, `lineage.json` a `checksums.json`. Podrobný kontrakt je v [RUN_BUNDLE_SPEC.md](RUN_BUNDLE_SPEC.md).
 
 Kanonická evidence je typovaná a verzovaná. `RunRecord` popisuje běh a jeho přesný stav; `StepRecord` logické kroky; `EventRecord` append-only události s monotónní sequence; `RequestRecord` přesný odeslaný payload a jeho hash; `ResponseRecord` kompletní response, usage a incomplete/error stav; `ValidationRecord` významnou validaci; `ArtifactRecord` soubor nebo externí zdroj s provenance a SHA-256; `CheckpointRecord` explicitní bezpečný nebo nebezpečný bod pokračování; `LineageRecord` vztah source run → nový target run. Runtime log a `run_state.json` mohou sloužit provoznímu workflow, ale Run Explorer staví nad kanonickou evidencí a rebuildovatelným `HistoryIndex`.

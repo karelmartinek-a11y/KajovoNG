@@ -101,6 +101,8 @@ Archivace neznamená, že se pracovní OUT/IN cesta přesměruje. Bundle je důk
 
 `seal()` vytvoří `checksums.json` s SHA-256 evidovaných souborů a `bundle_hash`; `run.json` obsahuje výsledný hash. `verify_integrity()` kontroluje chybějící soubory a hashové změny. Pozdější append-only událost na již uzavřeném běhu vyvolá opětovné zapečetění aktuální evidence.
 
+Provozní zámek `execution.lock` v kořeni běhu není důkazní artefakt a do nových otisků se nezahrnuje. U starších manifestů se jeho existence a obsah nekontrolují; původní manifest ani jeho souhrnný hash se nepřepisují. Kontrola ostatních souborů, včetně stejně pojmenovaných archivovaných artefaktů v podadresářích, zůstává beze změny.
+
 UI zobrazuje:
 
 - `Integrita ověřena`, nebo
