@@ -27,6 +27,10 @@ def main():
     from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, Qt
     from PySide6.QtWidgets import QApplication, QAbstractButton, QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidgetItem, QScrollArea, QTabWidget, QWidget
     from kajovo.core.config import AppSettings
+    from kajovo.core.runlog import RunLogger
+    from kajovo.core.run_bundle import LegacyRunAdapter
+    from kajovo.core.batch_completion import read_state
+    from kajovo.core.cascade_types import CascadeDefinition, CascadeStep
     from kajovo.core.progress import ProgressEvent
     from kajovo.studio.application import create_window
     from kajovo.studio.components import DetailDialog
@@ -35,6 +39,142 @@ def main():
     from kajovo.studio.resources import ValueDialog, fill_records
     from kajovo.core.cascade_types import CascadeInput, CascadeOutput
     from kajovo.studio.cascade_items import CascadeItemDialog
+    from kajovo.studio.history import _payload
+    from kajovo.studio.history_composer import BranchComposer
+    from kajovo.studio.history_details import CascadeStepsView, ModifyMap, RunDetailDialog
+    from kajovo.studio.history_models import build_run
+
+    def create_run_fixtures(workspace, settings):
+        log_dir = settings.log_dir
+        fixtures = {}
+
+        def base(run_id, project, mode, status="completed"):
+            logger = RunLogger(log_dir, run_id, project)
+            ui = {
+                "project": project, "prompt": f"Produkční zadání pro {project}", "mode": mode,
+                "model": "gpt-4.1", "model_a1": "gpt-4.1", "model_a2": "gpt-4.1",
+                "model_a3": "gpt-4.1", "response_id": "", "attached_file_ids": [],
+                "input_file_ids": [], "attached_vector_store_ids": [], "in_dir": "",
+                "out_dir": str(workspace / "OUT" / project), "in_equals_out": False,
+                "versing": False, "temperature": 0.2, "use_file_search": True,
+                "send_as_c": False, "maximum_quality": False,
+            }
+            logger.update_state({"ui_state": ui})
+            logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00"})
+            return logger, ui, status
+
+        def stage(logger, token, title, sequence, status="completed"):
+            row = logger.bundle.ensure_step(token, title=title, kind="api", model="gpt-4.1")
+            logger.bundle.update_step(
+                row["step_id"], status=status, progress=100 if status == "completed" else 62,
+                started_at=f"2026-09-15T10:{sequence:02d}:00+00:00",
+                finished_at=f"2026-09-15T10:{sequence:02d}:0{min(sequence + 1, 9)}+00:00",
+                technical_summary="Timeout při validaci" if status == "failed" else "",
+            )
+            return row["step_id"]
+
+        logger, ui, _ = base("RUN_150920261001_GENERATE", "Rezervační portál", "GENERATE")
+        for seq, token, title in ((0, "A0R", "Upřesnění požadavků"), (1, "A1", "Plán řešení"),
+                                  (2, "A2", "Struktura projektu"), (3, "A3", "BATCH soubory")):
+            stage(logger, token, title, seq, "batch_pending" if token == "A3" else "completed")
+        logger.update_state({"batch_id": "batch_generate_demo", "status": "batch_pending",
+                             "batch_records": {"batch_generate_demo": {"id": "batch_generate_demo", "status": "completed",
+                                 "request_counts": {"completed": 14, "failed": 0, "total": 14}}}})
+        logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00", "started_at": "2026-09-15T10:00:00+00:00", "finished_at": ""})
+        fixtures["generate"] = logger.paths.run_dir
+
+        logger, ui, _ = base("RUN_150920261002_MODIFY", "Úprava fakturace", "MODIFY")
+        ui["in_dir"] = str(workspace / "IN")
+        logger.update_state({"ui_state": ui, "preparation_snapshot": {"canonical_stage": "B2", "structure": {
+            "touched_files": [{"path": "billing.py", "action": "modify"}, {"path": "tests/test_billing.py", "action": "add"},
+                              {"path": "README.md", "action": "modify"}],
+            "preserved_files": [{"path": "config.py"}]}}})
+        for seq, token, title, status in ((0, "B0R", "Upřesnění změn", "completed"), (1, "B1", "Plán změn", "completed"),
+                                          (2, "B2", "Struktura změn", "completed"), (3, "B3", "Zápis souborů", "failed")):
+            step_id = stage(logger, token, title, seq, status)
+        old = workspace / "billing-old.py"
+        old.write_text("def total():\n    return 10\n", encoding="utf-8")
+        new = workspace / "billing-new.py"
+        new.write_text("def total():\n    return 12\n", encoding="utf-8")
+        logger.bundle.archive_artifact(old, role="in_project_file", step_id=step_id, reconstruction_role="billing.py",
+                                       metadata={"relative_path": "billing.py"})
+        logger.bundle.archive_artifact(new, role="modified_file", step_id=step_id, reconstruction_role="billing.py",
+                                       metadata={"before_sha256": "old"})
+        logger.update_state({"status": "partial", "missing_deliverables": [{"path": "README.md"}], "error": "B3: README.md nebyl uložen."})
+        logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00", "finished_at": "2026-09-15T10:03:04+00:00"})
+        logger.bundle.seal()
+        fixtures["modify"] = logger.paths.run_dir
+
+        logger, _ui, _ = base("RUN_150920261003_QA", "Audit přístupnosti", "QA")
+        step_id = stage(logger, "QA", "Odpověď na dotaz", 0)
+        logger.save_json("requests", "QA_request_demo", {"payload": {"model": "gpt-4.1", "input": "audit"}}, step_id=step_id)
+        logger.save_json("responses", "QA_response_demo", {"id": "resp_qa_demo", "status": "completed",
+                         "output_text": "Formulář potřebuje explicitní popisky a viditelný focus.",
+                         "usage": {"input_tokens": 820, "output_tokens": 96}}, step_id=step_id)
+        logger.update_state({"status": "completed", "completed_at": 1789467000})
+        logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00", "finished_at": "2026-09-15T10:00:01+00:00"})
+        logger.bundle.seal()
+        fixtures["qa"] = logger.paths.run_dir
+
+        logger, _ui, _ = base("RUN_150920261004_QFILE", "Export reportu", "QFILE")
+        step_id = stage(logger, "QFILE", "Výsledný PDF soubor", 0)
+        result = workspace / "vysledek.pdf"
+        from PySide6.QtGui import QPainter, QPdfWriter
+        writer = QPdfWriter(str(result))
+        writer.setTitle("Deterministický QFILE výsledek")
+        painter = QPainter(writer)
+        font = painter.font()
+        font.setPointSize(24)
+        painter.setFont(font)
+        painter.drawText(120, 180, "QFILE · validní souborový kontrakt · obsah neověřen")
+        painter.end()
+        artifact = logger.bundle.archive_artifact(result, role="generated_file", kind="output_file", step_id=step_id,
+                                                  reconstruction_role="report.pdf")
+        logger.record_validation(step_id=step_id, target_type="file_contract", target_id=artifact["artifact_id"],
+                                 validator="QFILE.A3_FILE", status="passed", evidence={"contract": "A3_FILE"})
+        logger.update_state({"status": "completed", "completed_at": 1789467100,
+                             "file_contract_valid": True, "human_verified": False})
+        logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00", "finished_at": "2026-09-15T10:00:01+00:00"})
+        logger.bundle.seal()
+        fixtures["qfile"] = logger.paths.run_dir
+
+        analysis_output = CascadeOutput(id="analysis_result", name="Analýza", kind="text")
+        implementation_output = CascadeOutput(id="implementation_result", name="Implementace", kind="text")
+        cascade = CascadeDefinition("Release pipeline", steps=[
+            CascadeStep(id="analysis", title="Analýza", model="gpt-4.1", input_text="Analyzuj",
+                        outputs=[analysis_output]),
+            CascadeStep(id="implementation", title="Implementace", model="gpt-4.1", input_text="Implementuj",
+                        inputs=[CascadeInput(name="Analýza", source="output", source_step_id="analysis",
+                                             source_output_id=analysis_output.id)],
+                        outputs=[implementation_output]),
+            CascadeStep(id="validation", title="Validace", model="gpt-4.1", input_text="Validuj",
+                        inputs=[CascadeInput(name="Implementace", source="output", source_step_id="implementation",
+                                             source_output_id=implementation_output.id)]),
+        ])
+        logger, _ui, _ = base("RUN_150920261005_KASKADA", "Release 2.4", "KASKADA")
+        first = stage(logger, "analysis", "Analýza", 0)
+        stage(logger, "implementation", "Implementace", 1)
+        stage(logger, "validation", "Validace", 2, "failed")
+        state = {"mode": "KASKADA", "project": "Release 2.4", "cascade_definition": cascade.to_dict(),
+                 "cascade_runtime": {"legacy_context": {}, "context_response_ids": {}, "values": {},
+                                     "executed_step_ids": ["analysis", "implementation"], "step_signatures": {}},
+                 "next_step_id": "validation", "failed_step_id": "validation", "failed_step_number": 3,
+                 "human_error": "Validace nenašla očekávaný výstup.", "technical_error": "missing artifact"}
+        logger.update_state(state)
+        logger.checkpoint("cascade_step_completed", state_snapshot=state, safe_to_continue=True,
+                          reason="Dva kroky jsou bezpečně dokončeny.", step_id=first)
+        logger.update_state({"status": "failed", "error": "missing artifact", "human_error": state["human_error"]})
+        logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00", "finished_at": "2026-09-15T10:02:03+00:00"})
+        logger.bundle.seal()
+        fixtures["cascade"] = logger.paths.run_dir
+
+        logger, _ui, _ = base("RUN_150920261006_COMIC", "Komiks", "COMIC")
+        stage(logger, "COMIC", "Komiksová operace", 0)
+        logger.update_state({"status": "completed", "completed_at": 1789467200, "comic_operation_id": "comic_demo"})
+        logger.bundle.update_run({"created_at": "2026-09-15T10:00:00+00:00", "finished_at": "2026-09-15T10:00:01+00:00"})
+        logger.bundle.seal()
+        fixtures["comic"] = logger.paths.run_dir
+        return fixtures
 
     QCoreApplication.setAttribute(Qt.AA_DontUseNativeDialogs, True)
     app = QApplication([])
@@ -50,7 +190,9 @@ def main():
                  patch("requests.sessions.Session.request", side_effect=AssertionError("Síť je při snímkování zakázaná.")), \
                  patch("kajovo.core.secret_store._read_persisted_api_key", return_value=None), \
                  patch("kajovo.core.secret_store.get_secret", return_value=None):
-                window = create_window(AppSettings(log_dir=str(workspace / "LOG"), cache_dir=str(workspace / "cache")))
+                settings = AppSettings(log_dir=str(workspace / "LOG"), cache_dir=str(workspace / "cache"))
+                fixtures = create_run_fixtures(workspace, settings)
+                window = create_window(settings)
                 window.resize(*map(int, args.size.split(",")))
                 window.context.models = ["gpt-4.1", "gpt-5.2", "gpt-image-1.5"]
                 window.context.models_changed.emit()
@@ -64,17 +206,6 @@ def main():
                 window.cascades.commit_step()
                 window.batches.records = [{"id": "batch_ukazka", "remote": {"status": "in_progress", "request_counts": {"completed": 8, "failed": 1, "total": 12}}, "state": {"project": "Rezervace", "status": "batch_pending"}, "run_dir": str(workspace / "LOG" / "RUN_ukazka")}]
                 window.batches.render()
-                examples = {
-                    "summary": {"project": "Rezervace", "status": "partial", "mode": "GENERATE", "input_summary": "Přehled rezervací", "output_summary": "Osm souborů uloženo; jeden vyžaduje opravu."},
-                    "steps": [{"step_id": "step_priprava", "title": "Příprava návrhu", "status": "completed", "human_summary": "Požadavky byly ověřeny."}],
-                    "responses": [{"response_id": "resp_ukazka", "output_text": "Návrh obsahuje seznam rezervací, detail hosta a kontrolu termínů."}],
-                    "artifacts": [{"artifact_id": "artifact_ukazka", "display_name": "rezervace.py", "size_bytes": 4096, "path_in_bundle": "artifacts/rezervace.py"}],
-                    "events": [{"event_type": "validation", "human_message": "Před uložením byla ověřena cesta souboru.", "severity": "info"}],
-                    "lineage": [{"source_run_id": "RUN_zdroj", "relation_type": "continue", "notes": "Navázáno na ověřený stav."}],
-                    "integrity": {"human_summary": "Archivované soubory odpovídají uloženým otiskům."},
-                }
-                for key, value in examples.items():
-                    window.history.views[key].set_value(value)
                 window.workbench.result.set_value({"status": "completed", "text": "Projekt je připravený k místnímu ověření.", "saved": ["rezervace.py", "README.md"]})
                 from PySide6.QtGui import QColor, QImage
                 sample = QImage(640, 400, QImage.Format_RGB32)
@@ -171,6 +302,72 @@ def main():
                             horizontal.setValue(previous)
 
                 window.show()
+                window.select_page("history")
+                from PySide6.QtTest import QTest
+                for _ in range(200):
+                    app.processEvents(QEventLoop.AllEvents, 25)
+                    if window.history.model.rowCount() >= len(fixtures):
+                        break
+                    QTest.qWait(10)
+                for row in range(window.history.model.rowCount()):
+                    candidate = window.history.model.run_at(row)
+                    if candidate and candidate.mode == "GENERATE":
+                        window.history.tracks.selectRow(row)
+                        break
+                for _ in range(100):
+                    app.processEvents(QEventLoop.AllEvents, 25)
+                    if window.history.adapter:
+                        break
+                    QTest.qWait(10)
+                if window.history.run and window.history.run.stages:
+                    window.history._stage_selected(window.history.run, window.history.run.stages[-1])
+                capture(window, "run_studio_main")
+
+                def run_detail(key, tab_name=None):
+                    adapter = LegacyRunAdapter(fixtures[key])
+                    payload = _payload(adapter)
+                    state = read_state(adapter.root)
+                    run = build_run(payload["summary"], steps=payload["steps"], state=state, events=payload["events"])
+                    dialog = RunDetailDialog(window.context, adapter, payload, state, run, window)
+                    if tab_name:
+                        tabs = dialog.findChild(QTabWidget)
+                        for index in range(tabs.count()):
+                            if tabs.tabText(index) == tab_name:
+                                tabs.setCurrentIndex(index)
+                                break
+                    dialog.show()
+                    for _ in range(4):
+                        app.processEvents(QEventLoop.AllEvents, 40)
+                    for _ in range(100):
+                        app.processEvents(QEventLoop.AllEvents, 25)
+                        if not window.context.operations.active:
+                            break
+                        QTest.qWait(10)
+                    if key == "modify":
+                        view = dialog.findChild(ModifyMap)
+                        view.table.setCurrentCell(view.table.rowCount() - 1, 0)
+                        view.load_diff()
+                        for _ in range(100):
+                            app.processEvents(QEventLoop.AllEvents, 25)
+                            if not window.context.operations.active:
+                                break
+                            QTest.qWait(10)
+                    elif key == "cascade":
+                        view = dialog.findChild(CascadeStepsView)
+                        view.table.setCurrentCell(view.table.rowCount() - 1, 0)
+                    capture(dialog, "run_studio_" + key, include_scroll=False)
+                    dialog.hide()
+
+                run_detail("generate", "Přehled")
+                run_detail("modify", "Mapa změn")
+                run_detail("qa", "Přehled")
+                run_detail("qfile", "Artefakty a náhled")
+                run_detail("cascade", "Kroky a závislosti")
+                cascade_adapter = LegacyRunAdapter(fixtures["cascade"])
+                repair = BranchComposer(window.history.launcher, cascade_adapter, cascade_adapter.checkpoints(),
+                                        "repair", "validation", window)
+                capture(repair, "run_studio_repair", include_scroll=False)
+                repair.hide()
                 for key, page in window.pages.items():
                     window.select_page(key)
                     capture(window, key)

@@ -20,7 +20,7 @@ from typing import Any, Iterable
 
 BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_COMPATIBILITY_VERSION = 1
-INDEX_SCHEMA_VERSION = 1
+INDEX_SCHEMA_VERSION = 2
 
 RUN_STATUSES = {
     "created",
@@ -1293,6 +1293,7 @@ class HistoryIndex:
         events = adapter.events()
         steps = adapter.steps()
         lineage = adapter.lineage()
+        state = adapter.state()
         response_ids = [str(item.get("response_id") or "") for item in responses if item.get("response_id")]
         search_parts = [
             str(run.get("run_id") or ""),
@@ -1322,13 +1323,41 @@ class HistoryIndex:
             "models": list(run.get("model_summary") or []),
             "result_class": str(run.get("result_class") or ""),
             "steps": len(steps),
+            "timeline_steps": [
+                {
+                    key: item.get(key)
+                    for key in (
+                        "step_id", "sequence", "stage", "title", "kind", "started_at", "finished_at",
+                        "status", "progress", "model", "reasoning_effort", "request_ids", "response_ids",
+                        "artifact_ids", "validation_ids", "checkpoint_id", "human_summary", "technical_summary",
+                    )
+                }
+                for item in steps
+            ],
             "responses": len(responses),
             "artifacts": len(artifacts),
+            "input_count": sum(
+                1 for item in artifacts
+                if item.get("role") in {"user_input", "attached_file", "in_project_file", "input"}
+            ),
+            "output_count": sum(
+                1 for item in artifacts
+                if item.get("role") in {"generated_file", "modified_file", "batch_output", "log_export"}
+            ),
+            "error_count": sum(
+                1 for event in events
+                if str(event.get("severity") or "").lower() == "error"
+            ),
             "checkpoints": len(checkpoints),
+            "has_checkpoint": bool(checkpoints),
             "has_error": has_error,
             "has_batch": bool(run.get("related_batch_ids")) or bool(adapter.state().get("batch_id") or adapter.state().get("generate_batches")),
             "has_output": any(item.get("role") in {"generated_file", "modified_file", "batch_output", "log_export"} for item in artifacts),
             "has_lineage": bool(lineage or run.get("parent_run_id")),
+            "parent_run_id": str(run.get("parent_run_id") or (lineage[-1].get("source_run_id") if lineage else "")),
+            "related_batch_ids": list(run.get("related_batch_ids") or []),
+            "batch_imports": state.get("batch_imports") if isinstance(state.get("batch_imports"), dict) else {},
+            "batch_records": state.get("batch_records") if isinstance(state.get("batch_records"), dict) else {},
             "response_ids": response_ids,
             "search_text": "\n".join(search_parts).casefold(),
         }

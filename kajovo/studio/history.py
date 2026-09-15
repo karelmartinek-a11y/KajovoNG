@@ -1,269 +1,431 @@
-"""Čtení kanonické evidence a nové běhy s doloženou návazností."""
+"""Run Studio: virtuální časové stopy nad kanonickou evidencí Historie."""
 
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
-from uuid import uuid4
+import shutil
+import zipfile
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QDialog, QFileDialog, QListWidget, QListWidgetItem, QTabWidget, QWidget
+from PySide6.QtCore import QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLineEdit, QWidget
 
-from kajovo.core.batch_completion import batch_ids, read_state
-from kajovo.core.delivery_preparation import validate_preparation_snapshot
+from kajovo.core.batch_completion import complete_saved_batch, pending_batch_ids, read_state
 from kajovo.core.run_bundle import HistoryIndex, LegacyRunAdapter
-from kajovo.core.runlog import verified_output_evidence
 from kajovo.core.utils import safe_join_under_root
-from .components import DetailDialog, Form, action, actions, caption, vertical
+
+from .components import action, actions, caption, panel, vertical
+from .history_artifacts import ArtifactGuard
+from .history_composer import BranchComposer
+from .history_details import RunDetailDialog
+from .history_launcher import HistoryBranchLauncher
+from .history_models import RunTableModel, RunView, build_run
+from .history_policy import ActionAvailabilityPolicy, apply_decision
+from .history_timeline import RunTrackView
 from .resources import ValueDialog
-from .evidence import EvidenceView, VALUES
+
+
+def _payload(adapter: LegacyRunAdapter) -> dict:
+    return {
+        "summary": adapter.run_record(), "steps": adapter.steps(), "requests": adapter.requests(),
+        "responses": adapter.responses(), "artifacts": adapter.artifacts(),
+        "validations": adapter.validations(), "events": adapter.events(),
+        "lineage": adapter.lineage(), "checkpoints": adapter.checkpoints(),
+        "integrity": adapter.integrity(),
+    }
 
 
 class HistoryPage(QWidget):
+    """Orchestrátor; skenování i detailní čtení běží mimo GUI thread."""
+
     activate_workbench = Signal()
     activate_comic = Signal(str)
+    activate_batch = Signal(str)
 
     def __init__(self, context, workbench, parent=None):
         super().__init__(parent)
-        self.context = context
-        self.workbench = workbench
-        self.records = []
-        self.adapter = None
-        self.payload = {}
-        self.generation = 0
+        self.context, self.workbench = context, workbench
+        self.model = RunTableModel(self)
+        self.policy = ActionAvailabilityPolicy()
+        self.launcher = HistoryBranchLauncher(context, self.refresh)
+        self.records, self.reverse_lineage = [], {}
+        self.adapter, self.payload, self.run, self.selected_step = None, {}, None, None
+        self.generation, self.zoom = 0, 1.0
+
         root = vertical(self, 0)
-        self.filters = Form()
-        self.search = self.filters.text("history.search", "Hledat v evidenci")
-        self.project = self.filters.text("history.project", "Projekt")
-        self.mode = self.filters.text("history.mode", "Režim")
-        self.state = self.filters.text("history.state", "Stav")
-        self.model = self.filters.text("history.model", "Model")
-        self.date_from = self.filters.text("history.from", "Od data ve tvaru den.měsíc.rok")
-        self.date_to = self.filters.text("history.to", "Do data ve tvaru den.měsíc.rok")
-        self.tabs = QTabWidget()
-        overview = QWidget()
-        body = vertical(overview)
-        body.addWidget(self.filters)
-        body.addWidget(actions(action("history.refresh", "Obnovit historii", self.refresh),
-                               action("history.filter", "Použít filtry", self.filter)))
-        self.runs = QListWidget()
-        self.runs.setWordWrap(True)
-        self.runs.setAccessibleName("Evidované běhy")
-        self.runs.currentItemChanged.connect(self.select_run)
-        body.addWidget(self.runs, 1)
-        self.tabs.addTab(overview, "Výběr běhu")
-        self.views = {}
-        for key, title in (("summary", "Přehled"), ("steps", "Průběh"), ("responses", "Odpovědi"),
-                           ("artifacts", "Soubory"), ("events", "Události"), ("lineage", "Návaznosti"), ("integrity", "Technické")):
-            view = EvidenceView(title)
-            self.views[key] = view
-            self.tabs.addTab(view, title)
-        root.addWidget(self.tabs, 1)
-        self.notice = caption("Vyberte běh; zdrojová evidence zůstává neměnná.", "muted")
-        root.addWidget(self.notice)
-        root.addWidget(actions(action("history.clone", "Klonovat zadání", self.clone),
-                               action("history.continue", "Pokračovat", self.resume),
-                               action("history.rerun", "Znovu spustit od checkpointu", lambda: self.resume(relation="rerun")),
-                               action("history.repair", "Opravit od checkpointu", lambda: self.resume(relation="repair"))))
-        root.addWidget(actions(action("history.step", "Detail kroku", self.step_detail),
-                               action("history.comic", "Otevřít komiks", self.open_comic),
-                               action("history.artifact", "Otevřít nebo exportovat soubor", self.artifact),
-                               action("history.reuse", "Použít soubor v novém zadání", lambda: self.artifact(reuse=True)),
-                               action("history.integrity", "Ověřit integritu", self.verify)))
+        root.addWidget(caption("Run Studio", "heading"))
+        root.addWidget(caption("Historické běhy jako vícestopá časová osa · zdrojová evidence je neměnná.", "muted"))
+        root.addWidget(self._filter_bar())
+        root.addWidget(self._timeline_bar())
+        self.tracks = RunTrackView()
+        self.tracks.setModel(self.model)
+        self.tracks.selectionModel().currentRowChanged.connect(self._row_selected)
+        self.tracks.stage_selected.connect(self._stage_selected)
+        self.tracks.run_activated.connect(lambda _run: self.open_detail())
+        root.addWidget(self.tracks, 1)
 
-    def open_comic(self):
-        if not self.adapter:
-            self.notice.setText("Nejprve vyberte běh komiksu.")
-            return
-        state = read_state(self.adapter.root)
-        if state.get("mode") != "COMIC" or not state.get("comic_operation_id"):
-            self.notice.setText("Vybraný běh nepatří komiksu.")
-            return
-        self.activate_comic.emit(state["comic_operation_id"])
+        inspector, body = panel("Kontext vybrané fáze")
+        self.phase = caption("Vyberte běh nebo jeho fázi.")
+        self.phase.setAccessibleName("Vybraná fáze")
+        body.addWidget(self.phase)
+        self.notice = caption("Procházení ani náhled první placené operace neposílají síťový požadavek.", "muted")
+        body.addWidget(self.notice)
+        self.buttons = {
+            "continue": action("history.continue", "Pokračovat", lambda: self.branch("continue")),
+            "rerun": action("history.rerun", "Znovu spustit", lambda: self.branch("rerun")),
+            "repair": action("history.repair", "Opravit", lambda: self.branch("repair")),
+            "edit_branch": action("history.qa.edit_branch", "Upravit QA a spustit novou větev",
+                                  lambda: self.branch("rerun", edit_input=True)),
+            "clone": action("history.clone", "Klonovat jako nové zadání", self.clone),
+            "complete_batch": action("history.batch.complete", "Převzít soubory", self.complete_batch, "primary"),
+            "open_batch": action("history.batch.open", "Otevřít v Dávkách", self.open_batch),
+            "clone_artifact": action("history.clone.artifact", "Klonovat s reusable souborem", self.choose_reusable_clone),
+        }
+        body.addWidget(actions(self.buttons["continue"], self.buttons["rerun"], self.buttons["repair"],
+                               self.buttons["edit_branch"], self.buttons["clone"]))
+        body.addWidget(actions(
+            self.buttons["complete_batch"], self.buttons["open_batch"],
+            action("history.detail", "Detail běhu", self.open_detail),
+            action("history.integrity", "Ověřit integritu", self.verify),
+            action("history.bundle.open", "Otevřít Run Bundle", self.open_bundle),
+            action("history.bundle.export", "Exportovat Run Bundle", self.export_bundle),
+            action("history.comic", "Otevřít komiks", self.open_comic),
+            action("history.lineage.parent", "Přejít na parent", self.open_parent),
+            self.buttons["clone_artifact"],
+        ))
+        inspector.setMaximumHeight(245)
+        root.addWidget(inspector)
+        for button in self.buttons.values():
+            button.setEnabled(False)
 
-    def refresh(self):
-        root = self.context.settings.log_dir
-        def receive(records):
-            self.records = records
-            self.filter()
-        self.context.operations.start("Načtení historie", lambda task: HistoryIndex(root).refresh(), receive)
+        self.filter_timer = QTimer(self)
+        self.filter_timer.setSingleShot(True)
+        self.filter_timer.setInterval(180)
+        self.filter_timer.timeout.connect(self.apply_filters)
 
-    def filter(self):
-        from datetime import datetime
+    def _filter_bar(self):
+        box, layout = QWidget(), QHBoxLayout()
+        box.setLayout(layout)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Hledat projekt, Run ID, Response ID, soubor…")
+        self.search.setAccessibleName("Fulltext historie")
+        self.project_filter = QLineEdit()
+        self.project_filter.setPlaceholderText("Projekt")
+        self.mode_filter, self.status_filter, self.transport_filter = QComboBox(), QComboBox(), QComboBox()
+        self.model_filter = QLineEdit()
+        self.model_filter.setPlaceholderText("Model")
+        for combo, label, values in (
+            (self.mode_filter, "Druh běhu", ["GENERATE", "MODIFY", "QA", "QFILE", "KASKADA", "COMIC"]),
+            (self.status_filter, "Stav", ["completed", "partial", "failed", "running", "batch_pending", "ready_to_import", "dry_run", "unknown"]),
+            (self.transport_filter, "LIVE/BATCH", ["LIVE", "BATCH"]),
+        ):
+            combo.setAccessibleName(label)
+            combo.addItem(label, "")
+            for value in values:
+                combo.addItem(value, value)
+        for widget, stretch in ((self.search, 3), (self.project_filter, 1), (self.mode_filter, 1),
+                                (self.status_filter, 1), (self.transport_filter, 1), (self.model_filter, 1)):
+            layout.addWidget(widget, stretch)
+            signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
+            signal.connect(lambda *_: self.filter_timer.start())
+        layout.addWidget(action("history.refresh", "Obnovit", self.refresh))
+        return box
 
+    def _timeline_bar(self):
+        box, layout = QWidget(), QHBoxLayout()
+        box.setLayout(layout)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.date_from, self.date_to = QLineEdit(), QLineEdit()
+        self.date_from.setPlaceholderText("Od DD.MM.RRRR")
+        self.date_to.setPlaceholderText("Do DD.MM.RRRR")
+        self.only_errors = QCheckBox("Jen chybové")
+        self.flag_batch = QCheckBox("BATCH")
+        self.flag_checkpoint = QCheckBox("Checkpoint")
+        self.flag_output = QCheckBox("Výstup")
+        self.flag_lineage = QCheckBox("Lineage")
+        for widget in (self.date_from, self.date_to, self.only_errors, self.flag_batch,
+                       self.flag_checkpoint, self.flag_output, self.flag_lineage):
+            layout.addWidget(widget)
+            signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.toggled
+            signal.connect(lambda *_: self.filter_timer.start())
+        layout.addStretch()
+        self.zoom_label = caption("Zoom 100 %", "muted")
+        layout.addWidget(self.zoom_label)
+        layout.addWidget(action("history.zoom.out", "−", lambda: self.set_zoom(self.zoom / 1.2)))
+        layout.addWidget(action("history.zoom.in", "+", lambda: self.set_zoom(self.zoom * 1.2)))
+        layout.addWidget(action("history.zoom.fit", "Přizpůsobit", lambda: self.set_zoom(0.7)))
+        return box
+
+    def set_zoom(self, value):
+        self.zoom = max(0.55, min(3.0, float(value)))
+        self.tracks.set_zoom(self.zoom)
+        self.zoom_label.setText(f"Zoom {self.zoom * 100:.0f} %")
+
+    @staticmethod
+    def _date_value(text: str, *, end=False):
+        if not text.strip():
+            return None
+        value = datetime.strptime(text.strip(), "%d.%m.%Y")
+        return value.timestamp() + (86399 if end else 0)
+
+    def apply_filters(self):
         try:
-            lower = datetime.strptime(self.date_from.text().strip(), "%d.%m.%Y").date() if self.date_from.text().strip() else None
-            upper = datetime.strptime(self.date_to.text().strip(), "%d.%m.%Y").date() if self.date_to.text().strip() else None
-            if lower and upper and lower > upper:
-                raise ValueError("Začátek období nesmí být pozdější než konec.")
+            lower, upper = self._date_value(self.date_from.text()), self._date_value(self.date_to.text(), end=True)
+            if lower is not None and upper is not None and lower > upper:
+                raise ValueError
         except ValueError:
-            self.notice.setText("Zadejte platné a správně seřazené datum ve tvaru den.měsíc.rok.")
+            self.notice.setText("Zadejte platný a správně seřazený interval DD.MM.RRRR.")
             return
-        selected = self.runs.currentItem().data(Qt.UserRole) if self.runs.currentItem() else None
-        self.runs.clear()
-        for record in self.records:
-            searchable = json.dumps(record, ensure_ascii=False).casefold()
-            if self.search.text().casefold() not in searchable:
-                continue
-            filters = {"project": self.project.text(), "mode": self.mode.text(), "status": self.state.text(), "model_summary": self.model.text()}
-            if any(value.casefold() not in str(record.get(key, "")).casefold() for key, value in filters.items() if value):
-                continue
-            if lower or upper:
-                try:
-                    created = datetime.fromisoformat(record.get("created_at", "").replace("Z", "+00:00")).astimezone().date()
-                except ValueError:
-                    continue
-                if (lower and created < lower) or (upper and created > upper):
-                    continue
-            item = QListWidgetItem(f"{record.get('project') or 'Projekt není evidován'} · {VALUES.get(record.get('status'), 'Není evidováno')}\n{record['run_id']} · {record.get('created_at', '')}")
-            item.setData(Qt.UserRole, record["run_id"])
-            self.runs.addItem(item)
-            if record["run_id"] == selected:
-                self.runs.setCurrentItem(item)
+        self.model.apply_filters({
+            "search": self.search.text(), "project": self.project_filter.text(),
+            "mode": self.mode_filter.currentData(), "status": self.status_filter.currentData(),
+            "transport": self.transport_filter.currentData(), "model": self.model_filter.text(),
+            "date_from": lower, "date_to": upper, "errors": self.only_errors.isChecked(),
+            "batch": self.flag_batch.isChecked(), "checkpoint": self.flag_checkpoint.isChecked(),
+            "output": self.flag_output.isChecked(), "lineage": self.flag_lineage.isChecked(),
+        })
+        self.notice.setText(f"Zobrazeno {self.model.rowCount()} z {len(self.records)} běhů; filtr používá místní index.")
 
-    def select_run(self, item, previous=None):
+    def refresh(self, *_):
+        root = self.context.settings.log_dir
+
+        def scan(task):
+            index = HistoryIndex(root)
+            return index.refresh(), index.reverse_lineage()
+
+        def receive(value):
+            self.records, self.reverse_lineage = value
+            self.model.set_runs([build_run(record, steps=record.get("timeline_steps") or [],
+                                           reverse_lineage=self.reverse_lineage) for record in self.records])
+            self.apply_filters()
+
+        self.context.operations.start("Obnovení Run Studia", scan, receive, popup=False, identifier="history.index")
+
+    def _row_selected(self, current, _previous):
+        run = self.model.run_at(current.row()) if current.isValid() else None
+        if run:
+            self.tracks.select_stage(run.run_id, "")
+            self.load_run(run)
+
+    def load_run(self, run: RunView):
         self.generation += 1
         generation = self.generation
-        self.adapter = None
-        self.payload = {}
-        for view in self.views.values():
-            view.clear()
-        if not item:
-            return
-        directory = safe_join_under_root(self.context.settings.log_dir, item.data(Qt.UserRole))
+        self.run, self.adapter, self.payload, self.selected_step = run, None, {}, None
+        self.phase.setText(f"Vybraný běh: {run.mode} · {run.run_id} · načítám kanonickou evidenci…")
+        for button in self.buttons.values():
+            button.setEnabled(False)
+        directory = safe_join_under_root(self.context.settings.log_dir, run.run_id)
 
         def read(task):
             adapter = LegacyRunAdapter(directory)
-            return adapter, {"summary": adapter.run_record(), "steps": adapter.steps(), "responses": adapter.responses(),
-                             "artifacts": adapter.artifacts(), "events": adapter.events(), "lineage": adapter.lineage(),
-                             "requests": adapter.requests(), "validations": adapter.validations(), "checkpoints": adapter.checkpoints()}
+            payload = _payload(adapter)
+            if adapter.bundle:
+                checked = []
+                for checkpoint in payload["checkpoints"]:
+                    row = dict(checkpoint)
+                    try:
+                        adapter.bundle.validate_checkpoint(str(row.get("checkpoint_id") or ""))
+                        row["_availability_valid"] = True
+                    except (ValueError, OSError, KeyError) as error:
+                        row["_availability_valid"] = False
+                        row["_availability_error"] = str(error)
+                    checked.append(row)
+                payload["checkpoints"] = checked
+            state = read_state(adapter.root)
+            full = build_run(payload["summary"], steps=payload["steps"], state=state,
+                             events=payload["events"], reverse_lineage=self.reverse_lineage)
+            return adapter, payload, state, full
 
-        def receive(result):
-            if self.generation != generation:
+        def receive(value):
+            if generation != self.generation:
                 return
-            self.adapter, self.payload = result
-            for key, view in self.views.items():
-                value = self.payload.get(key, "Ověření integrity spusťte příslušným tlačítkem.")
-                view.setPlainText(json.dumps(value, ensure_ascii=False, indent=2, default=str) if not isinstance(value, str) else value)
-            self.notice.setText("Starší evidence je pouze ke čtení; chybějící fakta nejsou doplněna." if self.adapter.legacy else "Kanonická evidence načtena; navazující akce vytvoří nový běh.")
+            self.adapter, self.payload, self._state, self.run = value
+            self.phase.setText(f"Vybraný běh: {self.run.mode} · {self.run.run_id}")
+            self.notice.setText("Legacy evidence je pouze ke čtení; chybějící údaje jsou Není evidováno."
+                                if self.adapter.legacy else "Kanonická evidence načtena. Přímá akce vytvoří nový Run ID.")
+            self.update_actions()
 
-        self.context.operations.start("Načtení evidence běhu", read, receive, popup=False)
+        self.context.operations.start("Načtení detailu běhu", read, receive, popup=False)
+
+    def _stage_selected(self, run, stage):
+        if not self.run or run.run_id != self.run.run_id:
+            self.load_run(run)
+        self.selected_step = stage.technical
+        self.phase.setText(f"Vybraná fáze: {stage.stage or 'Není evidováno'} · {stage.title}")
+        self.update_actions()
+
+    def update_actions(self):
+        if not self.adapter or not self.run:
+            return
+        decisions = self.policy.evaluate(self.payload.get("summary") or {}, getattr(self, "_state", {}),
+                                         self.payload.get("checkpoints") or [], legacy=self.adapter.legacy,
+                                         selected_step=self.selected_step,
+                                         artifacts=self.payload.get("artifacts") or [])
+        for name, button in self.buttons.items():
+            apply_decision(button, decisions[name])
+
+    def branch(self, relation, *, edit_input=False):
+        if not self.adapter:
+            return
+        composer = BranchComposer(self.launcher, self.adapter, self.payload.get("checkpoints") or [], relation,
+                                  str((self.selected_step or {}).get("stage") or ""), self, edit_input=edit_input)
+        if composer.exec() != QDialog.Accepted or not composer.preview:
+            return
+        try:
+            self.launcher.launch(self.adapter, composer.preview, composer.repair_instruction())
+            composer.confirm_button.setEnabled(False)
+            self.notice.setText("Nová větev byla spuštěna přímo v Run Studiu; sledujte standardní okno průběhu.")
+        except (ValueError, OSError, KeyError) as error:
+            self.notice.setText(str(error))
 
     def clone(self):
         if not self.adapter:
             return
-        state = read_state(self.adapter.root)
+        state = getattr(self, "_state", None) or read_state(self.adapter.root)
         ui = state.get("ui_state")
         if not isinstance(ui, dict) or not ui:
-            self.notice.setText("Běh nemá přesně uložené zadání, které lze klonovat.")
+            self.notice.setText("Běh nemá přesně uložený ui_state.")
             return
+        cloned = copy.deepcopy(ui)
+        for key in ("response_id", "resume_prev_id", "resume_files", "preparation_snapshot",
+                    "completed_hashes", "recovery_instruction", "source_checkpoint_id"):
+            cloned.pop(key, None)
         self.workbench.reset()
-        self.workbench.apply_state(copy.deepcopy(ui))
+        self.workbench.apply_state(cloned)
         self.workbench.widgets["response_id"].clear()
         self.workbench.pending_lineage = {"source_run_id": self.adapter.run_id, "relation_type": "clone"}
         self.activate_workbench.emit()
 
-    def resume(self, checked=False, relation="continue"):
-        if not self.adapter or not self.adapter.bundle:
-            self.notice.setText("Tento běh nemá bezpečný checkpoint pro pokračování.")
+    def complete_batch(self):
+        if not self.adapter:
             return
-        checkpoints = [row for row in self.payload.get("checkpoints", []) if row.get("safe_to_continue")]
-        if not checkpoints:
-            self.notice.setText("Běh neobsahuje bezpečný checkpoint.")
+        state = getattr(self, "_state", {})
+        records = state.get("batch_records") if isinstance(state.get("batch_records"), dict) else {}
+        pending = [identifier for identifier in pending_batch_ids(state)
+                   if isinstance(records.get(identifier), dict) and records[identifier].get("status") == "completed"]
+        if not pending:
+            self.notice.setText("Žádná existující dávka nečeká na místní převzetí.")
             return
-        dialog = ValueDialog("Vybrat checkpoint", "Identifikátor bezpečného checkpointu", str(checkpoints[-1].get("checkpoint_id", "")), self)
-        if dialog.exec() != QDialog.Accepted:
-            return
+        identifier = pending[0]
+        if len(pending) > 1:
+            picker = ValueDialog("Převzít existující dávku", "Batch ID", identifier, self)
+            if picker.exec() != QDialog.Accepted or picker.value not in pending:
+                return
+            identifier = picker.value
+        root = str(self.adapter.root)
         try:
-            if batch_ids(read_state(self.adapter.root)):
-                raise ValueError("Běh již odeslal dávku; výsledky převezměte v sekci Dávky, aby nevzniklo duplicitní odeslání.")
-            checkpoint = self.adapter.bundle.validate_checkpoint(dialog.value)
-            state = checkpoint["state_snapshot"]
-            ui = state.get("ui_state")
-            if not isinstance(ui, dict) or not ui:
-                raise ValueError("Checkpoint neobsahuje přesné zadání.")
-            snapshot = state.get("preparation_snapshot")
-            if snapshot and ui.get("mode") in {"GENERATE", "MODIFY"}:
-                snapshot = validate_preparation_snapshot(snapshot, ui["mode"], ui.get("maximum_quality", False))
-            self.workbench.reset()
-            self.workbench.apply_state(copy.deepcopy(ui))
-            evidence = verified_output_evidence(self.adapter.root, ui.get("out_dir"))
-            hashes = {row["path"]: row["sha256"] for row in evidence if row.get("sha256")}
-            previous = snapshot.get("response_id") if snapshot else state.get("last_response_id")
-            structure = (snapshot.get("structure") or {}) if snapshot else {}
-            files = structure.get("touched_files" if ui.get("mode") == "MODIFY" else "files", [])
-            self.workbench.resume = {"preparation_snapshot": snapshot, "completed_hashes": hashes, "skip_paths": list(hashes),
-                                     "resume_prev_id": previous, "resume_files": copy.deepcopy(files), "response_id": previous}
-            self.workbench.pending_lineage = {"source_run_id": self.adapter.run_id, "relation_type": relation, "source_checkpoint_id": dialog.value}
-            self.workbench.tabs.setCurrentIndex(0)
-            self.workbench.validate()
-        except (ValueError, KeyError, OSError) as error:
+            client = self.context.client()
+            output = Path(state["out_dir"]).resolve() if state.get("out_dir") else None
+            self.context.operations.assert_output_available(output)
+        except (ValueError, OSError) as error:
             self.notice.setText(str(error))
             return
-        self.activate_workbench.emit()
+        self.context.operations.start(
+            "Převzetí výsledků dávky",
+            lambda task: complete_saved_batch(client, root, identifier, self.context.settings,
+                                              progress=task.progress_event.emit),
+            lambda _value: self.refresh(), output_dir=output, identifier=f"batch.import:{identifier}",
+        )
 
-    def step_detail(self):
-        steps = self.payload.get("steps", [])
-        if not steps:
-            return
-        identifiers = [row.get("step_id", "") for row in steps]
-        dialog = ValueDialog("Detail kroku", "Identifikátor kroku: " + ", ".join(identifiers), identifiers[0], self)
-        if dialog.exec() == QDialog.Accepted:
-            value = {"step": next((row for row in steps if row.get("step_id") == dialog.value), None)}
-            for key in ("requests", "responses", "artifacts", "events", "validations"):
-                value[key] = [row for row in self.payload.get(key, []) if row.get("step_id") == dialog.value]
-            DetailDialog("Detail kroku", dialog.value, self, value).exec()
+    def open_batch(self):
+        pending = pending_batch_ids(getattr(self, "_state", {}))
+        related = (self.payload.get("summary") or {}).get("related_batch_ids") or []
+        identifier = (pending or related or [""])[0]
+        if identifier:
+            self.activate_batch.emit(identifier)
+
+    def open_detail(self):
+        if self.adapter and self.run:
+            RunDetailDialog(self.context, self.adapter, self.payload, getattr(self, "_state", {}), self.run, self).exec()
 
     def verify(self):
-        if self.adapter:
-            adapter = self.adapter
-            generation = self.generation
-            def receive(value):
-                if generation == self.generation:
-                    self.views["integrity"].set_value(value)
-            self.context.operations.start("Ověření integrity evidence", lambda task: adapter.integrity(),
-                                          receive)
+        if not self.adapter:
+            return
+        adapter, generation = self.adapter, self.generation
 
-    def artifact(self, checked=False, reuse=False):
-        artifacts = self.payload.get("artifacts", [])
-        if not artifacts or not self.adapter:
+        def receive(value):
+            if generation == self.generation:
+                self.notice.setText("Integrita: " + json.dumps(value, ensure_ascii=False))
+
+        self.context.operations.start("Ověření integrity Run Bundle", lambda task: adapter.integrity(), receive)
+
+    def open_bundle(self):
+        if self.adapter:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.adapter.root)))
+
+    def export_bundle(self):
+        if not self.adapter:
             return
-        identifier = ValueDialog("Vybrat soubor", "Identifikátor artefaktu z přehledu Soubory", artifacts[0].get("artifact_id", ""), self)
-        if identifier.exec() != QDialog.Accepted:
+        destination, _ = QFileDialog.getSaveFileName(self, "Exportovat Run Bundle", self.adapter.run_id + ".zip", "ZIP (*.zip)")
+        if not destination:
             return
-        record = next((row for row in artifacts if row.get("artifact_id") == identifier.value), None)
+        source, target = self.adapter.root.resolve(), Path(destination).resolve()
+        if target == source or source in target.parents:
+            self.notice.setText("Export nesmí přepsat zdrojový Run Bundle.")
+            return
+
+        def write(task):
+            with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for path in source.rglob("*"):
+                    if path.is_file():
+                        archive.write(path, path.relative_to(source.parent))
+            return str(target)
+
+        self.context.operations.start("Export Run Bundle", write,
+                                      lambda value: self.notice.setText("Run Bundle exportován: " + value))
+
+    def open_comic(self):
+        if not self.adapter:
+            return
+        state = getattr(self, "_state", {})
+        if state.get("mode") == "COMIC" and state.get("comic_operation_id"):
+            self.activate_comic.emit(str(state["comic_operation_id"]))
+        else:
+            self.notice.setText("Vybraný běh nemá doloženou komiksovou operaci.")
+
+    def open_parent(self):
+        if not self.run or not self.run.parent_run_id:
+            self.notice.setText("Parent běhu není evidován.")
+            return
+        for row in range(self.model.rowCount()):
+            candidate = self.model.run_at(row)
+            if candidate and candidate.run_id == self.run.parent_run_id:
+                self.tracks.selectRow(row)
+                self.tracks.scrollTo(self.model.index(row, 0))
+                return
+        self.notice.setText("Parent existuje v lineage, ale není v aktuálním filtru.")
+
+    def clone_with_artifact(self, record: dict):
+        """Sekundární clone varianta; reuse nikdy skrytě nepřepne do Zadání."""
+        if not self.adapter or not record.get("reusable"):
+            raise ValueError("Artefakt není označen jako reusable.")
+        source = ArtifactGuard(self.adapter.root).resolve(record)
+        staging = Path(self.context.settings.cache_dir).resolve() / "history_reuse" / uuid4().hex
+        staging.mkdir(parents=True, exist_ok=False)
+        shutil.copy2(source, staging / source.name)
+        self.clone()
+        self.workbench.widgets["in_dir"].setText(str(staging))
+        self.workbench.pending_lineage = {"source_run_id": self.adapter.run_id, "relation_type": "clone",
+                                          "inherited_artifact_ids": [record.get("artifact_id")]}
+
+    def choose_reusable_clone(self):
+        records = [row for row in self.payload.get("artifacts") or [] if row.get("reusable")]
+        if not records:
+            self.notice.setText("Běh nemá hashově ověřitelný reusable artefakt.")
+            return
+        picker = ValueDialog("Klonovat s artefaktem", "Artifact ID", str(records[0].get("artifact_id") or ""), self)
+        if picker.exec() != QDialog.Accepted:
+            return
+        record = next((row for row in records if row.get("artifact_id") == picker.value), None)
         if not record:
-            self.notice.setText("Zvolený artefakt není součástí tohoto běhu.")
-            return
-        relative = record.get("path_in_bundle")
-        if not relative:
-            self.notice.setText("Soubor nemá evidovanou archivní cestu.")
+            self.notice.setText("Zvolený artefakt není součástí běhu.")
             return
         try:
-            if reuse and (self.adapter.legacy or not record.get("reusable")):
-                raise ValueError("Tento soubor nemá doložené povolení k opětovnému použití.")
-            source = Path(safe_join_under_root(self.adapter.root, relative))
-            data = source.read_bytes()
-            if not record.get("sha256") or hashlib.sha256(data).hexdigest() != record["sha256"]:
-                raise ValueError("Obsah souboru neodpovídá evidovanému otisku.")
-            if reuse:
-                staging = Path(self.context.settings.cache_dir).resolve() / "history_reuse" / uuid4().hex
-                staging.mkdir(parents=True, exist_ok=False)
-                destination = str(staging / source.name)
-            else:
-                destination, _ = QFileDialog.getSaveFileName(self, "Exportovat ověřený soubor", source.name)
-            if not destination:
-                return
-            target = Path(destination).resolve()
-            if target == self.adapter.root.resolve() or self.adapter.root.resolve() in target.parents:
-                raise ValueError("Export nesmí přepsat zdrojovou evidenci.")
-            target.write_bytes(data)
-            if reuse:
-                self.workbench.reset()
-                self.workbench.widgets["in_dir"].setText(str(target.parent))
-                self.workbench.pending_lineage = {"source_run_id": self.adapter.run_id, "relation_type": "reuse_artifacts", "inherited_artifact_ids": [identifier.value]}
-                self.activate_workbench.emit()
+            self.clone_with_artifact(record)
         except (ValueError, OSError) as error:
             self.notice.setText(str(error))

@@ -120,7 +120,7 @@ Legacy adapter:
 
 ## Derived History index
 
-`HistoryIndex` zapisuje `LOG/history_index.json`. Je to odvozený read-model s metadata běhu, searchable textem, response IDs, modely a booleany error/Batch/checkpoint/output/lineage. Aktualizace používá mtime relevantních zdrojů a nenačítá plný obsah všech request/response souborů při každém stisku filtru.
+`HistoryIndex` verze 2 zapisuje `LOG/history_index.json`. Je to odvozený read-model s metadata běhu, kompaktními poli skutečných StepRecordů pro DAW stopu, searchable textem, response IDs, modely, oddělenými Batch/import údaji a booleany error/Batch/checkpoint/output/lineage. Aktualizace používá mtime relevantních zdrojů a nenačítá plný obsah všech request/response souborů při každém stisku filtru.
 
 Index není kanonická evidence. Lze jej smazat a kompletně znovu sestavit z Run Bundle/legacy adresářů.
 
@@ -130,7 +130,9 @@ Vzdálený stav Batch `completed` znamená pouze, že provider dokončil dávku.
 
 ## Immutabilita a pokračování
 
-Prohlížení Historie zdrojový běh nemění. `Pokračovat`, `ReRun`, `Opravit`, `Klonovat` a `Použít v novém běhu` vytvářejí nový běh nebo pouze připraví UI pro vznik nového běhu. Nový běh dostane LineageRecord. Odeslaný Batch se nikdy neklonuje druhým submittem; dokončuje se ve svém původním běhu.
+Prohlížení Historie zdrojový běh nemění. `Pokračovat`, `ReRun` a `Opravit` po lokálním preview vytvoří nové Run ID, target-only LineageRecord a ihned spustí existující worker přes Operations; Workbench se neplní. `Klonovat` jako jediné otevře Zadání a LineageRecord zapíše až při jeho startu. Odeslaný Batch se nikdy neklonuje druhým submittem; dokončuje se ve svém původním běhu stejným `complete_saved_batch` jako v Dávkách.
+
+Nové standardní běhy zapisují checkpoint `input_ready` před prvním síťovým requestem. GENERATE/MODIFY dále používají přípravné checkpointy. KASKADA zapisuje `cascade_input_ready` a `cascade_step_completed` se serializovanou definicí, step signatures, runtime hodnotami a required response/artifact ID. Recovery instruction patří pouze novému run state/configu a LineageRecordu a je vložena jen do requestů prováděných za safe boundary.
 
 
 ## Obrazová evidence Komiksu

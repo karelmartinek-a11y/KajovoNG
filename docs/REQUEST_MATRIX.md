@@ -30,7 +30,7 @@ Technický příjem delšího zadání uloží přesný lokální artefakt bez p
 
 Prohlížení Historie, filtrování přes `HistoryIndex`, ověření integrity Run Bundle, otevření request/response, náhled/porovnání artefaktů, export Run Bundle a zobrazení lineage jsou čistě lokální operace a nevytvářejí OpenAI požadavek.
 
-Akce **Klonovat**, **Pokračovat**, **ReRun**, **Opravit** a **Použít v novém běhu** nikdy neposílají skrytý generativní preflight. Připraví nový běh nebo jeho vstupy a explicitní `LineageRecord`; skutečná placená modelová práce vznikne až běžným spuštěním nového pracovního běhu uživatelem. `Pokračovat`, `ReRun` a `Opravit` vyžadují explicitní `CheckpointRecord` s `safe_to_continue=true` a ověřenou integritu požadovaných artefaktů/response. Zdrojový Run Bundle se nemění.
+Akce **Pokračovat**, **ReRun** a **Opravit** nikdy neposílají skrytý generativní preflight. Po čistě lokálním preview vytvoří nové Run ID a `LineageRecord` a okamžitě spustí správný existující worker přes Operations přímo v Historii. Vyžadují explicitní `CheckpointRecord` s `safe_to_continue=true` a ověřenou integritu požadovaných artefaktů/response. Opravný pokyn se přidá pouze do skutečně nově prováděných requestů. **Klonovat jako nové zadání** jako jediné otevře Workbench; lineage `clone` vznikne až při následném startu. Zdrojový Run Bundle se nemění.
 
 Akce **Dokončit** u již odeslané dávky používá čtení stavu existujícího Batch a stažení/import jeho výstupu. Nevytváří nový generativní submit. Pokud zdrojový běh již obsahuje odeslaný Batch, Run Explorer nepovolí pokračování, které by mohlo vytvořit duplicitní pracovní dávku; dokončení probíhá v původním běhu.
 
@@ -119,7 +119,7 @@ Standardní ověření repozitáře je offline vůči placeným generativním en
 | MODELS | seznam API a pevná matice → dostupné pracovní modely; bez generativního probe |
 | BATCH | seznam na pracovním vlákně, časované sledování, stažení souborů a cancel |
 | GITHUB | Git subprocess → stav, diff, commit, remote a synchronizace repozitáře |
-| HISTORIE | Run Explorer + Run Bundle → lokální index, timeline, request/response, artefakty, validace, integrita, lineage a příprava nového navazujícího běhu bez skrytého API volání |
+| HISTORIE | Run Studio + Run Bundle → lokální index, virtuální StepRecord timeline, typové detaily, artefakty, validace, integrita, lineage a přímý launch nového workeru po explicitním potvrzení bez skrytého preflightu |
 | HELP | Dokumentace a odkazy aplikace |
 
 Strukturální test Qt kontroluje připojení všech aktivních akčních tlačítek. Funkční testy odděleně kontrolují pracovní postupy, soubory, databázi, síťové kontrakty a vybrané interakce; samotné připojení signálu není důkazem správnosti vzdálené služby.

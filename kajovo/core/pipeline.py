@@ -93,6 +93,10 @@ class UiRunConfig:
     maximum_quality: bool = False
     preparation_snapshot: Optional[Dict[str, Any]] = None
     completed_hashes: Optional[Dict[str, str]] = None
+    # Explicitní pokyn opravné větve. Používá se výhradně v nově
+    # prováděné části za ověřeným checkpointem.
+    recovery_instruction: str = ""
+    source_checkpoint_id: str = ""
 
 
 class RunWorker(QThread):
@@ -138,6 +142,15 @@ class RunWorker(QThread):
 
     def _ts(self) -> str:
         return time.strftime("%Y%m%d %H%M%S")
+
+    def _recovery_suffix(self) -> str:
+        instruction = str(getattr(self.cfg, "recovery_instruction", "") or "").strip()
+        if not instruction:
+            return ""
+        return (
+            "\n\n[NOVÁ VĚTEV – explicitní pokyn platí pouze pro nově prováděnou část]\n"
+            + instruction
+        )
 
     def _log_debug(self, msg: str) -> None:
         line = f"{self._ts()} | {msg}"
@@ -326,11 +339,15 @@ class RunWorker(QThread):
             self.finished_err.emit("Tento běh již používá jiná instance aplikace.")
             return
         try:
+            # Každý nový běh ukládá přesný rekonstruovatelný vstup ještě před
+            # prvním síťovým požadavkem. RunLogger z něj vytvoří kanonický
+            # input_ready checkpoint; u legacy záznamů se nic nedopočítává.
+            self.log.update_state({"ui_state": self.cfg.__dict__})
             if self.cfg.mode in ("GENERATE", "MODIFY"):
                 self._response_journal = ResponseJournal(self.log, self.settings.response_poll_timeout_s)
                 saved_state = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
                 self._response_file_ids = saved_state.get("response_file_ids", {})
-                self.log.update_state({"response_transport": "background", "ui_state": self.cfg.__dict__})
+                self.log.update_state({"response_transport": "background"})
 
             if not self.api_key or not self.cfg.model or not self.cfg.prompt.strip():
                 raise ValueError("Běh vyžaduje API klíč, model a neprázdné zadání.")
@@ -1186,6 +1203,8 @@ class RunWorker(QThread):
                 files.append(f)
         else:
             a1_text = self.cfg.prompt or ""
+            if self.cfg.recovery_instruction:
+                a1_text += self._recovery_suffix()
             a1_text = self._with_diag_text(self._append_io_reference(
                 a1_text, self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)))
             note = self._in_dir_fallback_note()
@@ -1467,6 +1486,8 @@ class RunWorker(QThread):
                     self._fs_tools = tools
 
             b_text = self.cfg.prompt or ""
+            if self.cfg.recovery_instruction:
+                b_text += self._recovery_suffix()
             b_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids + [manifest_file_id] + [fid for _, fid in uploaded])
             b_input_files, b_input_images = self._build_input_attachments(
                 client, self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded])
@@ -1604,6 +1625,8 @@ class RunWorker(QThread):
         self._set(10, 0, "QA: odesílám dotaz…", stage="QA")
         note = self._in_dir_fallback_note()
         input_text = self.cfg.prompt or ""
+        if self.cfg.recovery_instruction:
+            input_text += self._recovery_suffix()
         if note:
             input_text = f"{input_text}\n\n{note}"
         qa_note = "Pozn.: Vrat pouze cisty text (bez markdownu) a neposilej zadne soubory."
@@ -1655,6 +1678,8 @@ class RunWorker(QThread):
         prompt = (self.cfg.prompt or "").strip()
         if not prompt:
             raise RuntimeError("QFILE: Zadání je prázdné.")
+        if self.cfg.recovery_instruction:
+            prompt += self._recovery_suffix()
         note = self._in_dir_fallback_note()
         if note:
             prompt = f"{prompt}\n\n{note}"
@@ -1735,6 +1760,16 @@ class RunWorker(QThread):
         out_files = [{"path": path, "content": parsed["content"], "purpose": "QFILE"}]
         self._set(70, 0, f"QFILE: ukládám {path}...")
         saved_map = self._save_out_files(out_files)
+        step = next((row for row in reversed(self.log.bundle.steps()) if row.get("stage") == "QFILE"), {})
+        self.log.record_validation(
+            step_id=str(step.get("step_id") or ""),
+            target_type="file_contract",
+            target_id=path,
+            validator="QFILE.A3_FILE",
+            status="passed",
+            evidence={"contract": "A3_FILE", "path": path, "chunk_count": 1},
+        )
+        self.log.update_state({"file_contract_valid": True, "human_verified": False})
         return {"mode": "QFILE", "response_id": str(resp.get("id") or ""), "saved": saved_map, "contract": parsed, "text": raw_text}
 
 
@@ -1771,6 +1806,8 @@ class RunWorker(QThread):
                 prompt = f"Vrať obsah souboru PATH={path}. Pokud je dlouhý, vrať chunk CHUNK_INDEX={chunk_index}."
             else:
                 prompt = f"Vrať výsledný obsah souboru PATH={path} ACTION={action}. Pokud je dlouhý, vrať chunk CHUNK_INDEX={chunk_index}."
+            if self.cfg.recovery_instruction:
+                prompt += self._recovery_suffix()
             prompt += "\n" + canonical({"file_context": compiled} if not parts else {
                 "file_context_hash": compiled["file_context_hash"],
                 "instruction": "Zachovej implementační kontrakt prvního chunku tohoto souboru."})

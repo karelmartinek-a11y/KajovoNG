@@ -1,148 +1,85 @@
-# Historie — Run Explorer
+# Historie — Run Studio
 
-## Cíl
+Sekce **Historie** je produkční Run Studio nad `HistoryIndex`, `RunBundle` a `LegacyRunAdapter`. Není novou databází. Index i prezentační model lze kdykoli znovu sestavit z kanonické evidence a pouhé procházení neposílá žádný OpenAI požadavek.
 
-Sekce **Historie** je pracovní dashboard nad kanonickou evidencí běhů. Výchozí pohled je lidsky čitelný; raw technická evidence je dostupná jedním přepnutím. UI nesmí zploštit vzdálený stav Batch na stav projektu a nesmí vydávat incomplete response za úspěšnou.
+## Hlavní plocha
 
-## Layout
+Jeden běh je jedna horizontální DAW-like stopa. Virtuální `RunTableModel` a malovaný `TrackDelegate` nevytvářejí QWidget pro každý segment, takže seznam zůstává použitelný pro tisíce běhů. Stopu tvoří výhradně skutečné `StepRecord`; legacy záznam bez kroků ukazuje `Kroky nejsou evidovány`.
 
-Run Explorer má horní toolbar, levý seznam běhů a hlavní tabovaný detail.
+Metadata řádku zahrnují mode, projekt, Run ID, čas, doložené trvání, stav, LIVE/BATCH, modely a počty vstupů, výstupů a chyb. Segment má lidský název, stage, text/ikonu/barvu stavu, trvání a počty response, artefaktů a chyb. Chybějící timestamp neprodukuje odhad trvání.
 
-### Horní toolbar
+Filtry:
 
-Obsahuje:
+- fulltext nad rebuildovatelným `HistoryIndex`, včetně Run ID, Response ID a názvů artefaktů;
+- datum od/do, projekt, mode, stav, LIVE/BATCH a model;
+- jen chybové a pokročilé příznaky BATCH/checkpoint/výstup/lineage.
 
-- fulltext nad odvozeným `HistoryIndex`;
-- období: Vše, Dnes, Včera, posledních 7/30 dní, tento měsíc a vlastní interval od–do;
-- kompatibilní přesný RUN ID a Response ID filtr;
-- projekt, mode, stav a model;
-- `Má chybu`, `Má BATCH`, `Má checkpoint`, `Má výstupy`, `Navazuje`;
-- Reset, Obnovit, Exportovat běh a Otevřít Run Bundle.
+Zoom mění ergonomickou šířku segmentů; Přizpůsobit vrací kompaktní měřítko. Výběr segmentu nastaví `Vybraná fáze: <stage> · <název>` a centrální politika akcí přepočítá dostupnost. Lineage se v přehledu ukazuje kompaktně; vybraný běh zvýrazní parent/children body, úplná evidence zůstává v detailu.
 
-Vlastní interval přijímá datum `DD.MM.YYYY`, `YYYY-MM-DD` nebo `DDMMYYYY`; lze zadat obě meze nebo pouze jednu. Pokud uživatel zadá obě meze opačně, UI je při vyhodnocení bezpečně prohodí. Filtrování nečte při každé změně celý obsah všech request/response souborů. Read-model je odvozený a rebuildovatelný.
+## Typové detaily
 
-### Levý seznam
+- **GENERATE:** A0R → A1 → A2 → volitelně A2Q → A3, původní zadání, LIVE/BATCH hranice, request/response, tokeny, retry, artefakty a validace. Cena je `Není evidováno`, pokud v evidence není číselná hodnota.
+- **MODIFY:** B0R → B1 → B2 → volitelně B2Q → B3 a deterministická mapa změněné/nové/zachované/odstraněné/chybové/přeskočené. Textový diff používá archivovaný originál a výsledek; velké nebo binární soubory ukazují metadata a hashe. Dry-run je návrh a ne hotový zápis do OUT.
+- **QA:** zadání, přílohy, lidský text odpovědi, response/request ID, model, tokeny, incomplete reason a error.
+- **QFILE:** zadání, výsledný ArtifactRecord, MIME preview a samostatné stavy `souborový kontrakt platný` a `obsah ověřen`. Text, obrázek a PDF mají read-only náhled; ostatní formáty metadata a externí otevření.
+- **KASKADA:** skutečné chronologické StepRecordy, model, čas, vstupy/výstupy, request/response, validace, artefakty, retry a chyby. Pravý inspektor zvýrazní jen skutečné dependencies vybraného kroku.
+- **COMIC:** generický důkazní detail a návrat do doménové sekce Komiks.
+- Neznámý budoucí kind dostane generický detail nad Run/Step/Request/Response/Artifact/Validation/Event/Checkpoint/Lineage záznamy.
 
-Položka zobrazuje časové seskupení, RUN ID, projekt, mode, stav a počty kroků/odpovědí/souborů. Legacy běh je explicitně označen. Existující pending Batch zachovává akci **Dokončit**, která přebírá již odeslanou dávku a nevytváří nový generativní požadavek.
+## Forenzní inventura producentů
 
-Hlavní akce jsou:
+| Druh | Zdroj a fáze | Evidence / transport | Výstupy a partial stavy | Bezpečné navázání |
+|---|---|---|---|---|
+| GENERATE | `core/pipeline.py`; A0R, A1, A2, volitelně A2Q, A3 | Step/Request/Response; LIVE nebo A3 BATCH | manifest, generated ArtifactRecordy, missing deliverables; completed/partial/failed/dry-run/BATCH stavy | `input_ready` a kanonické preparation snapshoty; hashově ověřené hotové cesty lze přeskočit |
+| MODIFY | `core/pipeline.py`; B0R, B1, B2, volitelně B2Q, B3 | Step/Request/Response; LIVE nebo B3 BATCH | modified/new/preserved manifest, write evidence, partial B3, dry-run | `input_ready`, preparation snapshot, původní IN artefakty a completed hashes |
+| QA | `core/pipeline.py`; QA | jeden LIVE Request/Response, textové a souborové přílohy | lidský text, incomplete/error metadata | nové běhy mají `input_ready`; staré bez checkpointu jsou read-only |
+| QFILE | `core/pipeline.py`; QFILE | jeden LIVE Request/Response, A3_FILE validation | jeden ArtifactRecord, file-contract validation; obsahové ověření zvlášť | nové běhy mají `input_ready`; bez něj žádný direct rerun |
+| KASKADA | `core/cascade_pipeline.py`; skutečné pořadí definovaných kroků | StepRecord na krok, LIVE request/response, dependencies a runtime values | text/JSON/soubory, retry, failed current step; pozdější stavy pouze podle evidence | `cascade_input_ready` a `cascade_step_completed` s definicí, signatures, cache, archivovanými lokálními vstupy a required evidence |
+| COMIC | `core/comic_service.py`; komiksová operace/panely | Run Bundle + doménový Comic store, Image BATCH | obrazové ArtifactRecordy a verze panelů | Run Studio je read/generic; pracovní retry a obnova zůstává v Komiksu |
+| Photo Studio / Image Batch | `core/photo_batch.py`, `studio/photos.py` | vlastní job store, nikoli Run Bundle/HistoryIndex | výsledky fotografií a batch joby | obnova pouze v Photo Studio; Run Studio nevymýšlí RunRecord |
+| Legacy/unknown | `LegacyRunAdapter` | pouze skutečně nalezené logy; žádné domyšlené StepRecordy | chybějící fakta = `Není evidováno` | read-only bez explicitního kanonického checkpointu |
 
-- ReRun jako nový běh;
-- Pokračovat od checkpointu;
-- Klonovat jako nový běh.
+Terminal/nonterminal a remote status se normalizují pouze v prezentační vrstvě. Kanonický `status`, StepRecord, event, validation, checkpoint, lineage a batch state se nepřepisují odhadem.
 
-Akce se deaktivují, pokud chybí nutná evidence nebo je operace nebezpečná.
+## Přímé historické větve
 
-## Přehled
+`Pokračovat`, `Znovu spustit` a `Opravit` už nikdy nenaplňují Workbench a nepřepínají do Zadání. `HistoryBranchLauncher`:
 
-Zobrazuje projekt, RUN ID, mode, čas a trvání, stav, modely, počty request/response/error, Batch IDs, vstupy, výstupy, parent run a lidské shrnutí. Nahoře je skutečný stav integrity.
+1. načte source Run Bundle a lokálně ověří integritu;
+2. validuje explicitní `CheckpointRecord`, jeho state hash, povinné artefakty a response;
+3. u GENERATE/MODIFY ověří preparation snapshot a hotové hashe;
+4. ukáže čistě lokální confirmation/repair composer včetně první nové placené operace;
+5. po potvrzení vytvoří nové Run ID a nový `RunLogger`;
+6. zapíše target-only LineageRecord `continue`, `rerun` nebo `repair`;
+7. spustí existující `RunWorker` nebo `CascadeRunWorker` přes standardní `Operations` dialog a output lock;
+8. zablokuje druhé potvrzení a po změně obnoví Run Studio.
 
-Checkpoint selector nabízí pouze explicitní `CheckpointRecord`. Unsafe záznam nelze použít pro pokračování.
+Source bundle je immutable. Confirmation, výběr checkpointu, výpočet první placené operace a filtry jsou lokální a negenerativní.
 
-Akce:
+Opravný pokyn je pole nového worker configu a LineageRecordu. Přidává se pouze do nově prováděných requestů za checkpointem; nemění původní prompt hash ani podmínky zděděných artefaktů.
 
-- Pokračovat;
-- Klonovat;
-- ReRun;
-- Opravit;
-- Otevřít výstupy;
-- Otevřít Run Bundle.
+QA navíc nabízí `Upravit QA a spustit novou větev`. Je dostupné jen pro explicitní `input_ready` před prvním QA requestem; uživatelův doplňující pokyn se eviduje v novém běhu a vstoupí do jeho skutečného requestu, zdroj se nemění.
 
-## Průběh
+## Clone a reuse
 
-Timeline je postavena nad StepRecord. Sloupce obsahují sequence, krok, stav, trvání, model, reasoning, počty request/response/artefaktů a checkpoint ID.
+**Klonovat jako nové zadání** je jediná rodina akcí, která otevře Workbench. Načte přesný uložený `ui_state`, odstraní `response_id`, resume/preparation metadata a recovery instruction. Lineage `clone` se zapíše až při následném skutečném startu nového běhu. Varianta klonu s reusable artefaktem nejprve ověří jeho SHA-256 a zkopíruje pouze zvolený soubor do izolovaného vstupu.
 
-Dvojklik otevře **Detail kroku** se záložkami:
+## BATCH
 
-- Přehled;
-- Vstupy;
-- Odpovědi;
-- Soubory;
-- Validace;
-- Události;
-- Technické.
+Sekce Dávky zůstává samostatná. Run Studio pouze zobrazuje vazbu a volá stejný `complete_saved_batch`. Poslední doložený remote status je uložen odděleně v `batch_records`; místní výsledek je v `batch_imports`. Remote `completed` s chybějícím importem znamená **K převzetí**, nikoli dokončený projekt. `files_complete_unverified` znamená souborově úplné, ale funkčně neověřené.
 
-Legacy běh bez StepRecord zobrazí pouze sdělení, že kroky nejsou evidovány. UI je nevytváří z filename/mtime heuristik.
+Dokud odeslaný Batch čeká na vzdálené dokončení nebo místní import, přímý continue/rerun/repair je zablokován, aby nevznikl druhý submit. `Převzít soubory` pracuje s původním Batch ID a je dostupné jen při doloženém remote `completed` a chybějícím místním importu. Částečný import lze bezpečně opakovat; teprve po dokončeném importu může explicitní rerun vytvořit nový samostatný běh.
 
-## Odpovědi
+## Checkpointy a legacy
 
-Centrální seznam ResponseRecord podporuje filtr stavu a response ID. Pravá část má:
+Nové GENERATE, MODIFY, QA a QFILE běhy ukládají před prvním síťovým požadavkem `input_ready` s přesným `ui_state`. GENERATE/MODIFY dále ukládají kanonické preparation checkpointy. Nové KASKADA běhy ukládají `cascade_input_ready` a po každém dokončeném kroku `cascade_step_completed` s definicí, signaturami, runtime hodnotami, required response a výstupními ArtifactRecordy.
 
-- **Lidsky** — output text, případně čitelný obsah;
-- **Technický detail** — celý normalizovaný record a full response bez obsahové redakce.
+Staré záznamy checkpoint nedostávají heuristicky. Legacy adapter je read-only; chybějící StepRecord, checkpoint, čas nebo validace se zobrazí jako `Není evidováno`/`Neověřeno`. Bez explicitního validního safe boundary není přímá akce dostupná.
 
-Status/incomplete reason zůstávají viditelné. Tisk a export TXT pracují s lidským pohledem; raw evidence zůstává v Run Bundle.
+## Artefakty a bezpečnost
 
-## Soubory
+Otevření, náhled, export, uložení a porovnání vyžadují místní `path_in_bundle`, existující soubor a platný SHA-256. Cesta musí zůstat pod Run Bundle; export nesmí přepsat source bundle. Remote-only artifact nelze otevřít. Textový náhled je omezen na 1 MiB a canonical soubor se netruncuje. Diff nad 5 MiB se synchronně nevytváří.
 
-Artifact manager ukazuje název, roli, krok, velikost, SHA-256, čas, zdroj a reuse flag.
+## Prezentační stavy
 
-Akce:
-
-- Otevřít;
-- Náhled;
-- Uložit jako;
-- Použít v novém běhu;
-- Zobrazit původ;
-- Porovnat právě dva vybrané artefakty;
-- Otevřít přímo evidovaný zdrojový RequestRecord;
-- Otevřít přímo evidovaný zdrojový ResponseRecord.
-
-Textové porovnání používá lokální unified diff. U souborů nad 5 MiB se plný diff kvůli responzivitě nenačítá a UI zobrazí jejich metadata/hash; binární artefakty se porovnávají podle integrity, velikosti a provenance. Náhled velkého souboru může být v UI omezen na 1 MiB, ale je označen jako náhled. Kanonický soubor v bundle zůstává kompletní a nezměněný.
-
-**Použít v novém běhu** funguje pouze pro nový Run Bundle s explicitním `artifact_id`, `reusable=true` a platným SHA-256. Vybrané soubory se kopírují do izolovaného dočasného IN a nový MODIFY běh zaznamená lineage `reuse_artifacts`.
-
-## Události
-
-Strukturovaný event stream lze filtrovat podle severity a společného filtru nad event type, step, request, response a artifact vazbami. Detail zobrazuje celý EventRecord.
-
-## Návaznosti
-
-Strom ukazuje parent i children runs a typy clone/continue/rerun/repair/reuse atd. Dvojklik otevře související běh, pokud není skryt aktuálním filtrem. Převzaté artefakty, checkpoint a configuration jsou součástí LineageRecord.
-
-## Technické
-
-Obsahuje:
-
-- `bundle.json`;
-- `run.json`;
-- `run_state.json`;
-- integritu, checkpointy, lineage a počty recordů.
-
-Technical viewer podporuje hledání a Kopírovat vše. Raw evidence se obsahově nemaskuje.
-
-## Pokračovat
-
-`Pokračovat od checkpointu`:
-
-1. ověří integritu state snapshotu a required artefaktů/response;
-2. načte přesný uložený `ui_state`;
-3. pro GENERATE/MODIFY znovu validuje `preparation_snapshot`;
-4. převezme pouze hashově doložené již hotové výstupy;
-5. před startem ukáže source run, checkpoint, důvod bezpečnosti a upozornění, že navazující modelové kroky mohou být znovu placené;
-6. vytvoří nový RUN;
-7. do nového RUN uloží LineageRecord.
-
-Zdrojový běh se nemění.
-
-Pokud source run obsahuje již odeslaný Batch, pokračování nevytvoří druhý submit. Batch se dokončuje v původním běhu.
-
-## ReRun
-
-ReRun v novém Run Exploreru není staré heuristické „obnov co nejvíc“. Použije nejnovější explicitní bezpečný checkpoint a vytvoří nový běh s lineage `rerun`. Pokud bezpečný checkpoint neexistuje, ReRun je zablokován a uživatel může použít Klonovat, pokud existuje přesný uložený `ui_state`.
-
-## Klonovat
-
-Klon načte pouze přesně uložené zadání a nastavení. Nezdědí automaticky staré Response IDs, `resume_files` ani hotové výsledky. Uživatel může před spuštěním vše změnit. Po startu nového běhu se zapíše lineage `clone`.
-
-## Opravit
-
-Repair vychází z explicitního checkpointu a konkrétní evidence chyby. Platné předchozí podklady mohou být převzaty, ale zdrojový běh se nepřepisuje. Nový běh má lineage `repair`.
-
-## Legacy chování
-
-Legacy adapter je read-only. U chybějících údajů UI používá `Není evidováno`. Legacy run nemá automaticky safe checkpoint, StepRecord ani verified bundle integritu. Tím se zabrání tomu, aby UI vydávalo rekonstruovanou domněnku za skutečnou historickou evidenci.
-
-## Responzivita
-
-Index minimalizuje opakované filesystem scany. Velké soubory se načtou až při explicitním náhledu a UI preview má limit; kanonická evidence se nezkracuje. Další optimalizace může přidat stránkování tabulek bez změny datového kontraktu.
+Centrální mapping pokrývá created, preparing, running, response_pending, batch_prepared, batch_pending, importing, completed, partial, failed, cancelled, stopped, dry_run, submission_unknown, files_complete_unverified, closed, corrupt_state, unknown a remote Batch stavy. Barva je vždy doplněna ikonou a textem; 100% progress sám nikdy neznamená completed.

@@ -223,9 +223,14 @@ class StudioWindow(QMainWindow):
         self.operations.changed.connect(self.update_activity)
         self.history.activate_workbench.connect(lambda: self.select_page("run"))
         self.history.activate_comic.connect(self.open_comic_operation)
+        self.history.activate_batch.connect(self.open_history_batch)
         self.shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
         self.shortcut.activated.connect(self.start_current)
         self.select_page("run")
+
+    def open_history_batch(self, identifier):
+        self.select_page("batch")
+        self.batches.focus_batch(identifier)
 
     def open_comic_operation(self, identifier):
         try:
@@ -242,6 +247,8 @@ class StudioWindow(QMainWindow):
         self.heading.setText(self.navigation[key].text())
         for name, button in self.navigation.items():
             button.setChecked(name == key)
+        if key == "history" and not self.history.records:
+            self.history.refresh()
         if self.width() < 1000:
             self.navigation_area.hide()
         if key in self.detached:

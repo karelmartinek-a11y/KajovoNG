@@ -91,19 +91,21 @@ UI odděluje stav OpenAI Batch od lokálního převzetí výsledků. `completed`
 
 ### Historie
 
-Run Explorer obsahuje:
+Produkční Run Studio obsahuje:
 
-- fulltext a časové/projektové/režimové/stavové/modelové filtry;
-- seznam běhů;
-- Přehled;
-- Průběh / StepRecord timeline;
-- Odpovědi lidsky i raw;
-- Soubory / ArtifactRecord;
-- Události;
-- Návaznosti;
-- Technické / integrita.
+- virtuální seznam běhů s malovanými DAW stopami skutečných StepRecordů;
+- fulltextový HistoryIndex a časové/projektové/režimové/stavové/transport/modelové filtry;
+- zoom, Fit, výběr fáze a kompaktní parent/children overlay;
+- typové GENERATE, MODIFY, QA, QFILE, KASKADA a COMIC detaily;
+- generický detail budoucích kindů, raw request/response, validace, události a integritu;
+- ArtifactRecord náhledy, SHA kontrolu, export, textový diff a binární metadata;
+- lokální branch composer a centrální availability policy;
+- přímé spuštění Continue/Rerun/Repair přes existující worker a Operations;
+- clone-only přechod do Zadání a sdílené převzetí původního BATCH.
 
-Continue, Continue from checkpoint, Clone, ReRun, Repair a reuse vždy vytvářejí nový run. Zdrojový Run Bundle se nemění.
+Continue, ReRun a Repair vytvoří a okamžitě spustí nový run přímo v Historii. Clone otevře editovatelné Zadání a lineage zapíše až jeho pozdější start. Zdrojový Run Bundle se nemění. Staré `workbench.resume`, `resume_notice` a `resume_submitted` nejsou součástí produkční cesty.
+
+Forenzně nalezené producenty Run Bundle: GENERATE, MODIFY, QA, QFILE, KASKADA a COMIC. Photo Studio/Image Batch používá vlastní job store a do Run Bundle Historie se nezapisuje. Legacy producent zůstává read-only bez dopočtených kroků a checkpointů.
 
 ### Verze projektu
 

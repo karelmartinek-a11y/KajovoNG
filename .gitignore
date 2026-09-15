@@ -33,6 +33,7 @@ resources/app_icon.png
 /Build/lib/
 /Build/Kajovo/
 /Build/bdist.*/
+/Build/run-studio-render*/
 *.sqlite-wal
 *.sqlite-shm
 *.before-cost-v1.bak

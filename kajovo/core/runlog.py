@@ -351,6 +351,22 @@ class RunLogger:
         checkpoint_type = ""
         safe = False
         reason = ""
+        required_artifacts: list[str] = []
+        if "ui_state" in patch and isinstance(state.get("ui_state"), dict):
+            mode = str(state["ui_state"].get("mode") or "")
+            if mode in {"GENERATE", "MODIFY", "QA", "QFILE"}:
+                checkpoint_type = "input_ready"
+                safe = True
+                reason = (
+                    "Přesný vstup a konfigurace nového běhu jsou uloženy před prvním síťovým požadavkem."
+                )
+                required_artifacts = [
+                    str(row.get("artifact_id"))
+                    for row in self.bundle.artifacts()
+                    if row.get("available_local", True)
+                    and row.get("role") in {"user_input", "attached_file", "in_project_file", "input"}
+                    and row.get("artifact_id")
+                ]
         if "preparation_snapshot" in patch and isinstance(
             state.get("preparation_snapshot"), dict
         ):
@@ -404,6 +420,7 @@ class RunLogger:
             state_snapshot=state,
             safe_to_continue=safe,
             reason=reason,
+            required_artifact_ids=required_artifacts,
             required_response_ids=required_responses,
             invalidation_rules=[
                 "Změna modelu, vstupů nebo kanonického přípravného kontraktu invaliduje zděděné navazující kroky.",
@@ -491,6 +508,8 @@ class RunLogger:
         state.update(patch)
         self._write_state(state)
         self.bundle.update_run(self._bundle_patch_from_state(state))
+        # Archivace musí předcházet checkpointu, aby checkpoint mohl uvést
+        # přesné kanonické ArtifactRecord závislosti.
         self._archive_run_inputs(patch, state)
         self.event(
             "state.updated", {"patch": patch, "status": state.get("status")}
@@ -581,7 +600,7 @@ class RunLogger:
         path = self._json_path(kind, name)
         return path if os.path.isfile(path) else None
 
-    def save_json(self, kind: str, name: str, obj: Any) -> str:
+    def save_json(self, kind: str, name: str, obj: Any, *, step_id: str = "") -> str:
         from .recoverable_artifacts import save_artifact
 
         save_artifact(self.paths.run_dir, kind + "/" + name, obj)
@@ -589,9 +608,9 @@ class RunLogger:
         self._atomic_write_json(path, obj)
         relative = Path(path).relative_to(Path(self.paths.run_dir)).as_posix()
         if kind == "requests":
-            self.bundle.record_request(obj, name=name, source_path=relative)
+            self.bundle.record_request(obj, name=name, step_id=step_id, source_path=relative)
         elif kind == "responses":
-            self.bundle.record_response(obj, name=name, source_path=relative)
+            self.bundle.record_response(obj, name=name, step_id=step_id, source_path=relative)
         else:
             role = {
                 "manifests": "manifest",
@@ -607,6 +626,7 @@ class RunLogger:
                 source="RunLogger.save_json",
                 reusable=kind in {"manifests", "files"},
                 reconstruction_role=name,
+                step_id=step_id,
             )
         self.event(
             f"file.saved.{kind}",
@@ -623,6 +643,7 @@ class RunLogger:
         after: Optional[str] = None,
         before_size: Optional[int] = None,
         after_size: Optional[int] = None,
+        step_id: str = "",
     ) -> None:
         self.event(
             "fs.change",
@@ -649,6 +670,7 @@ class RunLogger:
                     reusable=True,
                     reconstruction_role=str(src or "output"),
                     metadata={"before_sha256": before, "after_sha256": after},
+                    step_id=step_id,
                 )
             except Exception as exc:
                 self.event(

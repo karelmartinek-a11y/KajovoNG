@@ -17,7 +17,7 @@ Logo `resources/studio-symbol.png` doprovází větvený symbol kreslený Qt. An
 | Kaskády | `cascades.py`, `cascade_items.py` | `CascadeDefinition`, `validate_cascade_definition`, `CascadeRunWorker` |
 | Zdroje | `resources.py` | Files a Vector Stores `OpenAIClient`, přílohy běhu |
 | Dávky | `batches.py` | `list_batches`, `complete_saved_batch`, `repeat_saved_batch`, `cancel_batch` |
-| Historie | `history.py`, `evidence.py` | `HistoryIndex`, `LegacyRunAdapter`, checkpoint, SHA-256, lineage |
+| Historie / Run Studio | `history.py`, `history_models.py`, `history_timeline.py`, `history_details.py`, `history_artifacts.py`, `history_policy.py`, `history_launcher.py`, `history_composer.py` | `HistoryIndex`, `RunBundle`, `LegacyRunAdapter`, `RunWorker`, `CascadeRunWorker`, `Operations`, `complete_saved_batch` |
 | Verze | `versions.py` | `core/project_git.py`, Git a editor s kontrolou souběžných změn |
 | Modely | `application.py` | Účtový katalog, pevná matice, uložený výchozí model |
 | Nastavení | `settings.py` | `save_settings`, `persist_api_key`, SMTP |
@@ -36,6 +36,14 @@ Dokončeno, částečný výsledek, zastavení, předání dávky, čekání na 
 `core/user_errors.py` klasifikuje konkrétní kód a řetězec příčin. Samotné HTTP 429 nerozlišuje kredit a rychlost; timeout nepotvrzuje přijetí požadavku. Neznámá příčina zůstává výslovně neznámá. Technické podrobnosti jsou dostupné. Stoprocentní určení kořenové příčiny bez důkazů není součástí kontraktu.
 
 [Procházet galerii všech výsledných snímků](ui/gallery.html).
+
+## Historie / Run Studio
+
+Run Studio nahrazuje starý list/tab pohled pouze v sekci Historie. Používá virtuální dvousloupcový model a custom painted DAW stopu; jeden řádek je jeden run a segmenty jsou skutečné StepRecordy. Detail se načítá lazy a má typové pohledy GENERATE, MODIFY, QA, QFILE, KASKADA a COMIC plus generický renderer. Hlavní toolbar zachovává fulltext, čas, projekt, mode, stav, transport, model a pokročilé příznaky.
+
+Centrální `ActionAvailabilityPolicy` řídí viditelné důvody disabled stavů. Continue/Rerun/Repair otevírají lokální composer a po potvrzení přímo spouštějí nový worker přes Operations; Workbench neotevírají. Clone je jediná rodina akcí otevírající Zadání. Remote BATCH stav a místní import jsou oddělené a převzetí používá stejný backend jako Dávky.
+
+`scripts/render_studio.py` vytváří bez sítě sedm samostatných akceptačních snímků `run_studio_main`, `run_studio_generate`, `run_studio_modify`, `run_studio_qa`, `run_studio_qfile`, `run_studio_cascade` a `run_studio_repair` z dočasných Run Bundle fixture dat.
 
 ## Reprodukce
 

@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
 
 from kajovo.core.model_capabilities import ModelCapabilitiesCache
 from kajovo.core.model_registry import selectable
-from kajovo.core.generate_batch import digest
 from kajovo.core.pipeline import RunWorker, UiRunConfig
 from kajovo.core.request_rules import validate_run_options
 from kajovo.core.runlog import RunLogger
@@ -49,13 +48,8 @@ class Workbench(QWidget):
         self.context = context
         self.saved_extras = {}
         self.busy_outputs = {}
-        self.resume = {}
-        self.resume_submitted = False
         self.pending_lineage = None
         root = vertical(self, 0)
-        self.resume_notice = caption("")
-        self.resume_notice.setAccessibleName("Přehled pokračování")
-        root.addWidget(self.resume_notice)
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
         page = QWidget()
@@ -135,46 +129,9 @@ class Workbench(QWidget):
             field.setText(value)
 
     def reset(self):
-        self.resume = {}
-        self.resume_submitted = False
         self.pending_lineage = None
         self.apply_state(default_state(self.context.settings))
         self.result.clear()
-
-    def update_resume_notice(self):
-        snapshot = self.resume.get("preparation_snapshot")
-        lineage = self.pending_lineage or {}
-        self.resume_notice.setVisible(bool(self.resume))
-        self.start_button.setText("Spustit práci")
-        self.start_button.setAccessibleName("Spustit práci")
-        if not self.resume:
-            self.resume_notice.clear()
-            return
-        detail = ["Pokračování uloženého běhu", f"Zdroj: {lineage.get('source_run_id', 'Neuveden')}",
-                  f"Checkpoint: {lineage.get('source_checkpoint_id', 'Neuveden')}"]
-        if snapshot:
-            prefix = "A" if snapshot["mode"] == "GENERATE" else "B"
-            stages = [prefix + suffix for suffix in ("0R", "1", "2")]
-            if snapshot["maximum_quality"]:
-                stages.append(prefix + "2Q")
-            index = stages.index(snapshot["canonical_stage"]) + 1
-            next_stage = stages[index] if index < len(stages) else prefix + "3"
-            detail.append("Převezmu bez nové generace: " + ", ".join(stages[:index]) + ".")
-            if next_stage == prefix + "3":
-                detail.append(f"Další etapa: {next_stage}, zpracování zbývajících souborů. Placené požadavky vzniknou jen pro potřebné úlohy.")
-            else:
-                detail.append(f"Nová placená práce začne etapou {next_stage}; poté následují zbývající etapy.")
-            self.start_button.setText(f"Pokračovat od {next_stage}")
-        else:
-            detail.append("Pokračování použije uložené podklady checkpointu.")
-            self.start_button.setText("Pokračovat od checkpointu")
-        detail.append(f"Ověřené dokončené soubory k přeskočení: {len(self.resume.get('completed_hashes', {}))}.")
-        detail.append("Vznikne nový navazující běh; zdrojový běh zůstane zachovaný.")
-        if self.resume_submitted:
-            detail.append("Pokračování již bylo spuštěno. Další akci vyberte v Historii nebo přes Nové zadání.")
-        self.resume_notice.setText("\n".join(detail))
-        self.resume_notice.setAccessibleDescription(self.resume_notice.text())
-        self.start_button.setAccessibleName(self.start_button.text())
 
     def apply_state(self, state):
         if not isinstance(state, dict):
@@ -221,7 +178,7 @@ class Workbench(QWidget):
         return state
 
     def config(self):
-        state = {**default_state(self.context.settings), **self.state(secrets=True), **self.resume}
+        state = {**default_state(self.context.settings), **self.state(secrets=True)}
         cache = ModelCapabilitiesCache("")
         state["available_models"] = list(self.context.models)
         state["caps_by_model"] = {model: cache.get(model).to_dict() for model in self.context.models if cache.get(model)}
@@ -256,7 +213,6 @@ class Workbench(QWidget):
     def validate(self):
         if not hasattr(self, "widgets"):
             return False
-        self.update_resume_notice()
         mode = self.widgets["mode"].currentData()
         grouped = mode in {"GENERATE", "MODIFY"}
         for key in ("maximum_quality", "send_as_c"):
@@ -284,13 +240,7 @@ class Workbench(QWidget):
         capability = ModelCapabilitiesCache("").get(self.widgets["model"].currentData())
         self.widgets["temperature"].setEnabled(bool(capability and capability.supports_temperature))
         try:
-            if self.resume_submitted:
-                raise ValueError("Toto pokračování již bylo spuštěno; sledujte jeho průběh.")
             cfg = self.config()
-            snapshot = self.resume.get("preparation_snapshot")
-            if snapshot and (cfg.mode != snapshot["mode"] or cfg.maximum_quality != snapshot["maximum_quality"]
-                             or digest(cfg.prompt) != snapshot["prompt_hash"]):
-                raise ValueError("Pokračování vyžaduje původní zadání, režim a kvalitu. Vraťte změny nebo zvolte Nové zadání.")
             if not cfg.project.strip() or not cfg.prompt.strip():
                 raise ValueError("Vyplňte projekt a zadání.")
             if mode == "MODIFY" and (not cfg.in_dir or not Path(cfg.in_dir).is_dir()):
@@ -326,7 +276,6 @@ class Workbench(QWidget):
             return
         run_id = new_run_id()
         logger = RunLogger(self.context.settings.log_dir, run_id, project_name=cfg.project)
-        logger.update_state({"ui_state": self.state()})
         if self.pending_lineage:
             logger.record_lineage(**self.pending_lineage)
         settings = copy.deepcopy(self.context.settings)
@@ -356,11 +305,7 @@ class Workbench(QWidget):
         record = self.context.operations.adopt("Práce na projektu · " + cfg.project, worker, receive, identifier=run_id, output_dir=target)
         record.dialog.notification.show()
         worker.finished.connect(lambda: self.busy_outputs.pop(run_id, None))
-        if self.resume:
-            self.resume_submitted = True
-            self.validate()
-        else:
-            self.pending_lineage = None
+        self.pending_lineage = None
         return record
 
     def offer_repair(self, cfg, remote):

@@ -9,7 +9,10 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QDialog, QFileDialog, QHeaderView, QTableWidget, QTableWidgetItem, QWidget
 
-from kajovo.core.batch_completion import CANCELLABLE, batch_ids, complete_saved_batch, pending_batch_ids, read_state
+from kajovo.core.batch_completion import (
+    CANCELLABLE, batch_ids, complete_saved_batch, pending_batch_ids,
+    read_state, remember_remote_batch_state,
+)
 from kajovo.core.generate_batch import repeat_saved_batch
 from .components import DetailDialog, action, actions, caption, confirm, vertical
 from .resources import ValueDialog
@@ -24,6 +27,7 @@ class BatchesPage(QWidget):
         self.busy = False
         self.poll_started = 0
         self.last_refresh = None
+        self.focus_batch_id = ""
         root = vertical(self)
         root.addWidget(caption("Dávky a převzetí výsledků", "section"))
         self.table = QTableWidget(0, 5)
@@ -101,7 +105,11 @@ class BatchesPage(QWidget):
                         continue
                     state = read_state(directory)
                     for identifier in batch_ids(state):
-                        records.append({"id": identifier, "remote": remote.pop(identifier, {}), "state": state, "run_dir": str(directory)})
+                        remote_record = remote.pop(identifier, {})
+                        if remote_record:
+                            remember_remote_batch_state(directory, remote_record)
+                            state = read_state(directory)
+                        records.append({"id": identifier, "remote": remote_record, "state": state, "run_dir": str(directory)})
             records.extend({"id": identifier, "remote": value, "state": {}, "run_dir": ""} for identifier, value in remote.items())
             return records
 
@@ -136,6 +144,17 @@ class BatchesPage(QWidget):
             for column, value in enumerate(values):
                 self.table.setItem(row, column, QTableWidgetItem(value))
         self.table.resizeRowsToContents()
+        if self.focus_batch_id:
+            for row, record in enumerate(self.records):
+                if record.get("id") == self.focus_batch_id:
+                    self.table.selectRow(row)
+                    self.table.scrollToItem(self.table.item(row, 0))
+                    self.focus_batch_id = ""
+                    break
+
+    def focus_batch(self, identifier):
+        self.focus_batch_id = str(identifier or "")
+        self.refresh()
 
     def complete(self):
         record = self.selected()

@@ -17,3 +17,9 @@ UI-15,Kaskádové odkazy,Výběr existujícího zdroje; při duplikaci přemapov
 UI-16,Malé okno a samostatná sekce,Dosažitelná hlavní akce; vrácení stejného stavu,kajovo/studio/application.py,tests/test_studio.py;scripts/render_studio.py,https://doc.qt.io/qtforpython-6/PySide6/QtWidgets/QScrollArea.html
 UI-17,Animace,Pouze viditelný aktivní stav; respektovat omezený pohyb,kajovo/studio/components.py,tests/test_studio.py,https://doc.qt.io/qtforpython-6/PySide6/QtCore/QPropertyAnimation.html
 UI-18,Kontrast,Normální text nejméně 4.5:1; fokus odlišit i tvarem,kajovo/studio/components.py,scripts/render_studio.py,https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html
+UI-19,Run Studio stopa,Segmenty pouze ze StepRecord; tisíce řádků bez child QWidget,kajovo/studio/history_models.py;kajovo/studio/history_timeline.py,tests/test_run_studio.py,docs/HISTORY_RUN_EXPLORER.md
+UI-20,Přímá historická větev,Nové Run ID; source immutable; lineage; Operations; double submit blokován,kajovo/studio/history_launcher.py,tests/test_run_studio.py,docs/HISTORY_RUN_EXPLORER.md
+UI-21,Clone,Exact ui_state bez Response/resume metadata; lineage až při startu,kajovo/studio/history.py;kajovo/studio/workbench.py,tests/test_studio.py;tests/test_workbench_resume_intent.py,docs/SSOT.md
+UI-22,BATCH v Historii,Remote completed oddělit od místního importu; převzít původní batch,kajovo/core/batch_completion.py;kajovo/studio/history.py,tests/test_run_studio.py;tests/test_batch_completion_ui.py,docs/RUN_BUNDLE_SPEC.md
+UI-23,Artefakty,Path pod bundle; SHA; remote-only blokace; bezpečný export; omezený náhled,kajovo/studio/history_artifacts.py,tests/test_run_studio.py,docs/HISTORY_RUN_EXPLORER.md
+UI-24,Sedm vizuálních stavů,Offline deterministické fixture Run Bundles bez klíče a s kontrolou clippingu,scripts/render_studio.py,scripts/render_studio.py,docs/UI_DESIGN.md

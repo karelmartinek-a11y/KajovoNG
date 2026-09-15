@@ -239,16 +239,15 @@ def test_history_clone_does_not_reuse_remote_response(studio, monkeypatch, tmp_p
     studio.history.adapter = SimpleNamespace(root=tmp_path, run_id="RUN_source")
     state = studio.workbench.state()
     state["response_id"] = "resp_source"
-    monkeypatch.setattr("kajovo.studio.history.read_state", lambda root: {"ui_state": state})
+    studio.history._state = {"ui_state": state}
     studio.history.clone()
     assert studio.workbench.config().response_id == ""
     assert studio.workbench.pending_lineage["source_run_id"] == "RUN_source"
 
 
-def test_history_artifact_reuse_has_isolated_input(studio, monkeypatch, tmp_path):
+def test_history_clone_with_artifact_has_isolated_input(studio, tmp_path):
     import hashlib
     from types import SimpleNamespace
-    from PySide6.QtWidgets import QDialog
     source = tmp_path / "archive"
     source.mkdir()
     (source / "approved.txt").write_bytes(b"approved")
@@ -256,71 +255,18 @@ def test_history_artifact_reuse_has_isolated_input(studio, monkeypatch, tmp_path
     studio.history.adapter = SimpleNamespace(root=source, run_id="RUN_source", legacy=False)
     studio.history.payload = {"artifacts": [{"artifact_id": "artifact_test", "reusable": True,
                                             "path_in_bundle": "approved.txt", "sha256": hashlib.sha256(b"approved").hexdigest()}]}
-    monkeypatch.setattr("kajovo.studio.history.ValueDialog", lambda *args, **kwargs: SimpleNamespace(exec=lambda: QDialog.Accepted, value="artifact_test"))
-    studio.history.artifact(reuse=True)
+    studio.history._state = {"ui_state": studio.workbench.state()}
+    studio.history.clone_with_artifact(studio.history.payload["artifacts"][0])
     directory = Path(studio.workbench.widgets["in_dir"].text())
     assert directory != source
     assert [path.name for path in directory.iterdir()] == ["approved.txt"]
     assert studio.workbench.pending_lineage["inherited_artifact_ids"] == ["artifact_test"]
 
 
-def test_history_does_not_resubmit_existing_batch(studio, monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    from PySide6.QtWidgets import QDialog
-    bundle = Mock()
-    studio.history.adapter = SimpleNamespace(root=tmp_path, bundle=bundle)
-    studio.history.payload = {"checkpoints": [{"checkpoint_id": "safe", "safe_to_continue": True}]}
-    monkeypatch.setattr("kajovo.studio.history.ValueDialog", lambda *args, **kwargs: SimpleNamespace(exec=lambda: QDialog.Accepted, value="safe"))
-    monkeypatch.setattr("kajovo.studio.history.read_state", lambda root: {"batch_id": "batch_existing"})
-    studio.history.resume()
-    bundle.validate_checkpoint.assert_not_called()
-    assert "duplicitní" in studio.history.notice.text()
-
-
-@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("stage", ["0R", "1"])
-@pytest.mark.parametrize("relation", ["continue", "rerun", "repair"])
-def test_history_resumes_partial_preparation_without_structure(studio, monkeypatch, tmp_path, mode, stage, relation):
-    from copy import deepcopy
-    from types import SimpleNamespace
-    from PySide6.QtWidgets import QDialog
-    from kajovo.core.generate_batch import digest
-    from test_preparation_snapshot import snapshot
-
-    ui = studio.workbench.state()
-    ui.update(mode=mode, prompt="test", maximum_quality=False)
-    saved = snapshot(mode, stage=("A" if mode == "GENERATE" else "B") + stage)
-    saved["structure"] = None
-    if stage == "0R":
-        saved["plan"] = None
-    saved.pop("snapshot_hash")
-    saved["snapshot_hash"] = digest(saved)
-    checkpoint = {"state_snapshot": {"ui_state": ui, "preparation_snapshot": saved}}
-    original = deepcopy(checkpoint)
-    bundle = Mock()
-    bundle.validate_checkpoint.return_value = checkpoint
-    studio.history.adapter = SimpleNamespace(root=tmp_path, bundle=bundle, run_id="RUN_source")
-    studio.history.payload = {"checkpoints": [{"checkpoint_id": "safe", "safe_to_continue": True}]}
-    monkeypatch.setattr("kajovo.studio.history.ValueDialog", lambda *args, **kwargs: SimpleNamespace(exec=lambda: QDialog.Accepted, value="safe"))
-    monkeypatch.setattr("kajovo.studio.history.read_state", lambda root: {})
-    activated = Mock()
-    studio.history.activate_workbench.connect(activated)
-
-    studio.history.resume(relation=relation)
-
-    activated.assert_called_once_with()
-    bundle.validate_checkpoint.assert_called_once_with("safe")
-    assert studio.workbench.resume["preparation_snapshot"] == saved
-    assert studio.workbench.resume["resume_files"] == []
-    assert studio.workbench.pending_lineage == {"source_run_id": "RUN_source", "relation_type": relation, "source_checkpoint_id": "safe"}
-    assert studio.workbench.config().preparation_snapshot == saved
-    prefix = "A" if mode == "GENERATE" else "B"
-    assert studio.workbench.start_button.text() == "Pokračovat od " + prefix + ("1" if stage == "0R" else "2")
-    assert "RUN_source" in studio.workbench.resume_notice.text()
-    assert "Checkpoint: safe" in studio.workbench.resume_notice.text()
-    assert "Převezmu bez nové generace: " + prefix + "0R" in studio.workbench.resume_notice.text()
-    assert checkpoint == original
-    assert not studio.context.client().mock_calls
+def test_history_page_has_no_old_workbench_resume_path(studio):
+    assert not hasattr(studio.history, "resume")
+    assert not hasattr(studio.workbench, "resume")
+    assert not hasattr(studio.workbench, "resume_notice")
 
 
 def test_photo_submission_uses_only_explicit_selection(studio, monkeypatch, tmp_path):

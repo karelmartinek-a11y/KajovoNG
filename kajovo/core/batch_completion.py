@@ -106,6 +106,31 @@ def pending_batch_ids(state):
     ]
 
 
+def remember_remote_batch_state(run_dir, batch):
+    """Uloží naposledy doložený remote stav bez změny místního import statusu."""
+    if not isinstance(batch, dict) or not isinstance(batch.get("id"), str):
+        return False
+    state = read_state(run_dir)
+    identifier = batch["id"]
+    if identifier not in batch_ids(state):
+        return False
+    previous = (state.get("batch_records") or {}).get(identifier)
+    if previous == batch:
+        return False
+    state.setdefault("batch_records", {})[identifier] = batch
+    atomic_write_text(
+        str(Path(run_dir) / "run_state.json"),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+    _sync_bundle_state(
+        run_dir,
+        state,
+        "batch.remote_status_observed",
+        {"batch_id": identifier, "remote_status": batch.get("status")},
+    )
+    return True
+
+
 def preflight_ids(state):
     values = state.get("preflight_batches") or []
     if not isinstance(values, list):

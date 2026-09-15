@@ -9,6 +9,7 @@ import tempfile
 import time
 import jsonschema
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -120,6 +121,9 @@ class CascadeRunConfig:
     in_dir: str
     out_dir: str
     run_id: str = ""
+    resume_snapshot: Optional[Dict[str, Any]] = None
+    recovery_instruction: str = ""
+    lineage: Optional[Dict[str, Any]] = None
 
 
 class CascadeRunWorker(QThread):
@@ -165,6 +169,50 @@ class CascadeRunWorker(QThread):
 
     def _ts(self) -> str:
         return time.strftime("%Y%m%d %H%M%S")
+
+    def _recovery_suffix(self) -> str:
+        instruction = str(self.cfg.recovery_instruction or "").strip()
+        if not instruction:
+            return ""
+        return (
+            "\n\n[NOVÁ VĚTEV – explicitní pokyn platí pouze pro tento a následující nově prováděné kroky]\n"
+            + instruction
+        )
+
+    def _archive_cascade_inputs(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """Archivuje rekonstruovatelné lokální vstupy před safe checkpointem."""
+        if not self.logger:
+            return [], []
+        mappings: list[dict[str, Any]] = []
+        missing: list[str] = []
+        for step in self.cfg.cascade.steps:
+            candidates = [
+                ("input", item.id, item.value)
+                for item in step.inputs
+                if item.source == "local_file"
+            ]
+            candidates.extend(("files_local_paths", str(index), value)
+                              for index, value in enumerate(step.files_local_paths or []))
+            for field, input_id, value in candidates:
+                resolved = self._resolve_text(str(value or ""), {})
+                if not resolved or not Path(resolved).is_file():
+                    missing.append(f"{step.id}:{input_id}")
+                    continue
+                artifact = self.logger.bundle.archive_artifact(
+                    resolved,
+                    role="user_input",
+                    kind="cascade_input",
+                    reconstruction_role=f"cascade:{step.id}:{field}:{input_id}",
+                    metadata={"step_id": step.id, "field": field, "input_id": input_id},
+                )
+                mappings.append({
+                    "step_id": step.id,
+                    "field": field,
+                    "input_id": input_id,
+                    "artifact_id": artifact["artifact_id"],
+                    "path_in_bundle": artifact["path_in_bundle"],
+                })
+        return mappings, missing
 
     def _emit_status(self, p: int, sp: int, text: str) -> None:
         self.progress.emit(p)
@@ -368,10 +416,19 @@ class CascadeRunWorker(QThread):
                 except OSError:
                     pass
         if self.logger:
+            for row in written:
+                self.logger.record_fs_change(
+                    "write",
+                    row["path"],
+                    row["dst"],
+                    after_size=row["bytes"],
+                    step_id=str(getattr(self, "_current_step_record_id", "") or ""),
+                )
             self.logger.save_json(
                 "manifests",
                 f"cascade_step_{step_idx:02d}_out_saved_map",
                 {"saved": written, "out_dir": out_abs},
+                step_id=str(getattr(self, "_current_step_record_id", "") or ""),
             )
         return {"saved": written, "out_dir": out_abs}
 
@@ -468,7 +525,7 @@ class CascadeRunWorker(QThread):
         if start_index <= 0:
             return {}, {}, {}, set()
         state = self._read_runtime_state()
-        cache = state.get("cache")
+        cache = self.cfg.resume_snapshot if self.cfg.resume_snapshot is not None else state.get("cache")
         if not isinstance(cache, dict):
             raise CascadeValidationError(
                 "Pro spuštění od vybraného kroku chybí předchozí dokončený stav; spusťte kaskádu od začátku."
@@ -602,6 +659,8 @@ class CascadeRunWorker(QThread):
                 values=values,
                 client=client,
             )
+            if self.cfg.recovery_instruction:
+                resolved_input_text += self._recovery_suffix()
             content_parts: List[Dict[str, Any]] = [
                 {"type": "input_text", "text": resolved_input_text}
             ]
@@ -633,6 +692,8 @@ class CascadeRunWorker(QThread):
             if resolved:
                 file_ids.append(resolved)
         resolved_input = self._resolve_text(step.input_text, context)
+        if self.cfg.recovery_instruction:
+            resolved_input += self._recovery_suffix()
         resolved_instructions = self._resolve_text(step.instructions, context)
         resolved_content = (
             self._resolve_json(step.input_content_json, context)
@@ -644,6 +705,8 @@ class CascadeRunWorker(QThread):
             if resolved_content is not None
             else [{"type": "input_text", "text": resolved_input}]
         )
+        if self.cfg.recovery_instruction and resolved_content is not None:
+            content_parts.append({"type": "input_text", "text": self._recovery_suffix().strip()})
 
         # Validate the wire shape before any local file is uploaded, so a bad
         # content part cannot create chargeable/orphaned uploads.
@@ -852,6 +915,7 @@ class CascadeRunWorker(QThread):
     def run(self):
         run_id = self.cfg.run_id or new_run_id()
         current_index = 0
+        current_step_record_id = ""
         context: Dict[str, Any] = {}
         context_response_ids: Dict[str, str] = {}
         values: Dict[str, Any] = {}
@@ -863,6 +927,15 @@ class CascadeRunWorker(QThread):
                 run_id,
                 project_name=self.cfg.project,
             )
+            if self.cfg.lineage:
+                lineage = dict(self.cfg.lineage)
+                source_run_id = str(lineage.pop("source_run_id", "") or "")
+                relation_type = str(lineage.pop("relation_type", "") or "")
+                if source_run_id and relation_type:
+                    self.logger.record_lineage(source_run_id, relation_type, **lineage)
+            input_artifacts, missing_input_artifacts = self._archive_cascade_inputs()
+            self._cascade_input_artifact_ids = [row["artifact_id"] for row in input_artifacts]
+            self._cascade_input_missing = list(missing_input_artifacts)
             start_index = 0
             if self.cfg.cascade.run_from_step_id:
                 start_index = self.cfg.cascade.step_index(self.cfg.cascade.run_from_step_id)
@@ -916,7 +989,32 @@ class CascadeRunWorker(QThread):
                     "cascade_name": self.cfg.cascade.name,
                     "steps": len(self.cfg.cascade.steps),
                     "start_step": start_index + 1,
+                    "cascade_definition": self.cfg.cascade.to_dict(),
+                    "cascade_runtime": self._cache_snapshot(
+                        context=context,
+                        context_response_ids=context_response_ids,
+                        values=values,
+                        executed_step_ids=executed_step_ids,
+                    ),
+                    "next_step_id": self.cfg.cascade.steps[start_index].id if start_index < len(self.cfg.cascade.steps) else "",
+                    "recovery_instruction": self.cfg.recovery_instruction,
+                    "cascade_input_artifacts": input_artifacts,
+                    "cascade_input_missing": missing_input_artifacts,
                 }
+            )
+            initial_state = json.loads(Path(self.logger.state_path).read_text(encoding="utf-8"))
+            self.logger.checkpoint(
+                "cascade_input_ready",
+                state_snapshot=initial_state,
+                safe_to_continue=not missing_input_artifacts,
+                reason=("Definice kaskády a rekonstruovatelné vstupy před prvním novým krokem jsou uloženy."
+                        if not missing_input_artifacts else
+                        "Některé lokální vstupy nelze archivovat; checkpoint není bezpečný pro pokračování."),
+                required_artifact_ids=self._cascade_input_artifact_ids,
+                invalidation_rules=[
+                    "Změna signatury kteréhokoli zděděného kroku invaliduje checkpoint.",
+                    "Chybějící lokální výstup nebo response evidence blokuje přímé pokračování.",
+                ],
             )
             self._write_runtime_state(
                 {
@@ -952,6 +1050,14 @@ class CascadeRunWorker(QThread):
                 idx = current_index + 1
                 step = copy.deepcopy(self.cfg.cascade.steps[current_index])
                 step_label = step.title or f"Krok {idx}"
+                step_record = self.logger.bundle.ensure_step(
+                    step.id,
+                    title=step_label,
+                    kind="cascade",
+                    model=step.model,
+                )
+                current_step_record_id = str(step_record["step_id"])
+                self._current_step_record_id = current_step_record_id
                 base_p = int(current_index * 100 / total)
                 self._emit_status(base_p, 0, f"Krok {idx}/{total}: {step_label}")
                 self.progress_event.emit(
@@ -987,6 +1093,7 @@ class CascadeRunWorker(QThread):
                             "requests",
                             f"cascade_step_{idx:02d}_attempt_{attempt}",
                             payload,
+                            step_id=current_step_record_id,
                         )
                         self._emit_status(
                             base_p,
@@ -998,6 +1105,7 @@ class CascadeRunWorker(QThread):
                             "responses",
                             f"cascade_step_{idx:02d}_attempt_{attempt}",
                             response,
+                            step_id=current_step_record_id,
                         )
                         decoded = validate_output(response, payload)
 
@@ -1078,6 +1186,13 @@ class CascadeRunWorker(QThread):
                             per_step_out_files.setdefault(str(idx), {})[output.id] = value
 
                 executed_step_ids.add(step.id)
+                completed_record = self.logger.bundle.update_step(
+                    current_step_record_id,
+                    status="completed",
+                    progress=100,
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                    human_summary=f"Krok {idx} dokončen.",
+                )
                 self.logger.event(
                     "cascade.step.ok",
                     {
@@ -1090,19 +1205,59 @@ class CascadeRunWorker(QThread):
                         "file_ids": file_ids,
                     },
                 )
+                next_index = self._next_index_for_step(
+                    current_index,
+                    step,
+                    decision_value,
+                )
+                runtime_snapshot = self._cache_snapshot(
+                    context=context,
+                    context_response_ids=context_response_ids,
+                    values=values,
+                    executed_step_ids=executed_step_ids,
+                )
+                next_step_id = self.cfg.cascade.steps[next_index].id if next_index < len(self.cfg.cascade.steps) else ""
                 self._write_runtime_state(
                     {
                         "status": "running",
                         "run_id": run_id,
                         "last_completed_step_id": step.id,
                         "last_completed_step_number": idx,
-                        "cache": self._cache_snapshot(
-                            context=context,
-                            context_response_ids=context_response_ids,
-                            values=values,
-                            executed_step_ids=executed_step_ids,
-                        ),
+                        "cache": runtime_snapshot,
                     }
+                )
+                checkpoint_state = json.loads(Path(self.logger.state_path).read_text(encoding="utf-8"))
+                checkpoint_state.update(
+                    {
+                        "cascade_runtime": runtime_snapshot,
+                        "last_completed_step_id": step.id,
+                        "next_step_id": next_step_id,
+                    }
+                )
+                self.logger.update_state(
+                    {
+                        "cascade_runtime": runtime_snapshot,
+                        "last_completed_step_id": step.id,
+                        "next_step_id": next_step_id,
+                    }
+                )
+                self.logger.checkpoint(
+                    "cascade_step_completed",
+                    state_snapshot=checkpoint_state,
+                    safe_to_continue=not self._cascade_input_missing,
+                    reason=(f"Krok {idx} je dokončen a návazný stav je kanonicky uložen."
+                            if not self._cascade_input_missing else
+                            "Návazný stav existuje, ale některý lokální vstup není kanonicky archivován."),
+                    step_id=current_step_record_id,
+                    required_artifact_ids=list(dict.fromkeys([
+                        *self._cascade_input_artifact_ids,
+                        *(completed_record.get("artifact_ids") or []),
+                    ])),
+                    required_response_ids=list(completed_record.get("response_ids") or []),
+                    invalidation_rules=[
+                        "Změna signatury zděděného kroku invaliduje checkpoint.",
+                        "Chybějící response nebo souborový výstup blokuje pokračování.",
+                    ],
                 )
                 self._emit_status(
                     int((current_index + 1) * 100 / total),
@@ -1118,11 +1273,8 @@ class CascadeRunWorker(QThread):
                         detail=f"Krok {idx} dokončen.",
                     )
                 )
-                current_index = self._next_index_for_step(
-                    current_index,
-                    step,
-                    decision_value,
-                )
+                current_index = next_index
+                current_step_record_id = ""
 
             final_outputs = self._selected_final_outputs(values)
             text_value = per_step_text.get(str(max(per_step_text, key=int)), "") if per_step_text else ""
@@ -1171,6 +1323,13 @@ class CascadeRunWorker(QThread):
         except Exception as ex:
             if str(ex) in ("STOPPED", "STOP_REQUESTED"):
                 if self.logger:
+                    if current_step_record_id:
+                        self.logger.bundle.update_step(
+                            current_step_record_id,
+                            status="cancelled",
+                            finished_at=datetime.now(timezone.utc).isoformat(),
+                            human_summary="Krok byl zrušen uživatelem.",
+                        )
                     self.logger.event("cascade.cancelled", {"error": str(ex)})
                     self.logger.update_state(
                         {"status": "cancelled", "finished_at": time.time(), "error": str(ex)}
@@ -1204,6 +1363,14 @@ class CascadeRunWorker(QThread):
                 failed_step_id = failed_step.id
                 failed_step_number = self._failed_step_index + 1
             if self.logger:
+                if current_step_record_id:
+                    self.logger.bundle.update_step(
+                        current_step_record_id,
+                        status="failed",
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                        technical_summary=technical,
+                        human_summary=human,
+                    )
                 self.logger.event(
                     "cascade.failed",
                     {

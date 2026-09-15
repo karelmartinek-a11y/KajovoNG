@@ -17,6 +17,7 @@ from kajovo.core.cascade_types import (
     CascadeStep,
 )
 from kajovo.core.config import AppSettings
+from kajovo.core.run_bundle import LegacyRunAdapter
 
 
 MODEL = "gpt-5.2"
@@ -107,6 +108,69 @@ def test_same_context_uses_previous_response_id_automatically(tmp_path):
     second_payload = client.create_response.call_args_list[1].args[0]
     assert "previous_response_id" not in first_payload
     assert second_payload["previous_response_id"] == "resp_1"
+
+
+def test_new_cascade_records_steps_and_explicit_safe_checkpoints(tmp_path):
+    first = _text_step("První", context="Společný")
+    second = _text_step("Druhý", context="Společný")
+    definition = CascadeDefinition("evidence", steps=[first, second])
+    client = Mock()
+    client.create_response.side_effect = [
+        _response("resp_1", first.outputs[0], "A"),
+        _response("resp_2", second.outputs[0], "B"),
+    ]
+    worker = _worker(definition, tmp_path)
+    with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
+        worker.run()
+    run_dir = next((tmp_path / "LOG").iterdir())
+    adapter = LegacyRunAdapter(run_dir)
+    assert [(row["stage"], row["status"]) for row in adapter.steps()] == [
+        (first.id, "completed"), (second.id, "completed")
+    ]
+    checkpoints = adapter.checkpoints()
+    assert checkpoints[0]["checkpoint_type"] == "cascade_input_ready"
+    assert sum(row["checkpoint_type"] == "cascade_step_completed" for row in checkpoints) == 2
+    for checkpoint in checkpoints:
+        assert adapter.bundle.validate_checkpoint(checkpoint["checkpoint_id"])
+    assert all(row.get("step_id") for row in adapter.requests() if row.get("request_record_id"))
+
+
+def test_cascade_safe_checkpoint_archives_required_local_input(tmp_path):
+    local_input = tmp_path / "source.txt"
+    local_input.write_text("kanonický vstup", encoding="utf-8")
+    step = _text_step("Lokální vstup")
+    step.inputs.append(CascadeInput(name="Zdroj", source="local_file", value=str(local_input)))
+    definition = CascadeDefinition("evidence", steps=[step])
+    client = Mock()
+    client.upload_file.return_value = {"id": "file_uploaded"}
+    client.create_response.return_value = _response("resp_1", step.outputs[0], "A")
+    worker = _worker(definition, tmp_path)
+    with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
+        worker.run()
+    adapter = LegacyRunAdapter(next((tmp_path / "LOG").iterdir()))
+    inputs = [row for row in adapter.artifacts() if row.get("kind") == "cascade_input"]
+    assert len(inputs) == 1
+    checkpoint = adapter.checkpoints()[0]
+    assert checkpoint["safe_to_continue"] is True
+    assert inputs[0]["artifact_id"] in checkpoint["required_artifact_ids"]
+    assert adapter.bundle.validate_checkpoint(checkpoint["checkpoint_id"])
+
+
+def test_cascade_repair_instruction_is_only_in_new_step_request(tmp_path):
+    step = _text_step("Oprava")
+    definition = CascadeDefinition("repair", steps=[step])
+    client = Mock()
+    client.create_response.return_value = _response("resp_new", step.outputs[0], "hotovo")
+    settings = AppSettings(log_dir=str(tmp_path / "LOG"))
+    worker = CascadeRunWorker(
+        CascadeRunConfig("test", definition, "", str(tmp_path / "OUT"), recovery_instruction="Oprav citaci."),
+        settings,
+        "test",
+    )
+    with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
+        worker.run()
+    payload = client.create_response.call_args.args[0]
+    assert "Oprav citaci." in str(payload["input"])
 
 
 def test_new_context_does_not_inherit_previous_response_id(tmp_path):
