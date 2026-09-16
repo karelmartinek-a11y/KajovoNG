@@ -1,0 +1,61 @@
+name: temporary-diagnose-delivery-stack
+
+on:
+  push:
+    branches:
+      - refactor/architecture-hardening-20260916
+    paths:
+      - scripts/.trigger_delivery_stack
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/architecture-hardening-20260916
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install
+        run: python -m pip install -e .[dev]
+      - name: Instrument local exception stack only
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          p = Path('kajovo/core/pipeline.py')
+          text = p.read_text(encoding='utf-8')
+          old = '                self.finished_err.emit(msg)\n        finally:'
+          new = '                import traceback\n                traceback.print_exc()\n                self.finished_err.emit(msg)\n        finally:'
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one final error emit, found {text.count(old)}')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+          '@ | python -
+      - name: Capture exact failing stack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          python -m pytest -vv --tb=long 'tests/test_delivery_pipeline.py::test_delivery_eight_variants_use_canonical_preparation[False-False-GENERATE]' 2>&1 | Tee-Object -FilePath docs/refactor/DELIVERY_STACK_DIAGNOSTIC.txt
+          $code = $LASTEXITCODE
+          Add-Content docs/refactor/DELIVERY_STACK_DIAGNOSTIC.txt "`nPYTEST_EXIT_CODE=$code"
+          exit 0
+      - name: Commit diagnostic only and self-remove
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout -- kajovo/core/pipeline.py
+          rm scripts/.trigger_delivery_stack
+          rm .github/workflows/diagnose-delivery-stack.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "chore: zachytit stack delivery regrese"
+          git push origin HEAD:refactor/architecture-hardening-20260916
