@@ -50,6 +50,7 @@ def split_text(text: str, max_chars: int) -> List[str]:
 from .runs.config import UiRunConfig
 from .runs.delivery import DeliveryContext, save_out_files
 from .runs.polling import VectorStorePollingContext, wait_vector_store_files
+from .runs.observability import emit_signal, record_event, update_state as update_run_state
 
 
 class RunWorker(QThread):
@@ -107,11 +108,8 @@ class RunWorker(QThread):
 
     def _log_debug(self, msg: str) -> None:
         line = f"{self._ts()} | {msg}"
-        try:
-            self.logline.emit(line)
-            self.log.event("debug", {"ts": self._ts(), "msg": msg})
-        except Exception:
-            pass
+        emit_signal(self.logline, line, name="logline")
+        record_event(self.log, "debug", {"ts": self._ts(), "msg": msg})
 
     def _log_api_action(self, stage: str, action: str, details: Optional[Dict[str, Any]] = None) -> None:
         ts = self._ts()
@@ -122,29 +120,20 @@ class RunWorker(QThread):
                     continue
                 parts.append(f"{key}={value}")
         line = f"{ts} | " + " | ".join(parts)
-        try:
-            self.logline.emit(line)
-            event = {"ts": ts, "stage": stage, "action": action}
-            if details:
-                event.update({k: v for k, v in details.items() if v is not None})
-            self.log.event("api.trace", event)
-            if event.get("response_id"):
-                try:
-                    self._final_response_id = str(event.get("response_id") or "")
-                except Exception:
-                    pass
-                patch = {"last_response_id": str(event.get("response_id")), "last_response_stage": stage}
-                contract = event.get("contract") or details.get("contract") if details else None
-                if contract in ("A2_STRUCTURE", "B2_STRUCTURE"):
-                    patch["last_structure_response_id"] = str(event.get("response_id"))
-                if contract in ("A1_PLAN", "A2_STRUCTURE", "B1_PLAN", "B2_STRUCTURE"):
-                    patch["last_plan_response_id"] = str(event.get("response_id"))
-                try:
-                    self.log.update_state(patch)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        emit_signal(self.logline, line, name="logline")
+        event = {"ts": ts, "stage": stage, "action": action}
+        if details:
+            event.update({k: v for k, v in details.items() if v is not None})
+        record_event(self.log, "api.trace", event)
+        if event.get("response_id"):
+            self._final_response_id = str(event.get("response_id") or "")
+            patch = {"last_response_id": str(event.get("response_id")), "last_response_stage": stage}
+            contract = event.get("contract") or (details.get("contract") if details else None)
+            if contract in ("A2_STRUCTURE", "B2_STRUCTURE"):
+                patch["last_structure_response_id"] = str(event.get("response_id"))
+            if contract in ("A1_PLAN", "A2_STRUCTURE", "B1_PLAN", "B2_STRUCTURE"):
+                patch["last_plan_response_id"] = str(event.get("response_id"))
+            update_run_state(self.log, patch)
 
     def _attachments_snapshot(
         self,
@@ -251,10 +240,7 @@ class RunWorker(QThread):
         tools: Optional[List[Dict[str, Any]]],
     ) -> None:
         snapshot = self._attachments_snapshot(stage, ref_file_ids, input_file_ids, input_image_ids, vector_store_ids, tools)
-        try:
-            self.log.event("request.attachments", snapshot)
-        except Exception:
-            pass
+        record_event(self.log, "request.attachments", snapshot)
         if snapshot.get("file_ids") or snapshot.get("input_file_ids") or snapshot.get("input_image_ids") or snapshot.get("vector_store_ids") or snapshot.get("tool_types"):
             self._log_debug(
                 f"{stage}: attachments files={len(snapshot.get('file_ids') or [])} input_files={len(snapshot.get('input_file_ids') or [])} "
@@ -281,10 +267,7 @@ class RunWorker(QThread):
         self.progress_event.emit(ProgressEvent(getattr(self, "_progress_stage", "Příprava"), detail=msg,
                                                source=source, next_step=next_step))
         self._log_debug(msg)
-        try:
-            self.log.event("ui.progress", {"p": p, "sp": sp, "msg": msg, "ts": self._ts()})
-        except Exception:
-            pass
+        record_event(self.log, "ui.progress", {"p": p, "sp": sp, "msg": msg, "ts": self._ts()})
 
     def run(self):
         lock = QLockFile(str(Path(self.log.paths.run_dir) / "execution.lock"))
