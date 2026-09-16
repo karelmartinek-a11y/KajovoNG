@@ -9,6 +9,8 @@ WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 SELF = ROOT / "scripts" / "_refactor_release_attestation.py"
 RUNNER = ROOT / ".github" / "workflows" / "refactor-release-attestation.yml"
 
+# Tento soubor je úmyslně jednorázový a po úspěšném codemodu se sám odstraní.
+
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
