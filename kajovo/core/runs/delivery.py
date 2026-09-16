@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import os
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from ..contracts import ContractError, validate_paths
 from ..progress import ProgressEvent
@@ -34,10 +35,10 @@ class DeliveryContext:
     progress_emit: EmitSignal
     subprogress_emit: EmitSignal
     overwrite_guard_enabled: bool
-    overwrite_hashes: Optional[Mapping[str, Optional[str]]] = None
+    overwrite_hashes: Mapping[str, str | None] | None = None
 
 
-def save_out_files(context: DeliveryContext, files: List[Dict[str, Any]]) -> Dict[str, Any]:
+def save_out_files(context: DeliveryContext, files: list[dict[str, Any]]) -> dict[str, Any]:
     """Validuje a durable uloží textové výstupy se zachováním původních guardů."""
     cfg = context.cfg
     out_dir = cfg.out_dir
@@ -58,7 +59,7 @@ def save_out_files(context: DeliveryContext, files: List[Dict[str, Any]]) -> Dic
         context.set_progress(80, 0, "Vytvářím snapshot před zápisem…", stage="VERSING")
         context.create_snapshot(out_dir)
 
-    saved: List[Dict[str, Any]] = []
+    saved: list[dict[str, Any]] = []
     context.progress_emit(ProgressEvent("Ukládání", completed=0, total=len(files), unit="souborů"))
     for i, item in enumerate(files):
         context.check_stop()
