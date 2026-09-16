@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,3 +67,20 @@ def test_app_entrypoint_uses_studio_factory():
     main = (ROOT / "kajovo" / "app" / "main.py").read_text(encoding="utf-8")
     assert "kajovo.studio.application" in main
     assert "create_window" in main
+
+
+def test_distribution_excludes_legacy_desktop_package():
+    """Regresní zdroje mohou zůstat v repu, ale nesmějí být součástí instalace/release."""
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    excluded = set(config["tool"]["setuptools"]["packages"]["find"]["exclude"])
+    assert "kajovo.desktop" in excluded
+    assert "kajovo.desktop.*" in excluded
+
+
+def test_compatibility_renderer_targets_production_studio():
+    """Historický CLI renderer nesmí znovu renderovat duplicitní desktop implementaci."""
+    renderer = ROOT / "scripts" / "render_ui.py"
+    imports = _imports(renderer)
+    assert "kajovo.desktop" not in imports
+    source = renderer.read_text(encoding="utf-8")
+    assert "from render_studio import main" in source
