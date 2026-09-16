@@ -14,13 +14,18 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import pytest
 
+from kajovo.core import secret_store
+
 
 @pytest.fixture(autouse=True)
 def isolated_api_key_store(monkeypatch):
-    """Testy nesmějí načítat ani měnit skutečný klíč v registru uživatele."""
-    monkeypatch.setattr("kajovo.core.secret_store._read_persisted_api_key", lambda: None)
+    """Testy nesmějí načítat ani měnit skutečný registry/credential store uživatele."""
+    monkeypatch.setattr(secret_store, "_read_persisted_api_key", lambda: None)
+    monkeypatch.setattr(secret_store, "_read_keyring_api_key_record", lambda: secret_store._MISSING)
+
     def blocked(*args, **kwargs):
         raise AssertionError("Test musí nahradit trvalé ukládání API klíče.")
+
     monkeypatch.setattr("kajovo.desktop.settings.persist_api_key", blocked)
     monkeypatch.setattr("kajovo.studio.settings.persist_api_key", blocked)
 
