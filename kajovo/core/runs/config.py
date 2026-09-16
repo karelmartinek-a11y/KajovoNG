@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -22,9 +22,9 @@ class UiRunConfig:
     model_a2: str
     model_a3: str
     response_id: str
-    attached_file_ids: List[str]
-    input_file_ids: List[str]
-    attached_vector_store_ids: List[str]
+    attached_file_ids: list[str]
+    input_file_ids: list[str]
+    attached_vector_store_ids: list[str]
     in_dir: str
     out_dir: str
     in_equals_out: bool
@@ -40,22 +40,22 @@ class UiRunConfig:
     ssh_host: str
     ssh_key: str
     ssh_password: str
-    skip_paths: List[str]
-    skip_exts: List[str]
+    skip_paths: list[str]
+    skip_exts: list[str]
 
     # Snímek schopností vybraného modelu z lokální validace a pevné matice.
-    model_caps: Dict[str, Any]
+    model_caps: dict[str, Any]
     # None zde má existující význam „nebyly předány rerun podklady“.
-    resume_files: Optional[List[Dict[str, Any]]] = None
-    resume_prev_id: Optional[str] = None
+    resume_files: list[dict[str, Any]] | None = None
+    resume_prev_id: str | None = None
     ssh_pin: str = ""
     ssh_pin_required: bool = False
-    caps_by_model: Optional[Dict[str, Any]] = None
+    caps_by_model: dict[str, Any] | None = None
     # Aktuální katalog modelů z API; při jeho předání se vyžaduje povolení v pevné matici.
-    available_models: Optional[List[str]] = None
+    available_models: list[str] | None = None
     maximum_quality: bool = False
-    preparation_snapshot: Optional[Dict[str, Any]] = None
-    completed_hashes: Optional[Dict[str, str]] = None
+    preparation_snapshot: dict[str, Any] | None = None
+    completed_hashes: dict[str, str] | None = None
     # Explicitní pokyn opravné větve. Používá se výhradně v nově
     # prováděné části za ověřeným checkpointem.
     recovery_instruction: str = ""
