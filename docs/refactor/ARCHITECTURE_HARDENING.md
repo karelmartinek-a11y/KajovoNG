@@ -28,7 +28,8 @@ OpenAI API klíč se persistuje přes OS credential storage (`keyring`). Starý 
 
 - Plná regrese běží na Windows / Python 3.13.
 - Architektonická lane běží na Python 3.12 a kontroluje `core.runs` pomocí širšího Ruff profilu, mypy a cílených testů.
-- Plný testovací běh měří coverage a provádí `pip check`; `pip-audit` zatím slouží jako měřený baseline a není blokující gate.
+- Plný testovací běh vynucuje coverage minimálně 70 %, provádí `pip check` a blokuje merge při nálezu známé zranitelnosti z `pip-audit`.
+- CI používá aktuální major verze `actions/checkout@v7` a `actions/setup-python@v7` místo deprecated Node 20 kompatibilního runtime starších akcí.
 - Pre-commit navíc kontroluje merge konflikty, privátní klíče, nadměrně velké nové soubory a stejné architektonické kontrakty nové run vrstvy.
 
 ## Záměrně neprovedené administrativní kroky
