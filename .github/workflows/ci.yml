@@ -12,6 +12,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install architecture checks
+        run: python -m pip install "pytest>=9.0.3,<10" "ruff>=0.6,<1" "mypy>=1.11,<2"
+      - name: Strict checks for the new run layer
+        run: |
+          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF kajovo/core/runs tests/test_run_polling.py tests/test_architecture_contracts.py
+          python -m mypy --follow-imports=skip kajovo/core/runs
+      - name: Python 3.12 architecture regression
+        run: python -m pytest -q tests/test_architecture_contracts.py tests/test_run_polling.py
+
   test:
     runs-on: windows-latest
     env:
@@ -29,7 +48,10 @@ jobs:
         run: python -m pip install -e .[dev]
       - name: Static checks
         run: python -m ruff check --select F,B,E9 kajovo kajovong utf8nobom tests Build
-      - name: Tests
-        run: python -m pytest -q
+      - name: Tests and coverage baseline
+        run: python -m pytest -q --cov=kajovo --cov=kajovong --cov=utf8nobom --cov-report=term --cov-report=xml
       - name: Dependency consistency
         run: python -m pip check
+      - name: Dependency vulnerability baseline
+        continue-on-error: true
+        run: python -m pip_audit
