@@ -28,7 +28,7 @@ from .filescan import build_manifest, scan_tree
 from .openai_client import OpenAIClient
 from .batch_submit import submit_verified_batch
 from .retry import CircuitBreaker, with_retry
-from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root, atomic_write_text
+from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root
 
 from .compat import SUPPORTED_INPUT_FILE_EXTS, SUPPORTED_INPUT_IMAGE_EXTS
 
