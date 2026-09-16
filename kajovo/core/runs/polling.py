@@ -8,7 +8,6 @@ from typing import Any
 
 from ..progress import ProgressEvent
 
-
 LOGGER = logging.getLogger(__name__)
 
 

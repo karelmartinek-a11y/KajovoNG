@@ -4,7 +4,6 @@ import logging
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-
 LOGGER = logging.getLogger(__name__)
 
 
