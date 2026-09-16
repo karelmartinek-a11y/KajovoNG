@@ -48,6 +48,7 @@ def split_text(text: str, max_chars: int) -> List[str]:
 
 
 from .runs.config import UiRunConfig
+from .runs.delivery import DeliveryContext, save_out_files
 
 
 class RunWorker(QThread):
@@ -983,63 +984,23 @@ class RunWorker(QThread):
         return snap_dir
 
     def _save_out_files(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
-        out_dir = self.cfg.out_dir
-        validate_paths(files)
-        for row in files:
-            safe_join_under_root(out_dir, row["path"])
-            if not isinstance(row.get("content"), str):
-                raise ContractError("Obsah výstupního souboru musí být text.")
-        if self.cfg.mode == "MODIFY" and self.settings.dry_run_modify:
-            self.log.save_json("manifests", "modify_dry_run", {"files": files})
-            self.log.update_state({"dry_run": True, "written_files": []})
-            self._finish_file_delivery(files, dry_run=True)
-            return {"saved": [], "dry_run": True}
-        ensure_dir(out_dir)
-
-        if self.cfg.versing and files:
-            self._set(80, 0, "Vytvářím snapshot před zápisem…", stage="VERSING")
-            self._create_snapshot(out_dir)
-
-        saved: List[Dict[str, Any]] = []
+        # Tenký Qt adaptér. Vlastní validace, hash guardy a durable zápis jsou
+        # v Qt-nezávislé doménové vrstvě core.runs.delivery.
+        context = DeliveryContext(
+            cfg=self.cfg,
+            settings=self.settings,
+            log=self.log,
+            set_progress=self._set,
+            create_snapshot=self._create_snapshot,
+            check_stop=self._check_stop,
+            finish_delivery=self._finish_file_delivery,
+            progress_emit=self.progress_event.emit,
+            subprogress_emit=self.subprogress.emit,
+            overwrite_guard_enabled=hasattr(self, "_delivery_overwrite_hashes"),
+            overwrite_hashes=getattr(self, "_delivery_overwrite_hashes", None),
+        )
         self._progress_stage = "Ukládání"
-        self.progress_event.emit(ProgressEvent("Ukládání", completed=0, total=len(files), unit="souborů"))
-        for i, f in enumerate(files):
-            self._check_stop()
-            rel = f["path"]
-            content = f["content"]
-            dst = safe_join_under_root(out_dir, rel)
-            ensure_dir(os.path.dirname(dst))
-            if self.cfg.mode == "MODIFY" and hasattr(self, "_delivery_overwrite_hashes"):
-                current_hash = sha256_file(dst) if os.path.isfile(dst) else None
-                if current_hash != self._delivery_overwrite_hashes.get(rel):
-                    raise ContractError(f"OUT se během generování změnil; soubor zachován: {rel}")
-            before_size = os.path.getsize(dst) if os.path.exists(dst) else None
-            before = sha256_file(dst) if os.path.exists(dst) else None
-            if self.cfg.mode == "GENERATE" and before is not None:
-                expected = (self.cfg.completed_hashes or {}).get(rel)
-                incoming = hashlib.sha256(content.encode("utf-8")).hexdigest()
-                if before not in {expected, incoming}:
-                    raise ContractError(f"Existující soubor nepatří ověřenému výstupu; zachován: {rel}")
-            atomic_write_text(dst, content)
-            after_size = os.path.getsize(dst)
-            after = sha256_file(dst)
-            if after != hashlib.sha256(content.encode("utf-8")).hexdigest():
-                raise ContractError(f"Zápis neodpovídá ověřenému obsahu: {rel}")
-            self.log.record_fs_change("write", src=rel, dst=dst, before=before, after=after, before_size=before_size, after_size=after_size)
-            entry = {
-                "path": rel, "dst": dst, "bytes": after_size, "sha256": after,
-                "written_at": time.time(), "run_id": self.log.run_id,
-                "purpose": f.get("purpose", ""),
-            }
-            saved.append(entry)
-            # SSOT: multi-file zápis není transakce. Durable evidence vzniká po každém
-            # jednotlivém atomickém write ještě před zahájením dalšího souboru.
-            self.log.save_json("manifests", "out_write_journal", {"saved": saved, "out_dir": out_dir})
-            self.progress_event.emit(ProgressEvent("Ukládání", completed=i + 1, total=len(files), unit="souborů", detail=rel))
-            self.subprogress.emit(int((i + 1) * 100 / max(1, len(files))))
-        self.log.save_json("manifests", "out_saved_map", {"saved": saved, "out_dir": out_dir})
-        self._finish_file_delivery(files, saved=saved)
-        return {"saved": saved}
+        return save_out_files(context, files)
 
     def _finish_file_delivery(self, files, *, saved=(), dry_run=False):
         step_id = getattr(self, "_delivery_step_id", "")

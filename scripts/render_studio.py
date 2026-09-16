@@ -27,6 +27,7 @@ def main():
     from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, Qt
     from PySide6.QtWidgets import QApplication, QAbstractButton, QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidgetItem, QScrollArea, QTabWidget, QWidget
     from kajovo.core.config import AppSettings
+    from kajovo.core import secret_store
     from kajovo.core.runlog import RunLogger
     from kajovo.core.run_bundle import LegacyRunAdapter
     from kajovo.core.batch_completion import read_state
@@ -224,6 +225,7 @@ def main():
             with patch("socket.create_connection", side_effect=AssertionError("Síť je při snímkování zakázaná.")), \
                  patch("requests.sessions.Session.request", side_effect=AssertionError("Síť je při snímkování zakázaná.")), \
                  patch("kajovo.core.secret_store._read_persisted_api_key", return_value=None), \
+                 patch("kajovo.core.secret_store._read_keyring_api_key_record", return_value=secret_store._MISSING), \
                  patch("kajovo.core.secret_store.get_secret", return_value=None):
                 settings = AppSettings(log_dir=str(workspace / "LOG"), cache_dir=str(workspace / "cache"))
                 fixtures = create_run_fixtures(workspace, settings)
