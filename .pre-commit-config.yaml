@@ -6,3 +6,28 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: ruff-run-layer
+        name: Ruff · core.runs + architecture tests
+        entry: python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF kajovo/core/runs tests/test_run_polling.py tests/test_architecture_contracts.py
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: mypy-run-layer
+        name: mypy · core.runs
+        entry: python -m mypy --follow-imports=skip kajovo/core/runs
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: architecture-contracts
+        name: pytest · architecture contracts
+        entry: python -m pytest -q tests/test_architecture_contracts.py tests/test_run_polling.py
+        language: system
+        pass_filenames: false
+        types: [python]

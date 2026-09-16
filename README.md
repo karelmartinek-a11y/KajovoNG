@@ -21,7 +21,7 @@ Pro běžné spuštění stačí dvojklik na kořenový `start.bat`. Vytvoří c
 
 API klíč nastavte v aplikaci v sekci Nastavení → Přístup nebo v proměnné prostředí `OPENAI_API_KEY`. Klíč se nevkládá do repozitáře.
 
-Na Windows volba „Uložit“ zachová klíč i pro další spuštění. Uložený klíč má přednost před proměnnou prostředí terminálu; restart Windows není nutný. Volba smazání zabrání i opětovnému načtení starého klíče z prostředí.
+Volba „Uložit“ zachová API klíč v OS credential storage přes `keyring`; uložený credential má přednost před proměnnou prostředí terminálu a restart Windows není nutný. Starší Windows uložení v `HKCU\Environment\OPENAI_API_KEY` se při prvním načtení bezpečně migruje až po ověřeném readbacku. Volba smazání zabrání i opětovnému načtení stale klíče z prostředí.
 
 Program před pracovním během provádí lokální validaci parametrů, schémat, modelové matice a podle potřeby ne-generativní načtení katalogu nebo metadat již existujících vzdálených prostředků. **Nevytváří samostatné placené testovací Responses ani zkušební BATCH dávky.** První generativní požadavek dané etapy je její skutečný pracovní požadavek. JSON Schema zajišťuje program včetně textových odpovědí a kaskád; uživatel je nemusí sestavovat. V Nastavení lze změnit limit jednoho HTTP požadavku (výchozí 300 sekund) a limit sledování jedné generace (výchozí 3600 sekund). GENERATE/MODIFY spouštějí pracovní odpovědi na pozadí a jejich stav kontrolují každé dvě sekundy. Po výpadku spojení nebo vypršení sledování zůstává uložené ID; obnova pokračuje ve stejné poskytovatelské odpovědi tam, kde to pracovní kontrakt dovoluje. Pokud API nepotvrdilo ID při odeslání, automatické opakování je zablokováno.
 

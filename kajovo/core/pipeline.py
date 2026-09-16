@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import time
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal, QThread, QLockFile
@@ -29,7 +28,7 @@ from .filescan import build_manifest, scan_tree
 from .openai_client import OpenAIClient
 from .batch_submit import submit_verified_batch
 from .retry import CircuitBreaker, with_retry
-from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root, atomic_write_text
+from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root
 
 from .compat import SUPPORTED_INPUT_FILE_EXTS, SUPPORTED_INPUT_IMAGE_EXTS
 
@@ -48,55 +47,10 @@ def split_text(text: str, max_chars: int) -> List[str]:
     return out
 
 
-@dataclass
-class UiRunConfig:
-    project: str
-    prompt: str
-    mode: str  # GENERATE|MODIFY|QA|QFILE
-    send_as_c: bool
-    model: str
-    model_a1: str
-    model_a2: str
-    model_a3: str
-    response_id: str
-    attached_file_ids: List[str]
-    input_file_ids: List[str]
-    attached_vector_store_ids: List[str]
-    in_dir: str
-    out_dir: str
-    in_equals_out: bool
-    versing: bool
-    temperature: float
-    use_file_search: bool
-
-    diag_windows_in: bool
-    diag_windows_out: bool
-    diag_ssh_in: bool
-    diag_ssh_out: bool
-    ssh_user: str
-    ssh_host: str
-    ssh_key: str
-    ssh_password: str
-    skip_paths: List[str]
-    skip_exts: List[str]
-
-    # Snímek schopností vybraného modelu z lokální validace a pevné matice.
-    model_caps: Dict[str, Any]
-    # Podklady ReRun: seznam souborů a ID předchozí odpovědi.
-    resume_files: List[Dict[str, Any]] = None  # type: ignore
-    resume_prev_id: Optional[str] = None
-    ssh_pin: str = ""
-    ssh_pin_required: bool = False
-    caps_by_model: Optional[Dict[str, Any]] = None
-    # Aktuální katalog modelů z API; při jeho předání se vyžaduje povolení v pevné matici.
-    available_models: Optional[List[str]] = None
-    maximum_quality: bool = False
-    preparation_snapshot: Optional[Dict[str, Any]] = None
-    completed_hashes: Optional[Dict[str, str]] = None
-    # Explicitní pokyn opravné větve. Používá se výhradně v nově
-    # prováděné části za ověřeným checkpointem.
-    recovery_instruction: str = ""
-    source_checkpoint_id: str = ""
+from .runs.config import UiRunConfig
+from .runs.delivery import DeliveryContext, save_out_files
+from .runs.polling import VectorStorePollingContext, wait_vector_store_files
+from .runs.observability import emit_signal, record_event, update_state as update_run_state
 
 
 class RunWorker(QThread):
@@ -154,11 +108,8 @@ class RunWorker(QThread):
 
     def _log_debug(self, msg: str) -> None:
         line = f"{self._ts()} | {msg}"
-        try:
-            self.logline.emit(line)
-            self.log.event("debug", {"ts": self._ts(), "msg": msg})
-        except Exception:
-            pass
+        emit_signal(self.logline, line, name="logline")
+        record_event(self.log, "debug", {"ts": self._ts(), "msg": msg})
 
     def _log_api_action(self, stage: str, action: str, details: Optional[Dict[str, Any]] = None) -> None:
         ts = self._ts()
@@ -169,29 +120,20 @@ class RunWorker(QThread):
                     continue
                 parts.append(f"{key}={value}")
         line = f"{ts} | " + " | ".join(parts)
-        try:
-            self.logline.emit(line)
-            event = {"ts": ts, "stage": stage, "action": action}
-            if details:
-                event.update({k: v for k, v in details.items() if v is not None})
-            self.log.event("api.trace", event)
-            if event.get("response_id"):
-                try:
-                    self._final_response_id = str(event.get("response_id") or "")
-                except Exception:
-                    pass
-                patch = {"last_response_id": str(event.get("response_id")), "last_response_stage": stage}
-                contract = event.get("contract") or details.get("contract") if details else None
-                if contract in ("A2_STRUCTURE", "B2_STRUCTURE"):
-                    patch["last_structure_response_id"] = str(event.get("response_id"))
-                if contract in ("A1_PLAN", "A2_STRUCTURE", "B1_PLAN", "B2_STRUCTURE"):
-                    patch["last_plan_response_id"] = str(event.get("response_id"))
-                try:
-                    self.log.update_state(patch)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        emit_signal(self.logline, line, name="logline")
+        event = {"ts": ts, "stage": stage, "action": action}
+        if details:
+            event.update({k: v for k, v in details.items() if v is not None})
+        record_event(self.log, "api.trace", event)
+        if event.get("response_id"):
+            self._final_response_id = str(event.get("response_id") or "")
+            patch = {"last_response_id": str(event.get("response_id")), "last_response_stage": stage}
+            contract = event.get("contract") or (details.get("contract") if details else None)
+            if contract in ("A2_STRUCTURE", "B2_STRUCTURE"):
+                patch["last_structure_response_id"] = str(event.get("response_id"))
+            if contract in ("A1_PLAN", "A2_STRUCTURE", "B1_PLAN", "B2_STRUCTURE"):
+                patch["last_plan_response_id"] = str(event.get("response_id"))
+            update_run_state(self.log, patch)
 
     def _attachments_snapshot(
         self,
@@ -298,10 +240,7 @@ class RunWorker(QThread):
         tools: Optional[List[Dict[str, Any]]],
     ) -> None:
         snapshot = self._attachments_snapshot(stage, ref_file_ids, input_file_ids, input_image_ids, vector_store_ids, tools)
-        try:
-            self.log.event("request.attachments", snapshot)
-        except Exception:
-            pass
+        record_event(self.log, "request.attachments", snapshot)
         if snapshot.get("file_ids") or snapshot.get("input_file_ids") or snapshot.get("input_image_ids") or snapshot.get("vector_store_ids") or snapshot.get("tool_types"):
             self._log_debug(
                 f"{stage}: attachments files={len(snapshot.get('file_ids') or [])} input_files={len(snapshot.get('input_file_ids') or [])} "
@@ -328,10 +267,7 @@ class RunWorker(QThread):
         self.progress_event.emit(ProgressEvent(getattr(self, "_progress_stage", "Příprava"), detail=msg,
                                                source=source, next_step=next_step))
         self._log_debug(msg)
-        try:
-            self.log.event("ui.progress", {"p": p, "sp": sp, "msg": msg, "ts": self._ts()})
-        except Exception:
-            pass
+        record_event(self.log, "ui.progress", {"p": p, "sp": sp, "msg": msg, "ts": self._ts()})
 
     def run(self):
         lock = QLockFile(str(Path(self.log.paths.run_dir) / "execution.lock"))
@@ -958,35 +894,18 @@ class RunWorker(QThread):
         return f"{text}\n\nDIAGNOSTICS (PARSED):\n{self._diag_text}"
 
     def _wait_vector_store_files(self, client: OpenAIClient, vs_id: str, vs_file_ids: List[str], timeout_s: int = 180) -> None:
-        if not vs_file_ids:
-            return
-        start = time.time()
-        pending = set(vs_file_ids)
-        while pending:
-            self._check_stop()
-            if time.time() - start > timeout_s:
-                raise RuntimeError(f"Vector store index timeout ({vs_id}).")
-            completed: List[str] = []
-            for vs_file_id in list(pending):
-                try:
-                    info = with_retry(lambda v=vs_id, f=vs_file_id: client.retrieve_vector_store_file(v, f), self.settings.retry, self.breaker)
-                except Exception:
-                    continue
-                status = str(info.get("status") or "")
-                self.progress_event.emit(ProgressEvent("Indexace", detail=f"API ověřilo stav souboru: {status}",
-                                                       source="files_api"))
-                if status == "completed":
-                    completed.append(vs_file_id)
-                elif status == "failed":
-                    last_error = info.get("last_error") or {}
-                    msg = last_error.get("message") or "Vector store indexing failed."
-                    raise RuntimeError(f"Vector store indexing failed ({vs_id}): {msg}")
-            for done in completed:
-                pending.discard(done)
-            self.progress_event.emit(ProgressEvent("Indexace", completed=len(set(vs_file_ids)) - len(pending),
-                                                   total=len(set(vs_file_ids)), unit="souborů", source="files_api"))
-            if pending:
-                time.sleep(2.0)
+        context = VectorStorePollingContext(
+            retrieve=lambda vector_store_id, file_id: with_retry(
+                lambda: client.retrieve_vector_store_file(vector_store_id, file_id),
+                self.settings.retry,
+                self.breaker,
+            ),
+            check_stop=self._check_stop,
+            progress_emit=self.progress_event.emit,
+            evidence_emit=lambda event, payload: self.log.event(event, payload),
+            timeout_s=timeout_s,
+        )
+        wait_vector_store_files(context, vs_id, vs_file_ids)
 
     def _in_dir_fallback_note(self) -> str:
         if not self._in_dir_info or not self._in_dir_info.get("file_id"):
@@ -1032,63 +951,23 @@ class RunWorker(QThread):
         return snap_dir
 
     def _save_out_files(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
-        out_dir = self.cfg.out_dir
-        validate_paths(files)
-        for row in files:
-            safe_join_under_root(out_dir, row["path"])
-            if not isinstance(row.get("content"), str):
-                raise ContractError("Obsah výstupního souboru musí být text.")
-        if self.cfg.mode == "MODIFY" and self.settings.dry_run_modify:
-            self.log.save_json("manifests", "modify_dry_run", {"files": files})
-            self.log.update_state({"dry_run": True, "written_files": []})
-            self._finish_file_delivery(files, dry_run=True)
-            return {"saved": [], "dry_run": True}
-        ensure_dir(out_dir)
-
-        if self.cfg.versing and files:
-            self._set(80, 0, "Vytvářím snapshot před zápisem…", stage="VERSING")
-            self._create_snapshot(out_dir)
-
-        saved: List[Dict[str, Any]] = []
+        # Tenký Qt adaptér. Vlastní validace, hash guardy a durable zápis jsou
+        # v Qt-nezávislé doménové vrstvě core.runs.delivery.
+        context = DeliveryContext(
+            cfg=self.cfg,
+            settings=self.settings,
+            log=self.log,
+            set_progress=self._set,
+            create_snapshot=self._create_snapshot,
+            check_stop=self._check_stop,
+            finish_delivery=self._finish_file_delivery,
+            progress_emit=self.progress_event.emit,
+            subprogress_emit=self.subprogress.emit,
+            overwrite_guard_enabled=hasattr(self, "_delivery_overwrite_hashes"),
+            overwrite_hashes=getattr(self, "_delivery_overwrite_hashes", None),
+        )
         self._progress_stage = "Ukládání"
-        self.progress_event.emit(ProgressEvent("Ukládání", completed=0, total=len(files), unit="souborů"))
-        for i, f in enumerate(files):
-            self._check_stop()
-            rel = f["path"]
-            content = f["content"]
-            dst = safe_join_under_root(out_dir, rel)
-            ensure_dir(os.path.dirname(dst))
-            if self.cfg.mode == "MODIFY" and hasattr(self, "_delivery_overwrite_hashes"):
-                current_hash = sha256_file(dst) if os.path.isfile(dst) else None
-                if current_hash != self._delivery_overwrite_hashes.get(rel):
-                    raise ContractError(f"OUT se během generování změnil; soubor zachován: {rel}")
-            before_size = os.path.getsize(dst) if os.path.exists(dst) else None
-            before = sha256_file(dst) if os.path.exists(dst) else None
-            if self.cfg.mode == "GENERATE" and before is not None:
-                expected = (self.cfg.completed_hashes or {}).get(rel)
-                incoming = hashlib.sha256(content.encode("utf-8")).hexdigest()
-                if before not in {expected, incoming}:
-                    raise ContractError(f"Existující soubor nepatří ověřenému výstupu; zachován: {rel}")
-            atomic_write_text(dst, content)
-            after_size = os.path.getsize(dst)
-            after = sha256_file(dst)
-            if after != hashlib.sha256(content.encode("utf-8")).hexdigest():
-                raise ContractError(f"Zápis neodpovídá ověřenému obsahu: {rel}")
-            self.log.record_fs_change("write", src=rel, dst=dst, before=before, after=after, before_size=before_size, after_size=after_size)
-            entry = {
-                "path": rel, "dst": dst, "bytes": after_size, "sha256": after,
-                "written_at": time.time(), "run_id": self.log.run_id,
-                "purpose": f.get("purpose", ""),
-            }
-            saved.append(entry)
-            # SSOT: multi-file zápis není transakce. Durable evidence vzniká po každém
-            # jednotlivém atomickém write ještě před zahájením dalšího souboru.
-            self.log.save_json("manifests", "out_write_journal", {"saved": saved, "out_dir": out_dir})
-            self.progress_event.emit(ProgressEvent("Ukládání", completed=i + 1, total=len(files), unit="souborů", detail=rel))
-            self.subprogress.emit(int((i + 1) * 100 / max(1, len(files))))
-        self.log.save_json("manifests", "out_saved_map", {"saved": saved, "out_dir": out_dir})
-        self._finish_file_delivery(files, saved=saved)
-        return {"saved": saved}
+        return save_out_files(context, files)
 
     def _finish_file_delivery(self, files, *, saved=(), dry_run=False):
         step_id = getattr(self, "_delivery_step_id", "")

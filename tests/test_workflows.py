@@ -1,5 +1,6 @@
 import json
-from dataclasses import fields
+from dataclasses import MISSING, fields
+from typing import get_origin, get_type_hints
 from unittest.mock import Mock, patch
 
 import pytest
@@ -12,10 +13,23 @@ from delivery_fixtures import delivery_payloads, plan_payload, requirements_payl
 
 def make_worker(tmp_path, mode):
     values = {}
+    resolved_types = get_type_hints(UiRunConfig)
     for field in fields(UiRunConfig):
-        annotation = str(field.type)
-        values[field.name] = (False if annotation == "bool" else [] if annotation.startswith("List")
-                              else {} if annotation.startswith("Dict") else 0.0 if annotation == "float" else "")
+        annotation = resolved_types[field.name]
+        origin = get_origin(annotation)
+        if annotation is bool:
+            value = False
+        elif origin is list:
+            value = []
+        elif origin is dict:
+            value = {}
+        elif annotation is float:
+            value = 0.0
+        elif field.default is not MISSING:
+            value = field.default
+        else:
+            value = ""
+        values[field.name] = value
     values.update(project="test", prompt="Write a file", mode=mode, model="gpt-4o-mini",
                   model_a1="gpt-4o-mini", model_a2="gpt-4o-mini", model_a3="gpt-4o-mini",
                   out_dir=str(tmp_path / "out"), resume_files=None, resume_prev_id=None,
