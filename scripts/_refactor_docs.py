@@ -24,8 +24,7 @@ def update_ssot() -> None:
     text = replace_once(
         text,
         re.compile(
-            r"API klíč se před inicializací API panelů načítá z uživatelského záznamu "
-            r"`HKCU\\\\Environment\\\\OPENAI_API_KEY`\..*?klíč se nepředává programu `setx` jako argument procesu\.\n",
+            r"API klíč se před inicializací API panelů.*?klíč se nepředává programu `setx` jako argument procesu\.\n",
             re.DOTALL,
         ),
         "API klíč se před inicializací API panelů načítá primárně z OS credential storage přes `keyring`. "
@@ -54,20 +53,19 @@ def update_ssot() -> None:
 
 def update_readme() -> None:
     text = README.read_text(encoding="utf-8")
-    old = (
-        "Na Windows volba „Uložit“ zachová klíč i pro další spuštění. Uložený klíč má přednost před "
-        "proměnnou prostředí terminálu; restart Windows není nutný. Volba smazání zabrání i opětovnému "
-        "načtení starého klíče z prostředí."
-    )
-    new = (
+    text = replace_once(
+        text,
+        re.compile(
+            r"Na Windows volba „Uložit“ zachová klíč.*?starého klíče z prostředí\.",
+            re.DOTALL,
+        ),
         "Volba „Uložit“ zachová API klíč v OS credential storage přes `keyring`; uložený credential má "
         "přednost před proměnnou prostředí terminálu a restart Windows není nutný. Starší Windows uložení v "
         "`HKCU\\Environment\\OPENAI_API_KEY` se při prvním načtení bezpečně migruje až po ověřeném readbacku. "
-        "Volba smazání zabrání i opětovnému načtení stale klíče z prostředí."
+        "Volba smazání zabrání i opětovnému načtení stale klíče z prostředí.",
+        "README API key paragraph",
     )
-    if text.count(old) != 1:
-        raise SystemExit(f"Dokumentační refaktor odmítnut: README API key paragraph, nalezeno {text.count(old)} shod.")
-    README.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+    README.write_text(text, encoding="utf-8", newline="\n")
 
 
 def main() -> None:
