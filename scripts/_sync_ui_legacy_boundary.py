@@ -9,6 +9,8 @@ DOC = ROOT / "docs" / "UI_DESIGN.md"
 SELF = ROOT / "scripts" / "_sync_ui_legacy_boundary.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "sync-ui-legacy-boundary.yml"
 
+# Záměrně jednorázový codemod: po úspěšné synchronizaci odstraní sám sebe i runner.
+
 OLD = (
     "Produkční sestavu vytváří `kajovo.studio.application.create_window`; stejnou továrnu používají testy a "
     "snímkovací nástroj. Rozhraní neimportuje `kajovo.desktop`. Starší implementace zůstává pro regresní "
