@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import time
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from ..progress import ProgressEvent
 
@@ -16,13 +17,17 @@ class VectorStorePollingContext:
     retrieve: Callable[[str, str], Mapping[str, Any]]
     check_stop: Callable[[], None]
     progress_emit: Callable[[ProgressEvent], None]
-    evidence_emit: Optional[Callable[[str, Dict[str, Any]], None]] = None
+    evidence_emit: Callable[[str, dict[str, Any]], None] | None = None
     timeout_s: int = 180
     poll_interval_s: float = 2.0
     max_consecutive_failures: int = 5
 
 
-def _emit_evidence(context: VectorStorePollingContext, event: str, payload: Dict[str, Any]) -> None:
+def _emit_evidence(
+    context: VectorStorePollingContext,
+    event: str,
+    payload: dict[str, Any],
+) -> None:
     if context.evidence_emit is None:
         return
     try:
@@ -47,8 +52,8 @@ def wait_vector_store_files(
 
     start = time.monotonic()
     pending = set(file_ids)
-    failures = {file_id: 0 for file_id in pending}
-    last_error_type: Dict[str, str] = {}
+    failures = dict.fromkeys(pending, 0)
+    last_error_type: dict[str, str] = {}
 
     while pending:
         context.check_stop()
