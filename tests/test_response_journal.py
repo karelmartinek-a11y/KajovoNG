@@ -72,6 +72,38 @@ def test_get_failure_preserves_id_and_resume(journal):
     assert client.create_response.call_count == 1
 
 
+def test_poll_503_is_followed_by_explicit_recovery(journal):
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_wait", "status": "queued"}
+    error = OpenAIError("Dočasná nedostupnost")
+    error.status_code = 503
+    error.code = "server_error"
+    client.retrieve_response.side_effect = [error, {"id": "resp_wait", "status": "completed"}]
+    execute(journal, client)
+    events = [json.loads(line) for line in Path(journal.log.events_path).read_text("utf-8").splitlines()]
+    failed = [e for e in events if e["type"] == "response.poll_error"]
+    assert len(failed) == 1
+    assert failed[0]["data"]["message"] == str(error)
+    assert failed[0]["data"]["code"] == "server_error"
+    recovered = [e for e in events if e["type"] == "response.poll_recovered"]
+    assert len(recovered) == 1 and recovered[0]["data"]["response_id"] == "resp_wait"
+    client.create_response.assert_called_once()
+
+
+def test_failed_response_keeps_provider_id_after_restart(journal):
+    from kajovo.core.contracts import RemoteResponseError
+    client = Mock()
+    client.create_response.return_value = {"id": "resp_bad", "status": "failed",
+        "error": {"code": "credit_balance_exhausted"}, "_request_id": "req_provider"}
+    with pytest.raises(RemoteResponseError):
+        execute(journal, client)
+    with pytest.raises(RemoteResponseError) as caught:
+        execute(ResponseJournal(journal.log), client)
+    assert caught.value.request_id == "req_provider"
+    assert caught.value.code == "credit_balance_exhausted"
+    client.create_response.assert_called_once()
+
+
 @pytest.mark.parametrize("error", [OpenAIError("timeout"), OSError("connection lost")])
 def test_unknown_submission_never_reposts(journal, error):
     client = Mock()

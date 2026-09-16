@@ -62,6 +62,20 @@ def test_completion_survives_restart_without_paid_calls(tmp_path, generate):
     client.upload_file.assert_not_called()
 
 
+def test_import_archives_from_out_and_seals_after_evidence(tmp_path):
+    from kajovo.core.run_bundle import RunBundle
+    run_dir, state = saved_run(tmp_path, True)
+    bundle = RunBundle(run_dir, run_dir.name, create=True)
+    client = Mock()
+    client.retrieve_batch.return_value = {"id": "batch_work", "status": "completed", "output_file_id": "file_out"}
+    client.file_content.return_value = raw(outputs(state["generate_batch"]))
+    result = complete_saved_batch(client, run_dir, "batch_work", AppSettings())
+    artifacts = [r for r in bundle.artifacts() if r["role"] == "batch_output"]
+    assert len(artifacts) == len(result["written"])
+    assert all(Path(r["original_path"]).is_relative_to(Path(state["out_dir"])) for r in artifacts)
+    assert bundle.verify_integrity()["valid"]
+
+
 @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
 def test_running_batch_is_normal_wait_without_writes(tmp_path, status):
     run_dir, state = saved_run(tmp_path, True)

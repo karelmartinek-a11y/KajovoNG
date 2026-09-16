@@ -166,6 +166,31 @@ def verified_output_evidence(
     return verified
 
 
+def inspect_current_outputs(run_dir: str | Path) -> list[dict]:
+    """Přečte dnešní OUT; historická evidence zápisu zůstává nedotčená."""
+    state = _read_json_dict(Path(run_dir) / "run_state.json")
+    root = str(state.get("out_dir") or "")
+    entries = {row["path"]: row for row in load_output_evidence(run_dir)}
+    for path, expected in (state.get("generated_hashes") or {}).items():
+        entries.setdefault(path, {"path": path, "sha256": expected})
+    result = []
+    for path, entry in sorted(entries.items()):
+        actual, status, detail = None, "unknown", ""
+        try:
+            if root:
+                target = safe_join_under_root(root, path)
+                if os.path.isfile(target):
+                    actual = sha256_file(target)
+                    status = "matching" if actual == entry.get("sha256") else "changed" if entry.get("sha256") else "unknown"
+                else:
+                    status = "missing"
+        except (OSError, ValueError) as exc:
+            detail = str(exc)
+        result.append({"path": path, "current_status": status, "expected_sha256": entry.get("sha256"),
+                       "actual_sha256": actual, "detail": detail, "checked_at": time.time()})
+    return result
+
+
 class RunLogger:
     """Legacy-kompatibilní logger nad kanonickým bezeztrátovým Run Bundle."""
 
@@ -229,12 +254,23 @@ class RunLogger:
             create=True,
         )
         if not resume:
+            from kajovo import __version__
+            provenance = {
+                "application_version": __version__, "process_contract_version": 2,
+                "source_hash_scope": "files_on_disk_at_run_start",
+                "source_hashes": {name: sha256_file(str(Path(__file__).parent / name))
+                                  for name in ("requirements.py", "delivery_preparation.py", "pipeline.py", "contracts.py",
+                                               "response_journal.py", "run_bundle.py", "runlog.py", "generate_batch.py")
+                                  if (Path(__file__).parent / name).is_file()},
+            }
+            self.bundle.update_run({"provenance": provenance})
             self._write_state(
                 {
                     "status": "created",
                     "run_id": run_id,
                     "project": self.project_name,
                     "created_at": time.time(),
+                    "provenance": provenance,
                 }
             )
         self.event(
@@ -526,6 +562,15 @@ class RunLogger:
             "state.updated", {"patch": patch, "status": state.get("status")}
         )
         self._checkpoint_if_needed(patch, state)
+        if patch.get("status") in {"stopped", "cancelled", "response_pending", "submission_unknown"}:
+            step_id = getattr(self, "_active_request_step_id", "")
+            step = next((row for row in self.bundle.steps() if row["step_id"] == step_id), {})
+            if step and step.get("status") not in {"completed", "failed", "cancelled"}:
+                self.bundle.update_step(
+                    step_id, status=patch["status"],
+                    finished_at=datetime.now(timezone.utc).isoformat()
+                    if patch["status"] in {"stopped", "cancelled"} else "",
+                )
         if str(state.get("status") or "") in TERMINAL_STATUSES:
             self.bundle.seal()
 
@@ -568,6 +613,7 @@ class RunLogger:
         self.bundle.append_event(
             typ,
             dict(data or {}),
+            step_id=str(data.get("step_id") or getattr(self, "_active_request_step_id", "")),
             severity=severity,
             source_module="runlog",
             operation=stage,
@@ -610,6 +656,12 @@ class RunLogger:
             return exact
         path = self._json_path(kind, name)
         return path if os.path.isfile(path) else None
+
+    def begin_validated_step(self, stage: str, *, kind: str, model: str = "") -> str:
+        step = self.bundle.ensure_step(stage, kind=kind, model=model)
+        self._active_request_step_id = step["step_id"]
+        self.bundle.update_step(step["step_id"], validation_required=True, status="running", finished_at="")
+        return step["step_id"]
 
     def save_json(self, kind: str, name: str, obj: Any, *, step_id: str = "") -> str:
         from .recoverable_artifacts import save_artifact
@@ -696,6 +748,19 @@ class RunLogger:
                 )
 
     def exception(self, where: str, ex: Exception) -> None:
+        from .user_errors import describe_error
+        step_id = getattr(self, "_active_request_step_id", "")
+        detail = asdict(describe_error(ex))
+        detail.update(operation=where, step_id=step_id)
+        if hasattr(ex, "evidence"):
+            detail["evidence"] = ex.evidence()
+        if step_id and where == "run":
+            step = next((s for s in self.bundle.steps() if s["step_id"] == step_id), {})
+            detail["stage"] = step.get("stage", "")
+            if step.get("status") not in {"completed", "cancelled"}:
+                self.bundle.update_step(step_id, status="failed", finished_at=datetime.now(timezone.utc).isoformat())
+        if where == "run":
+            self.update_state({"failure_detail": detail})
         self.bundle.append_event(
             "error.exception",
             {
@@ -703,7 +768,9 @@ class RunLogger:
                 "type": type(ex).__name__,
                 "msg": str(ex),
                 "trace": traceback.format_exc(),
+                "failure_detail": detail,
             },
+            step_id=step_id,
             severity="error",
             source_module="runlog",
             operation=where,
@@ -761,7 +828,7 @@ def find_last_incomplete_run(log_dir: str) -> Optional[str]:
         try:
             with open(state_path, "r", encoding="utf-8") as stream:
                 state = json.load(stream)
-            if state.get("status") not in ("completed", "closed", "failed"):
+            if state.get("status") not in TERMINAL_STATUSES:
                 return run_id
         except Exception:
             continue

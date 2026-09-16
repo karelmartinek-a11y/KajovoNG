@@ -11,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .contracts import ContractError, file_response_format, parse_json_strict, validate_paths
+from .contracts import ContractError, RemoteResponseError, file_response_format, parse_json_strict, validate_paths
 from .request_rules import uses_reasoning_defaults, validate_response_payload
 from .structured_output import validate_output
 from .utils import atomic_write_text, is_versing_snapshot_dir, safe_join_under_root
@@ -359,7 +359,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             if cid in entries:
                 errors[cid] = "Duplicitní výsledek."
             entries[cid] = item
-    contents = {}
+    contents, error_details = {}, {}
     for cid, path in expected.items():
         if cid in errors:
             continue
@@ -375,7 +375,11 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             responses.append(body)
         try:
             if item.get("error") or response.get("status_code") != 200 or body.get("status") != "completed":
-                raise ContractError("Požadavek selhal nebo nebyl dokončen.")
+                raise RemoteResponseError(
+                    body if body else {"error": item.get("error") or {}},
+                    request_id=response.get("request_id") or "", status_code=response.get("status_code"),
+                    custom_id=cid, path=path,
+                )
             request_body = request_bodies[cid]
             stage = "B3_FILE" if manifest.get("mode") == "MODIFY" else "A3_FILE"
             payload = validate_output(body, {"text": request_body.get("text") or file_response_format(stage, path, 0)})
@@ -385,14 +389,21 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             if not isinstance(chunk, dict) or type(chunk.get("chunk_index")) is not int or chunk["chunk_index"] != 0 or type(chunk.get("chunk_count")) is not int or chunk["chunk_count"] != 1 or chunk.get("has_more") is not False or chunk.get("next_chunk_index") is not None:
                 raise ContractError("Dávkový soubor musí být úplný v jediné části.")
             contents[cid] = payload["content"]
+            if manifest.get("version") != 3 and not payload["content"].strip():
+                contents.pop(cid)
+                raise ContractError("Prázdný historický výsledek nemá výslovné oprávnění; vyžaduje posouzení.")
             if manifest.get("version") == 3:
                 context, _ = json.JSONDecoder().raw_decode(request_body["input"])
                 allow_empty = context["file_context"]["working_context"]["implementation_contract"]["allow_empty"]
                 if not payload["content"].strip() and not allow_empty:
                     contents.pop(cid)
                     raise ContractError("Prázdný soubor odporuje implementačnímu kontraktu.")
-        except (ContractError, AttributeError) as exc:
+        except (ContractError, RemoteResponseError, AttributeError) as exc:
+            from dataclasses import asdict
+            from .user_errors import describe_error
             errors[cid] = str(exc)
+            error_details[cid] = {**asdict(describe_error(exc)), "custom_id": cid, "path": path,
+                                  "evidence": exc.evidence() if hasattr(exc, "evidence") else {}}
     hashes, written = dict(previous_hashes or {}), []
     allowed = ({**manifest.get("overwrite_hashes", {}), **manifest.get("base_hashes", {}), **hashes}
                if overwrite_hashes is None else overwrite_hashes)
@@ -423,13 +434,21 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
                             raise ContractError("Soubor se změnil během vytváření snapshotu; zachován.")
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
                     atomic_write_text(dest, content)
+                if hashlib.sha256(Path(dest).read_bytes()).hexdigest() != new_hash:
+                    raise ContractError("Zápis neodpovídá ověřenému obsahu souboru.")
                 hashes[path] = new_hash
                 written.append(path)
         except (OSError, ValueError, ContractError) as exc:
             errors[cid] = str(exc)
         if progress:
             progress(ProgressEvent("Ukládání souborů", completed=write_index, total=len(items), unit="souborů", detail=path))
+    from dataclasses import asdict
+    from .user_errors import describe_error
+    for cid, message in errors.items():
+        error_details.setdefault(cid, {**asdict(describe_error(ContractError(message))),
+                                      "custom_id": cid, "path": expected[cid]})
     return {"written": written, "errors": errors, "hashes": hashes, "responses": responses,
+            "error_details": error_details,
             "completed_errors": completed_errors,
             "dry_run": dry_run, "planned_files": planned, "snapshot_dir": snapshot_dir,
             "file_errors": {**completed_errors, **{expected[cid]: message for cid, message in errors.items()}},

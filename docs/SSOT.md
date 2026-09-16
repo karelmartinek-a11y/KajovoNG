@@ -76,6 +76,18 @@ Výchozí retry má šest pokusů, počáteční prodlevu 0,8 s, strop 20 s, jit
 
 ## Běhy a souborové kontrakty
 
+Každá přípravná fáze GENERATE/MODIFY se ověřuje před přijetím do kanonického snapshotu. A0R/B0R kontroluje schéma, záměr a jednoznačné neprázdné identifikátory a popisy požadavků. A1/B1 samostatně kontroluje identitu a odpovědnosti architektury, platnost odkazů a pokrytí požadavků. Vadný plán nesmí spustit A2/B2. Obnova kontroluje i částečný snapshot requirements nebo plánu před sítí; historické záznamy se automaticky neopravují.
+
+`requirement_ids` odkazují výhradně na explicitní a implicitní požadavky. Schéma pracovního požadavku omezuje reference na aktuální registr ID; identifikátory architektury mají vlastní registr. Akceptační kritéria, invarianty a předpoklady zůstávají zachované pomocí zdrojových odkazů a působnosti implementačních kontraktů. Neplatné odkazy se nesmějí opravovat zahazováním požadavků.
+
+Oprava se vrací do fáze, která vytváří vadný podklad. Každá přípravná fáze má nejvýše tři pokusy včetně prvního; opakování stejného vadného kandidáta se stejnými nálezy skončí dříve. Opravný požadavek nahrazuje pouze kandidáta své fáze a zachovává původní zadání, přílohy a schválené předchůdce. Chyby JSON a schématu procházejí stejným řízením. `ValidationIssue` obsahuje kód, původní fázi, JSON pointer, zprávu, očekávání a skutečnost. Nezávislé chyby schématu a plánu se předávají společně.
+
+Evidence uchovává každý pokus a validaci včetně neúspěšných; úspěšná oprava odkazuje na vyřešené nálezy. API stav `completed` je stav přijaté odpovědi, nikoli schválení pracovní fáze. Příprava a živá souborová generace mají do aplikační validace stav `validating_result`, během opravy `repairing`. Souborová fáze končí až po ověření zápisů nebo dokončeném dry-run. Nové běhy zaznamenávají verzi aplikace, verzi procesního kontraktu a dostupné otisky zdrojů orchestrace; starším běhům se původ kódu nedoplňuje odhadem.
+
+`RemoteResponseError` zachovává vzdálený kód, stav, důvod neúplnosti a identifikátory požadavku a odpovědi; dávková chyba také custom_id a cestu souboru. `failure_detail` ukládá stejné české vysvětlení pro chybové okno a Historii. Chyba pollingu a následné zotavení jsou samostatné události. Neznámý vzdálený výsledek se nesmí zaměnit za bezpečné nové odeslání.
+
+Úplná živá i dávková dodávka souborů končí `files_complete_unverified`: potvrzuje souborové kontrakty a zápisy, nikoli spuštění, sestavení nebo funkčnost výsledného programu. MODIFY bez navržených změn může skončit `completed` s `no_changes`; dry-run nezapisuje OUT. Prázdný soubor vyžaduje explicitní `allow_empty` implementačního kontraktu; prázdný historický výsledek bez tohoto oprávnění vyžaduje posouzení. Chybějící, konfliktní, neúplné a nepodporované soubory nesmějí vést k úplné dodávce. Historie nabízí samostatnou asynchronní kontrolu současných souborů OUT: rozlišuje shodu otisku, změnu, chybějící soubor a neověřitelný stav. Kontrola nepřepisuje historickou evidenci ani výstupy.
+
 | Režim | Zpracování | Výsledek |
 | --- | --- | --- |
 | GENERATE | A0R_REQUIREMENTS → A1_PLAN → A2_STRUCTURE → volitelně A2Q_QUALITY_GATE → A3_FILE | Textové soubory v OUT |

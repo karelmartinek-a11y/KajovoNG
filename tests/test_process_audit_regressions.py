@@ -144,8 +144,8 @@ def test_missing_deliverables_report_records_reason(tmp_path):
 def test_live_generate_partial_semantics_are_wired_end_to_end():
     pipeline = Path("kajovo/core/pipeline.py").read_text(encoding="utf-8")
     desktop = Path("kajovo/desktop/application.py").read_text(encoding="utf-8")
-    assert '"status": "partial" if missing_deliverables else "completed"' in pipeline
-    assert 'final_status in ("completed", "partial", "dry_run")' in pipeline
+    assert '"status": "partial" if missing_deliverables else "files_complete_unverified"' in pipeline
+    assert 'final_status in ("completed", "partial", "dry_run", "files_complete_unverified")' in pipeline
     assert 'terminal_status == "partial"' in desktop
     assert "Kájovo NG · částečný výstup" in desktop
 

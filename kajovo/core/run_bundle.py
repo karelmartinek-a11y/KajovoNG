@@ -42,7 +42,8 @@ RUN_STATUSES = {
     "corrupt_state",
     "unknown",
 }
-TERMINAL_STATUSES = {"completed", "partial", "failed", "cancelled", "stopped", "closed"}
+TERMINAL_STATUSES = {"completed", "partial", "failed", "cancelled", "stopped", "closed",
+                     "files_complete_unverified", "dry_run"}
 ARTIFACT_BUCKETS = {"inputs", "intermediate", "outputs", "external"}
 
 
@@ -588,6 +589,8 @@ class RunBundle:
         reasoning_effort = str(reasoning.get("effort") or "") if isinstance(reasoning, dict) else ""
         projected_output = payload.get("max_output_tokens") if isinstance(payload, dict) else None
         stage = self._stage_from_name(name)
+        if isinstance(payload, dict):
+            retry_attempt = int((payload.get("metadata") or {}).get("kajovo_repair_attempt", retry_attempt))
         if not step_id and request_role != "transport":
             step = self.ensure_step(stage, title=stage, kind="api", model=model, reasoning_effort=reasoning_effort)
             step_id = str(step["step_id"])
@@ -679,12 +682,14 @@ class RunBundle:
         path = self.responses_dir / f"_record_{identifier}.json"
         _atomic_json(path, record)
         if step_id:
+            current_step = next((row for row in self.steps() if row["step_id"] == step_id), {})
+            pending_validation = bool(current_step.get("validation_required")) and status == "completed"
             self.update_step(
                 step_id,
                 response_ids=[identifier],
-                status="completed" if status == "completed" else status,
-                finished_at=_now_iso() if status not in {"queued", "in_progress"} else "",
-                progress=100 if status == "completed" else 0,
+                status="validating_result" if pending_validation else status,
+                finished_at=_now_iso() if status not in {"queued", "in_progress"} and not pending_validation else "",
+                progress=100 if status == "completed" and not pending_validation else 0,
             )
         self.append_event(
             "response.received",
@@ -727,6 +732,12 @@ class RunBundle:
             )
         )
         _atomic_json(self.validations_dir / f"{identifier}.json", record)
+        if target_type == "preparation":
+            for path in self.responses_dir.glob("_record_*.json"):
+                response = _read_json(path, {})
+                if response.get("step_id") == step_id and response.get("response_id") == target_id:
+                    response["validation_status"] = status
+                    _atomic_json(path, response)
         if step_id:
             try:
                 self.update_step(step_id, validation_ids=[identifier])

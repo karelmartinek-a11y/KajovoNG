@@ -119,6 +119,23 @@ def raw(rows):
     return "\n".join(json.dumps(row) for row in rows).encode()
 
 
+@pytest.mark.parametrize("code", ["context_length_exceeded", "max_output_tokens"])
+def test_batch_keeps_provider_cause_and_file_identity(tmp_path, code):
+    m = manifest()
+    rows = outputs(m)
+    body = rows[0]["response"]["body"]
+    body["status"] = "incomplete" if code == "max_output_tokens" else "failed"
+    body["incomplete_details" if code == "max_output_tokens" else "error"] = {
+        "reason" if code == "max_output_tokens" else "code": code}
+    result = import_results(m, [raw(rows)], str(tmp_path))
+    cid = rows[0]["custom_id"]
+    detail = result["error_details"][cid]
+    assert detail["code"] == code and detail["cause_known"]
+    assert detail["path"] == m["expected"][cid]
+    assert not (tmp_path / detail["path"]).exists()
+    assert result["status"] == "partial"
+
+
 def test_live_preparation_then_one_request_per_file(tmp_path):
     worker = make_worker(tmp_path, "GENERATE")
     worker.cfg.send_as_c = True
@@ -259,7 +276,7 @@ def test_invalid_preparation_never_submits_batch(tmp_path):
     with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
         worker.run()
     assert errors
-    assert client.create_response.call_count == 5
+    assert client.create_response.call_count == 4
     client.create_batch.assert_not_called()
 
 

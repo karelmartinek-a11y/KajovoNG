@@ -111,7 +111,11 @@ class ModifyMap(QWidget):
         for change in self.changes:
             counts[change.classification] = counts.get(change.classification, 0) + 1
         root.addWidget(caption(" · ".join(f"{count} {kind}" for kind, count in counts.items()), "muted"))
-        if state.get("error"):
+        failure = state.get("failure_detail") or {}
+        if failure:
+            root.addWidget(caption(f"{failure.get('stage') or failure.get('operation', '')}: {failure.get('message', '')}", "error"))
+            root.addWidget(caption(str(failure.get("next_step") or "")))
+        elif state.get("error"):
             root.addWidget(caption(str(state["error"]), "error"))
         self.generation = 0
         self.table.currentCellChanged.connect(lambda *_: self.load_diff())
@@ -242,6 +246,17 @@ class RunDetailView(QWidget):
         root.addWidget(caption(f"{run.mode} · {run.project}", "heading"))
         duration = format_duration(run.duration) if run.duration is not None else "Celkový čas nebyl uložen"
         root.addWidget(caption(f"{run.run_id}  ·  {run.status.symbol} {run.status.label}  ·  {run.transport}  ·  {duration}", "muted"))
+        failure = state.get("failure_detail") or {}
+        if failure:
+            root.addWidget(caption(f"{failure.get('stage') or failure.get('operation', '')}: {failure.get('message', '')}", "error"))
+            root.addWidget(caption(str(failure.get("next_step") or "")))
+        elif state.get("error"):
+            root.addWidget(caption(str(state["error"]), "error"))
+        if state.get("batch_imports"):
+            failures = [detail for result in state["batch_imports"].values()
+                        for detail in result.get("error_details", {}).values()]
+            if failures:
+                root.addWidget(caption(f"Dávkové chyby: {len(failures)}. Příčiny a dotčené soubory jsou v záložce Chyby.", "error"))
         if run.legacy:
             root.addWidget(caption("Starší záznam · pouze pro čtení. Podrobný průběh nebyl uložen.", "muted"))
         if state.get("dry_run") or run.status.key == "dry_run":
@@ -334,6 +349,17 @@ class RunDetailView(QWidget):
         artifacts = ArtifactBrowser(context=context)
         artifacts.set_artifacts(adapter.root, payload.get("artifacts") or [])
         self.tabs.addTab(artifacts, "Soubory")
+        failed_validations = [v for v in (payload.get("validations") or []) if v.get("status") == "failed"]
+        batch_errors = {key: value.get("error_details") or value.get("file_errors") or value.get("errors")
+                        for key, value in (state.get("batch_imports") or {}).items()}
+        recovery_events = [event for event in (payload.get("events") or [])
+                           if event.get("type") in {"response.poll_error", "validation.recovered", "response.poll_recovered"}]
+        if state.get("failure_detail") or state.get("error") or failed_validations or any(batch_errors.values()) or recovery_events:
+            errors_view = EvidenceView("Chyby, opravy a jejich důkazy")
+            errors_view.set_value({"poslední_chyba": state.get("failure_detail") or state.get("error"),
+                                   "validace": payload.get("validations") or [], "dávky": batch_errors,
+                                   "zotavení": recovery_events})
+            self.tabs.addTab(errors_view, "Chyby")
         root.addWidget(self.tabs, 1)
         if run.mode in {"QA", "QFILE"}:
             from .history_data import unique_responses
@@ -352,9 +378,28 @@ class RunDetailView(QWidget):
             self.timeline.select_stage(run.run_id, self.selected_stage.step_id)
             self.select_stage(run, self.selected_stage)
         root.addWidget(actions(action("history.detail.evidence", "Technická evidence", self.open_evidence)))
+        if run.mode in {"GENERATE", "MODIFY", "QFILE"}:
+            artifacts.layout().insertWidget(0, actions(action("history.detail.current_outputs", "Ověřit současné soubory OUT", self.check_outputs)))
+            self.output_status = QPlainTextEdit("Historie dokládá tehdejší zápis. Aktuální soubory zatím nebyly zkontrolovány.")
+            self.output_status.setReadOnly(True)
+            self.output_status.setMaximumHeight(110)
+            artifacts.layout().addWidget(self.output_status)
         if run.mode in {"QA", "QFILE"}:
             self.inspector.setParent(self)
             self.inspector.hide()
+
+    def check_outputs(self):
+        from kajovo.core.runlog import inspect_current_outputs
+        root = self.adapter.root
+        self.output_status.setPlainText("Kontroluji existenci a otisky souborů…")
+
+        def show(rows):
+            labels = {"matching": "odpovídá zápisu", "changed": "změněn", "missing": "chybí", "unknown": "nelze ověřit"}
+            self.output_status.setPlainText("\n".join(
+                f"{r['path']}: {labels[r['current_status']]}" for r in rows
+            ) or "Chybí evidence zapsaných souborů; nelze potvrdit dodávku.")
+
+        self.context.operations.start_read("Kontrola současných výstupů", lambda task: inspect_current_outputs(root), show, popup=False)
 
     def select_stage(self, _run, stage):
         self.selected_stage = stage

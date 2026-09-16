@@ -522,7 +522,7 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
         )
         if bundle:
             for destination in result.get("written") or []:
-                path = Path(destination)
+                path = Path(safe_join_under_root(state["out_dir"], destination))
                 if path.is_file():
                     try:
                         bundle.archive_artifact(
@@ -534,16 +534,22 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
                             reconstruction_role="imported_output",
                             metadata={"batch_id": batch_id},
                         )
-                    except (OSError, ValueError):
-                        pass
+                    except (OSError, ValueError) as exc:
+                        bundle.append_event("artifact.archive_error", {"path": destination, "error": str(exc)},
+                                            severity="error", human_message=f"Výstup nelze archivovat: {destination}")
+            import_errors = {**(result.get("errors") or {}), **(result.get("completed_errors") or {})}
             bundle.record_validation(
                 target_type="batch_import",
                 target_id=batch_id,
                 validator="process_saved_batch",
-                status="failed" if result.get("errors") else "passed",
-                errors=[str(value) for value in result.get("errors") or []],
-                evidence={"status": result.get("status"), "written": result.get("written") or []},
+                status="failed" if import_errors or result.get("missing") or result.get("omitted") else "passed",
+                errors=[str(value) for value in import_errors.values()],
+                evidence={"status": result.get("status"), "written": result.get("written") or [],
+                          "error_details": result.get("error_details") or {}, "missing": result.get("missing") or [],
+                          "omitted": result.get("omitted") or []},
             )
+            if result.get("status") in {"completed", "files_complete_unverified", "partial", "dry_run", "failed"}:
+                bundle.seal()
         return result
     target = state.get("out_dir")
     if not target:

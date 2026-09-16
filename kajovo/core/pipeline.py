@@ -361,9 +361,11 @@ class RunWorker(QThread):
                 validate_paths(self.cfg.resume_files)
             if self.cfg.mode in ("GENERATE", "MODIFY"):
                 self._verify_completed_files()
+                if self.cfg.preparation_snapshot:
+                    validate_preparation_snapshot(self.cfg.preparation_snapshot, self.cfg.mode, self.cfg.maximum_quality)
             self.log.update_state(
                 {
-                    "status": "running", "error": None, "failed_at": None,
+                    "status": "running", "error": None, "failure_detail": None, "failed_at": None,
                     "started_at": time.time(),
                     "mode": self.cfg.mode,
                     "send_as_c": self.cfg.send_as_c,
@@ -440,9 +442,9 @@ class RunWorker(QThread):
                     result["response_id"] = self._final_response_id
 
             final_status = "batch_pending" if result.get("batch_id") else str(result.get("status") or "completed")
-            if final_status not in ("completed", "partial", "batch_pending", "dry_run"):
+            if final_status not in ("completed", "partial", "batch_pending", "dry_run", "files_complete_unverified"):
                 raise ContractError(f"Neplatný terminální stav běhu: {final_status}")
-            if final_status in ("completed", "partial", "dry_run"):
+            if final_status in ("completed", "partial", "dry_run", "files_complete_unverified"):
                 self.log.update_state({"status": final_status, "completed_at": time.time()})
             else:
                 self.log.clear_state_keys("completed_at")
@@ -1039,6 +1041,7 @@ class RunWorker(QThread):
         if self.cfg.mode == "MODIFY" and self.settings.dry_run_modify:
             self.log.save_json("manifests", "modify_dry_run", {"files": files})
             self.log.update_state({"dry_run": True, "written_files": []})
+            self._finish_file_delivery(files, dry_run=True)
             return {"saved": [], "dry_run": True}
         ensure_dir(out_dir)
 
@@ -1061,9 +1064,16 @@ class RunWorker(QThread):
                     raise ContractError(f"OUT se během generování změnil; soubor zachován: {rel}")
             before_size = os.path.getsize(dst) if os.path.exists(dst) else None
             before = sha256_file(dst) if os.path.exists(dst) else None
+            if self.cfg.mode == "GENERATE" and before is not None:
+                expected = (self.cfg.completed_hashes or {}).get(rel)
+                incoming = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                if before not in {expected, incoming}:
+                    raise ContractError(f"Existující soubor nepatří ověřenému výstupu; zachován: {rel}")
             atomic_write_text(dst, content)
             after_size = os.path.getsize(dst)
             after = sha256_file(dst)
+            if after != hashlib.sha256(content.encode("utf-8")).hexdigest():
+                raise ContractError(f"Zápis neodpovídá ověřenému obsahu: {rel}")
             self.log.record_fs_change("write", src=rel, dst=dst, before=before, after=after, before_size=before_size, after_size=after_size)
             entry = {
                 "path": rel, "dst": dst, "bytes": after_size, "sha256": after,
@@ -1077,7 +1087,21 @@ class RunWorker(QThread):
             self.progress_event.emit(ProgressEvent("Ukládání", completed=i + 1, total=len(files), unit="souborů", detail=rel))
             self.subprogress.emit(int((i + 1) * 100 / max(1, len(files))))
         self.log.save_json("manifests", "out_saved_map", {"saved": saved, "out_dir": out_dir})
+        self._finish_file_delivery(files, saved=saved)
         return {"saved": saved}
+
+    def _finish_file_delivery(self, files, *, saved=(), dry_run=False):
+        step_id = getattr(self, "_delivery_step_id", "")
+        if not step_id:
+            return
+        record = self.log.record_validation(
+            step_id=step_id, target_type="delivery", target_id=self.log.run_id,
+            validator="output_writes", status="passed",
+            evidence={"expected": [f["path"] for f in files], "written": list(saved),
+                      "dry_run": dry_run, "functionality_verified": False},
+        )
+        self.log.bundle.update_step(step_id, status="dry_run" if dry_run else "completed",
+                                    finished_at=record["timestamp"], progress=100)
 
     def _write_missing_files_report(self, skipped_files: List[Dict[str, Any]]) -> Optional[str]:
         if not skipped_files:
@@ -1141,7 +1165,8 @@ class RunWorker(QThread):
         self.progress_event.emit(ProgressEvent(self._progress_stage, detail="Odpověď přijata z OpenAI Responses API; lokálně ověřuji výsledek.", source="api"))
         self.log.save_json("responses", f"received_{response.get('id', 'NOID')}", response)
         if response.get("status") not in (None, "completed") or response.get("error"):
-            raise ContractError("API nedokončilo odpověď; běh nemůže pokračovat s částečnými daty.")
+            from .contracts import RemoteResponseError
+            raise RemoteResponseError(response)
         validate_output(response, payload)
         return response
 
@@ -1308,7 +1333,7 @@ class RunWorker(QThread):
             "plan": plan,
             "structure": struct,
             "saved": saved_map,
-            "status": "partial" if missing_deliverables else "completed",
+            "status": "partial" if missing_deliverables else "files_complete_unverified",
             "no_changes": no_changes,
             "response_id": resp2_id,
             "last_response_id": self._final_response_id or resp2_id,
@@ -1620,7 +1645,7 @@ class RunWorker(QThread):
             self.log.update_state({"missing_deliverables": omitted})
         return {"mode": "MODIFY", "plan": plan, "structure": struct, "saved": saved_map,
                 "response_id": resp2_id, "vector_store_id": vs_id, "supports_file_search": supports_fs,
-                "status": "partial" if omitted else "dry_run" if saved_map.get("dry_run") else "completed",
+                "status": "partial" if omitted else "dry_run" if saved_map.get("dry_run") else "files_complete_unverified",
                 "dry_run": bool(saved_map.get("dry_run")), "missing_deliverables": omitted}
 
     # Režim QA.
@@ -1792,6 +1817,7 @@ class RunWorker(QThread):
         from .context_budget import configure_file_request, checked_measurement
         if not getattr(self, "_delivery_snapshot", None):
             raise ContractError("Souborová generace vyžaduje úplnou kanonickou přípravu FileContext.")
+        self._delivery_step_id = self.log.begin_validated_step(contract.split("_")[0], kind="file_delivery")
         compiler = ContextCompiler(self._delivery_snapshot)
         compiled = compiler.compile(path, originals=getattr(self, "_delivery_originals", None))
         gen_ref_files, gen_input_files, gen_input_images = [], [], []
@@ -1802,6 +1828,7 @@ class RunWorker(QThread):
         parts: List[str] = []
         latest_response_id = ""
         declared_chunk_count = 0
+        rejected_chunks = []
         step_model = str(model_override or self.cfg.model or "").strip()
         while True:
             self._check_stop()
@@ -1857,11 +1884,12 @@ class RunWorker(QThread):
 
             self.log.save_json(
                 "requests",
-                f"{contract}_{path.replace('/','_')}_{chunk_index}_{ts_code()}",
+                f"{contract}_{path}_{chunk_index}_{ts_code()}",
                 {
                     "payload": payload,
                     "ui_state": self.cfg.__dict__,
                 },
+                step_id=self._delivery_step_id,
             )
             self._log_api_action(
                 f"{contract}:{path}",
@@ -1873,10 +1901,22 @@ class RunWorker(QThread):
             parsed = None
             last_err: Optional[Exception] = None
             while attempt < max_attempts and parsed is None:
+                if attempt:
+                    repair_payload = copy.deepcopy(payload)
+                    repair_payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
+                    self.log.save_json("requests", f"{contract}_{path}_{chunk_index}_repair_{attempt}",
+                                       {"payload": repair_payload}, step_id=self._delivery_step_id)
                 try:
                     resp = self._create_response(client, payload, attempt=attempt, measurement=report)
                 except OutputContractError as exc:
-                    self.log.save_json("responses", f"{contract}_invalid_{chunk_index}_{attempt}", exc.response)
+                    self.log.save_json("responses", f"{contract}_{path}_invalid_{chunk_index}_{attempt}", exc.response,
+                                       step_id=self._delivery_step_id)
+                    rejected = self.log.record_validation(
+                        step_id=self._delivery_step_id, target_type="file_chunk", target_id=path,
+                        validator=contract, status="failed", errors=[str(exc)],
+                        evidence={"chunk": chunk_index, "attempt": attempt, "response_id": exc.response.get("id")},
+                    )
+                    rejected_chunks.append(rejected["validation_id"])
                     last_err = exc
                     repair = {"validation_error": str(exc),
                               "invalid_output": extract_text_from_response(exc.response),
@@ -1888,7 +1928,8 @@ class RunWorker(QThread):
                 resp_id = str(resp.get("id") or "")
                 if resp_id:
                     latest_response_id = resp_id
-                self.log.save_json("responses", f"{contract}_{resp.get('id','NOID')}_{path.replace('/','_')}_{chunk_index}_{ts_code()}", resp)
+                self.log.save_json("responses", f"{contract}_{resp.get('id','NOID')}_{path}_{chunk_index}_{ts_code()}", resp,
+                                   step_id=self._delivery_step_id)
                 self._log_api_action(
                     f"{contract}:{path}",
                     "receive",
@@ -1976,6 +2017,12 @@ class RunWorker(QThread):
         content = "".join(parts)
         if not content.strip() and not compiled["working_context"]["implementation_contract"]["allow_empty"]:
             raise ContractError(f"{path}: prázdný soubor odporuje implementačnímu kontraktu.")
+        self.log.record_validation(
+            step_id=self._delivery_step_id, target_type="file_contract", target_id=path,
+            validator=contract, status="passed",
+            evidence={"chunks": len(parts), "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                      "response_id": latest_response_id, "written": False, "resolves": rejected_chunks},
+        )
         from .recoverable_artifacts import save_artifact
         save_artifact(self.log.paths.run_dir, "generated/" + path, {
             "path": path, "content": content, "output_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),

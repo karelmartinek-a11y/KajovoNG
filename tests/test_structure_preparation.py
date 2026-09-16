@@ -223,7 +223,7 @@ def test_unrepairable_manifest_blocks_all_file_generation(tmp_path, batch):
     with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks") as generate:
         worker.run()
     assert errors and "controller" in errors[0]
-    assert client.create_response.call_count == 5
+    assert client.create_response.call_count == 4
     client.create_batch.assert_not_called()
     client.upload_file.assert_not_called()
     generate.assert_not_called()

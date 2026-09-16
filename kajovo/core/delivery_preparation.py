@@ -13,6 +13,7 @@ from .generate_batch import digest, prepare_structure, validate_structure
 from .requirements import (
     apply_quality, enriched_plan_format, enriched_structure_format,
     requirements_format, stage_instructions, validate_traceability,
+    validate_requirements, validate_plan, validate_stage_schema, bound_reference_format,
 )
 from .utils import safe_join_under_root, sha256_file
 from .context_budget import preparation_measurement
@@ -71,6 +72,9 @@ def validate_preparation_snapshot(snapshot, mode, maximum_quality):
             jsonschema.validate(snapshot.get(key), fmt["format"]["schema"])
         except jsonschema.ValidationError as exc:
             raise ContractError(f"Neplatný snímek {key}: {exc.message}") from exc
+    validate_requirements(snapshot["requirements"], mode)
+    if index >= 1:
+        validate_plan(snapshot["requirements"], snapshot["plan"], mode)
     if index >= 2:
         prepared, _ = validate_delivery_structure(snapshot["requirements"], snapshot["plan"], snapshot["structure"], mode)
         if prepared != snapshot["structure"]:
@@ -80,6 +84,8 @@ def validate_preparation_snapshot(snapshot, mode, maximum_quality):
 
 def validate_delivery_structure(requirements, plan, structure, mode):
     """Připraví jednoznačné vazby bez změny uložené odpovědi modelu."""
+    validate_stage_schema(structure, enriched_structure_format(mode, implementation="implementation" in structure),
+                          ("A" if mode == "GENERATE" else "B") + "2")
     prepared = copy.deepcopy(structure)
     additions = []
     if mode == "GENERATE":
@@ -139,6 +145,13 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
             prev_id=previous_id if index == 0 else None,
             supports_temperature=worker._model_caps(model).get("supports_temperature", False),
         )
+        if index:
+            fmt = bound_reference_format(fmt, snapshot["requirements"], snapshot["plan"], mode)
+            payload["instructions"] += (
+                "\nrequirement_ids odkazují pouze na ID explicitních a implicitních požadavků. "
+                "Akceptační kritéria, invarianty a předpoklady zachovej přes zdrojové odkazy "
+                "implementation.scopes; jejich textové značky nejsou requirement_ids."
+            )
         payload["text"] = fmt
         if index >= 2:
             payload["instructions"] += (
@@ -162,10 +175,12 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
         apply_quality(payload, quality)
         if tools:
             payload["tools"] = tools
-        for attempt in range(3 if index >= 2 else 1):
+        step_id = worker.log.begin_validated_step(stage, kind="preparation", model=model)
+        fingerprints = set()
+        rejected = []
+        for attempt in range(3):
             worker._check_stop()
-            if attempt:
-                payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
+            payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
             worker._set(10 + index * 8, 0, labels[index] + ": ověřuji kapacitu vstupu…", stage=stage)
             prepare_payload(payload)
             measurement = preparation_measurement(payload, client)
@@ -173,29 +188,76 @@ def prepare_delivery(worker, client, mode, previous_id, input_text, input_files,
                         f"{labels[index]} · vstup {'=' if measurement['input_tokens_exact'] else '~'}"
                         f"{measurement['input_tokens']:,} tokenů · výstupní rezerva {measurement['output_budget']:,}",
                         stage=stage)
-            worker.log.save_json("requests", f"{stage}_request_{attempt}", {"payload": payload, "ui_state": worker.cfg.__dict__})
+            worker.log.save_json("requests", f"{stage}_request_{attempt}",
+                                 {"payload": payload, "ui_state": worker.cfg.__dict__}, step_id=step_id)
             worker._log_api_action(stage, "send", {"contract": fmt["format"]["name"], "model": model})
-            response = worker._create_response(client, payload, measurement=measurement)
-            worker.log.save_json("responses", f"{stage}_response_{response.get('id', 'NOID')}", response)
-            previous_id = str(response.get("id") or "")
-            if not previous_id:
-                raise ContractError(f"{stage}: odpověď nemá ID.")
-            value = parse_json_strict(extract_text_from_response(response))
-            worker._log_api_action(stage, "receive", {"response_id": previous_id, "contract": value.get("contract")})
+            value, response, raw = None, {}, ""
             try:
-                if index >= 2:
+                response = worker._create_response(client, payload, measurement=measurement)
+                worker.log.save_json("responses", f"{stage}_response_{attempt}_{response.get('id', 'NOID')}",
+                                     response, step_id=step_id)
+                previous_id = str(response.get("id") or "")
+                if not previous_id:
+                    raise ContractError(f"{stage}: odpověď nemá ID.")
+                raw = extract_text_from_response(response)
+                value = parse_json_strict(raw)
+                validate_stage_schema(value, fmt, stage)
+                worker._log_api_action(stage, "receive", {"response_id": previous_id, "contract": value.get("contract")})
+                if index == 0:
+                    validate_requirements(value, mode)
+                elif index == 1:
+                    validate_plan(snapshot["requirements"], value, mode)
+                else:
                     value, additions = validate_delivery_structure(snapshot["requirements"], snapshot["plan"], value, mode)
                     from .context_compiler import validate_implementation
                     validate_implementation({"requirements": snapshot["requirements"],
                                              "plan": snapshot["plan"], "structure": value})
                     worker.log.save_json("manifests", f"{stage}_prepared_candidate_{attempt}", {
                         "response_id": previous_id, "structure": value, "added_dependencies": additions})
-                break
             except ContractError as exc:
-                if attempt == 2:
-                    raise
-                repair_context = {**context, "structure": value, "validation_errors": str(exc)}
+                response = getattr(exc, "response", None) or response
+                if response and not raw:
+                    try:
+                        raw = extract_text_from_response(response)
+                    except ContractError:
+                        raw = json.dumps(response.get("output", response), ensure_ascii=False)
+                if value is None and raw:
+                    try:
+                        value = parse_json_strict(raw)
+                        validate_stage_schema(value, fmt, stage)
+                    except ContractError as schema_error:
+                        if schema_error.issues:
+                            exc = schema_error
+                issues = exc.evidence() or [{"code": exc.code, "stage": stage, "pointer": "/",
+                                            "message": str(exc), "expected": None, "actual": None}]
+                record = worker.log.record_validation(
+                    step_id=step_id, target_type="preparation", target_id=str(response.get("id") or stage),
+                    validator=stage, status="failed", errors=[str(exc)],
+                    evidence={"attempt": attempt, "issues": issues, "candidate_hash": digest(value if value is not None else raw)},
+                )
+                rejected.append(record["validation_id"])
+                fingerprint = digest({"candidate": value if value is not None else raw, "issues": issues})
+                terminal = attempt == 2 or fingerprint in fingerprints
+                worker.log.bundle.update_step(step_id, status="failed" if terminal else "repairing",
+                                              finished_at=record["timestamp"] if terminal else "")
+                if terminal:
+                    raise exc
+                fingerprints.add(fingerprint)
+                repair_context = {**context, "validation_errors": str(exc), "validation_issues": issues}
+                repair_context[("requirements", "plan", "structure", "structure")[index]] = value if value is not None else raw
                 payload["input"] = worker._input_parts(json.dumps(repair_context, ensure_ascii=False), input_files, input_images)
+                continue
+            record = worker.log.record_validation(
+                step_id=step_id, target_type="preparation", target_id=previous_id, validator=stage, status="passed",
+                evidence={"attempt": attempt, "candidate_hash": digest(value), "resolves": rejected},
+            )
+            worker.log.bundle.update_step(step_id, status="completed", progress=100, finished_at=record["timestamp"],
+                                          human_summary=f"Validace úspěšná; opravné pokusy: {attempt}.")
+            if rejected:
+                worker.log.event("validation.recovered", {"stage": stage, "step_id": step_id,
+                                 "validation_ids": rejected, "response_id": previous_id,
+                                 "message": "Opravený kandidát prošel validací."})
+            break
         snapshot[("requirements", "plan", "structure", "structure")[index]] = value
         snapshot.update(canonical_stage=stage, response_id=previous_id)
         snapshot.pop("snapshot_hash", None)

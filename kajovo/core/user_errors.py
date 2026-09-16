@@ -25,6 +25,7 @@ class UserError:
 
 # Katalog zachovává význam kódu; například HTTP 429 samo nerozlišuje kredit a rychlost.
 API_CODES = {
+    "max_output_tokens": ("Odpověď dosáhla výstupního limitu a není úplná.", "Upravte rozpočet výstupu nebo rozdělení dodávky; neimportujte částečný obsah."),
     "credit_balance_exhausted": ("Předplacený kredit organizace byl vyčerpán.", "Doplňte kredit organizace u poskytovatele."),
     "organization_spend_limit_exceeded": ("Organizace dosáhla nastaveného rozpočtového limitu.", "Ověřte rozpočet organizace u poskytovatele."),
     "project_spend_limit_exceeded": ("Projekt dosáhl nastaveného rozpočtového limitu.", "Ověřte rozpočet projektu u poskytovatele."),
@@ -84,6 +85,20 @@ def _chain(error: BaseException) -> list[BaseException]:
 def describe_error(error: BaseException, *, operation: str = "Operaci") -> UserError:
     """Neznámou příčinu nedoplňuje odhadem ani podle podobnosti volného textu."""
     chain = _chain(error)
+    from .contracts import ContractError
+    for item in chain:
+        if isinstance(item, ContractError):
+            message = str(item)
+            if item.issues:
+                first = item.issues[0]
+                message = f"{first.stage} {first.pointer}: {first.message}"
+            if len(message) > 600:
+                message = message[:600] + "… Úplný nález je v podrobnostech."
+            if len(item.issues) > 1:
+                message += f" Další nálezy: {len(item.issues) - 1}."
+            return UserError("contract", item.code, message, True,
+                             "\n".join(f"{i.stage} {i.pointer}: {i.message}" for i in item.issues) or str(item),
+                             "Opravte uvedenou fázi; zachované podklady a pokusy jsou v Historii.")
     from .comic_types import ComicError
     for item in chain:
         if isinstance(item, ComicError):

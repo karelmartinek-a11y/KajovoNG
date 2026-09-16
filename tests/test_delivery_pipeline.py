@@ -179,14 +179,15 @@ def test_invalid_canonical_structure_blocks_batch_submission(tmp_path, mode, max
     client, calls = _client(before + [invalid, invalid, invalid])
     results, errors = _run(worker, client)
     assert not results and errors
-    assert "neznámý požadavek" in errors[0]
-    assert len(calls) == len(before) + 3
+    assert "NEZNÁMÝ-POŽADAVEK" in errors[0]
+    assert len(calls) == len(before) + 2
     client.create_batch.assert_not_called()
     assert all(call.kwargs.get("purpose") != "batch" for call in client.upload_file.call_args_list)
     assert not (tmp_path / "out" / "hello.txt").exists()
-    for call in calls[-2:]:
+    for call in calls[len(before) + 1:]:
         context = _input(call)
-        assert "neznámý požadavek" in context["validation_errors"]
+        assert "NEZNÁMÝ-POŽADAVEK" in context["validation_errors"]
+        assert context["validation_issues"][0]["code"] == "schema_invalid"
         assert context["structure"] == invalid
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     prefix = "A" if mode == "GENERATE" else "B"
@@ -288,7 +289,7 @@ def test_completed_file_rerun_uses_hash_and_does_not_generate(tmp_path, mode, ba
     worker.cfg.completed_hashes = {"hello.txt": hashlib.sha256(b"done").hexdigest()}
     client, calls = _client(preparation)
     results, errors = _run(worker, client)
-    assert not errors and results[0]["status"] == "completed"
+    assert not errors and results[0]["status"] == "files_complete_unverified"
     assert len(calls) == 3
     client.create_batch.assert_not_called()
     assert (out / "hello.txt").read_bytes() == b"done"
@@ -393,7 +394,7 @@ def test_live_file_chunks_keep_order_content_and_canonical_context(tmp_path, mod
                 chunking={"chunk_index": 1, "chunk_count": 2, "has_more": False, "next_chunk_index": None})
     client, calls = _client([*preparation, first, last])
     results, errors = _run(worker, client)
-    assert not errors and results[0]["status"] == "completed"
+    assert not errors and results[0]["status"] == "files_complete_unverified"
     assert Path(worker.cfg.out_dir, file["path"]).read_text(encoding="utf-8") == first["content"] + last["content"]
     assert calls[-1]["previous_response_id"] == f"resp_{len(preparation)}"
     report = json.loads((Path(worker.log.paths.run_dir) / "cost_context_report.json").read_text("utf-8"))

@@ -6,7 +6,7 @@ from copy import deepcopy
 
 import jsonschema
 
-from .contracts import ContractError, structure_response_format, validate_paths
+from .contracts import ContractError, ValidationIssue, structure_response_format, validate_paths
 from .model_registry import model_spec
 from .structured_output import array, builtin_format, obj, response_format
 
@@ -164,6 +164,115 @@ def _ids(values: list, label: str) -> set:
     return set(values)
 
 
+def validate_stage_schema(value, fmt, stage):
+    """Vrátí všechny nezávislé vady schématu s přesným místem."""
+    errors = list(jsonschema.Draft202012Validator(fmt["format"]["schema"]).iter_errors(value))
+    if errors:
+        issues = [ValidationIssue(
+            "schema_invalid", stage,
+            "/" + "/".join(str(p).replace("~", "~0").replace("/", "~1") for p in e.absolute_path),
+            e.message, e.validator_value, e.instance,
+        ) for e in errors]
+        raise ContractError("Neplatná specifikace: " + "; ".join(i.message for i in issues), issues=issues)
+
+
+def validate_requirements(req, mode):
+    prefix = _prefix(mode)
+    stage = prefix + "0R"
+    validate_stage_schema(req, requirements_format(mode), stage)
+    keys = (("explicit_requirements", "implicit_requirements") if prefix == "A" else
+            ("explicit_change_requirements", "implicit_change_requirements"))
+    issues, seen = [], set()
+    intent_key = "product_intent" if prefix == "A" else "requested_change"
+    if not req[intent_key].strip():
+        issues.append(ValidationIssue("requirements_intent_empty", stage, "/" + intent_key,
+                                      "Specifikace nemá popsaný záměr.", "neprázdný záměr", ""))
+    for key in keys:
+        for index, item in enumerate(req[key]):
+            identifier = item["id"]
+            pointer = f"/{key}/{index}"
+            if not identifier.strip() or identifier != identifier.strip() or identifier in seen:
+                issues.append(ValidationIssue("requirement_id_invalid", stage, pointer + "/id",
+                                              "ID požadavku musí být jedinečné a neprázdné.", None, identifier))
+            seen.add(identifier)
+            if not item["description"].strip():
+                issues.append(ValidationIssue("requirement_description_empty", stage, pointer + "/description",
+                                              "Požadavek nemá popis.", "neprázdný popis", ""))
+    if issues:
+        raise ContractError("; ".join(i.message for i in issues), issues=issues)
+    return seen
+
+
+def validate_plan(req, plan, mode):
+    required = validate_requirements(req, mode)
+    stage = _prefix(mode) + "1"
+    validate_stage_schema(plan, enriched_plan_format(mode), stage)
+    issues, seen, covered = [], set(), set()
+    for index, item in enumerate(plan["architecture_items"]):
+        pointer = f"/architecture_items/{index}"
+        identifier = item["id"]
+        if not identifier.strip() or identifier != identifier.strip() or identifier in seen:
+            issues.append(ValidationIssue("architecture_id_invalid", stage, pointer + "/id",
+                                          "ID architektury musí být jedinečné a neprázdné.", None, identifier))
+        seen.add(identifier)
+        refs = item["requirement_ids"]
+        unknown = sorted(set(refs) - required)
+        if unknown or len(refs) != len(set(refs)):
+            issues.append(ValidationIssue("architecture_requirement_invalid", stage, pointer + "/requirement_ids",
+                                          f"Architektura {identifier}: neplatné odkazy na požadavky {unknown}.",
+                                          sorted(required), refs))
+        if not item["responsibility"].strip():
+            issues.append(ValidationIssue("architecture_responsibility_empty", stage, pointer + "/responsibility",
+                                          f"Architektura {identifier} nemá odpovědnost.", "neprázdná odpovědnost", ""))
+        covered.update(refs)
+    if required - covered:
+        issues.append(ValidationIssue("plan_coverage_missing", stage, "/architecture_items",
+                                      "Plán nepokrývá všechny požadavky.", sorted(required), sorted(covered)))
+    if mode == "MODIFY":
+        for pointer, values in (
+            ("/change_plan", plan["change_plan"]["files_to_modify"] + plan["change_plan"]["files_to_add"]),
+            ("/diagnosis/evidence", plan["diagnosis"]["evidence"]),
+        ):
+            try:
+                validate_paths(values)
+            except (ContractError, ValueError) as exc:
+                issues.append(ValidationIssue("plan_paths_invalid", stage, pointer, str(exc), None,
+                                              [item["path"] for item in values]))
+    if issues:
+        raise ContractError("; ".join(i.message for i in issues), issues=issues)
+    return seen
+
+
+def bound_reference_format(fmt, req, plan, mode):
+    """Omezí reference ve výstupu; ostatní povinnosti zůstávají ve scopes."""
+    result = deepcopy(fmt)
+    required = sorted(validate_requirements(req, mode))
+    architecture = sorted(item["id"] for item in (plan or {}).get("architecture_items", []))
+
+    def bind(node):
+        if not isinstance(node, dict):
+            return
+        for key, child in node.get("properties", {}).items():
+            child = deepcopy(child)
+            node["properties"][key] = child
+            ids = required if key == "requirement_ids" else architecture if key == "architecture_item_ids" else None
+            if ids is not None:
+                if ids:
+                    child["items"] = {"type": "string", "enum": ids}
+                else:
+                    child["maxItems"] = 0
+            bind(child)
+        bind(node.get("items"))
+
+    bind(result["format"]["schema"])
+    from .structured_output import validate_schema
+    try:
+        validate_schema(result["format"]["schema"])
+    except ValueError as exc:
+        raise ContractError(f"Registr odkazů nelze odeslat v podporovaném schématu: {exc}") from exc
+    return result
+
+
 def validate_traceability(req: dict, plan: dict, struct: dict, mode: str | None = None) -> None:
     """Ověří schémata a úplné vazby bez změny vstupů; chyby jsou ContractError.
 
@@ -179,6 +288,7 @@ def validate_traceability(req: dict, plan: dict, struct: dict, mode: str | None 
     if mode is not None and mode != detected_mode:
         raise ContractError("Režim snapshotu neodpovídá requirements kontraktu.")
     mode = detected_mode
+    validate_plan(req, plan, mode)
     for value, factory in ((req, requirements_format), (plan, enriched_plan_format),
                            (struct, enriched_structure_format)):
         try:

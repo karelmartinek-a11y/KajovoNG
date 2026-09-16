@@ -151,6 +151,11 @@ class ResponseJournal:
                 if response.get("id") != entry["id"]:
                     raise OpenAIError("API vrátilo jiné ID odpovědi.")
                 self._record(key, entry, response)
+                if failures:
+                    self.log.event("response.poll_recovered", {
+                        "response_id": entry["id"], "failed_attempts": failures,
+                        "message": "Spojení obnoveno; pokračuje sledování původní odpovědi.",
+                    })
                 failures = 0
             except OpenAIError as exc:
                 failures += 1
@@ -161,6 +166,8 @@ class ResponseJournal:
                     {
                         "response_id": entry["id"],
                         "status_code": code,
+                        "code": getattr(exc, "code", None),
+                        "message": str(exc),
                         "request_id": getattr(exc, "request_id", None),
                         "attempt": failures,
                         "error_type": type(exc.__cause__ or exc).__name__,
@@ -184,10 +191,8 @@ class ResponseJournal:
         if entry["status"] == "cancelled":
             raise ResponseCancelled("Vzdálená generace byla zrušena (cancelled).")
         if entry["status"] != "completed":
-            raise RuntimeError(
-                f"Vzdálená generace skončila stavem {entry['status']}: "
-                f"{response.get('error') or response.get('incomplete_details') or ''}"
-            )
+            from .contracts import RemoteResponseError
+            raise RemoteResponseError(response, request_id=entry.get("last_request_id") or "")
         client._known_responses.add(entry["id"])
         return copy.deepcopy(response)
 
@@ -218,6 +223,7 @@ class ResponseJournal:
         entry.update(
             status=response.get("status", "unknown"),
             response=response,
+            last_request_id=response.get("_request_id") or entry.get("last_request_id") or "",
             checked_at=time.time(),
         )
         self.save()

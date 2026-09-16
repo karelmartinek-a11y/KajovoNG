@@ -104,7 +104,12 @@ def test_complete_offline_workflow(tmp_path, mode, maximum_quality):
         assert (tmp_path / "out" / "hello.txt").read_text(encoding="utf-8") == "hello\n"
     assert json.loads(
         (tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(encoding="utf-8")
-    )["status"] == "completed"
+    )["status"] == ("files_complete_unverified" if mode in ("GENERATE", "MODIFY") else "completed")
+    if mode in ("GENERATE", "MODIFY"):
+        assert worker.log.bundle.verify_integrity()["valid"]
+        step = worker.log.bundle.steps()[-1]
+        assert step["status"] == "completed"
+        assert step["validation_required"] is True
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
@@ -136,9 +141,11 @@ def test_incomplete_response_stops_workflow(tmp_path):
     worker = make_worker(tmp_path, "QA")
     client = Mock()
     client.create_response.return_value = {**response(1, "partial"), "status": "incomplete"}
-    from kajovo.core.contracts import ContractError
-    with pytest.raises(ContractError):
+    from kajovo.core.contracts import RemoteResponseError
+    with pytest.raises(RemoteResponseError) as caught:
         worker._create_response(client, {"model": "gpt-4o-mini", "input": "test"})
+    assert caught.value.status == "incomplete"
+    assert caught.value.response_id == "resp_1"
     assert client.create_response.call_count == 1
 
 

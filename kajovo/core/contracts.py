@@ -1,11 +1,54 @@
 from __future__ import annotations
 
 import json, re
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
 from .utils import validate_relative_path
 
+@dataclass(frozen=True)
+class ValidationIssue:
+    """Doložená vada konkrétního podkladu, nikoli odhad příčiny."""
+
+    code: str
+    stage: str
+    pointer: str
+    message: str
+    expected: Any = None
+    actual: Any = None
+
+
 class ContractError(Exception):
-    pass
+    def __init__(self, message: str, *, issues=()):
+        super().__init__(message)
+        self.issues = list(issues)
+        self.code = self.issues[0].code if self.issues else "invalid_contract"
+
+    def evidence(self):
+        return [asdict(issue) for issue in self.issues]
+
+
+class RemoteResponseError(RuntimeError):
+    """Zachová původní strukturovanou chybu i identitu vzdálené operace."""
+
+    def __init__(self, response, *, request_id="", status_code=None, custom_id="", path=""):
+        self.body = response
+        error = response.get("error") or {}
+        incomplete = response.get("incomplete_details") or {}
+        error = error if isinstance(error, dict) else {"message": str(error)}
+        incomplete = incomplete if isinstance(incomplete, dict) else {"reason": str(incomplete)}
+        self.status = response.get("status") or "failed"
+        self.code = error.get("code") or incomplete.get("reason") or "remote_response_failed"
+        self.response_id = response.get("id") or ""
+        self.request_id = request_id or response.get("_request_id") or ""
+        self.status_code = status_code
+        self.custom_id = custom_id
+        self.path = path
+        super().__init__(f"Vzdálená generace skončila stavem {self.status}: {error or incomplete or self.code}")
+
+    def evidence(self):
+        return {key: getattr(self, key) for key in (
+            "code", "status", "response_id", "request_id", "status_code", "custom_id", "path"
+        )}
 
 
 def validate_chunk_metadata(chunk: Any) -> None:

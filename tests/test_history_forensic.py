@@ -168,6 +168,36 @@ def test_programmatic_phase_selection_updates_visible_text_and_copy(qtbot, tmp_p
     assert view.phase_text.copy_button.isEnabled()
 
 
+@pytest.mark.parametrize("recovered", [False, True])
+def test_detail_exposes_errors_and_read_only_output_check(qtbot, tmp_path, recovered):
+    from kajovo.core.batch_completion import read_state
+    from kajovo.core.contracts import ContractError
+    from kajovo.studio.history_data import payload
+    from kajovo.studio.history_details import RunDetailView
+
+    settings, logger, _ui = source(tmp_path)
+    logger.begin_validated_step("A1", kind="preparation")
+    if recovered:
+        logger.event("response.poll_error", {"response_id": "resp", "status_code": 503})
+        logger.event("response.poll_recovered", {"response_id": "resp", "failed_attempts": 1})
+    else:
+        logger.exception("run", ContractError("Neplatná vazba na požadavek."))
+    adapter = LegacyRunAdapter(logger.paths.run_dir)
+    data = payload(adapter)
+    run = build_run(data["summary"], steps=data["steps"])
+    operations = Mock()
+    context = SimpleNamespace(settings=settings, operations=operations)
+    view = RunDetailView(context, adapter, data, read_state(adapter.root), run)
+    qtbot.addWidget(view)
+    assert "Chyby" in [view.tabs.tabText(index) for index in range(view.tabs.count())]
+    view.check_outputs()
+    args = operations.start_read.call_args.args
+    assert args[1](None) == []
+    args[2]([{"path": "main.py", "current_status": "missing"}])
+    assert "main.py: chybí" in view.output_status.toPlainText()
+    assert view.output_status.isReadOnly()
+
+
 def test_cached_index_refresh_does_not_read_responses_or_rescan_lineage(tmp_path, monkeypatch):
     settings, logger, _ui = source(tmp_path)
     logger.save_json("responses", "QA_response", {"id": "resp_lookup", "status": "completed"})

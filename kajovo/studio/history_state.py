@@ -20,6 +20,8 @@ _STATES = {
     "created": ("Vytvořeno", "○", "muted", False),
     "preparing": ("Připravuje se", "◌", "focus", False),
     "running": ("Běží", "▶", "focus", False),
+    "validating_result": ("Ověřuje výsledek", "◌", "focus", False),
+    "repairing": ("Opravuje podklad", "↻", "warning", False),
     "active": ("Běží", "▶", "focus", False),
     "response_pending": ("Čeká na odpověď", "◷", "focus", False),
     "batch_prepared": ("BATCH připraven", "⚑", "focus", False),
