@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping, Protocol
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 
 LOGGER = logging.getLogger(__name__)
