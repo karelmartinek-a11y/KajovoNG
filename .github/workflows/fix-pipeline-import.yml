@@ -1,0 +1,43 @@
+name: temporary-fix-pipeline-import
+
+on:
+  push:
+    branches:
+      - refactor/architecture-hardening-20260916
+    paths:
+      - scripts/.trigger_pipeline_import_fix
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/architecture-hardening-20260916
+      - name: Remove stale pipeline import
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('kajovo/core/pipeline.py')
+          text = p.read_text(encoding='utf-8')
+          old = 'from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root, atomic_write_text'
+          new = 'from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root'
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one stale import, found {text.count(old)}')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+          PY
+          rm scripts/.trigger_pipeline_import_fix
+      - name: Commit source-only fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add kajovo/core/pipeline.py scripts/.trigger_pipeline_import_fix
+          git diff --cached --check
+          git commit -m "style: odstranit nepouzity import po delivery extrakci"
+          git push origin HEAD:refactor/architecture-hardening-20260916
