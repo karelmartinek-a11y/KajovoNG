@@ -1,6 +1,6 @@
 # Řídicí studio Kájovo NG
 
-Produkční sestavu vytváří `kajovo.studio.application.create_window`; stejnou továrnu používají testy a snímkovací nástroj. Rozhraní neimportuje `kajovo.desktop`. Starší implementace zůstává pro regresní porovnání, není záložní cestou spouštěče. Samostatný převodník používá Qt a společné komponenty.
+Produkční sestavu vytváří `kajovo.studio.application.create_window`; stejnou továrnu používají testy a snímkovací nástroj. Rozhraní neimportuje `kajovo.desktop`. Starší implementace zůstává pouze jako zdrojový regresní referenční materiál: není záložní cestou spouštěče ani součástí instalovaného/distribuovaného balíku. Kompatibilní `scripts/render_ui.py` deleguje na produkční `scripts/render_studio.py`, takže snímkování ověřuje skutečné Studio. Samostatný převodník používá Qt a společné komponenty.
 
 ## Vizuální pravidla
 
