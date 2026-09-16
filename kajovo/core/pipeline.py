@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import time
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal, QThread, QLockFile
@@ -48,55 +47,7 @@ def split_text(text: str, max_chars: int) -> List[str]:
     return out
 
 
-@dataclass
-class UiRunConfig:
-    project: str
-    prompt: str
-    mode: str  # GENERATE|MODIFY|QA|QFILE
-    send_as_c: bool
-    model: str
-    model_a1: str
-    model_a2: str
-    model_a3: str
-    response_id: str
-    attached_file_ids: List[str]
-    input_file_ids: List[str]
-    attached_vector_store_ids: List[str]
-    in_dir: str
-    out_dir: str
-    in_equals_out: bool
-    versing: bool
-    temperature: float
-    use_file_search: bool
-
-    diag_windows_in: bool
-    diag_windows_out: bool
-    diag_ssh_in: bool
-    diag_ssh_out: bool
-    ssh_user: str
-    ssh_host: str
-    ssh_key: str
-    ssh_password: str
-    skip_paths: List[str]
-    skip_exts: List[str]
-
-    # Snímek schopností vybraného modelu z lokální validace a pevné matice.
-    model_caps: Dict[str, Any]
-    # Podklady ReRun: seznam souborů a ID předchozí odpovědi.
-    resume_files: List[Dict[str, Any]] = None  # type: ignore
-    resume_prev_id: Optional[str] = None
-    ssh_pin: str = ""
-    ssh_pin_required: bool = False
-    caps_by_model: Optional[Dict[str, Any]] = None
-    # Aktuální katalog modelů z API; při jeho předání se vyžaduje povolení v pevné matici.
-    available_models: Optional[List[str]] = None
-    maximum_quality: bool = False
-    preparation_snapshot: Optional[Dict[str, Any]] = None
-    completed_hashes: Optional[Dict[str, str]] = None
-    # Explicitní pokyn opravné větve. Používá se výhradně v nově
-    # prováděné části za ověřeným checkpointem.
-    recovery_instruction: str = ""
-    source_checkpoint_id: str = ""
+from .runs.config import UiRunConfig
 
 
 class RunWorker(QThread):
