@@ -45,8 +45,11 @@ def no_live_http(monkeypatch):
     def blocked(*args, **kwargs):
         raise AssertionError("Test se pokusil o živý HTTP požadavek.")
 
-    monkeypatch.setattr("requests.sessions.Session.request", blocked)
+    # Architektonická lane neinstaluje provozní HTTP klienty. Pokud klient v
+    # prostředí existuje, je vždy zablokován; jinak jej fixture sama neimportuje.
+    if importlib.util.find_spec("requests") is not None:
+        monkeypatch.setattr("requests.sessions.Session.request", blocked)
     for module_name in ("httpx", "httpx2"):
-        if importlib.util.find_spec(module_name):
+        if importlib.util.find_spec(module_name) is not None:
             module = importlib.import_module(module_name)
             monkeypatch.setattr(module.Client, "send", blocked)
