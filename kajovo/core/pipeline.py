@@ -49,6 +49,7 @@ def split_text(text: str, max_chars: int) -> List[str]:
 
 from .runs.config import UiRunConfig
 from .runs.delivery import DeliveryContext, save_out_files
+from .runs.polling import VectorStorePollingContext, wait_vector_store_files
 
 
 class RunWorker(QThread):
@@ -910,35 +911,18 @@ class RunWorker(QThread):
         return f"{text}\n\nDIAGNOSTICS (PARSED):\n{self._diag_text}"
 
     def _wait_vector_store_files(self, client: OpenAIClient, vs_id: str, vs_file_ids: List[str], timeout_s: int = 180) -> None:
-        if not vs_file_ids:
-            return
-        start = time.time()
-        pending = set(vs_file_ids)
-        while pending:
-            self._check_stop()
-            if time.time() - start > timeout_s:
-                raise RuntimeError(f"Vector store index timeout ({vs_id}).")
-            completed: List[str] = []
-            for vs_file_id in list(pending):
-                try:
-                    info = with_retry(lambda v=vs_id, f=vs_file_id: client.retrieve_vector_store_file(v, f), self.settings.retry, self.breaker)
-                except Exception:
-                    continue
-                status = str(info.get("status") or "")
-                self.progress_event.emit(ProgressEvent("Indexace", detail=f"API ověřilo stav souboru: {status}",
-                                                       source="files_api"))
-                if status == "completed":
-                    completed.append(vs_file_id)
-                elif status == "failed":
-                    last_error = info.get("last_error") or {}
-                    msg = last_error.get("message") or "Vector store indexing failed."
-                    raise RuntimeError(f"Vector store indexing failed ({vs_id}): {msg}")
-            for done in completed:
-                pending.discard(done)
-            self.progress_event.emit(ProgressEvent("Indexace", completed=len(set(vs_file_ids)) - len(pending),
-                                                   total=len(set(vs_file_ids)), unit="souborů", source="files_api"))
-            if pending:
-                time.sleep(2.0)
+        context = VectorStorePollingContext(
+            retrieve=lambda vector_store_id, file_id: with_retry(
+                lambda: client.retrieve_vector_store_file(vector_store_id, file_id),
+                self.settings.retry,
+                self.breaker,
+            ),
+            check_stop=self._check_stop,
+            progress_emit=self.progress_event.emit,
+            evidence_emit=lambda event, payload: self.log.event(event, payload),
+            timeout_s=timeout_s,
+        )
+        wait_vector_store_files(context, vs_id, vs_file_ids)
 
     def _in_dir_fallback_note(self) -> str:
         if not self._in_dir_info or not self._in_dir_info.get("file_id"):
