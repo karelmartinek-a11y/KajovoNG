@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar, QWidget
 
 from kajovo.core.progress import ProgressClock, ProgressEvent
+from kajovo.core.progress_display import build_steps, event_sentence, source_title, stage_title, state_title
 from kajovo.core.user_errors import UserError, describe_error
 from .components import BranchMark, DetailDialog, action, actions, caption, scroll, vertical
 
@@ -81,6 +82,7 @@ class OperationDialog(QDialog):
         self.setWindowTitle(title)
         self.resize(620, 530)
         self.clock = ProgressClock()
+        self.events = []
         self.active = True
         self.reduced_motion = reduced_motion
         self.stop_callback = None
@@ -96,6 +98,12 @@ class OperationDialog(QDialog):
         body.addWidget(self.summary)
         self.stage = caption("Čekám na první zprávu", "muted")
         body.addWidget(self.stage)
+        self.source = caption("Zdroj práce: zatím neurčen", "muted")
+        body.addWidget(self.source)
+        self.plan = caption("Plán běhu: čekám na první doložený krok", "muted")
+        body.addWidget(self.plan)
+        self.next_step = caption("Další krok: bude uveden po zahájení běhu", "muted")
+        body.addWidget(self.next_step)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setTextVisible(False)
@@ -136,14 +144,18 @@ class OperationDialog(QDialog):
         self.mark.set_running(self.active, self.reduced_motion)
 
     def on_event(self, event):
+        self.events.append(event)
+        self.events[:] = self.events[-2000:]
         self.clock.update(event)
         if event.stage == "RUN" and event.state in STATES and event.state not in {"active", "waiting"}:
             self.summary.setText(STATES[event.state])
             self.tick()
             return
-        stage = STAGES.get(event.stage, event.stage)
+        stage = stage_title(event.stage)
         self.stage.setText(stage + (" · " + event.detail if event.detail else ""))
-        self.summary.setText(STATES.get(event.state, "Pracuji"))
+        self.source.setText("Zdroj práce: " + source_title(getattr(event, "source", "local")))
+        self.summary.setText(event_sentence(event) if event.detail else state_title(event.state))
+        self._refresh_plan()
         if event.total is not None and event.total > 0 and event.completed is not None:
             self.progress.show()
             self.progress.setRange(0, event.total)
@@ -153,6 +165,18 @@ class OperationDialog(QDialog):
             self.progress.setRange(0, 0)
             self.counts.setText("Služba neposkytuje měřitelný postup.")
         self.tick()
+
+    def _refresh_plan(self):
+        steps = build_steps(self.events, quality=any(e.stage in {"A2Q", "B2Q"} for e in self.events))
+        if not steps:
+            return
+        self.plan.setText("Plán běhu: " + "  →  ".join(
+            ("✓ " if step.state == "done" else "▶ " if step.state == "current" else "○ ") + step.title
+            for step in steps
+        ))
+        index = next((i for i, step in enumerate(steps) if step.state == "current"), len(steps) - 1)
+        next_step = next((step.title for step in steps[index + 1:] if step.state == "pending"), "hotový výsledek")
+        self.next_step.setText("Další krok: " + next_step)
 
     def tick(self):
         elapsed, age, eta = self.clock.times()

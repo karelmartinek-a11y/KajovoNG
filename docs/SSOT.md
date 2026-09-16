@@ -318,3 +318,11 @@ Nativní generovací rozměr a finální raster jsou odlišné pojmy. Finální 
 Upload ověřuje obsah a limity, originál uchovává v místní knihovně, pracovní kopie normalizuje orientaci a metadata. Žádné veřejné anonymní URL ani klientské klíče nevznikají. Base64 obrázky nepatří do textových logů; přesná provider evidence může být bezeztrátový binární archiv s hashovaným odkazem. Usage a cena se evidují jen v rozsahu doložených dat. Neznámá cena není nula.
 
 Placená ruční akceptace Komiksu je oddělený výslovně spuštěný pracovní scénář, nikoli preflight ani součást běžných testů. Testovací PASS nelze použít místo dokladu dokončené živé operace nebo vizuální kontroly. Produkční distribuce zůstává desktopové sestavení podle `Build/README.md`; nevzniká ad-hoc serverové nasazení.
+
+## Živé průběhy operací
+
+Všechna popup okna pro běžící práci používají společný význam průběhu. Zobrazují doložené dokončené fáze, aktuální fázi, další známý krok, dílčí počty, čas a stáří poslední skutečné události. Textový audit zůstává dostupný jako technický detail, ale není jediným zdrojem informace o stavu.
+
+Událost průběhu může určit zdroj práce (`local`, `api`, `files_api`, `batch_api`, `upload`, `download`, `disk`, `validation`) a další krok. `api` znamená konkrétní OpenAI Responses API; Files API a Batch API se zobrazují samostatně. Neznámý postup se nezobrazuje jako falešné procento a ETA se uvádí pouze při doložitelném měření. Terminální stav není odvozen pouze z hodnoty progress baru.
+
+Volba maximální propracovanosti je v živém plánu zobrazena jako skutečná etapa `A2Q` nebo `B2Q`. ReRun zobrazuje převzaté, právě prováděné a zbývající etapy odděleně; přeskočená etapa neznamená nové placené volání.

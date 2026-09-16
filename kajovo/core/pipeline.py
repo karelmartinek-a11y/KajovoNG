@@ -319,13 +319,14 @@ class RunWorker(QThread):
         if self._stop or self._cancel_response:
             raise RuntimeError("STOP_REQUESTED")
 
-    def _set(self, p: int, sp: int, msg: str, *, stage=None):
+    def _set(self, p: int, sp: int, msg: str, *, stage=None, source="local", next_step=""):
         if stage:
             self._progress_stage = stage
         self.progress.emit(p)
         self.subprogress.emit(sp)
         self.status.emit(msg)
-        self.progress_event.emit(ProgressEvent(getattr(self, "_progress_stage", "Příprava"), detail=msg))
+        self.progress_event.emit(ProgressEvent(getattr(self, "_progress_stage", "Příprava"), detail=msg,
+                                               source=source, next_step=next_step))
         self._log_debug(msg)
         try:
             self.log.event("ui.progress", {"p": p, "sp": sp, "msg": msg, "ts": self._ts()})
@@ -970,7 +971,8 @@ class RunWorker(QThread):
                 except Exception:
                     continue
                 status = str(info.get("status") or "")
-                self.progress_event.emit(ProgressEvent("Indexace", detail=f"API ověřilo stav souboru: {status}"))
+                self.progress_event.emit(ProgressEvent("Indexace", detail=f"API ověřilo stav souboru: {status}",
+                                                       source="files_api"))
                 if status == "completed":
                     completed.append(vs_file_id)
                 elif status == "failed":
@@ -980,7 +982,7 @@ class RunWorker(QThread):
             for done in completed:
                 pending.discard(done)
             self.progress_event.emit(ProgressEvent("Indexace", completed=len(set(vs_file_ids)) - len(pending),
-                                                   total=len(set(vs_file_ids)), unit="souborů"))
+                                                   total=len(set(vs_file_ids)), unit="souborů", source="files_api"))
             if pending:
                 time.sleep(2.0)
 
@@ -1118,7 +1120,7 @@ class RunWorker(QThread):
             measurement = {**measurement, "request_hash": content_hash(cost_payload)}
         cost_report.record(cost_payload, measurement=measurement, status="submitting")
         self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
-        self.progress_event.emit(ProgressEvent(self._progress_stage, "waiting", detail="Čekám na odpověď API."))
+        self.progress_event.emit(ProgressEvent(self._progress_stage, "waiting", detail="Čekám na dokončení odpovědi v OpenAI Responses API.", source="api"))
         try:
             if self._response_journal is not None:
                 labels = {"queued": "Čeká ve frontě", "in_progress": "API zpracovává zadání",
@@ -1127,7 +1129,7 @@ class RunWorker(QThread):
                 response = self._response_journal.execute(
                     client, payload, stopped=lambda: self._stop, cancelled=lambda: self._cancel_response,
                     progress=lambda state, elapsed: self.progress_event.emit(ProgressEvent(
-                        self._progress_stage, "waiting", detail=f"{labels[state]} · sledování {elapsed} s")),
+                        self._progress_stage, "waiting", detail=f"{labels[state]} · sledování {elapsed} s", source="api")),
                 )
             else:
                 response = client.create_response(payload)
@@ -1136,7 +1138,7 @@ class RunWorker(QThread):
             if not isinstance(response, dict):
                 raise
         cost_report.record(cost_payload, response=response)
-        self.progress_event.emit(ProgressEvent(self._progress_stage, detail="Odpověď přijata; ověřuji výsledek."))
+        self.progress_event.emit(ProgressEvent(self._progress_stage, detail="Odpověď přijata z OpenAI Responses API; lokálně ověřuji výsledek.", source="api"))
         self.log.save_json("responses", f"received_{response.get('id', 'NOID')}", response)
         if response.get("status") not in (None, "completed") or response.get("error"):
             raise ContractError("API nedokončilo odpověď; běh nemůže pokračovat s částečnými daty.")

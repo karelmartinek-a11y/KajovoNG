@@ -15,6 +15,12 @@ class ProgressEvent:
     unit: str = ""
     detail: str = ""
     timestamp: float = field(default_factory=time.monotonic)
+    # Volitelná metadata pro společné živé zobrazení. Přidáváme je za původní
+    # argumenty, aby starší volání s pozičními argumenty zůstala kompatibilní.
+    source: str = "local"
+    next_step: str = ""
+    phase_index: int | None = None
+    phase_total: int | None = None
 
 
 class ProgressClock:
@@ -29,8 +35,10 @@ class ProgressClock:
         self.samples = deque(maxlen=5)
         self.unit_started = self.started
         self.finished = None
+        self.last_event = None
 
     def update(self, event):
+        self.last_event = event
         if event.stage != self.stage:
             self.stage = event.stage
             self.samples.clear()

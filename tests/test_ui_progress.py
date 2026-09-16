@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 from PySide6.QtCore import QTimer
 from kajovo.core.progress import ProgressClock, ProgressEvent
+from kajovo.core.progress_display import build_steps, event_sentence, source_title
 from kajovo.desktop.jobs import Job
 from kajovo.desktop.dialogs import ProgressDialog
 from kajovo.desktop.dialogs import UploadProgressDialog
@@ -22,6 +23,26 @@ def test_eta_requires_completed_samples_and_counts_down():
     assert clock.times(35)[2] == 25
     clock.update(ProgressEvent("Ukládání", completed=0, total=6, timestamp=40))
     assert clock.times(40)[2] is None
+
+
+def test_progress_display_explains_remote_work_and_remaining_steps():
+    events = [
+        ProgressEvent("A1", detail="Odesílám architektonický plán.", source="api"),
+        ProgressEvent("A2", detail="Ověřuji přijatou strukturu.", source="api"),
+    ]
+    steps = build_steps(events, mode="GENERATE", quality=True)
+    states = {step.key: step.state for step in steps}
+    assert states["A1"] == "done"
+    assert states["A2"] == "current"
+    assert any(step.key == "A2Q" and step.state == "pending" for step in steps)
+    assert source_title("api") == "OpenAI Responses API"
+    assert "OpenAI Responses API" in event_sentence(events[0])
+
+
+def test_progress_event_metadata_is_optional_and_compatible():
+    event = ProgressEvent("A3", source="disk", next_step="Kontrola výsledků")
+    assert event.source == "disk"
+    assert event.next_step == "Kontrola výsledků"
 
 
 def test_repeated_poll_does_not_restart_unit_measurement():

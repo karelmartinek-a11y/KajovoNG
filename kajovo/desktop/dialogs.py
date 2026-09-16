@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QTextBrowser,
 )
 from ..core.progress import ProgressClock, ProgressEvent
+from ..core.progress_display import build_steps, event_sentence, source_title, stage_title, state_title
 from .design import column, label, button, row, editor, card, FitDialog
 
 
@@ -202,6 +203,7 @@ class ProgressDialog(FitDialog):
         self.setWindowTitle("Průběh běhu")
         self.resize(760, 580)
         self.clock = ProgressClock()
+        self.events = []
         layout = column(self, 16)
         layout.setSpacing(8)
         layout.addWidget(label("Průběh běhu", "Heading"))
@@ -210,11 +212,15 @@ class ProgressDialog(FitDialog):
         body.setSpacing(6)
         self.lbl_status = label("Připravuji běh…")
         self.lbl_stage = label("Příprava · Probíhá")
+        self.lbl_source = label("Zdroj práce: zatím neurčen")
+        self.lbl_plan = label("Plán běhu: čekám na první doložený krok")
+        self.lbl_next = label("Další krok: bude uveden po zahájení běhu")
         self.lbl_time = label("", "Hint")
         self.pb, self.pb_sub = QProgressBar(), QProgressBar()
         self.pb.setRange(0, 0)
         self.pb_sub.setRange(0, 0)
-        for widget in (self.lbl_status, self.lbl_stage, self.pb, self.pb_sub, self.lbl_time):
+        for widget in (self.lbl_status, self.lbl_stage, self.lbl_source, self.lbl_plan,
+                       self.lbl_next, self.pb, self.pb_sub, self.lbl_time):
             body.addWidget(widget)
         layout.addWidget(surface)
         self.txt_log = editor(readonly=True, height=80)
@@ -247,11 +253,37 @@ class ProgressDialog(FitDialog):
         self.txt_log.appendPlainText(value)
 
     def on_progress_event(self, event):
+        self.events.append(event)
+        self.events[:] = self.events[-2000:]
         self.clock.update(event)
         self.btn_cancel_response.setEnabled(event.state == "waiting")
-        self.lbl_stage.setText(f"{stage_label(event.stage)} · {STATES.get(event.state, event.state)}")
+        if event.stage == "RUN" and event.state in STATES and event.state not in {"active", "waiting"}:
+            terminal_label = "Celý běh"
+            if event.state == "batch_pending":
+                terminal_label = "BATCH"
+            elif event.state == "dry_run":
+                terminal_label = "RUN · dry-run"
+            self.lbl_stage.setText(f"{terminal_label} · {state_title(event.state)}")
+            self.lbl_source.setText(f"Zdroj práce: {source_title(getattr(event, 'source', 'local'))}")
+            self._refresh_plan(event)
+            self.pb.setRange(0, 100)
+            self.pb.setValue(100 if event.state == "completed" else 0)
+            self.pb_sub.setRange(0, max(1, self.clock.total or 1))
+            self.pb_sub.setValue(self.clock.completed)
+            self.btn_stop.setEnabled(False)
+            self.btn_stop.hide()
+            self.btn_cancel_response.hide()
+            self.chk_bzz.hide()
+            self.btn_close.setText("OK")
+            self.btn_close.setDefault(True)
+            self.timer.stop()
+            self._update_eta()
+            return
+        self.lbl_stage.setText(f"{stage_title(event.stage)} · {state_title(event.state)}")
+        self.lbl_source.setText(f"Zdroj práce: {source_title(getattr(event, 'source', 'local'))}")
+        self._refresh_plan(event)
         if event.detail:
-            self.set_status(event.detail)
+            self.set_status(event_sentence(event))
         if self.clock.total:
             self.pb_sub.setRange(0, self.clock.total)
             self.pb_sub.setValue(self.clock.completed)
@@ -272,6 +304,18 @@ class ProgressDialog(FitDialog):
             self.timer.stop()
         self._update_eta()
 
+    def _refresh_plan(self, event):
+        steps = build_steps(self.events, quality=any(e.stage in {"A2Q", "B2Q"} for e in self.events))
+        if not steps:
+            return
+        self.lbl_plan.setText("Plán běhu: " + "  →  ".join(
+            ("✓ " if step.state == "done" else "▶ " if step.state == "current" else "○ ") + step.title
+            for step in steps
+        ))
+        index = next((i for i, step in enumerate(steps) if step.state == "current"), len(steps) - 1)
+        next_step = next((step.title for step in steps[index + 1:] if step.state == "pending"), "hotový výsledek")
+        self.lbl_next.setText(f"Další krok: {next_step}")
+
     def _update_eta(self):
         elapsed, age, eta = self.clock.times()
         remaining = f"{int(eta)} s" if eta is not None else "nelze určit"
@@ -291,18 +335,23 @@ class TaskProgressDialog(FitDialog):
         self._done = False
         self.terminal_state = None
         self.clock = ProgressClock()
+        self.events = []
         layout = column(self, 16)
         layout.setSpacing(8)
         layout.addWidget(label(title, "Heading"))
         self.lbl_status = label("Připravuji…")
         self.lbl_current = label("")
+        self.lbl_source = label("Zdroj práce: zatím neurčen")
+        self.lbl_plan = label("Plán: čekám na první doložený krok")
+        self.lbl_next = label("Další krok: bude uveden po zahájení operace")
         self.activity = label("", "Hint")
         self.pb, self.pb_sub = QProgressBar(), QProgressBar()
         self.pb.setRange(0, 0)
         self.pb_sub.setVisible(show_subprogress)
         self.txt_log = editor(readonly=True, height=80)
         self.txt_log.setMaximumBlockCount(2000)
-        for widget in (self.lbl_status, self.lbl_current, self.activity, self.pb, self.pb_sub):
+        for widget in (self.lbl_status, self.lbl_current, self.lbl_source, self.lbl_plan,
+                       self.lbl_next, self.activity, self.pb, self.pb_sub):
             layout.addWidget(widget)
         layout.addWidget(self.txt_log, 1)
         self.btn_close = button("Zavřít", self.accept)
@@ -348,15 +397,31 @@ class TaskProgressDialog(FitDialog):
         if self._done:
             return
         self.clock.update(event)
+        self.events.append(event)
+        self.events[:] = self.events[-2000:]
         if event.detail:
-            self.lbl_status.setText(event.detail)
-        self.lbl_current.setText(f"{stage_label(event.stage)} · {STATES.get(event.state, event.state)}")
+            self.lbl_status.setText(event_sentence(event))
+        self.lbl_current.setText(f"Právě probíhá: {stage_title(event.stage)} · {state_title(event.state)}")
+        self.lbl_source.setText(f"Zdroj práce: {source_title(getattr(event, 'source', 'local'))}")
+        self._refresh_plan()
         if event.total:
             self.pb_sub.setVisible(True)
             self.pb_sub.setRange(0, event.total)
             self.pb_sub.setValue(event.completed)
             self.pb_sub.setFormat(f"%v / %m {event.unit}" if event.unit else "%v / %m")
         self._tick()
+
+    def _refresh_plan(self):
+        steps = build_steps(self.events, quality=any(e.stage in {"A2Q", "B2Q"} for e in self.events))
+        if not steps:
+            return
+        self.lbl_plan.setText("Plán: " + "  →  ".join(
+            ("✓ " if step.state == "done" else "▶ " if step.state == "current" else "○ ") + step.title
+            for step in steps
+        ))
+        index = next((i for i, step in enumerate(steps) if step.state == "current"), len(steps) - 1)
+        next_step = next((step.title for step in steps[index + 1:] if step.state == "pending"), "hotový výsledek")
+        self.lbl_next.setText(f"Další krok: {next_step}")
 
     def add_log(self, value):
         self.txt_log.appendPlainText(value)
