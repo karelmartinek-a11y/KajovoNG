@@ -43,17 +43,10 @@ jobs:
 
           path = Path('tools/_r05c_finalize_studio.py')
           text = path.read_text(encoding='utf-8')
-          strict = '''    missing = names - {
-              node.name
-              for node in tree.body
-              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names
-          }
-          if missing:
-              raise RuntimeError(f"Missing functions in {relative}: {sorted(missing)}")
-          '''
-          if strict in text:
-              text = text.replace(strict, '')
-              path.write_text(text, encoding='utf-8')
+          strict = '    if missing:\n        raise RuntimeError(f"Missing functions in {relative}: {sorted(missing)}")\n'
+          if strict not in text:
+              raise RuntimeError('Expected remove_functions guard was not found')
+          path.write_text(text.replace(strict, ''), encoding='utf-8')
           PY
           python tools/_r05c_finalize_studio.py
           python tools/_r05c_postfix.py
