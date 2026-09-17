@@ -1,0 +1,42 @@
+name: wp01-apply
+
+on:
+  push:
+    branches:
+      - codex/production-hardening-20260917
+    paths:
+      - tools/_apply_wp01.py
+      - .github/workflows/wp01_apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/production-hardening-20260917
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Apply migration
+        run: python tools/_apply_wp01.py
+      - name: Structural verification
+        run: |
+          python -m compileall -q kajovo/core/openai_client.py kajovo/core/openai_transport.py kajovo/core/retry.py
+          git diff --check
+          ! git grep -n -E 'with_retry\(.*(upload_file|add_file_to_vector_store)' -- kajovo/core/pipeline.py kajovo/core/cascade_pipeline.py
+      - name: Commit transformed sources
+        shell: bash
+        run: |
+          git config user.name "kajovo-hardening-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add kajovo/core/openai_client.py kajovo/core/retry.py kajovo/core/pipeline.py kajovo/core/cascade_pipeline.py
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "refactor: apply WP01 transport hardening"
+            git push origin HEAD:codex/production-hardening-20260917
+          fi
