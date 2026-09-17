@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vygeneruje forenzní inventář desktopového UI KájovoNG."""
+"""Vygeneruje forenzní inventář Studio UI KájovoNG."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from kajovo.desktop.ui_audit import audit_desktop, write_inventory
+from kajovo.studio.ui_audit import audit_studio, write_inventory
 
 
 def main() -> int:
@@ -24,7 +24,7 @@ def main() -> int:
     result = (
         write_inventory(root, args.write)
         if args.write
-        else audit_desktop(root)
+        else audit_studio(root)
     )
     if not args.write:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -32,7 +32,7 @@ def main() -> int:
         for module in result["modules"]:
             for issue in module["unresolved"]:
                 print(
-                    f"{module['source']}:{issue['line']}: {issue['target']} – {issue['reason']}"
+                    f"{module['source']}:{issue['line']}: {issue['target']} - {issue['reason']}"
                 )
         return 1
     return 0
