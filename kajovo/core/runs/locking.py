@@ -16,7 +16,10 @@ class ExecutionLock:
         if self._stream is not None:
             return True
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        stream = self.path.open("a+b")
+        try:
+            stream = self.path.open("a+b")
+        except OSError:
+            return False
         try:
             if os.name == "nt":
                 import msvcrt
@@ -31,7 +34,7 @@ class ExecutionLock:
                 import fcntl
 
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, PermissionError):
+        except OSError:
             stream.close()
             return False
         self._stream = stream
@@ -55,7 +58,7 @@ class ExecutionLock:
             stream.close()
             self._stream = None
 
-    def __enter__(self) -> "ExecutionLock":
+    def __enter__(self) -> ExecutionLock:
         if not self.acquire():
             raise BlockingIOError(f"Zámek je již obsazen: {self.path}")
         return self
