@@ -1,0 +1,48 @@
+name: retry-boundary-apply
+
+on:
+  push:
+    branches:
+      - codex/production-hardening-20260917
+    paths:
+      - 'tools/_apply_retry_boundary.py'
+      - '.github/workflows/retry_boundary_apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Apply deterministic source migration
+        run: python tools/_apply_retry_boundary.py
+      - name: Verify no outer retry or direct SDK operation remains
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -n 'with_retry' kajovo/core/pipeline.py kajovo/core/cascade_pipeline.py; then
+            echo '::error::V orchestrace zůstala vnější retry vrstva.'
+            exit 1
+          fi
+          if grep -n 'self\._sdk\.' kajovo/core/openai_client.py; then
+            echo '::error::OpenAIClient stále provádí operaci přímo přes SDK.'
+            exit 1
+          fi
+          python -m py_compile kajovo/core/openai_client.py kajovo/core/pipeline.py kajovo/core/cascade_pipeline.py
+      - name: Commit migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'karelmartinek-a11y'
+          git config user.email 'karel.martinek@post.cz'
+          git add kajovo/core/openai_client.py kajovo/core/pipeline.py kajovo/core/cascade_pipeline.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'refactor: make OpenAI transport the sole retry boundary'
+          git push origin HEAD:codex/production-hardening-20260917
