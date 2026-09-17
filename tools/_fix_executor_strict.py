@@ -40,10 +40,16 @@ def fix_executor() -> None:
         r"(?P=indent)except Exception:\n"
         r"(?P=indent)    pass\n"
     )
+    target = re.compile(r"\bself\.log\.(?:event|exception|save_json)\(")
+    replaced = 0
 
     def replace(match: re.Match[str]) -> str:
-        indent = match.group("indent")
+        nonlocal replaced
         body = match.group("body")
+        if not target.search(body):
+            return match.group(0)
+        replaced += 1
+        indent = match.group("indent")
         return (
             f"{indent}try:\n"
             f"{body}"
@@ -53,16 +59,18 @@ def fix_executor() -> None:
             f"{indent}    )\n"
         )
 
-    text, count = pattern.subn(replace, text)
-    if count not in {0, 12}:
+    text = pattern.sub(replace, text)
+    remaining_targets = sum(
+        1 for match in pattern.finditer(text) if target.search(match.group("body"))
+    )
+    if replaced not in {0, 12} or remaining_targets != 0:
         raise RuntimeError(
-            f"Po safe Ruff autofixu je očekáváno 12 transparentních evidence catchů, nalezeno {count}."
+            "Evidence migrace neodpovídá strict-Ruff kontraktu: "
+            f"replaced={replaced}, remaining={remaining_targets}."
         )
-    if count == 0 and "except Exception:\n" in text and "    pass\n" in text:
-        raise RuntimeError("Evidence migrace je nejednoznačná: zůstaly kandidátní try/pass bloky.")
 
     EXECUTOR.write_text(text, encoding="utf-8")
-    print(f"Upraveno {count} evidence catchů bez tichého pass.")
+    print(f"Upraveno {replaced} evidence catchů bez tichého pass.")
 
 
 def fix_migrated_tests() -> None:
