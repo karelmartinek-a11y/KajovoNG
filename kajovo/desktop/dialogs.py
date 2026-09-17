@@ -5,16 +5,16 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QProgressBar,
     QCheckBox,
     QMessageBox,
     QFileDialog,
     QInputDialog,
     QTextBrowser,
 )
-from ..core.progress import ProgressClock, ProgressEvent
-from ..core.progress_display import build_steps, event_sentence, source_title, stage_title, state_title
-from .design import column, label, button, row, editor, card, FitDialog
+from ..core.progress import ProgressClock, ProgressEvent, TERMINAL_RUN_STATES
+from ..core.progress_display import state_title
+from .design import column, label, button, row, FitDialog
+from ..progress_ui import DIALOG_STYLE, ProcessInspector
 
 
 PREPARATION_STAGES = {
@@ -178,66 +178,92 @@ def dialog_input_text(parent, title, message, value=""):
 
 
 STATES = {
-    "response_pending": "Sledování přerušeno · lze pokračovat",
-    "submission_unknown": "Výsledek odeslání není známý",
+    "created": "Vytvořeno",
+    "preparing": "Připravuje se",
+    "running": "Běží",
     "active": "Probíhá",
-    "waiting": "Čekání na API",
+    "waiting": "Čeká na odpověď služby",
+    "validating_result": "Ověřuje výsledek",
+    "repairing": "Opravuje podklad",
+    "response_pending": "Čeká na odpověď",
+    "batch_prepared": "BATCH připraven",
+    "batch_pending": "BATCH běží",
+    "importing": "Přebírá se",
+    "ready_to_import": "K převzetí",
     "completed": "Dokončeno",
+    "closed": "Dokončeno / uzavřeno",
+    "dry_run": "Dry-run / návrh bez zápisu",
+    "partial": "Částečně dokončeno",
+    "files_complete_unverified": "Soubory převzaty, funkčnost neověřena",
+    "unfinished_record": "Konec fáze nezapsán",
+    "cancelled": "Zrušeno",
+    "stopped": "Zastaveno",
+    "cancelling": "Ruší se",
     "failed": "Chyba",
-    "cancelled": "Zastaveno",
-    "batch_pending": "Odesláno do fronty BATCH",
-    "files_complete_unverified": "Soubory uloženy · funkčnost neověřena",
-    "partial": "Částečné výsledky · vyžadují kontrolu",
+    "error": "Chyba",
+    "submission_unknown": "Neznámý výsledek odeslání",
+    "corrupt_state": "Chyba evidence",
+    "unknown": "Neznámý stav",
+    "expired": "Vypršel čas služby",
+    "not_started": "Ještě nezačalo",
+    "blocked": "Blokováno",
+    "skipped": "Přeskočeno",
     "validating": "Ověřování dávky",
     "in_progress": "Zpracovává se",
     "finalizing": "Dokončuje se",
-    "cancelling": "Ruší se zpracování",
-    "expired": "Vypršel čas dávky",
-    "dry_run": "Změny ověřeny · OUT nezměněn (dry-run)",
 }
 
 
+def _run_terminal(event):
+    return event.stage == "RUN" and event.state in TERMINAL_RUN_STATES
+
+
 class ProgressDialog(FitDialog):
+    """Hlavní GENERATE/MODIFY dialog jako živý procesní inspektor."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Průběh běhu")
-        self.resize(760, 580)
+        self.resize(1120, 760)
+        self.setMinimumSize(820, 600)
+        self.setStyleSheet(DIALOG_STYLE)
         self.clock = ProgressClock()
         self.events = []
-        layout = column(self, 16)
-        layout.setSpacing(8)
-        layout.addWidget(label("Průběh běhu", "Heading"))
-        surface, body = card()
-        body.setContentsMargins(12, 12, 12, 12)
-        body.setSpacing(6)
-        self.lbl_status = label("Připravuji běh…")
-        self.lbl_stage = label("Příprava · Probíhá")
-        self.lbl_source = label("Zdroj práce: zatím neurčen")
-        self.lbl_plan = label("Plán běhu: čekám na první doložený krok")
-        self.lbl_next = label("Další krok: bude uveden po zahájení běhu")
-        self.lbl_time = label("", "Hint")
-        self.pb, self.pb_sub = QProgressBar(), QProgressBar()
-        self.pb.setRange(0, 0)
-        self.pb_sub.setRange(0, 0)
-        for widget in (self.lbl_status, self.lbl_stage, self.lbl_source, self.lbl_plan,
-                       self.lbl_next, self.pb, self.pb_sub, self.lbl_time):
-            body.addWidget(widget)
-        layout.addWidget(surface)
-        self.txt_log = editor(readonly=True, height=80)
-        self.txt_log.setMaximumBlockCount(2000)
-        layout.addWidget(self.txt_log, 1)
+        layout = column(self, 0)
+        layout.setSpacing(0)
+        self.inspector = ProcessInspector("Práce na projektu")
+        layout.addWidget(self.inspector, 1)
+        self.lbl_status = self.inspector.activity_label
+        self.lbl_stage = self.inspector.phase_label
+        self.lbl_source = self.inspector.source_label
+        self.lbl_plan = self.inspector.meta_label
+        self.lbl_next = self.inspector.next_label
+        self.lbl_time = self.inspector.time_label
+        self.pb = self.inspector.run_progress
+        self.pb_sub = self.inspector.unit_progress
+        self.txt_log = self.inspector.log
         self.chk_bzz = QCheckBox("Upozornit po dokončení")
         self.btn_stop = button("Zastavit běh", role="Danger")
-        self.btn_stop.setToolTip("Zastaví místní sledování. Vzdálená generace může pokračovat; navázat lze přes ReRun.")
+        self.btn_stop.setToolTip(
+            "Požádá o bezpečné zastavení. Terminální stav se zobrazí až po potvrzení backendem."
+        )
         self.btn_cancel_response = button("Zrušit generování", role="Danger")
         self.btn_cancel_response.hide()
         self.btn_close = button("Skrýt průběh", self.hide)
-        layout.addWidget(self.chk_bzz)
-        layout.addWidget(row(self.btn_stop, self.btn_cancel_response, self.btn_close))
+        controls = row(self.chk_bzz, self.btn_stop, self.btn_cancel_response, self.btn_close)
+        controls.setStyleSheet(DIALOG_STYLE)
+        layout.addWidget(controls)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_eta)
         self.timer.start(1000)
         self._update_eta()
+
+    def setWindowTitle(self, title):
+        super().setWindowTitle(title)
+        if hasattr(self, "inspector"):
+            run_id = title.split("·", 1)[1].strip() if "·" in title else ""
+            if run_id:
+                self.inspector.set_context(run_id=run_id)
 
     def set_progress(self, value):
         # Starší procentní signál neprokazuje dokončení operace.
@@ -247,54 +273,28 @@ class ProgressDialog(FitDialog):
         return None
 
     def set_status(self, value):
-        self.lbl_status.setText(value)
+        self.inspector.set_status_text(value)
 
     def add_log(self, value):
-        self.txt_log.appendPlainText(value)
+        self.inspector.append_log(value)
 
     def on_progress_event(self, event):
         self.events.append(event)
         self.events[:] = self.events[-2000:]
         self.clock.update(event)
+        self.inspector.on_event(event, self.clock)
         self.btn_cancel_response.setEnabled(event.state == "waiting")
-        if event.stage == "RUN" and event.state in STATES and event.state not in {"active", "waiting"}:
+        self.lbl_stage = self.inspector.phase_label
+        if _run_terminal(event):
             terminal_label = "Celý běh"
             if event.state == "batch_pending":
                 terminal_label = "BATCH"
             elif event.state == "dry_run":
                 terminal_label = "RUN · dry-run"
-            self.lbl_stage.setText(f"{terminal_label} · {state_title(event.state)}")
-            self.lbl_source.setText(f"Zdroj práce: {source_title(getattr(event, 'source', 'local'))}")
-            self._refresh_plan(event)
-            self.pb.setRange(0, 100)
-            self.pb.setValue(100 if event.state == "completed" else 0)
-            self.pb_sub.setRange(0, max(1, self.clock.total or 1))
-            self.pb_sub.setValue(self.clock.completed)
-            self.btn_stop.setEnabled(False)
-            self.btn_stop.hide()
-            self.btn_cancel_response.hide()
-            self.chk_bzz.hide()
-            self.btn_close.setText("OK")
-            self.btn_close.setDefault(True)
-            self.timer.stop()
-            self._update_eta()
-            return
-        self.lbl_stage.setText(f"{stage_title(event.stage)} · {state_title(event.state)}")
-        self.lbl_source.setText(f"Zdroj práce: {source_title(getattr(event, 'source', 'local'))}")
-        self._refresh_plan(event)
-        if event.detail:
-            self.set_status(event_sentence(event))
-        if self.clock.total:
-            self.pb_sub.setRange(0, self.clock.total)
-            self.pb_sub.setValue(self.clock.completed)
-            self.pb_sub.setFormat(f"%v / %m {self.clock.unit}")
-        else:
-            self.pb_sub.setRange(0, 0)
-        if self.clock.finished is not None or (event.stage == "RUN" and event.state == "files_complete_unverified"):
-            self.pb.setRange(0, 100)
-            self.pb.setValue(100 if event.state == "completed" else 0)
-            self.pb_sub.setRange(0, max(1, self.clock.total or 1))
-            self.pb_sub.setValue(self.clock.completed)
+            self.inspector.phase_label.setText(f"{terminal_label} · {state_title(event.state)}")
+            if self.pb_sub.maximum() == 0:
+                self.pb_sub.setRange(0, max(1, self.clock.total or 1))
+                self.pb_sub.setValue(self.clock.completed)
             self.btn_stop.setEnabled(False)
             self.btn_stop.hide()
             self.btn_cancel_response.hide()
@@ -304,92 +304,84 @@ class ProgressDialog(FitDialog):
             self.timer.stop()
         self._update_eta()
 
-    def _refresh_plan(self, event):
-        steps = build_steps(self.events, quality=any(e.stage in {"A2Q", "B2Q"} for e in self.events))
-        if not steps:
-            return
-        self.lbl_plan.setText("Plán běhu: " + "  →  ".join(
-            ("✓ " if step.state == "done" else "▶ " if step.state == "current" else "○ ") + step.title
-            for step in steps
-        ))
-        index = next((i for i, step in enumerate(steps) if step.state == "current"), len(steps) - 1)
-        next_step = next((step.title for step in steps[index + 1:] if step.state == "pending"), "hotový výsledek")
-        self.lbl_next.setText(f"Další krok: {next_step}")
+    def _refresh_plan(self, event=None):
+        self.inspector.refresh(self.clock)
 
     def _update_eta(self):
-        elapsed, age, eta = self.clock.times()
-        remaining = f"{int(eta)} s" if eta is not None else "nelze určit"
-        self.lbl_time.setText(
-            f"Uplynulo {int(elapsed)} s · Odhad zbývající doby: {remaining}\nPoslední aktivita před {int(age)} s"
-        )
+        self.inspector.refresh(self.clock)
 
     def reject(self):
         self.hide()
 
 
 class TaskProgressDialog(FitDialog):
+    """Společný progress dialog pro P03-P12 a podpůrné asynchronní operace."""
+
     def __init__(self, title, parent=None, show_subprogress=True):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(700, 500)
+        self.resize(1040, 720)
+        self.setMinimumSize(760, 560)
+        self.setStyleSheet(DIALOG_STYLE)
         self._done = False
         self.terminal_state = None
         self.clock = ProgressClock()
         self.events = []
-        layout = column(self, 16)
-        layout.setSpacing(8)
-        layout.addWidget(label(title, "Heading"))
-        self.lbl_status = label("Připravuji…")
-        self.lbl_current = label("")
-        self.lbl_source = label("Zdroj práce: zatím neurčen")
-        self.lbl_plan = label("Plán: čekám na první doložený krok")
-        self.lbl_next = label("Další krok: bude uveden po zahájení operace")
-        self.activity = label("", "Hint")
-        self.pb, self.pb_sub = QProgressBar(), QProgressBar()
-        self.pb.setRange(0, 0)
-        self.pb_sub.setVisible(show_subprogress)
-        self.txt_log = editor(readonly=True, height=80)
-        self.txt_log.setMaximumBlockCount(2000)
-        for widget in (self.lbl_status, self.lbl_current, self.lbl_source, self.lbl_plan,
-                       self.lbl_next, self.activity, self.pb, self.pb_sub):
-            layout.addWidget(widget)
-        layout.addWidget(self.txt_log, 1)
+        layout = column(self, 0)
+        layout.setSpacing(0)
+        self.inspector = ProcessInspector(title)
+        layout.addWidget(self.inspector, 1)
+        self.lbl_status = self.inspector.activity_label
+        self.lbl_current = self.inspector.phase_label
+        self.lbl_source = self.inspector.source_label
+        self.lbl_plan = self.inspector.meta_label
+        self.lbl_next = self.inspector.next_label
+        self.activity = self.inspector.time_label
+        self.pb = self.inspector.run_progress
+        self.pb_sub = self.inspector.unit_progress
+        self.pb_sub.setVisible(show_subprogress and self.pb_sub.isVisible())
+        self.txt_log = self.inspector.log
         self.btn_close = button("Zavřít", self.accept)
         self.btn_close.setEnabled(False)
         self.btn_cancel = button("Zrušit operaci", self._handle_cancel, "Danger")
         self.btn_cancel.hide()
         self._cancel = None
         self._cancelled = False
-        layout.addWidget(row(self.btn_cancel, self.btn_close))
+        controls = row(self.btn_cancel, self.btn_close)
+        controls.setStyleSheet(DIALOG_STYLE)
+        layout.addWidget(controls)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(1000)
         self._tick()
 
     def _tick(self):
-        elapsed, age, _ = self.clock.times()
-        self.activity.setText(
-            f"Uplynulo {int(elapsed)} s · Poslední aktivita před {int(age)} s · ETA nelze určit"
-        )
+        self.inspector.refresh(self.clock)
 
     def set_status(self, value):
-        self.lbl_status.setText(value)
+        self.inspector.set_status_text(value)
         if not self._done:
-            self.clock.update(ProgressEvent("Operace", detail=value))
+            event = ProgressEvent("Operace", detail=value)
+            self.clock.update(event)
 
     def set_current(self, value):
-        self.lbl_current.setText(value)
+        self.inspector.activity_label.setText(value)
 
     def set_progress(self, value):
         if self._done:
             return
-        self.pb.setRange(0, 100)
-        self.pb.setValue(value)
+        self.pb.hide()
+        self.pb_sub.show()
+        self.pb_sub.setRange(0, 100)
+        self.pb_sub.setValue(value)
+        self.pb_sub.setFormat("%p %")
+        self.inspector.progress_note.setText(f"{value} % · měřeno volajícím procesem")
         self.clock.update(ProgressEvent("Operace"))
 
     def set_subprogress(self, value):
         if self._done:
             return
+        self.pb_sub.show()
         self.pb_sub.setRange(0, 100)
         self.pb_sub.setValue(value)
 
@@ -399,32 +391,14 @@ class TaskProgressDialog(FitDialog):
         self.clock.update(event)
         self.events.append(event)
         self.events[:] = self.events[-2000:]
-        if event.detail:
-            self.lbl_status.setText(event_sentence(event))
-        self.lbl_current.setText(f"Právě probíhá: {stage_title(event.stage)} · {state_title(event.state)}")
-        self.lbl_source.setText(f"Zdroj práce: {source_title(getattr(event, 'source', 'local'))}")
-        self._refresh_plan()
-        if event.total:
-            self.pb_sub.setVisible(True)
-            self.pb_sub.setRange(0, event.total)
-            self.pb_sub.setValue(event.completed)
-            self.pb_sub.setFormat(f"%v / %m {event.unit}" if event.unit else "%v / %m")
+        self.inspector.on_event(event, self.clock)
         self._tick()
 
     def _refresh_plan(self):
-        steps = build_steps(self.events, quality=any(e.stage in {"A2Q", "B2Q"} for e in self.events))
-        if not steps:
-            return
-        self.lbl_plan.setText("Plán: " + "  →  ".join(
-            ("✓ " if step.state == "done" else "▶ " if step.state == "current" else "○ ") + step.title
-            for step in steps
-        ))
-        index = next((i for i, step in enumerate(steps) if step.state == "current"), len(steps) - 1)
-        next_step = next((step.title for step in steps[index + 1:] if step.state == "pending"), "hotový výsledek")
-        self.lbl_next.setText(f"Další krok: {next_step}")
+        self.inspector.refresh(self.clock)
 
     def add_log(self, value):
-        self.txt_log.appendPlainText(value)
+        self.inspector.append_log(value)
         if not self._done:
             self.clock.update(ProgressEvent("Operace"))
 
@@ -433,24 +407,22 @@ class TaskProgressDialog(FitDialog):
             return
         self._done = True
         self.terminal_state = state
-        self.lbl_status.setText(text)
-        self.clock.update(ProgressEvent("RUN", state))
-        if success:
-            self.pb.setRange(0, 100)
-            self.pb.setValue(100)
-        elif self.pb.minimum() == 0 and self.pb.maximum() == 0:
-            # Chyba/zrušení ukončí animaci, ale nesmí implikovat 100% úspěch.
-            self.pb.setRange(0, 100)
-            self.pb.setValue(0)
+        event = ProgressEvent("RUN", state, detail=text)
+        self.clock.update(event)
+        self.events.append(event)
+        self.inspector.on_event(event, self.clock)
+        self.pb.setRange(0, 100)
+        self.pb.setValue(100 if success else 0)
+        self.pb.show()
+        if self.pb_sub.maximum() == 0:
+            self.pb_sub.setRange(0, 1)
+            self.pb_sub.setValue(0)
         self.btn_close.setEnabled(True)
         self.btn_close.setText("OK")
         self.btn_close.setDefault(True)
         self.btn_close.setFocus()
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.hide()
-        if self.pb_sub.maximum() == 0:
-            self.pb_sub.setRange(0, 100)
-            self.pb_sub.setValue(0)
         self.timer.stop()
         self._tick()
 
@@ -479,7 +451,10 @@ class TaskProgressDialog(FitDialog):
             return
         self._cancelled = True
         self.btn_cancel.setEnabled(False)
-        self.set_status("Ruším; čekám na potvrzení dokončení aktuální operace.")
+        event = ProgressEvent("RUN", "cancelling", detail="Čekám na bezpečné ukončení operace")
+        self.clock.update(event)
+        self.events.append(event)
+        self.inspector.on_event(event, self.clock)
         if self._cancel:
             self._cancel()
 
@@ -500,4 +475,5 @@ class TaskProgressDialog(FitDialog):
 class UploadProgressDialog(TaskProgressDialog):
     def __init__(self, title="Nahrávání souborů", parent=None):
         super().__init__(title, parent, False)
+        self.inspector.set_context(kind="ZDROJE")
         self.btn_cancel.show()
