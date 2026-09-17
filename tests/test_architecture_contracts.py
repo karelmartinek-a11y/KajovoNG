@@ -53,6 +53,13 @@ def test_core_does_not_depend_on_ui_packages():
     assert not violations, violations
 
 
+
+def test_pipeline_facade_is_qt_free():
+    """Legacy název modulu smí zůstat jen jako Qt-free core fasáda."""
+    path = ROOT / "kajovo" / "core" / "pipeline.py"
+    violations = _violations([path], ("PySide6",))
+    assert not violations, violations
+
 def test_new_runs_layer_is_qt_free():
     """Nově extrahovaná doménová run vrstva musí zůstat nezávislá na PySide6."""
     runs = ROOT / "kajovo" / "core" / "runs"

@@ -26,7 +26,8 @@ from ..core.secret_store import load_api_key, get_secret
 from ..core.model_capabilities import ModelCapabilitiesCache
 from ..core.model_registry import model_spec, selectable, matrix_version
 from ..core.request_rules import validate_run_options, uses_reasoning_defaults
-from ..core.pipeline import UiRunConfig, RunWorker
+from ..core.runs.config import UiRunConfig
+from ..studio.workers.run_worker import RunWorker
 from ..core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
 from ..core.cascade_types import CascadeDefinition
 from ..core.openai_client import OpenAIClient

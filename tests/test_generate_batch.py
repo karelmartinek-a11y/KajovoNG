@@ -151,7 +151,7 @@ def test_live_preparation_then_one_request_per_file(tmp_path):
     results, errors = [], []
     worker.finished_ok.connect(results.append)
     worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
     assert not errors
     assert client.create_response.call_count == 3
@@ -273,7 +273,7 @@ def test_invalid_preparation_never_submits_batch(tmp_path):
     ]
     errors = []
     worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
     assert errors
     assert client.create_response.call_count == 4

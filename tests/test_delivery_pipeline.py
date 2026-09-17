@@ -69,7 +69,7 @@ def _run(worker, client):
     results, errors = [], []
     worker.finished_ok.connect(results.append)
     worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
     return results, errors
 

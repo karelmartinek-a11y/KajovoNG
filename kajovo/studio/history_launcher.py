@@ -13,7 +13,8 @@ from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
 from kajovo.core.cascade_types import CascadeDefinition
 from kajovo.core.delivery_preparation import validate_preparation_snapshot
 from kajovo.core.model_capabilities import ModelCapabilitiesCache
-from kajovo.core.pipeline import RunWorker, UiRunConfig
+from kajovo.core.runs.config import UiRunConfig
+from kajovo.studio.workers.run_worker import RunWorker
 from kajovo.core.runlog import RunLogger, verified_output_evidence
 from kajovo.core.utils import new_run_id
 

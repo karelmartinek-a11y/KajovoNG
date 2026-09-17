@@ -49,7 +49,7 @@ def test_wrapped_label_releases_old_height_after_panel_expands(qtbot):
 @pytest.mark.parametrize("relation", ["continue", "rerun", "repair"])
 def test_async_branch_prepares_off_gui_and_adopts_real_worker(qtbot, tmp_path, monkeypatch, relation):
     from PySide6.QtCore import QThread
-    from kajovo.core.pipeline import RunWorker
+    from kajovo.studio.workers.run_worker import RunWorker
 
     settings, logger, _ui = source(tmp_path, "QA")
     adapter = LegacyRunAdapter(logger.paths.run_dir)

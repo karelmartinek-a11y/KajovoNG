@@ -13,7 +13,7 @@ from kajovo.core.openai_client import OpenAIClient, OpenAIError
 from kajovo.core.response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
 from kajovo.core.request_rules import validate_response_payload
 from kajovo.core.runlog import RunLogger
-from kajovo.core.pipeline import RunWorker
+from kajovo.core.runs.executor import RunExecutor as RunWorker
 from kajovo.desktop.recovery import recover_run
 from test_workflows import make_worker, response
 from delivery_fixtures import delivery_payloads
@@ -208,7 +208,7 @@ def test_worker_recovers_preparation_and_file_without_reposting(tmp_path, mode, 
     def stop_get(*args):
         raise OpenAIError("offline", status_code=404)
     client.retrieve_response.side_effect = stop_get
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(ResponseJournal, "_wait"):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(ResponseJournal, "_wait"):
         worker.run()
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert state["status"] == "response_pending"
@@ -222,7 +222,7 @@ def test_worker_recovers_preparation_and_file_without_reposting(tmp_path, mode, 
     client.create_response.side_effect = results[pending_index + 1:]
     errors = []
     resumed.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(ResponseJournal, "_wait"):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(ResponseJournal, "_wait"):
         resumed.run()
     assert errors == []
     assert (tmp_path / "out" / "hello.txt").read_text() == expected
@@ -236,7 +236,7 @@ def test_second_instance_does_not_change_run_state(tmp_path):
     lock = QLockFile(str(Path(worker.log.paths.run_dir) / "execution.lock"))
     assert lock.tryLock(0)
     try:
-        with patch("kajovo.core.pipeline.OpenAIClient") as client:
+        with patch("kajovo.core.runs.executor.OpenAIClient") as client:
             worker.run()
         client.assert_not_called()
         assert Path(worker.log.state_path).read_bytes() == before
@@ -336,7 +336,7 @@ def test_restart_after_first_output_write_keeps_files_and_response_chain(tmp_pat
         save(rows[:1])
         raise OSError("Pád po prvním zápisu")
 
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(worker, "_save_out_files", side_effect=partial_save):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(worker, "_save_out_files", side_effect=partial_save):
         worker.run()
     assert (tmp_path / "out" / "hello.txt").is_file()
     assert not (tmp_path / "out" / "world.txt").exists()
@@ -345,7 +345,7 @@ def test_restart_after_first_output_write_keeps_files_and_response_chain(tmp_pat
     resumed = RunWorker(worker.cfg, worker.settings, "test", RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True))
     errors = []
     resumed.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         resumed.run()
     assert errors == []
     assert client.create_response.call_count == 5

@@ -10,7 +10,7 @@ import pytest
 from kajovo.core.batch_submit import exact_batch_matches
 from kajovo.core.batch_completion import recover_unknown_submission
 from kajovo.core.openai_client import OpenAIClient
-from kajovo.core.pipeline import RunWorker
+from kajovo.core.runs.executor import RunExecutor as RunWorker
 from kajovo.core.progress import ProgressClock, ProgressEvent
 from kajovo.core.runlog import RunLogger, verified_output_evidence
 

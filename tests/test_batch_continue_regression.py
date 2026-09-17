@@ -20,7 +20,7 @@ def test_continue_generate_batch_with_recovered_resume_files_skips_live_a1_a2(tm
     worker.finished_ok.connect(results.append)
     worker.finished_err.connect(errors.append)
 
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
 
     assert not errors
