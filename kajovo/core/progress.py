@@ -6,6 +6,26 @@ from statistics import median
 import time
 
 
+TERMINAL_RUN_STATES = {
+    "completed",
+    "closed",
+    "dry_run",
+    "partial",
+    "files_complete_unverified",
+    "unfinished_record",
+    "cancelled",
+    "stopped",
+    "failed",
+    "error",
+    "submission_unknown",
+    "corrupt_state",
+    "unknown",
+    "expired",
+    "response_pending",
+    "batch_pending",
+}
+
+
 @dataclass(frozen=True)
 class ProgressEvent:
     stage: str
@@ -15,12 +35,23 @@ class ProgressEvent:
     unit: str = ""
     detail: str = ""
     timestamp: float = field(default_factory=time.monotonic)
-    # Volitelná metadata pro společné živé zobrazení. Přidáváme je za původní
-    # argumenty, aby starší volání s pozičními argumenty zůstala kompatibilní.
+    # Volitelná metadata pro společné živé zobrazení. Přidávají se až za
+    # původní argumenty, aby starší poziční volání zůstala kompatibilní.
     source: str = "local"
     next_step: str = ""
     phase_index: int | None = None
     phase_total: int | None = None
+    operation: str = ""
+    project: str = ""
+    run_id: str = ""
+    model: str = ""
+    provider_state: str = ""
+    attempt: int | None = None
+    attempt_total: int | None = None
+    response_id: str = ""
+    batch_id: str = ""
+    file_id: str = ""
+    path: str = ""
 
 
 class ProgressClock:
@@ -36,6 +67,7 @@ class ProgressClock:
         self.unit_started = self.started
         self.finished = None
         self.last_event = None
+        self.stage_started = self.started
 
     def update(self, event):
         self.last_event = event
@@ -44,6 +76,7 @@ class ProgressClock:
             self.samples.clear()
             self.completed, self.total = 0, None
             self.unit_started = event.timestamp
+            self.stage_started = event.timestamp
         self.last_activity = event.timestamp
         self.state = event.state
         if event.total is not None:
@@ -55,15 +88,21 @@ class ProgressClock:
             if event.completed != self.completed:
                 self.unit_started = event.timestamp
             self.completed = event.completed
-        if event.state in ("completed", "partial", "failed", "cancelled", "batch_pending", "dry_run", "response_pending", "submission_unknown", "files_complete_unverified") and event.stage == "RUN":
+        if event.state in TERMINAL_RUN_STATES and event.stage == "RUN":
             self.finished = event.timestamp
 
     def times(self, now=None):
         now = time.monotonic() if now is None else now
-        elapsed = max(0, (self.finished if self.finished is not None else now) - self.started)
+        effective_now = self.finished if self.finished is not None else now
+        elapsed = max(0, effective_now - self.started)
         eta = None
         if self.finished is None and self.total and len(self.samples) >= 3:
             eta = max(
                 0, (self.total - self.completed) * median(self.samples) - (now - self.unit_started)
             )
         return elapsed, max(0, now - self.last_activity), eta
+
+    def stage_elapsed(self, now=None):
+        now = time.monotonic() if now is None else now
+        effective_now = self.finished if self.finished is not None else now
+        return max(0, effective_now - self.stage_started)
