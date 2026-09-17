@@ -1,7 +1,11 @@
 name: retry-boundary-apply
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - codex/production-hardening-20260917
+    paths:
+      - '.github/workflows/retry_boundary_apply.yml'
 
 permissions:
   contents: write
@@ -30,7 +34,7 @@ jobs:
             echo '::error::OpenAIClient stále provádí operaci přímo přes SDK.'
             exit 1
           fi
-          python -m py_compile kajovo/core/openai_client.py kajovo/core/pipeline.py kajovo/core/cascade_pipeline.py
+          python -m py_compile kajovo/core/openai_client.py kajovo/core/pipeline.py kajovo/core/cascade_pipeline.py tests/test_response_journal.py
       - name: Commit migration
         shell: bash
         run: |
