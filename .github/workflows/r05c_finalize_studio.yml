@@ -3,7 +3,7 @@ name: r05c-finalize-studio
 on:
   push:
     branches:
-      - codex/r05-ui-consolidation-20260917
+      - codex/final-nine-hardening-20260917
     paths:
       - 'tools/_r05c_finalize_studio.py'
       - 'tools/_r05c_postfix.py'
@@ -88,4 +88,4 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m 'refactor: remove legacy desktop UI and tracked runtime artifacts'
-          git push origin HEAD:codex/r05-ui-consolidation-20260917
+          git push origin HEAD:codex/final-nine-hardening-20260917
