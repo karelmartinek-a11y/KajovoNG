@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 
 from kajovo.core.runs.contracts import (
@@ -21,7 +23,7 @@ def test_happy_path_lifecycle_is_valid_with_delivery():
         RunStatus.FINALIZING,
         RunStatus.COMPLETED,
     ]
-    for current, target in zip(states, states[1:], strict=True):
+    for current, target in pairwise(states):
         validate_transition(current, target)
 
 
