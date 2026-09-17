@@ -36,6 +36,11 @@ def transform_core() -> None:
     elif new_import not in text:
         raise RuntimeError("Cascade core nemá očekávaný Qt import ani EventPort import.")
 
+    if "import contextlib\n" not in text:
+        if "import copy\n" not in text:
+            raise RuntimeError("Cascade core nemá očekávaný import copy pro vložení contextlib.")
+        text = text.replace("import copy\n", "import contextlib\nimport copy\n", 1)
+
     old_header = '''class CascadeRunWorker(QThread):
     progress = Signal(int)
     progress_event = Signal(object)
@@ -90,10 +95,22 @@ def transform_core() -> None:
     elif new_run not in text:
         raise RuntimeError("Cascade executor nemá očekávanou execute metodu.")
 
-    text = text.replace(
-        "[NOVÁ VĚTEV – explicitní pokyn platí pouze pro nově prováděný krok kaskády]",
-        "[NOVÁ VĚTEV - explicitní pokyn platí pouze pro nově prováděný krok kaskády]",
-    )
+    text = text.replace("NOVÁ VĚTEV –", "NOVÁ VĚTEV -")
+
+    old_cleanup = '''            for temp_path in temp_paths:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+'''
+    new_cleanup = '''            for temp_path in temp_paths:
+                with contextlib.suppress(OSError):
+                    os.remove(temp_path)
+'''
+    if old_cleanup in text:
+        text = text.replace(old_cleanup, new_cleanup, 1)
+    elif new_cleanup not in text:
+        raise RuntimeError("Cascade core nemá očekávaný cleanup blok dočasných souborů.")
 
     if "PySide6" in text or "QThread" in text or "Signal(" in text or "QObject" in text:
         raise RuntimeError("Po extrakci zůstal v cascade core Qt symbol.")
