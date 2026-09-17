@@ -142,7 +142,7 @@ def test_missing_deliverables_report_records_reason(tmp_path):
 
 
 def test_live_generate_partial_semantics_are_wired_end_to_end():
-    pipeline = Path("kajovo/core/pipeline.py").read_text(encoding="utf-8")
+    pipeline = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
     desktop = Path("kajovo/desktop/application.py").read_text(encoding="utf-8")
     assert '"status": "partial" if missing_deliverables else "files_complete_unverified"' in pipeline
     assert 'final_status in ("completed", "partial", "dry_run", "files_complete_unverified")' in pipeline
@@ -151,7 +151,7 @@ def test_live_generate_partial_semantics_are_wired_end_to_end():
 
 
 def test_user_progress_no_longer_exposes_obsolete_english_stage_messages():
-    source = Path("kajovo/core/pipeline.py").read_text(encoding="utf-8")
+    source = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
     obsolete = (
         "C: building batch JSONL...",
         "IN mirror: scan + manifest + upload...",

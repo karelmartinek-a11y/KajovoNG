@@ -1,42 +1,65 @@
 from __future__ import annotations
-import copy
 
 import base64
+import copy
 import hashlib
 import json
+import logging
 import os
 import shutil
 import time
-from typing import Any, Dict, List, Optional, Tuple
-
 from pathlib import Path
 from types import SimpleNamespace
-from ..response_journal import ResponseJournal, ResponsePending, SubmissionUnknown, ResponseCancelled
-from ..progress import ProgressEvent
+from typing import Any
 
-from ..request_rules import uses_reasoning_defaults, validate_run_options
-from ..structured_output import prepare_payload, validate_output, user_text, text_format, OutputContractError
-from ..compat import validate_input_file_sizes
+from ..batch_submit import submit_verified_batch
+from ..compat import (
+    SUPPORTED_INPUT_FILE_EXTS,
+    SUPPORTED_INPUT_IMAGE_EXTS,
+    validate_input_file_sizes,
+)
+from ..contracts import (
+    ContractError,
+    extract_text_from_response,
+    file_response_format,
+    parse_json_strict,
+    validate_chunk_metadata,
+    validate_paths,
+)
+from ..delivery_preparation import (
+    prepare_delivery,
+    validate_modify_sources,
+    validate_preparation_snapshot,
+)
+from ..filescan import build_manifest, scan_tree
 from ..generate_batch import build_manifest as build_batch_manifest
 from ..generate_batch import encode_requests
-from ..delivery_preparation import prepare_delivery, validate_preparation_snapshot, validate_modify_sources
-from ..requirements import apply_quality, stage_instructions
-from ..contracts import validate_chunk_metadata
-from ..contracts import ContractError, extract_text_from_response, parse_json_strict, validate_paths, file_response_format
-from ..filescan import build_manifest, scan_tree
 from ..openai_client import OpenAIClient
-from ..batch_submit import submit_verified_batch
-from ..utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root
+from ..progress import ProgressEvent
+from ..request_rules import uses_reasoning_defaults, validate_run_options
+from ..requirements import apply_quality, stage_instructions
+from ..response_journal import (
+    ResponseCancelled,
+    ResponseJournal,
+    ResponsePending,
+    SubmissionUnknown,
+)
+from ..structured_output import (
+    OutputContractError,
+    prepare_payload,
+    text_format,
+    user_text,
+    validate_output,
+)
+from ..utils import ensure_dir, is_versing_snapshot_dir, safe_join_under_root, sha256_file, ts_code
 
-from ..compat import SUPPORTED_INPUT_FILE_EXTS, SUPPORTED_INPUT_IMAGE_EXTS
 
-
-def split_text(text: str, max_chars: int) -> List[str]:
+def split_text(text: str, max_chars: int) -> list[str]:
     if not text:
         return [""]
     if max_chars <= 0:
         return [text]
-    out: List[str] = []
+    out: list[str] = []
     i = 0
     n = len(text)
     while i < n:
@@ -45,12 +68,13 @@ def split_text(text: str, max_chars: int) -> List[str]:
     return out
 
 
+from .cancellation import CancellationToken
 from .config import UiRunConfig
 from .delivery import DeliveryContext, save_out_files
-from .polling import VectorStorePollingContext, wait_vector_store_files
-from .observability import emit_signal, record_event, update_state as update_run_state
-from .cancellation import CancellationToken
 from .locking import ExecutionLock
+from .observability import emit_signal, record_event
+from .observability import update_state as update_run_state
+from .polling import VectorStorePollingContext, wait_vector_store_files
 from .ports import EventPort
 
 
@@ -62,7 +86,7 @@ class RunExecutor:
         settings,
         api_key: str,
         run_logger,
-        parent: Optional[object] = None,
+        parent: object | None = None,
     ):
         del parent
         self.cfg = copy.deepcopy(cfg)
@@ -83,17 +107,19 @@ class RunExecutor:
         self._stop = False
         self._cancel_response = False
         self._response_journal = None
-        self._response_file_ids = {}
-        self._last_prev_id_error: Optional[str] = None
-        self._final_response_id: Optional[str] = None
-        self._in_dir_info: Optional[Dict[str, Any]] = None
-        self._fs_tools: Optional[List[Dict[str, Any]]] = None
-        self._vector_store_ids: List[str] = []
-        self._diag_vector_store_ids: List[str] = []
+        self._response_file_ids: dict[str, str] = {}
+        self.resume_generate_batch: dict[str, Any] | None = None
+        self._delivery_snapshot: dict[str, Any] = {}
+        self._last_prev_id_error: str | None = None
+        self._final_response_id: str | None = None
+        self._in_dir_info: dict[str, Any] | None = None
+        self._fs_tools: list[dict[str, Any]] | None = None
+        self._vector_store_ids: list[str] = []
+        self._diag_vector_store_ids: list[str] = []
         self._diag_text: str = ""
         self._diag_zip_path: str = ""
-        self._input_kind_cache: Dict[str, str] = {}
-        self._file_name_cache: Dict[str, str] = {}
+        self._input_kind_cache: dict[str, str] = {}
+        self._file_name_cache: dict[str, str] = {}
 
     def _ts(self) -> str:
         return time.strftime("%Y%m%d %H%M%S")
@@ -103,7 +129,7 @@ class RunExecutor:
         if not instruction:
             return ""
         return (
-            "\n\n[NOVÁ VĚTEV – explicitní pokyn platí pouze pro nově prováděnou část]\n"
+            "\n\n[NOVÁ VĚTEV - explicitní pokyn platí pouze pro nově prováděnou část]\n"
             + instruction
         )
 
@@ -112,7 +138,7 @@ class RunExecutor:
         emit_signal(self.logline, line, name="logline")
         record_event(self.log, "debug", {"ts": self._ts(), "msg": msg})
 
-    def _log_api_action(self, stage: str, action: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def _log_api_action(self, stage: str, action: str, details: dict[str, Any] | None = None) -> None:
         ts = self._ts()
         parts = [f"{stage}: {action}"]
         if details:
@@ -139,12 +165,12 @@ class RunExecutor:
     def _attachments_snapshot(
         self,
         stage: str,
-        ref_file_ids: List[str],
-        input_file_ids: List[str],
-        input_image_ids: List[str],
-        vector_store_ids: List[str],
-        tools: Optional[List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+        ref_file_ids: list[str],
+        input_file_ids: list[str],
+        input_image_ids: list[str],
+        vector_store_ids: list[str],
+        tools: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
         ts = self._ts()
         ref_ids = [fid for fid in (ref_file_ids or []) if fid]
         input_ids = [fid for fid in (input_file_ids or []) if fid]
@@ -164,7 +190,7 @@ class RunExecutor:
             "supports_vector_store": bool(self.cfg.model_caps.get("supports_vector_store", False)),
         }
 
-    def _input_file_ids(self) -> List[str]:
+    def _input_file_ids(self) -> list[str]:
         try:
             if hasattr(self.cfg, "input_file_ids"):
                 return list(self.cfg.input_file_ids or [])
@@ -234,11 +260,11 @@ class RunExecutor:
     def _log_request_attachments(
         self,
         stage: str,
-        ref_file_ids: List[str],
-        input_file_ids: List[str],
-        input_image_ids: List[str],
-        vector_store_ids: List[str],
-        tools: Optional[List[Dict[str, Any]]],
+        ref_file_ids: list[str],
+        input_file_ids: list[str],
+        input_image_ids: list[str],
+        vector_store_ids: list[str],
+        tools: list[dict[str, Any]] | None,
     ) -> None:
         snapshot = self._attachments_snapshot(stage, ref_file_ids, input_file_ids, input_image_ids, vector_store_ids, tools)
         record_event(self.log, "request.attachments", snapshot)
@@ -417,8 +443,10 @@ class RunExecutor:
             else:
                 try:
                     self.log.exception("run", e)
-                except Exception:
-                    pass
+                except Exception as evidence_error:
+                    logging.getLogger(__name__).warning(
+                        "Zápis pomocné evidence selhal: %s", evidence_error
+                    )
                 self.log.update_state({"status": "failed", "failed_at": time.time(), "error": str(e)})
                 from ..user_errors import describe_error
                 self.failure_detail.emit(describe_error(e))
@@ -432,7 +460,7 @@ class RunExecutor:
             self._set(2, 0, "Ověřuji vstupní přílohy…", stage="Přílohy")
         input_files, input_images = self._build_input_attachments(client, self._input_file_ids())
         if input_files or input_images:
-            for model in self.cfg.caps_by_model:
+            for model in (self.cfg.caps_by_model or {}):
                 client.validate_access({"model": model, "text": text_format(),
                     "input": self._input_parts("kontrola příloh", input_files, input_images)})
         diag_file_ids, diag_text = self._maybe_collect_diagnostics(client)
@@ -448,7 +476,7 @@ class RunExecutor:
             and (bool(self.cfg.use_file_search) or bool(diag_file_ids))
             and self._vector_store_ids
         ):
-            uniq: List[str] = []
+            uniq: list[str] = []
             seen: set = set()
             for vid in self._vector_store_ids:
                 if vid and vid not in seen:
@@ -497,15 +525,15 @@ class RunExecutor:
             })
 
     # Sestavení požadavků.
-    def _input_parts(self, text: str, file_ids: List[str], image_file_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def _input_parts(self, text: str, file_ids: list[str], image_file_ids: list[str] | None = None) -> list[dict[str, Any]]:
         """Sestaví vstup Responses API z textu a volitelných souborů či obrázků."""
         chunks = split_text(text, max_chars=20_000)
         if not chunks:
             chunks = [""]
-        parts: List[Dict[str, Any]] = []
+        parts: list[dict[str, Any]] = []
         image_ids = [fid for fid in (image_file_ids or []) if fid]
         for i, ch in enumerate(chunks):
-            content: List[Dict[str, Any]] = [{"type": "input_text", "text": ch}]
+            content: list[dict[str, Any]] = [{"type": "input_text", "text": ch}]
             if i == 0 and file_ids:
                 for fid in file_ids:
                     content.append({"type": "input_file", "file_id": fid})
@@ -519,11 +547,11 @@ class RunExecutor:
         self,
         model: str,
         instructions: str,
-        input_parts: List[Dict[str, Any]],
-        prev_id: Optional[str],
-        supports_temperature: Optional[bool] = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+        input_parts: list[dict[str, Any]],
+        prev_id: str | None,
+        supports_temperature: bool | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "model": model,
             "instructions": instructions,
             "input": input_parts,
@@ -539,14 +567,14 @@ class RunExecutor:
         return payload
 
     # Diagnostika.
-    def _build_diag_text(self, files: List[str]) -> str:
+    def _build_diag_text(self, files: list[str]) -> str:
         allowed_exts = {
             ".txt", ".log", ".json", ".xml", ".yaml", ".yml", ".md", ".csv",
             ".ini", ".cfg", ".conf", ".ps1", ".bat", ".cmd", ".sh"
         }
         max_total = 120_000
         max_per_file = 20_000
-        parts: List[str] = []
+        parts: list[str] = []
         total = 0
         for fp in files:
             if total >= max_total:
@@ -555,7 +583,7 @@ class RunExecutor:
             if ext and ext not in allowed_exts:
                 continue
             try:
-                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                with open(fp, encoding="utf-8", errors="ignore") as f:
                     content = f.read(max_per_file)
             except Exception:
                 continue
@@ -572,7 +600,7 @@ class RunExecutor:
             total += len(content)
         return "".join(parts).strip()
 
-    def _write_diagnostics_json(self, root: str, files: List[str]) -> Optional[str]:
+    def _write_diagnostics_json(self, root: str, files: list[str]) -> str | None:
         if not root or not os.path.isdir(root):
             return None
         ensure_dir(self.log.paths.files_dir)
@@ -583,7 +611,7 @@ class RunExecutor:
                 ".ini", ".cfg", ".conf", ".ps1", ".bat", ".cmd", ".sh", ".reg"
             }
             total_size = 0
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "source_root": root,
                 "file_count": 0,
@@ -599,7 +627,7 @@ class RunExecutor:
                     size = None
                 try:
                     if ext in text_exts:
-                        with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                        with open(fp, encoding="utf-8", errors="ignore") as f:
                             content = f.read()
                         payload["files"].append({"path": rel, "encoding": "utf-8", "content": content, "bytes": size})
                     else:
@@ -619,8 +647,8 @@ class RunExecutor:
         except Exception:
             return None
 
-    def _maybe_collect_diagnostics(self, client: OpenAIClient) -> Tuple[List[str], str]:
-        diag_file_ids: List[str] = []
+    def _maybe_collect_diagnostics(self, client: OpenAIClient) -> tuple[list[str], str]:
+        diag_file_ids: list[str] = []
         diag_text = ""
         if not (self.cfg.diag_windows_in or self.cfg.diag_ssh_in):
             return diag_file_ids, diag_text
@@ -628,7 +656,7 @@ class RunExecutor:
         self._set(2, 0, "Sbírám diagnostická data…", stage="Diagnostika")
         diag_root = os.path.join(self.log.paths.manifests_dir, "diagnostics")
         ensure_dir(diag_root)
-        diag_files: List[str] = []
+        diag_files: list[str] = []
 
         if self.cfg.diag_windows_in:
             from ..diagnostics.windows import collect_windows_diagnostics
@@ -638,13 +666,17 @@ class RunExecutor:
                 diag_files.extend(files)
                 try:
                     self.log.event("diagnostics.windows.collected", {"folder": folder, "count": len(files)})
-                except Exception:
-                    pass
+                except Exception as evidence_error:
+                    logging.getLogger(__name__).warning(
+                        "Zápis pomocné evidence selhal: %s", evidence_error
+                    )
             except Exception as e:
                 try:
                     self.log.exception("diagnostics.windows.failed", e)
-                except Exception:
-                    pass
+                except Exception as evidence_error:
+                    logging.getLogger(__name__).warning(
+                        "Zápis pomocné evidence selhal: %s", evidence_error
+                    )
                 raise RuntimeError(f"Diagnostics Windows failed: {e}") from e
 
         if self.cfg.diag_ssh_in:
@@ -667,13 +699,17 @@ class RunExecutor:
                 diag_files.extend(files)
                 try:
                     self.log.event("diagnostics.ssh.collected", {"folder": folder, "count": len(files)})
-                except Exception:
-                    pass
+                except Exception as evidence_error:
+                    logging.getLogger(__name__).warning(
+                        "Zápis pomocné evidence selhal: %s", evidence_error
+                    )
             except Exception as e:
                 try:
                     self.log.exception("diagnostics.ssh.failed", e)
-                except Exception:
-                    pass
+                except Exception as evidence_error:
+                    logging.getLogger(__name__).warning(
+                        "Zápis pomocné evidence selhal: %s", evidence_error
+                    )
                 raise RuntimeError(f"Diagnostics SSH failed: {e}") from e
 
         diag_text = self._build_diag_text(diag_files)
@@ -731,7 +767,7 @@ class RunExecutor:
                     raise ValueError("Textový balíček IN překračuje limit 40 MiB.")
         return zip_path
 
-    def _prepare_in_dir_upload(self, client: OpenAIClient) -> Optional[Dict[str, Any]]:
+    def _prepare_in_dir_upload(self, client: OpenAIClient) -> dict[str, Any] | None:
         in_dir = (self.cfg.in_dir or "").strip()
         if not in_dir or not os.path.isdir(in_dir):
             return None
@@ -740,11 +776,13 @@ class RunExecutor:
         up = client.upload_file(zip_path, purpose='user_data')
         file_id = up["id"]
         self._remember_file_name(file_id, os.path.basename(zip_path))
-        info: Dict[str, Any] = {"zip_path": zip_path, "file_id": file_id, "vector_store_id": None}
+        info: dict[str, Any] = {"zip_path": zip_path, "file_id": file_id, "vector_store_id": None}
         try:
             self.log.event("upload.in_dir", {"zip": zip_path, "file_id": file_id, "bytes": os.path.getsize(zip_path)})
-        except Exception:
-            pass
+        except Exception as evidence_error:
+            logging.getLogger(__name__).warning(
+                "Zápis pomocné evidence selhal: %s", evidence_error
+            )
 
         if (not self.cfg.send_as_c or self.cfg.mode == "GENERATE") and self._preparation_cap("supports_vector_store"):
             try:
@@ -759,8 +797,10 @@ class RunExecutor:
                     info["vector_store_id"] = vs_id
                     try:
                         self.log.event("vector_store.in_dir", {"vector_store_id": vs_id, "file_id": file_id})
-                    except Exception:
-                        pass
+                    except Exception as evidence_error:
+                        logging.getLogger(__name__).warning(
+                            "Zápis pomocné evidence selhal: %s", evidence_error
+                        )
             except Exception as e:
                 try:
                     self.log.exception("vector_store.in_dir", e)
@@ -774,7 +814,7 @@ class RunExecutor:
                 ))
         return info
 
-    def _files_with_in_dir(self, file_ids: List[str]) -> List[str]:
+    def _files_with_in_dir(self, file_ids: list[str]) -> list[str]:
         ids = list(file_ids or [])
         fid = None
         try:
@@ -789,7 +829,7 @@ class RunExecutor:
         ext = os.path.splitext(path or "")[1].lower()
         return bool(ext and ext in SUPPORTED_INPUT_FILE_EXTS)
 
-    def _input_files_with_in_dir(self, file_ids: List[str]) -> List[str]:
+    def _input_files_with_in_dir(self, file_ids: list[str]) -> list[str]:
         ids = list(file_ids or [])
         fid = None
         zpath = ""
@@ -806,10 +846,10 @@ class RunExecutor:
                 self._log_debug("IN: ZIP není podporovaný input_file; přeskočeno v input.")
         return ids
 
-    def _build_input_attachments(self, client: OpenAIClient, base_ids: List[str]) -> Tuple[List[str], List[str]]:
+    def _build_input_attachments(self, client: OpenAIClient, base_ids: list[str]) -> tuple[list[str], list[str]]:
         candidate_ids = self._input_files_with_in_dir(base_ids)
-        file_ids: List[str] = []
-        image_ids: List[str] = []
+        file_ids: list[str] = []
+        image_ids: list[str] = []
         seen: set = set()
         for fid in candidate_ids:
             fid_s = str(fid or "").strip()
@@ -828,12 +868,12 @@ class RunExecutor:
             validate_input_file_sizes(metadata)
         return file_ids, image_ids
 
-    def _io_reference_note(self, file_ids: List[str]) -> str:
+    def _io_reference_note(self, file_ids: list[str]) -> str:
         ids = [fid for fid in (file_ids or []) if fid]
         vs_ids = [vid for vid in (self._vector_store_ids or []) if vid]
         if not ids and not vs_ids:
             return ""
-        parts: List[str] = ["DATA REFERENCE:"]
+        parts: list[str] = ["DATA REFERENCE:"]
         if ids:
             parts.append(f"Files API file_id: {', '.join(ids)}")
             parts.append("Pouzij soubory v inputu automaticky podle typu a podporovaneho formatu: dokumenty jako input_file, obrazky (napr. PNG/JPG/WEBP/GIF) jako input_image.")
@@ -842,7 +882,7 @@ class RunExecutor:
             parts.append("Pokud model podporuje file_search, pouzij file_search nad uvedenymi vector store.")
         return "\n".join(parts)
 
-    def _append_io_reference(self, text: str, file_ids: List[str]) -> str:
+    def _append_io_reference(self, text: str, file_ids: list[str]) -> str:
         note = self._io_reference_note(file_ids)
         if not note:
             return text
@@ -850,7 +890,7 @@ class RunExecutor:
             return text
         return f"{text}\n\n{note}"
 
-    def _append_io_reference_instructions(self, instructions: str, file_ids: List[str]) -> str:
+    def _append_io_reference_instructions(self, instructions: str, file_ids: list[str]) -> str:
         note = self._io_reference_note(file_ids)
         if not note:
             return instructions
@@ -861,7 +901,7 @@ class RunExecutor:
     def _should_inline_diag_text(self) -> bool:
         return False
 
-    def _attach_diagnostics_vector_store(self, client: OpenAIClient, diag_file_ids: List[str]) -> None:
+    def _attach_diagnostics_vector_store(self, client: OpenAIClient, diag_file_ids: list[str]) -> None:
         if not diag_file_ids:
             return
         supports_vs = self._preparation_cap("supports_vector_store")
@@ -874,7 +914,7 @@ class RunExecutor:
         if not vs_id:
             raise RuntimeError("Diagnostics IN: nepodařilo se vytvořit vector store.")
         self._log_debug("Diagnostics IN: add JSON file_id to vector store...")
-        vs_file_ids: List[str] = []
+        vs_file_ids: list[str] = []
         for fid in diag_file_ids:
             if not fid:
                 continue
@@ -896,7 +936,7 @@ class RunExecutor:
             return text
         return f"{text}\n\nDIAGNOSTICS (PARSED):\n{self._diag_text}"
 
-    def _wait_vector_store_files(self, client: OpenAIClient, vs_id: str, vs_file_ids: List[str], timeout_s: int = 180) -> None:
+    def _wait_vector_store_files(self, client: OpenAIClient, vs_id: str, vs_file_ids: list[str], timeout_s: int = 180) -> None:
         context = VectorStorePollingContext(
             retrieve=lambda vector_store_id, file_id: client.retrieve_vector_store_file(vector_store_id, file_id),
             check_stop=self._check_stop,
@@ -916,7 +956,7 @@ class RunExecutor:
         return f"IN adresář je přiložen jako textový balíček (file_id={self._in_dir_info['file_id']}). Každý řádek JSON obsahuje cestu a obsah souboru."
 
     # Zavedení dlouhého zadání.
-    def _ingest_prompt_if_needed(self, client: OpenAIClient, prev_id: Optional[str]) -> Optional[str]:
+    def _ingest_prompt_if_needed(self, client: OpenAIClient, prev_id: str | None) -> str | None:
         """Zachová přesný dlouhý vstup lokálně; příjem proběhne v pracovní A0R/B0R."""
         from ..recoverable_artifacts import save_artifact
         prompt = self.cfg.prompt or ""
@@ -936,20 +976,20 @@ class RunExecutor:
         def ignore(dirpath, names):
             ignored = set()
             for n in names:
-                if n in deny:
-                    ignored.add(n)
-                elif is_versing_snapshot_dir(n, root_name):
+                if n in deny or is_versing_snapshot_dir(n, root_name):
                     ignored.add(n)
             return ignored
 
         shutil.copytree(root, snap_dir, ignore=ignore, symlinks=True)
         try:
             self.log.event("versing.snapshot.created", {"snap_dir": snap_dir})
-        except Exception:
-            pass
+        except Exception as evidence_error:
+            logging.getLogger(__name__).warning(
+                "Zápis pomocné evidence selhal: %s", evidence_error
+            )
         return snap_dir
 
-    def _save_out_files(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _save_out_files(self, files: list[dict[str, Any]]) -> dict[str, Any]:
         # Tenký Qt adaptér. Vlastní validace, hash guardy a durable zápis jsou
         # v Qt-nezávislé doménové vrstvě core.runs.delivery.
         context = DeliveryContext(
@@ -981,13 +1021,13 @@ class RunExecutor:
         self.log.bundle.update_step(step_id, status="dry_run" if dry_run else "completed",
                                     finished_at=record["timestamp"], progress=100)
 
-    def _write_missing_files_report(self, skipped_files: List[Dict[str, Any]]) -> Optional[str]:
+    def _write_missing_files_report(self, skipped_files: list[dict[str, Any]]) -> str | None:
         if not skipped_files:
             return None
         out_dir = self.cfg.out_dir
         ensure_dir(out_dir)
         report_path = safe_join_under_root(out_dir, "MISSINGFILES.md")
-        lines: List[str] = [
+        lines: list[str] = [
             "# MISSINGFILES",
             "",
             "Tyto soubory byly součástí výstupní struktury, ale Kájovo NG je v A3 automaticky nedodává.",
@@ -1049,12 +1089,13 @@ class RunExecutor:
         return response
 
     # Režim GENERATE.
-    def _run_a_generate(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
+    def _run_a_generate(self, client: OpenAIClient, diag_file_ids: list[str], base_prev_id: str | None) -> dict[str, Any]:
         # ReRun se známou strukturou přeskočí A1 a A2.
-        plan = {}
+        plan: dict[str, Any] = {}
+        struct: dict[str, Any]
         a3_model = self._generate_model("A3")
-        files: List[Dict[str, Any]] = []
-        skipped_a3_deliverables: List[Dict[str, Any]] = []
+        files: list[dict[str, Any]] = []
+        skipped_a3_deliverables: list[dict[str, Any]] = []
         auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
         if self.cfg.resume_files and not self.cfg.preparation_snapshot:
             if self.cfg.send_as_c:
@@ -1068,8 +1109,10 @@ class RunExecutor:
                     f"resume_structure_{ts_code()}",
                     {"resume_files": self.cfg.resume_files, "resume_prev_id": resp2_id},
                 )
-            except Exception:
-                pass
+            except Exception as evidence_error:
+                logging.getLogger(__name__).warning(
+                    "Zápis pomocné evidence selhal: %s", evidence_error
+                )
 
             files_raw = struct.get("files", []) or []
             if not files_raw:
@@ -1136,8 +1179,10 @@ class RunExecutor:
                     f"resume_structure_{ts_code()}",
                     {"resume_files": struct.get("files", []) or [], "resume_prev_id": resp2_id},
                 )
-            except Exception:
-                pass
+            except Exception as evidence_error:
+                logging.getLogger(__name__).warning(
+                    "Zápis pomocné evidence selhal: %s", evidence_error
+                )
 
             files_raw = struct.get("files", []) or []
             if not files_raw:
@@ -1176,10 +1221,12 @@ class RunExecutor:
 
         total_files = len(files)
         base_a3_prev_id = str(resp2_id or "")
-        out_files: List[Dict[str, Any]] = []
+        out_files: list[dict[str, Any]] = []
         for idx, f in enumerate(files, start=1):
             self._check_stop()
             path = f.get("path")
+            if not isinstance(path, str) or not path:
+                continue
             self._progress_stage = "A3"
             self.progress_event.emit(ProgressEvent("A3", completed=idx - 1, total=total_files, unit="souborů", detail=str(path)))
             self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: generuji soubor {path} ({idx}/{total_files})")
@@ -1273,10 +1320,13 @@ class RunExecutor:
                 "status": "batch_pending", "files": len(manifest["expected"])}
 
     # Režim MODIFY.
-    def _run_b_modify(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
+    def _run_b_modify(self, client: OpenAIClient, diag_file_ids: list[str], base_prev_id: str | None) -> dict[str, Any]:
         self._set(8, 0, "Skenuji a nahrávám vstupní projekt IN…", stage="Vstupní data")
         root = self.cfg.in_dir
         context_path = self.log.find_json("manifests", "response_modify_context") if self._response_journal else None
+        tools: list[dict[str, Any]] | None
+        supports_fs: bool
+        vs_id: str | None
         if context_path:
             context = json.loads(Path(context_path).read_text(encoding="utf-8"))
             items = [SimpleNamespace(**item) for item in context["items"]]
@@ -1308,7 +1358,7 @@ class RunExecutor:
             self._remember_file_name(manifest_file_id, os.path.basename(manifest_path))
             self._log_debug(f"Mirror manifest uploaded: {manifest_file_id}")
 
-            uploaded: List[Tuple[str, str]] = []
+            uploaded: list[tuple[str, str]] = []
             up_items = [it for it in items if it.uploadable]
             for i, it in enumerate(up_items):
                 self._check_stop()
@@ -1322,14 +1372,16 @@ class RunExecutor:
                 self._remember_file_name(up["id"], os.path.basename(it.abs_path))
                 try:
                     self.log.event("upload.mirror", {"path": it.rel_path, "abs": it.abs_path, "file_id": up["id"], "bytes": it.size})
-                except Exception:
-                    pass
+                except Exception as evidence_error:
+                    logging.getLogger(__name__).warning(
+                        "Zápis pomocné evidence selhal: %s", evidence_error
+                    )
 
             self.log.save_json("manifests", "mirror_manifest", {"manifest_file_id": manifest_file_id, "uploaded": uploaded, "manifest": manifest})
 
-            tools: Optional[List[Dict[str, Any]]] = None
-            vs_id: Optional[str] = None
-            vs_ids: List[str] = list(self._vector_store_ids or [])
+            tools = None
+            vs_id = None
+            vs_ids: list[str] = list(self._vector_store_ids or [])
             supports_fs = bool(self.cfg.model_caps.get("supports_file_search", False)) and bool(self.cfg.use_file_search)
 
             if supports_fs:
@@ -1338,7 +1390,7 @@ class RunExecutor:
                     vs = client.create_vector_store(f"{(self.cfg.project or root_name)}{ts_code()}")
                     vs_id = vs.get("id")
                     if vs_id:
-                        vs_file_ids: List[str] = []
+                        vs_file_ids: list[str] = []
                         for rel, fid in uploaded[:2000]:
                             self._check_stop()
                             vs_file = client.add_file_to_vector_store(vs_id, fid, attributes={'source_path': os.path.join(root, rel)})
@@ -1377,7 +1429,7 @@ class RunExecutor:
 
             if supports_fs and vs_ids:
                 seen = set()
-                uniq_ids: List[str] = []
+                uniq_ids: list[str] = []
                 for vid in vs_ids:
                     if vid and vid not in seen:
                         uniq_ids.append(vid)
@@ -1485,7 +1537,7 @@ class RunExecutor:
 
         total_files = len(touched)
         chain_prev_id = str(resp2_id or "")
-        out_files: List[Dict[str, Any]] = []
+        out_files: list[dict[str, Any]] = []
         generation_order = [row for row in touched_raw if row in touched or row["path"] in (self.cfg.skip_paths or [])]
         for i, tf in enumerate(generation_order, start=1):
             self._check_stop()
@@ -1523,7 +1575,7 @@ class RunExecutor:
                 "dry_run": bool(saved_map.get("dry_run")), "missing_deliverables": omitted}
 
     # Režim QA.
-    def _run_qa(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
+    def _run_qa(self, client: OpenAIClient, diag_file_ids: list[str], base_prev_id: str | None) -> dict[str, Any]:
         self._set(10, 0, "QA: odesílám dotaz…", stage="QA")
         note = self._in_dir_fallback_note()
         input_text = self.cfg.prompt or ""
@@ -1574,7 +1626,7 @@ class RunExecutor:
         return {"mode": "QA", "response_id": str(resp.get("id") or ""), "text": user_text(resp, payload)}
 
     # Režim QFILE.
-    def _run_qfile(self, client: OpenAIClient, diag_file_ids: List[str], base_prev_id: Optional[str]) -> Dict[str, Any]:
+    def _run_qfile(self, client: OpenAIClient, diag_file_ids: list[str], base_prev_id: str | None) -> dict[str, Any]:
         self._set(10, 0, "QFILE: generuji soubor…", stage="QFILE")
         self._check_stop()
         prompt = (self.cfg.prompt or "").strip()
@@ -1662,7 +1714,9 @@ class RunExecutor:
         out_files = [{"path": path, "content": parsed["content"], "purpose": "QFILE"}]
         self._set(70, 0, f"QFILE: ukládám {path}...")
         saved_map = self._save_out_files(out_files)
-        step = next((row for row in reversed(self.log.bundle.steps()) if row.get("stage") == "QFILE"), {})
+        step: dict[str, Any] = next(
+            (row for row in reversed(self.log.bundle.steps()) if row.get("stage") == "QFILE"), {}
+        )
         self.log.record_validation(
             step_id=str(step.get("step_id") or ""),
             target_type="file_contract",
@@ -1682,24 +1736,26 @@ class RunExecutor:
         prev_id: str,
         contract: str,
         path: str,
-        action: Optional[str],
-        diag_file_ids: List[str],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        model_override: Optional[str] = None,
-    ) -> Tuple[str, str]:
+        action: str | None,
+        diag_file_ids: list[str],
+        tools: list[dict[str, Any]] | None = None,
+        model_override: str | None = None,
+    ) -> tuple[str, str]:
+        from ..context_budget import checked_measurement, configure_file_request
         from ..context_compiler import ContextCompiler, canonical
-        from ..context_budget import configure_file_request, checked_measurement
         if not getattr(self, "_delivery_snapshot", None):
             raise ContractError("Souborová generace vyžaduje úplnou kanonickou přípravu FileContext.")
         self._delivery_step_id = self.log.begin_validated_step(contract.split("_")[0], kind="file_delivery")
         compiler = ContextCompiler(self._delivery_snapshot)
         compiled = compiler.compile(path, originals=getattr(self, "_delivery_originals", None))
-        gen_ref_files, gen_input_files, gen_input_images = [], [], []
+        gen_ref_files: list[str] = []
+        gen_input_files: list[str] = []
+        gen_input_images: list[str] = []
         tools = None
 
         instructions = stage_instructions("A3" if contract == "A3_FILE" else "B3")
         chunk_index = 0
-        parts: List[str] = []
+        parts: list[str] = []
         latest_response_id = ""
         declared_chunk_count = 0
         rejected_chunks = []
@@ -1748,7 +1804,7 @@ class RunExecutor:
                                {"context": compiled, "routing": routing, "measurement": report})
             if tools:
                 payload["tools"] = tools
-            vs_ids = []
+            vs_ids: list[str] = []
             if tools:
                 for t in tools:
                     if isinstance(t, dict) and t.get("type") == "file_search":
@@ -1773,7 +1829,7 @@ class RunExecutor:
             attempt = 0
             max_attempts = 3
             parsed = None
-            last_err: Optional[Exception] = None
+            last_err: Exception | None = None
             while attempt < max_attempts and parsed is None:
                 if attempt:
                     repair_payload = copy.deepcopy(payload)
@@ -1830,8 +1886,10 @@ class RunExecutor:
                         self._log_debug(f"{contract} {path} chunk {chunk_index}: invalid/mismatched response after {attempt} attempts: {e}")
                         try:
                             self.log.event("contract.mismatch", {"contract": contract, "path": path, "chunk": chunk_index, "error": str(e)})
-                        except Exception:
-                            pass
+                        except Exception as evidence_error:
+                            logging.getLogger(__name__).warning(
+                                "Zápis pomocné evidence selhal: %s", evidence_error
+                            )
                         break
                     self._log_debug(f"{contract} {path} chunk {chunk_index}: invalid JSON/contract, retrying ({attempt}/{max_attempts})")
                     continue
