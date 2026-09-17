@@ -41,7 +41,7 @@ jobs:
             tests/test_run_lifecycle.py \
             tests/test_architecture_contracts.py \
             tests/test_python312_runtime_contract.py
-      - name: Replace explicit evidence catches and migrated test targets
+      - name: Replace only strict-Ruff evidence catches and migrated test targets
         run: python tools/_fix_executor_strict.py
       - name: Verify strict Ruff
         run: |
