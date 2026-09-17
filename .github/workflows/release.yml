@@ -205,6 +205,12 @@ jobs:
       - name: Build with canonical Windows script
         shell: pwsh
         run: .\Build\build_windows.ps1 -Python "python" -AppName "Kajovo"
+      - name: Compatibility and dependency smoke
+        shell: pwsh
+        run: |
+          python tools/compatibility_smoke.py
+          python -m pip check
+          python -m pip_audit
       - name: Validate, archive and checksum Windows build
         shell: pwsh
         env:
@@ -300,6 +306,13 @@ jobs:
           PYTHON_BIN: python
           APP_NAME: Kajovo
         run: ./Build/build_macos.sh
+      - name: Compatibility and dependency smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/compatibility_smoke.py
+          python -m pip check
+          python -m pip_audit
       - name: Validate, archive and checksum macOS build
         shell: bash
         env:
