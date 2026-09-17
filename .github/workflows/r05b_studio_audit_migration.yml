@@ -44,11 +44,27 @@ jobs:
             tests/test_ui_audit_inheritance.py \
             tests/test_ui_forensic_contract.py \
             scripts/audit_ui.py
-      - name: Forensic audit verification
-        shell: bash
+      - name: Compact forensic diagnostics
         run: |
-          set -o pipefail
-          python scripts/audit_ui.py --check | tee /tmp/studio_ui_audit.json
+          python - <<'PY'
+          from pathlib import Path
+          from kajovo.studio.ui_audit import audit_studio
+
+          result = audit_studio(Path.cwd())
+          unresolved = [
+              (module["source"], issue["line"], issue["target"], issue["reason"])
+              for module in result["modules"]
+              for issue in module["unresolved"]
+          ]
+          print(f"UNRESOLVED_COUNT={len(unresolved)}")
+          for source, line, target, reason in unresolved:
+              print(f"UNRESOLVED|{source}|{line}|{target}|{reason}")
+          if unresolved:
+              raise SystemExit(1)
+          PY
+      - name: Forensic audit verification
+        run: |
+          python scripts/audit_ui.py --check
           python -m pytest -q tests/test_ui_audit_inheritance.py tests/test_ui_forensic_contract.py
       - name: Commit verified Studio audit migration
         shell: bash
