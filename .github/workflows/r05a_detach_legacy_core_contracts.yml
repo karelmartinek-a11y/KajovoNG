@@ -1,0 +1,84 @@
+name: r05a-detach-legacy-core-contracts
+
+on:
+  push:
+    branches:
+      - codex/r05-ui-consolidation-20260917
+    paths:
+      - 'tools/_r05a_detach_legacy_core_contracts.py'
+      - '.github/workflows/r05a_detach_legacy_core_contracts.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-and-verify:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install headless Qt runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install canonical environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Apply deterministic R05-A migration
+        run: python tools/_r05a_detach_legacy_core_contracts.py
+      - name: Static verification
+        run: |
+          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
+            kajovo/core/recovery.py \
+            tests/conftest.py \
+            tests/test_desktop_preparation_recovery.py \
+            tests/test_output_chunks.py \
+            tests/test_response_journal.py \
+            tests/test_studio_contracts.py
+          python - <<'PY'
+          from pathlib import Path
+          required = {
+              'tests/test_desktop_preparation_recovery.py': 'kajovo.core.recovery',
+              'tests/test_response_journal.py': 'kajovo.core.recovery',
+              'tests/test_output_chunks.py': 'kajovo.core.batch_completion',
+          }
+          for name, token in required.items():
+              source = Path(name).read_text(encoding='utf-8')
+              if token not in source:
+                  raise SystemExit(f'{name}: missing {token}')
+          if 'kajovo.desktop.settings.persist_api_key' in Path('tests/conftest.py').read_text(encoding='utf-8'):
+              raise SystemExit('conftest still imports legacy desktop settings')
+          PY
+      - name: Behavior verification
+        run: |
+          python -m pytest -q \
+            tests/test_desktop_preparation_recovery.py \
+            tests/test_output_chunks.py \
+            tests/test_response_journal.py \
+            tests/test_studio_contracts.py::test_invalid_bundle_never_partially_overwrites_files \
+            tests/test_studio_contracts.py::test_recovery_uses_events_and_related_structure \
+            tests/test_studio_contracts.py::test_recovery_saved_map_rejects_unsafe_paths \
+            tests/test_desktop.py::test_batch_rejects_incomplete_output_before_file_processing
+      - name: Commit verified R05-A migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'karelmartinek-a11y'
+          git config user.email 'karel.martinek@post.cz'
+          git add \
+            kajovo/core/recovery.py \
+            tests/conftest.py \
+            tests/test_desktop_preparation_recovery.py \
+            tests/test_output_chunks.py \
+            tests/test_response_journal.py \
+            tests/test_studio_contracts.py \
+            tests/test_desktop.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'refactor: detach core contracts from legacy desktop'
+          git push origin HEAD:codex/r05-ui-consolidation-20260917
