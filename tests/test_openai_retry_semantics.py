@@ -6,7 +6,7 @@ import pytest
 import requests
 
 from kajovo.core.config import RetryPolicy
-from kajovo.core.openai_transport import SubmissionOutcomeUnknown
+from kajovo.core.openai_transport import OpenAIError, SubmissionOutcomeUnknown
 from kajovo.core.retry import with_retry
 
 
@@ -40,7 +40,8 @@ def test_upload_http_429_is_single_request_without_workflow_retry(tmp_path):
     response.json.return_value = {"error": {"code": "rate_limit"}}
     client.session.request = Mock(return_value=response)
 
-    with pytest.raises(Exception):
+    with pytest.raises(OpenAIError) as caught:
         client.upload_file(str(source))
 
+    assert caught.value.status_code == 429
     assert client.session.request.call_count == 1
