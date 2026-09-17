@@ -378,6 +378,14 @@ class Operations(QObject):
             dialog.inspector.refresh(dialog.clock)
         else:
             dialog = OperationDialog(title, self.parent(), self.reduced_motion)
+        cfg = getattr(worker, "cfg", None)
+        if cfg is not None:
+            dialog.inspector.set_context(
+                kind=str(getattr(cfg, "mode", "") or ""),
+                run_id=str(getattr(cfg, "run_id", "") or identifier),
+                model=str(getattr(cfg, "model", "") or ""),
+                project=str(getattr(cfg, "project", "") or ""),
+            )
         record = Operation(identifier, title, worker, dialog)
         self.records[identifier] = record
         if output_dir:
