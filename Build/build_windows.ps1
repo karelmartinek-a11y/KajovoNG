@@ -7,10 +7,12 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-& $Python -m pip install --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw "Aktualizace pip selhala." }
-& $Python -m pip install -r requirements.txt pyinstaller pillow
-if ($LASTEXITCODE -ne 0) { throw "Instalace závislostí selhala." }
+& $Python -m pip install -c requirements/constraints.txt -e ".[build]"
+if ($LASTEXITCODE -ne 0) { throw "Instalace závislostí podle constraints selhala." }
+& $Python tools/verify_dependency_contract.py
+if ($LASTEXITCODE -ne 0) { throw "Dependency contract není platný." }
+& $Python -m pip check
+if ($LASTEXITCODE -ne 0) { throw "Kontrola konzistence závislostí selhala." }
 & $Python Build/generate_icons.py
 if ($LASTEXITCODE -ne 0) { throw "Generování ikon selhalo." }
 
@@ -34,5 +36,9 @@ $pyinstallerArgs = @(
 
 & $Python -m PyInstaller @pyinstallerArgs
 if ($LASTEXITCODE -ne 0) { throw "Sestavení aplikace selhalo." }
+& $Python tools/write_build_metadata.py
+if ($LASTEXITCODE -ne 0) { throw "Generování build metadat selhalo." }
 
+$artifact = Join-Path $repoRoot "dist/$AppName/$AppName.exe"
+if (-not (Test-Path $artifact -PathType Leaf)) { throw "Build artefakt nebyl vytvořen: $artifact" }
 Write-Host "Build complete: dist/$AppName/$AppName.exe"
