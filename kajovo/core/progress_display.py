@@ -6,33 +6,87 @@ from dataclasses import dataclass
 
 
 STAGE_TITLES = {
-    "RUN": "Celý běh", "Lokální validace": "Lokální kontrola před spuštěním",
-    "Přílohy": "Kontrola vstupních příloh", "Diagnostika": "Sběr diagnostických podkladů",
-    "Vstupní data": "Příprava vstupních dat", "Indexace": "Indexace podkladů pro hledání",
-    "A0": "Analýza zadání", "A0R": "Upřesnění požadavků", "A1": "Architektonický plán",
-    "A2": "Struktura projektu", "A2Q": "Nezávislá kontrola návrhu", "A3": "Vytváření souborů",
-    "B0R": "Upřesnění požadovaných změn", "B1": "Plán změn", "B2": "Struktura změn",
-    "B2Q": "Nezávislá kontrola změn", "B3": "Úprava souborů", "Upload": "Nahrávání podkladů",
-    "Download": "Stahování výsledků", "Ukládání": "Ukládání do výstupu",
-    "Validace kontraktů": "Kontrola výsledků", "BATCH": "Zpracování dávky",
-    "Čekání na dávku": "Čekání na vzdálenou dávku", "Operace": "Aktuální operace",
-    "A0R_REQUIREMENTS": "Profesionální requirements", "B0R_REQUIREMENTS": "Change requirements",
-    "A2Q_QUALITY_GATE": "Quality gate", "B2Q_QUALITY_GATE": "Quality gate",
+    "RUN": "Celý běh",
+    "Lokální validace": "Lokální kontrola před spuštěním",
+    "Přílohy": "Kontrola vstupních příloh",
+    "Diagnostika": "Sběr diagnostických podkladů",
+    "Vstupní data": "Příprava vstupních dat",
+    "Indexace": "Indexace podkladů pro hledání",
+    "A0": "Analýza zadání",
+    "A0R": "Profesionální requirements",
+    "A1": "Architektonický plán",
+    "A2": "Struktura projektu",
+    "A2Q": "Quality gate",
+    "A3": "Vytváření souborů",
+    "B0R": "Change requirements",
+    "B1": "Plán změn",
+    "B2": "Struktura změn",
+    "B2Q": "Quality gate",
+    "B3": "Úprava souborů",
+    "Upload": "Nahrávání podkladů",
+    "Download": "Stahování výsledků",
+    "Ukládání": "Ukládání do výstupu",
+    "Validace kontraktů": "Kontrola výsledků",
+    "BATCH": "Zpracování dávky",
+    "Čekání na dávku": "Čekání na vzdálenou dávku",
+    "Operace": "Aktuální operace",
+    "A0R_REQUIREMENTS": "Profesionální requirements",
+    "B0R_REQUIREMENTS": "Change requirements",
+    "A2Q_QUALITY_GATE": "Quality gate",
+    "B2Q_QUALITY_GATE": "Quality gate",
 }
 
 STATE_TITLES = {
-    "active": "Probíhá", "waiting": "Čeká na odpověď služby", "completed": "Dokončeno",
-    "failed": "Operace selhala", "partial": "Dokončeno částečně", "cancelled": "Zastaveno",
-    "batch_pending": "Předáno do dávky", "response_pending": "Odpověď stále není dokončená",
-    "submission_unknown": "Výsledek odeslání není znám", "dry_run": "Ověřeno bez zápisu",
+    "created": "Vytvořeno",
+    "preparing": "Připravuje se",
+    "running": "Běží",
+    "active": "Probíhá",
+    "waiting": "Čeká na odpověď služby",
+    "validating_result": "Ověřuje výsledek",
+    "repairing": "Opravuje podklad",
+    "response_pending": "Čeká na odpověď",
+    "batch_prepared": "BATCH připraven",
+    "batch_pending": "BATCH běží",
+    "importing": "Přebírá se",
+    "ready_to_import": "K převzetí",
+    "completed": "Dokončeno",
+    "closed": "Dokončeno / uzavřeno",
+    "dry_run": "Dry-run / návrh bez zápisu",
+    "partial": "Částečně dokončeno",
     "files_complete_unverified": "Soubory převzaty, funkčnost neověřena",
-    "cancelling": "Čeká se na potvrzení zrušení",
+    "unfinished_record": "Konec fáze nezapsán",
+    "cancelled": "Zrušeno",
+    "stopped": "Zastaveno",
+    "cancelling": "Ruší se",
+    "failed": "Operace selhala",
+    "error": "Chyba",
+    "submission_unknown": "Neznámý výsledek odeslání",
+    "corrupt_state": "Chyba evidence",
+    "unknown": "Neznámý stav",
+    "expired": "Vypršel čas služby",
+    "not_started": "Ještě nezačalo",
+    "blocked": "Blokováno",
+    "skipped": "Přeskočeno",
+    "queued": "Čeká ve frontě",
+    "validating": "Služba validuje",
+    "in_progress": "Vzdálené zpracování probíhá",
+    "finalizing": "Služba finalizuje výstup",
+    "pending": "Čeká na zpracování",
+    "submitted": "Odesláno službě",
+    "downloaded": "Výsledky převzaty",
 }
 
 SOURCE_TITLES = {
-    "local": "Lokální práce", "api": "OpenAI Responses API", "files_api": "OpenAI Files API",
-    "batch_api": "OpenAI Batch API", "upload": "Upload", "download": "Download",
-    "disk": "Zápis na disk", "validation": "Lokální validace",
+    "local": "Lokální zpracování",
+    "api": "OpenAI Responses API",
+    "files_api": "OpenAI Files API",
+    "batch_api": "OpenAI Batch API",
+    "vector_store": "OpenAI Vector Store",
+    "image_api": "OpenAI Image API",
+    "upload": "Upload",
+    "download": "Download",
+    "disk": "Zápis na disk",
+    "validation": "Lokální validace",
 }
 
 
@@ -83,12 +137,24 @@ def build_steps(events, *, mode: str = "", quality: bool = False) -> list[Displa
         if stage not in keys:
             keys.append(stage)
     current = next((event.stage for event in reversed(events) if event.stage != "RUN"), "")
-    completed = {event.stage for event in events if event.stage != "RUN" and event.state == "completed"}
+    completed = {
+        event.stage
+        for event in events
+        if event.stage != "RUN" and event.state == "completed"
+    }
     current_index = keys.index(current) if current in keys else -1
-    return [DisplayStep(key, stage_title(key),
-                        "current" if key == current else
-                        "done" if key in completed or (current_index >= 0 and index < current_index) else
-                        "pending") for index, key in enumerate(keys)]
+    return [
+        DisplayStep(
+            key,
+            stage_title(key),
+            "current"
+            if key == current
+            else "done"
+            if key in completed or (current_index >= 0 and index < current_index)
+            else "pending",
+        )
+        for index, key in enumerate(keys)
+    ]
 
 
 def event_sentence(event) -> str:
