@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 
 class ExecutionLock:
@@ -24,12 +24,13 @@ class ExecutionLock:
             if os.name == "nt":
                 import msvcrt
 
+                windows_lock: Any = msvcrt
                 stream.seek(0, os.SEEK_END)
                 if stream.tell() == 0:
                     stream.write(b"\0")
                     stream.flush()
                 stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                windows_lock.locking(stream.fileno(), windows_lock.LK_NBLCK, 1)
             else:
                 import fcntl
 
@@ -48,8 +49,9 @@ class ExecutionLock:
             if os.name == "nt":
                 import msvcrt
 
+                windows_lock: Any = msvcrt
                 stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                windows_lock.locking(stream.fileno(), windows_lock.LK_UNLCK, 1)
             else:
                 import fcntl
 
