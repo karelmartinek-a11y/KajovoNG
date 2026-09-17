@@ -55,7 +55,7 @@ jobs:
             tests/test_run_lifecycle.py \
             tests/test_architecture_contracts.py \
             tests/test_python312_runtime_contract.py
-      - name: Verify mypy
+      - name: Verify hardened-core mypy
         run: python -m mypy --follow-imports=skip kajovo/core/runs kajovo/core/openai_transport.py
       - name: Verify focused behavior after safe fixes
         run: |
