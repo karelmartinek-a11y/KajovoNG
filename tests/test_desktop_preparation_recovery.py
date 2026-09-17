@@ -6,7 +6,7 @@ import pytest
 
 from kajovo.core.generate_batch import digest
 from kajovo.core.contracts import ContractError
-from kajovo.desktop.recovery import recover_run
+from kajovo.core.recovery import recover_run
 from test_requirements import _documents
 
 

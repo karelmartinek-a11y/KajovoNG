@@ -31,10 +31,9 @@ def isolated_api_key_store(monkeypatch):
         raise AssertionError("Test musí nahradit trvalé ukládání API klíče.")
 
     # Lightweight architecture lane záměrně neinstaluje PySide6. UI moduly proto
-    # neimportujeme jen kvůli monkeypatchi; v plné desktopové regresi jsou oba
-    # aliasy dále explicitně blokované.
+    # neimportujeme jen kvůli monkeypatchi; kanonický Studio alias blokujeme
+    # pouze v prostředí, kde je Qt skutečně dostupné.
     if importlib.util.find_spec("PySide6") is not None:
-        monkeypatch.setattr("kajovo.desktop.settings.persist_api_key", blocked)
         monkeypatch.setattr("kajovo.studio.settings.persist_api_key", blocked)
 
 

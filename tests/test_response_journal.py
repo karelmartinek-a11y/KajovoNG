@@ -14,7 +14,7 @@ from kajovo.core.response_journal import ResponseJournal, ResponsePending, Submi
 from kajovo.core.request_rules import validate_response_payload
 from kajovo.core.runlog import RunLogger
 from kajovo.core.runs.executor import RunExecutor as RunWorker
-from kajovo.desktop.recovery import recover_run
+from kajovo.core.recovery import recover_run
 from test_workflows import make_worker, response
 from delivery_fixtures import delivery_payloads
 

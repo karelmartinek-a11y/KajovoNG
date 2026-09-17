@@ -9,7 +9,7 @@ import test_desktop
 
 window = test_desktop.window
 from test_output_chunks import raw
-from kajovo.desktop.batches import import_bundle
+from kajovo.core.batch_completion import import_bundle
 
 
 
@@ -115,7 +115,7 @@ def test_cascade_text_output_cannot_claim_expected_files(window):
 
 def test_recovery_uses_events_and_related_structure(tmp_path):
     import json
-    from kajovo.desktop.recovery import recover_run
+    from kajovo.core.recovery import recover_run
 
     current = tmp_path / "run"
     (current / "requests").mkdir(parents=True)
@@ -142,7 +142,7 @@ def test_recovery_uses_events_and_related_structure(tmp_path):
 
 def test_recovery_saved_map_rejects_unsafe_paths(tmp_path):
     import json
-    from kajovo.desktop.recovery import recover_run
+    from kajovo.core.recovery import recover_run
 
     current = tmp_path / "run"
     (current / "requests").mkdir(parents=True)

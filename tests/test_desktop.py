@@ -441,7 +441,7 @@ def test_enabled_action_buttons_have_connected_handlers(window):
 
 def test_batch_rejects_incomplete_output_before_file_processing(window, tmp_path):
     import json
-    from kajovo.desktop.batches import import_bundle
+    from kajovo.core.batch_completion import import_bundle
 
     raw = json.dumps(
         {"response": {"body": {"status": "incomplete", "output_text": '{"files":[]}'}}}
