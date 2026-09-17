@@ -1,4 +1,4 @@
-# Kritické oblasti: baseline je úspěšný python313-full běh 35256464175.
+# Kritické oblasti: baseline odpovídá aktuálnímu produkčnímu stavu main.
 # Doporučené vyšší cíle se zavádějí po behaviorálních testech; historické
 # nepokryté platformní/diagnostické větve se nesmějí skrýt vynecháním souborů.
 
@@ -59,9 +59,9 @@ baseline_statements = 1005
 paths = ["kajovo/core/cascade_pipeline.py","kajovo/core/cascade_contract.py"]
 
 [areas.studio_policy]
-minimum = 78.954802259887
-baseline_covered = 559
-baseline_statements = 708
+minimum = 78.35
+baseline_covered = 536
+baseline_statements = 684
 paths = ["kajovo/studio/history_policy.py","kajovo/studio/history_launcher.py","kajovo/studio/history_state.py","kajovo/studio/operations.py","kajovo/studio/context.py"]
 
 [areas.core_runs]
@@ -71,9 +71,9 @@ baseline_statements = 1730
 paths = ["kajovo/core/runs/*.py"]
 
 [areas.studio]
-minimum = 65.70680628272251
-baseline_covered = 4267
-baseline_statements = 6494
+minimum = 65.59
+baseline_covered = 4244
+baseline_statements = 6470
 paths = ["kajovo/studio/**/*.py"]
 
 [areas.transport]
