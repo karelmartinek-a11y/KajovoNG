@@ -62,7 +62,7 @@ def _delete_persisted_api_key() -> None:
 
 def _keyring_module():
     try:
-        import keyring  # type: ignore
+        import keyring
     except Exception as exc:
         raise APIKeyStoreError("OS credential storage není dostupné.") from exc
     return keyring
@@ -222,7 +222,7 @@ def set_secret(key: str, value: str) -> bool:
     env_name = _env_name(key)
     os.environ.pop(env_name, None)
     try:
-        import keyring  # type: ignore
+        import keyring
 
         if value:
             keyring.set_password(SERVICE_NAME, key, value)
@@ -245,7 +245,7 @@ def get_secret(key: str) -> Optional[str]:
     if env_name in os.environ:
         return os.environ[env_name] or None
     try:
-        import keyring  # type: ignore
+        import keyring
 
         value = keyring.get_password(SERVICE_NAME, key)
         if value:

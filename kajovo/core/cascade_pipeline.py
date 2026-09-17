@@ -28,10 +28,12 @@ from .cascade_log import CascadeLogger
 from .cascade_types import CascadeDefinition, CascadeOutput, CascadeStep
 from .contracts import ContractError, validate_paths
 from .openai_client import OpenAIClient
+from .openai_transport import SubmissionOutcomeUnknown
 from .progress import ProgressEvent
 from .request_rules import validate_response_payload
 from .runs.ports import EventPort
 from .structured_output import (
+    OutputContractError,
     resolve_schema,
     response_format,
     restore_optional_fields,
@@ -127,8 +129,6 @@ class CascadeRunConfig:
 
 class CascadeRunExecutor:
     """Qt-free executor kaskády; thread lifecycle vlastní pouze UI adaptér."""
-
-    STEP_ATTEMPTS = 3
 
     def __init__(
         self,
@@ -885,6 +885,12 @@ class CascadeRunExecutor:
         return result
 
     def execute(self) -> None:
+        previous = self._read_runtime_state()
+        if previous.get("status") == "submission_unknown":
+            message = "Předchozí odeslání nemá potvrzený výsledek; automatické opakování je zakázáno."
+            self.progress_event.emit(ProgressEvent("RUN", "submission_unknown", detail=message))
+            self.finished_err.emit(message)
+            return
         run_id = self.cfg.run_id or new_run_id()
         current_index = 0
         current_step_record_id = ""
@@ -1042,96 +1048,83 @@ class CascadeRunExecutor:
                     )
                 )
 
-                last_exc: BaseException | None = None
-                decoded: dict[str, Any] = {}
-                response: dict[str, Any] = {}
-                schema: dict[str, Any] = {}
-                file_ids: list[str] = []
+                self._check_stop()
                 step_summary: dict[str, Any] = {}
                 decision_value: str | None = None
-
-                for attempt in range(1, self.STEP_ATTEMPTS + 1):
+                payload, schema, file_ids = self._prepare_step(
+                    step=step,
+                    idx=idx,
+                    context=context,
+                    context_response_ids=context_response_ids,
+                    values=values,
+                    client=client,
+                )
+                self._emit_status(
+                    base_p,
+                    50,
+                    f"Krok {idx}: požadavek na OpenAI",
+                )
+                original_instructions = str(payload.get("instructions") or "")
+                for repair_attempt in range(3):
                     self._check_stop()
+                    self.logger.save_json(
+                        "requests", f"cascade_step_{idx:02d}_attempt_{repair_attempt + 1}",
+                        payload, step_id=current_step_record_id,
+                    )
                     try:
-                        payload, schema, file_ids = self._prepare_step(
-                            step=step,
-                            idx=idx,
-                            context=context,
-                            context_response_ids=context_response_ids,
-                            values=values,
-                            client=client,
-                        )
-                        self.logger.save_json(
-                            "requests",
-                            f"cascade_step_{idx:02d}_attempt_{attempt}",
-                            payload,
-                            step_id=current_step_record_id,
-                        )
-                        self._emit_status(
-                            base_p,
-                            50,
-                            f"Krok {idx}: požadavek na OpenAI · pokus {attempt}/{self.STEP_ATTEMPTS}",
-                        )
                         response = client.create_response(payload)
                         self.logger.save_json(
-                            "responses",
-                            f"cascade_step_{idx:02d}_attempt_{attempt}",
-                            response,
-                            step_id=current_step_record_id,
+                            "responses", f"cascade_step_{idx:02d}_attempt_{repair_attempt + 1}",
+                            response, step_id=current_step_record_id,
                         )
                         decoded = validate_output(response, payload)
-
-                        if step.deterministic:
-                            self._validate_json_output(decoded, schema)
-                            step_summary, decision_value = self._process_deterministic_output(
-                                step=step,
-                                idx=idx,
-                                decoded=decoded,
-                                client=client,
-                                context=context,
-                                values=values,
-                            )
-                        elif step.output_type == "json":
-                            restored = restore_optional_fields(decoded, schema or {})
-                            self._validate_json_output(restored, schema or {})
-                            per_step_json[str(idx)] = restored
-                            context[f"step.{idx}.json"] = restored
-                            if step.expected_out_files:
-                                per_step_out_files[str(idx)] = self._process_expected_out_files(
-                                    step=step,
-                                    idx=idx,
-                                    json_output=restored,
-                                    context=context,
-                                    client=client,
-                                )
-                        else:
-                            text = str(decoded.get("text") or "")
-                            per_step_text[str(idx)] = text
-                            context[f"step.{idx}.text"] = text
-
-                        last_exc = None
                         break
-                    except Exception as exc:
-                        if str(exc) in ("STOPPED", "STOP_REQUESTED"):
+                    except OutputContractError as exc:
+                        # Oprava prokazatelně přijatého výstupu není síťový retry.
+                        # Příprava příloh ani následné delivery se nikdy neopakují.
+                        if exc.response.get("status") != "completed" or exc.response.get("error"):
                             raise
-                        last_exc = exc
-                        self.logger.event(
-                            "cascade.step.attempt_failed",
-                            {
-                                "idx": idx,
-                                "attempt": attempt,
-                                "error": str(exc),
-                            },
+                        self.logger.save_json(
+                            "responses", f"cascade_step_{idx:02d}_invalid_{repair_attempt + 1}",
+                            exc.response, step_id=current_step_record_id,
                         )
-                        if attempt < self.STEP_ATTEMPTS:
-                            self._emit_status(
-                                base_p,
-                                50,
-                                f"Krok {idx}: výstup neprošel kontrolou, opakuji ({attempt + 1}/{self.STEP_ATTEMPTS}).",
-                            )
-                            time.sleep(min(2.0, 0.35 * attempt))
-                if last_exc is not None:
-                    raise last_exc
+                        self.logger.event("cascade.output.invalid", {
+                            "idx": idx, "attempt": repair_attempt + 1,
+                            "response_id": exc.response.get("id"), "error": str(exc),
+                        })
+                        if repair_attempt == 2:
+                            raise
+                        payload = copy.deepcopy(payload)
+                        payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(repair_attempt + 1)
+                        payload["instructions"] = original_instructions + "\nOprav předchozí neplatný výstup: " + str(exc)
+
+                if step.deterministic:
+                    self._validate_json_output(decoded, schema)
+                    step_summary, decision_value = self._process_deterministic_output(
+                        step=step,
+                        idx=idx,
+                        decoded=decoded,
+                        client=client,
+                        context=context,
+                        values=values,
+                    )
+                elif step.output_type == "json":
+                    restored = restore_optional_fields(decoded, schema or {})
+                    self._validate_json_output(restored, schema or {})
+                    per_step_json[str(idx)] = restored
+                    context[f"step.{idx}.json"] = restored
+                    if step.expected_out_files:
+                        per_step_out_files[str(idx)] = self._process_expected_out_files(
+                            step=step,
+                            idx=idx,
+                            json_output=restored,
+                            context=context,
+                            client=client,
+                        )
+                else:
+                    text = str(decoded.get("text") or "")
+                    per_step_text[str(idx)] = text
+                    context[f"step.{idx}.text"] = text
 
                 response_id = str(response.get("id") or "").strip()
                 if response_id:
@@ -1292,6 +1285,39 @@ class CascadeRunExecutor:
             )
             self.progress_event.emit(ProgressEvent("RUN", "completed"))
             self.finished_ok.emit(result)
+        except SubmissionOutcomeUnknown as ex:
+            snapshot = self._cache_snapshot(
+                context=context, context_response_ids=context_response_ids,
+                values=values, executed_step_ids=executed_step_ids,
+            )
+            unknown = {
+                "operation": ex.operation, "method": ex.method, "path": ex.path,
+                "request_id": ex.request_id, "step_number": self._failed_step_index + 1,
+            }
+            state = {
+                "status": "submission_unknown", "run_id": run_id,
+                "error": str(ex), "unknown_submission": unknown,
+                "cascade_runtime": snapshot,
+            }
+            if self.logger:
+                if current_step_record_id:
+                    self.logger.bundle.update_step(
+                        current_step_record_id, status="submission_unknown",
+                        finished_at=datetime.now(UTC).isoformat(),
+                        human_summary="Výsledek odeslání není znám; automatické opakování je zakázáno.",
+                    )
+                self.logger.event("cascade.submission_unknown", unknown)
+                self.logger.update_state(state)
+                self.logger.checkpoint(
+                    "cascade_submission_unknown", state_snapshot=state,
+                    safe_to_continue=False,
+                    reason="Nejdříve je nutné dohledat výsledek již odeslané operace.",
+                )
+            self._write_runtime_state({**state, "cache": snapshot})
+            if self.logger:
+                self.logger.bundle.seal()
+            self.progress_event.emit(ProgressEvent("RUN", "submission_unknown", detail=str(ex)))
+            self.finished_err.emit(str(ex))
         except Exception as ex:
             if str(ex) in ("STOPPED", "STOP_REQUESTED"):
                 if self.logger:

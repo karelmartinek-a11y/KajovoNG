@@ -47,7 +47,7 @@ def test_core_does_not_depend_on_ui_packages():
     """Core smí být používán UI vrstvami, nikoliv naopak."""
     violations = _violations(
         _python_files("kajovo/core"),
-        ("kajovo.studio", "kajovo.desktop"),
+        ("kajovo.studio", "kajovo.desktop", "PySide6", "PyQt6", "PyQt5"),
     )
     assert not violations, violations
 
@@ -96,4 +96,3 @@ def test_cascade_pipeline_is_qt_free():
     assert "class CascadeRunExecutor" in source
     assert "class CascadeRunWorker" not in source
     assert "QThread" not in source
-

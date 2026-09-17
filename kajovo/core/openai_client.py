@@ -4,6 +4,7 @@ import os
 import json
 import re
 import time
+import logging
 from typing import Any, Dict, List, Optional
 import requests
 from .request_rules import validate_response_payload, validate_vector_attributes
@@ -31,9 +32,10 @@ class OpenAIClient:
         self._sdk = None
         self._known_responses = set()
         try:
-            from openai import OpenAI  # type: ignore
+            from openai import OpenAI
             self._sdk = OpenAI(api_key=api_key, base_url=self.base_url, timeout=self.timeout_s, max_retries=0)
-        except Exception:
+        except (ImportError, ValueError, TypeError) as exc:
+            logging.getLogger(__name__).warning("SDK není dostupné, používám REST: %s", type(exc).__name__)
             self._sdk = None
 
         self.session = requests.Session()

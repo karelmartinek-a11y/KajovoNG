@@ -16,6 +16,7 @@ from kajovo.core.openai_transport import (
     OperationEffect,
     OperationSpec,
     SubmissionOutcomeUnknown,
+    operation_spec,
 )
 
 
@@ -149,3 +150,48 @@ def test_transport_never_allows_multiple_attempts_for_non_idempotent_spec():
             retry_http_statuses=frozenset({500}),
             retry_transport_errors=True,
         )
+
+
+@pytest.mark.parametrize("path", ["/responses", "/batches", "/files", "/vector_stores",
+                                   "/vector_stores/vs_test/files", "/images/edits", "/images/generations"])
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_all_side_effect_endpoints_send_once(path, status):
+    session = FakeSession(FakeResponse(status, {"error": {"code": "temporary"}}))
+    spec = operation_spec("POST", path)
+    with pytest.raises(OpenAIError):
+        transport(session).request(spec, "POST", path)
+    assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/files/f_1/content"), ("GET", "/responses/r_1"),
+    ("GET", "/vector_stores/vs_1/files/f_1"), ("GET", "/batches/b_1"),
+    ("DELETE", "/files/f_1"), ("POST", "/responses/r_1/cancel"),
+    ("POST", "/vector_stores/vs_1/files/f_1"), ("POST", "/unregistered"),
+])
+def test_endpoint_policy_resolution(method, path):
+    spec = operation_spec(method, path)
+    assert (spec.max_attempts > 1) == (method == "GET")
+
+
+def test_malformed_success_is_unknown_not_retryable():
+    response = FakeResponse()
+    response.json = lambda: (_ for _ in ()).throw(ValueError("broken JSON"))
+    session = FakeSession(response)
+    with pytest.raises(SubmissionOutcomeUnknown):
+        transport(session).request(CREATE_RESPONSE, "POST", "/responses")
+    assert len(session.calls) == 1
+
+
+def test_retry_after_invalid_falls_back_and_safe_read_error_is_normalized():
+    session = FakeSession(requests.RequestException("read error"))
+    with pytest.raises(OpenAIError):
+        transport(session).request(LIST_MODELS, "GET", "/models")
+    assert transport(session)._delay(1, "invalid") == 0.8
+
+
+def test_binary_content_response():
+    response = FakeResponse(headers={"content-type": "application/octet-stream"})
+    response.content = b"file bytes"
+    session = FakeSession(response)
+    assert transport(session).request(LIST_MODELS, "GET", "/models") == b"file bytes"

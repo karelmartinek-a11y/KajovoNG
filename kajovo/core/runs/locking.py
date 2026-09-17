@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -21,7 +22,7 @@ class ExecutionLock:
         except OSError:
             return False
         try:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import msvcrt
 
                 windows_lock: Any = msvcrt
@@ -46,7 +47,7 @@ class ExecutionLock:
         if stream is None:
             return
         try:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import msvcrt
 
                 windows_lock: Any = msvcrt

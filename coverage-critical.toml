@@ -1,0 +1,83 @@
+# Kritické oblasti: baseline je úspěšný python313-full běh 35256464175.
+# Doporučené vyšší cíle se zavádějí po behaviorálních testech; historické
+# nepokryté platformní/diagnostické větve se nesmějí skrýt vynecháním souborů.
+
+[areas.openai]
+minimum = 78.62190812720848
+baseline_covered = 445
+baseline_statements = 566
+paths = ["kajovo/core/openai_transport.py","kajovo/core/openai_client.py","kajovo/core/retry.py"]
+
+[areas.run_bundle]
+minimum = 87.24082934609251
+baseline_covered = 1094
+baseline_statements = 1254
+paths = ["kajovo/core/run_bundle.py","kajovo/core/runlog.py"]
+
+[areas.recovery]
+minimum = 90.34482758620689
+baseline_covered = 262
+baseline_statements = 290
+paths = ["kajovo/core/recovery.py","kajovo/core/response_journal.py","kajovo/core/recoverable_artifacts.py","kajovo/core/runs/recovery.py"]
+
+[areas.delivery]
+# Nová delivery_execution vrstva rozšiřuje oblast oproti historickému baseline;
+# její vlastní pokrytí je současně kontrolováno v core_runs.
+minimum = 82
+baseline_covered = 388
+baseline_statements = 454
+paths = ["kajovo/core/runs/delivery.py","kajovo/core/utils.py","kajovo/core/filescan.py","kajovo/core/delivery_preparation.py","kajovo/core/runs/delivery_execution.py"]
+
+[areas.project_git]
+minimum = 80
+baseline_covered = 41
+baseline_statements = 113
+paths = ["kajovo/core/project_git.py"]
+
+[areas.repair]
+minimum = 80
+baseline_covered = 28
+baseline_statements = 46
+paths = ["kajovo/core/repair_execution.py"]
+
+[areas.api_contracts]
+minimum = 80
+baseline_covered = 303
+baseline_statements = 377
+paths = ["kajovo/core/contracts.py","kajovo/core/response_policy.py","kajovo/core/structured_output.py"]
+
+[areas.batch]
+minimum = 82.51046025104603
+baseline_covered = 986
+baseline_statements = 1195
+paths = ["kajovo/core/batch_completion.py","kajovo/core/batch_submit.py","kajovo/core/generate_batch.py","kajovo/core/photo_batch.py","kajovo/core/runs/batch_execution.py"]
+
+[areas.cascade]
+minimum = 70.8457711442786
+baseline_covered = 712
+baseline_statements = 1005
+paths = ["kajovo/core/cascade_pipeline.py","kajovo/core/cascade_contract.py"]
+
+[areas.studio_policy]
+minimum = 78.954802259887
+baseline_covered = 559
+baseline_statements = 708
+paths = ["kajovo/studio/history_policy.py","kajovo/studio/history_launcher.py","kajovo/studio/history_state.py","kajovo/studio/operations.py","kajovo/studio/context.py"]
+
+[areas.core_runs]
+minimum = 73.17919075144509
+baseline_covered = 1266
+baseline_statements = 1730
+paths = ["kajovo/core/runs/*.py"]
+
+[areas.studio]
+minimum = 65.70680628272251
+baseline_covered = 4267
+baseline_statements = 6494
+paths = ["kajovo/studio/**/*.py"]
+
+[areas.transport]
+minimum = 90
+baseline_covered = 194
+baseline_statements = 225
+paths = ["kajovo/core/openai_transport.py","kajovo/core/retry.py"]

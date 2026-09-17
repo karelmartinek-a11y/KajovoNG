@@ -124,6 +124,7 @@ def test_missing_deliverables_report_records_reason(tmp_path):
 
 def test_user_progress_no_longer_exposes_obsolete_english_stage_messages():
     source = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
+    batch_source = Path("kajovo/core/runs/batch_execution.py").read_text(encoding="utf-8")
     obsolete = (
         "C: building batch JSONL...",
         "IN mirror: scan + manifest + upload...",
@@ -133,7 +134,7 @@ def test_user_progress_no_longer_exposes_obsolete_english_stage_messages():
     )
     assert not any(message in source for message in obsolete)
     assert 'stage="Lokální validace"' in source
-    assert 'stage="Příprava BATCH"' in source
+    assert 'stage="Příprava BATCH"' in batch_source
 
 
 def test_modify_requires_existing_input_in_studio(qtbot, tmp_path):
@@ -168,9 +169,10 @@ def test_batch_monitoring_starts_only_after_explicit_refresh():
 
 
 def test_live_generate_partial_semantics_are_wired_end_to_end():
-    pipeline = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
+    pipeline = Path("kajovo/core/runs/generate.py").read_text(encoding="utf-8")
     from kajovo.studio.operations import STATES
 
     assert '"status": "partial" if missing_deliverables else "files_complete_unverified"' in pipeline
-    assert 'final_status in ("completed", "partial", "dry_run", "files_complete_unverified")' in pipeline
+    executor = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
+    assert 'final_status in ("completed", "partial", "dry_run", "files_complete_unverified")' in executor
     assert STATES["partial"] == "Dokončeno s chybami"

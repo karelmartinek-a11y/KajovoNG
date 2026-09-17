@@ -4,7 +4,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from .context import RunContext
+
+
+class WorkflowExecutor(Protocol):
+    """Workflow používá služby běhu a vrací výsledek pro obecnou finalizaci."""
+
+    def execute(self, context: RunContext) -> dict[str, Any]: ...
 
 
 class RunMode(StrEnum):

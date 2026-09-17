@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -121,7 +122,16 @@ class ProjectGit:
         # Ověření obsahu i cíle těsně před odstraněním vlastní historie.
         if not (directory / "HEAD").is_file() or not (directory / "objects").is_dir():
             raise ValueError("Adresář nemá očekávanou strukturu repozitáře Git.")
-        shutil.rmtree(directory)
+        def remove_readonly(function, path, error):
+            target = Path(path)
+            if (os.name != "nt" or not isinstance(error, PermissionError)
+                    or target.is_symlink() or not target.is_file()
+                    or not target.resolve().is_relative_to(directory.resolve())):
+                raise error
+            target.chmod(target.stat().st_mode | stat.S_IWRITE)
+            function(path)
+
+        shutil.rmtree(directory, onexc=remove_readonly)
         return self.snapshot()
 
     def read_file(self, relative, tag=""):

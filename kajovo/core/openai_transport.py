@@ -322,6 +322,8 @@ class OpenAITransport:
                     continue
                 raise OpenAIError(f"{method} {path} failed: {exc}") from exc
             except requests.RequestException as exc:
+                if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
+                    raise SubmissionOutcomeUnknown(spec.name, method, path, cause=exc) from exc
                 raise OpenAIError(f"{method} {path} failed: {exc}") from exc
 
             request_id = response.headers.get("x-request-id")
@@ -355,7 +357,14 @@ class OpenAITransport:
                 raise error
 
             if response.headers.get("content-type", "").startswith("application/json"):
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError as exc:
+                    if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
+                        raise SubmissionOutcomeUnknown(
+                            spec.name, method, path, request_id=request_id, cause=exc
+                        ) from exc
+                    raise OpenAIError(f"{method} {path}: neplatná JSON odpověď") from exc
                 if isinstance(result, dict) and request_id:
                     result.setdefault("_request_id", request_id)
                 return result

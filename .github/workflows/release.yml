@@ -185,6 +185,12 @@ jobs:
           fetch-depth: 0
           lfs: true
           persist-credentials: false
+      - name: Verify exact checkout SHA
+        shell: pwsh
+        env:
+          TARGET_SHA: ${{ needs.metadata.outputs.target_sha }}
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:TARGET_SHA) { throw "Checkout nemá požadovaný TARGET_SHA." }
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -208,6 +214,10 @@ jobs:
           SHORT_SHA: ${{ needs.metadata.outputs.short_sha }}
         run: |
           $ErrorActionPreference = "Stop"
+          $buildInfo = Get-Content "build-metadata/build-info.json" -Raw | ConvertFrom-Json
+          if ($buildInfo.git_sha -ne $env:TARGET_SHA) { throw "Build metadata obsahuje jiný git SHA." }
+          $constraintsSha = (Get-FileHash -Algorithm SHA256 "requirements/constraints.txt").Hash.ToLowerInvariant()
+          if ($buildInfo.constraints_sha256 -ne $constraintsSha) { throw "Build metadata obsahuje jiný SHA constraints." }
           $exe = Get-Item "dist/Kajovo/Kajovo.exe" -ErrorAction Stop
           if ($exe.Length -le 0) { throw "dist/Kajovo/Kajovo.exe má nulovou velikost." }
           $files = @(Get-ChildItem "dist/Kajovo" -File -Recurse)
@@ -215,6 +225,7 @@ jobs:
 
           $releaseDir = Join-Path $PWD "release"
           New-Item -ItemType Directory -Force $releaseDir | Out-Null
+          Copy-Item "build-metadata/*" $releaseDir -Force
           $archiveName = "$env:ASSET_STEM-windows-x64.zip"
           $archivePath = Join-Path $releaseDir $archiveName
           Push-Location "dist"
@@ -259,7 +270,6 @@ jobs:
     needs: [metadata, ci_gate]
     runs-on: macos-latest
     timeout-minutes: 45
-    continue-on-error: true
     permissions:
       contents: read
     steps:
@@ -269,6 +279,11 @@ jobs:
           fetch-depth: 0
           lfs: true
           persist-credentials: false
+      - name: Verify exact checkout SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.metadata.outputs.target_sha }}
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -296,6 +311,17 @@ jobs:
           set -euo pipefail
           test -d dist/Kajovo.app
           test -s dist/Kajovo.app/Contents/MacOS/Kajovo
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          info = json.loads(Path("build-metadata/build-info.json").read_text())
+          if info["git_sha"] != "${{ needs.metadata.outputs.target_sha }}":
+              raise SystemExit("Build metadata obsahuje jiný git SHA.")
+          expected = hashlib.sha256(Path("requirements/constraints.txt").read_bytes()).hexdigest()
+          if info["constraints_sha256"] != expected:
+              raise SystemExit("Build metadata obsahuje jiný SHA constraints.")
+          PY
 
           case "$(uname -m)" in
             arm64) platform="macos-arm64" ;;
@@ -304,6 +330,7 @@ jobs:
           esac
 
           mkdir -p release
+          cp build-metadata/* release/
           archive_name="${ASSET_STEM}-${platform}.zip"
           archive_path="release/${archive_name}"
           ditto -c -k --sequesterRsrc --keepParent dist/Kajovo.app "$archive_path"

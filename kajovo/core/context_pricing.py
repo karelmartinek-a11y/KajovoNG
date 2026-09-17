@@ -1,7 +1,9 @@
 """Explicitně doložené základní USD sazby; neznámé modely se neodhadují."""
 
+from typing import Any
+
 VERSION = "2026-09-13.1"
-PRICES = {
+PRICES: dict[str, dict[str, Any]] = {
     "gpt-5.6-luna": {"input": 0.20, "cached_input": 0.02, "output": 1.20,
         "long_context_threshold": 272000, "long_input_multiplier": 2, "long_output_multiplier": 1.5,
         "source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"},

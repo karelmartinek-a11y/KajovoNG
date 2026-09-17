@@ -172,7 +172,7 @@ def parse_json_strict(text: str) -> Dict[str, Any]:
         parsed = _load_json(text)
     except ContractError:
         raise
-    except Exception:
+    except (ValueError, TypeError):
         parsed = None
 
     if isinstance(parsed, dict):
@@ -186,7 +186,7 @@ def parse_json_strict(text: str) -> Dict[str, Any]:
             parsed2 = _load_json(m.group(1))
             if isinstance(parsed2, dict):
                 return parsed2
-        except Exception:
+        except (ValueError, TypeError):
             pass
     raise ContractError("Response is not valid JSON (strict contract violated).")
 

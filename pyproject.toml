@@ -53,6 +53,11 @@ namespaces = false
 line-length = 100
 extend-exclude = ["Build/lib", "Build/Kajovo", "Build/bdist.*", "build/lib", "build/Kajovo"]
 
+[tool.ruff.lint]
+# Stejný celorepozitářový kontrakt jako AGENTS.md a CI; přísnější kontrola
+# kritických modulů zůstává samostatným povinným krokem quality jobu.
+select = ["F", "B", "E9"]
+
 [tool.mypy]
 python_version = "3.12"
 check_untyped_defs = true
