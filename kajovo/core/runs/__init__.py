@@ -5,6 +5,33 @@ legacy `core.pipeline` probíhá inkrementálně a po každém kroku musí zůst
 zachováno původní runtime chování.
 """
 
+from .cancellation import CancellationToken, RunCancelled
 from .config import UiRunConfig
+from .contracts import (
+    InvalidRunTransition,
+    RunEvent,
+    RunFailure,
+    RunMode,
+    RunPhase,
+    RunResult,
+    RunStatus,
+    TERMINAL_STATUSES,
+    phase_for_status,
+    validate_transition,
+)
 
-__all__ = ["UiRunConfig"]
+__all__ = [
+    "CancellationToken",
+    "InvalidRunTransition",
+    "RunCancelled",
+    "RunEvent",
+    "RunFailure",
+    "RunMode",
+    "RunPhase",
+    "RunResult",
+    "RunStatus",
+    "TERMINAL_STATUSES",
+    "UiRunConfig",
+    "phase_for_status",
+    "validate_transition",
+]
