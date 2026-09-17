@@ -8,7 +8,13 @@ old = 'results[:pending_index] + [{"id": results[pending_index]["id"], "status":
 new = '[*results[:pending_index], {"id": results[pending_index]["id"], "status": "queued"}]'
 if old not in text:
     raise RuntimeError("Expected response journal list concatenation not found")
-journal.write_text(text.replace(old, new, 1), encoding="utf-8")
+text = text.replace(old, new, 1)
+orphan = '@pytest.mark.parametrize("state", ["response_pending", "submission_unknown", "cancelled"])\n@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])'
+replacement = '@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])'
+if orphan not in text:
+    raise RuntimeError("Expected orphan response-journal decorator not found")
+text = text.replace(orphan, replacement, 1)
+journal.write_text(text, encoding="utf-8")
 
 bundle = ROOT / "tests/test_run_bundle.py"
 text = bundle.read_text(encoding="utf-8")
