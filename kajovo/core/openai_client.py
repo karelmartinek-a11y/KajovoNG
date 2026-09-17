@@ -11,7 +11,6 @@ from .compat import is_compatible_path
 from .openai_transport import (
     OpenAIError,
     OpenAITransport,
-    SubmissionOutcomeUnknown,
     operation_spec,
 )
 
@@ -98,20 +97,10 @@ class OpenAIClient:
         }, max_attempts=1)
 
     def list_models(self) -> List[Dict[str, Any]]:
-        if self._sdk is not None:
-            try:
-                return [m.model_dump() for m in self._sdk.models.list()]  # type: ignore
-            except Exception:
-                pass
         data = self._req("GET", "/models")
         return data.get("data", [])
 
     def list_files(self) -> List[Dict[str, Any]]:
-        if self._sdk is not None:
-            try:
-                return [f.model_dump() for f in self._sdk.files.list()]  # type: ignore
-            except Exception:
-                pass
         return self._list_all("/files")
 
     def upload_file(self, path: str, purpose: str = "user_data") -> Dict[str, Any]:
@@ -120,45 +109,21 @@ class OpenAIClient:
                 raise ValueError("Dávka překračuje 200 MB.")
             with open(path, "rb") as stream:
                 self.validate_batch_data(stream.read())
-        if self._sdk is not None:
-            try:
-                with open(path, "rb") as f:
-                    obj = self._sdk.files.create(file=f, purpose=purpose)  # type: ignore
-                return obj.model_dump()  # type: ignore
-            except Exception as exc:
-                raise OpenAIError(str(exc)) from exc
-        with open(path, "rb") as f:
-            files = {"file": (os.path.basename(path), f)}
+        with open(path, "rb") as stream:
+            files = {"file": (os.path.basename(path), stream)}
             data = {"purpose": purpose}
             return self._req("POST", "/files", json_body=data, files=files)
 
     def delete_file(self, file_id: str) -> Dict[str, Any]:
         self._validate_resource_id(file_id)
-        if self._sdk is not None:
-            try:
-                obj = self._sdk.files.delete(file_id)  # type: ignore
-                return obj.model_dump()  # type: ignore
-            except Exception as exc:
-                raise OpenAIError(str(exc)) from exc
         return self._req("DELETE", f"/files/{file_id}")
 
     def file_content(self, file_id: str) -> bytes:
         self._validate_resource_id(file_id)
-        if self._sdk is not None:
-            try:
-                return self._sdk.files.content(file_id).read()  # type: ignore
-            except Exception:
-                pass
         return self._req("GET", f"/files/{file_id}/content")
 
     def retrieve_file(self, file_id: str) -> Dict[str, Any]:
         self._validate_resource_id(file_id)
-        if self._sdk is not None:
-            try:
-                obj = self._sdk.files.retrieve(file_id)  # type: ignore
-                return obj.model_dump()  # type: ignore
-            except Exception:
-                pass
         return self._req("GET", f"/files/{file_id}")
 
     def configure_validation(self, settings):
@@ -347,19 +312,9 @@ class OpenAIClient:
 
     def _response_operation(self, response_id, *, cancel=False):
         self._validate_resource_id(response_id)
-        if self._sdk is None:
-            return self._req("POST" if cancel else "GET", f"/responses/{response_id}" + ("/cancel" if cancel else ""), max_attempts=1)
-        try:
-            method = self._sdk.responses.cancel if cancel else self._sdk.responses.retrieve
-            obj = method(response_id)
-            result = obj.model_dump()
-            if getattr(obj, "_request_id", None):
-                result["_request_id"] = obj._request_id
-            return result
-        except Exception as exc:
-            error = OpenAIError(str(exc), status_code=getattr(exc, "status_code", None))
-            error.request_id = getattr(exc, "request_id", None)
-            raise error from exc
+        if cancel:
+            return self._req("POST", f"/responses/{response_id}/cancel", max_attempts=1)
+        return self._req("GET", f"/responses/{response_id}")
 
     def retrieve_response(self, response_id):
         return self._response_operation(response_id)
@@ -373,34 +328,6 @@ class OpenAIClient:
         prepare_payload(payload)
         validate_response_payload(payload)
         started = time.monotonic()
-        if self._sdk is not None:
-            try:
-                obj = self._sdk.responses.create(**payload)  # type: ignore
-                result = obj.model_dump()  # type: ignore
-                request_id = getattr(obj, "_request_id", None)
-                if request_id:
-                    result["_request_id"] = request_id
-                if payload.get("store", True) and result.get("status") == "completed" and result.get("id"):
-                    self._known_responses.add(result["id"])
-                return result
-            except Exception as exc:
-                status = getattr(exc, "status_code", None)
-                if status in (400, 422) and hasattr(self, "_policy"):
-                    self._policy.invalidate(payload["model"])
-                detail = getattr(exc, "body", None) or {}
-                if isinstance(detail, dict):
-                    detail = detail.get("error", detail)
-                detail = detail if isinstance(detail, dict) else {}
-                error = OpenAIError(
-                    str(exc),
-                    status_code=status,
-                    param=detail.get("param"),
-                    code=detail.get("code"),
-                )
-                error.request_id = getattr(exc, "request_id", None)
-                error.elapsed_s = time.monotonic() - started
-                error.phase = "response"
-                raise error from exc
         try:
             result = self._req("POST", "/responses", json_body=payload, timeout=self.timeout_s)
             if payload.get("store", True) and result.get("status") == "completed" and result.get("id"):

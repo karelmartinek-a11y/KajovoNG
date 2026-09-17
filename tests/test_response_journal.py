@@ -159,18 +159,16 @@ def test_client_background_does_not_validate_unfinished_output(sdk):
     client.validate_access = Mock()
     client._policy = Mock()
     result = {"id": "resp_test", "status": "queued", "output": []}
-    if sdk:
-        client._sdk = Mock()
-        client._sdk.responses.create.return_value.model_dump.return_value = result
-        client._sdk.responses.retrieve.return_value.model_dump.return_value = result
-        client._sdk.responses.cancel.return_value.model_dump.return_value = result
-        client._sdk.responses.create.return_value._request_id = None
-    else:
-        client._sdk = None
-        client._req = Mock(return_value=result)
+    client._sdk = Mock() if sdk else None
+    client._req = Mock(return_value=result)
     assert client.create_response({"model": "gpt-5.4", "input": "x", "background": True, "store": True})["status"] == "queued"
     assert client.retrieve_response("resp_test")["id"] == "resp_test"
     assert client.cancel_response("resp_test")["id"] == "resp_test"
+    assert client._req.call_count == 3
+    if sdk:
+        client._sdk.responses.create.assert_not_called()
+        client._sdk.responses.retrieve.assert_not_called()
+        client._sdk.responses.cancel.assert_not_called()
 
 
 def test_background_not_allowed_inside_batch():

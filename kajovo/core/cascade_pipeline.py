@@ -30,7 +30,6 @@ from .contracts import ContractError, validate_paths
 from .openai_client import OpenAIClient
 from .progress import ProgressEvent
 from .request_rules import validate_response_payload
-from .retry import CircuitBreaker, with_retry
 from .structured_output import (
     resolve_schema,
     response_format,
@@ -151,10 +150,6 @@ class CascadeRunWorker(QThread):
             self.cfg.out_dir = self.cfg.cascade.default_out_dir.strip()
         self.settings = copy.deepcopy(settings)
         self.api_key = api_key
-        self.breaker = CircuitBreaker(
-            settings.retry.circuit_breaker_failures,
-            settings.retry.circuit_breaker_cooldown_s,
-        )
         self._stop = False
         self.logger: Optional[CascadeLogger] = None
         self._failed_step_index = 0

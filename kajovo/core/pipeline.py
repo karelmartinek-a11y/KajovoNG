@@ -27,7 +27,6 @@ from .contracts import ContractError, extract_text_from_response, parse_json_str
 from .filescan import build_manifest, scan_tree
 from .openai_client import OpenAIClient
 from .batch_submit import submit_verified_batch
-from .retry import CircuitBreaker, with_retry
 from .utils import ensure_dir, is_versing_snapshot_dir, sha256_file, ts_code, safe_join_under_root
 
 from .compat import SUPPORTED_INPUT_FILE_EXTS, SUPPORTED_INPUT_IMAGE_EXTS
@@ -78,7 +77,6 @@ class RunWorker(QThread):
         self.settings = copy.deepcopy(settings)
         self.api_key = api_key
         self.log = run_logger
-        self.breaker = CircuitBreaker(settings.retry.circuit_breaker_failures, settings.retry.circuit_breaker_cooldown_s)
         self._stop = False
         self._cancel_response = False
         self._response_journal = None
@@ -219,7 +217,7 @@ class RunWorker(QThread):
             self._remember_file_name(fid, filename)
             return self._input_kind_cache.get(fid, "unsupported")
         try:
-            meta = with_retry(lambda f=fid: client.retrieve_file(f), self.settings.retry, self.breaker)
+            meta = client.retrieve_file(fid)
             filename = str(meta.get("filename") or "").strip()
             self._remember_file_name(fid, filename)
         except Exception as e:
@@ -745,7 +743,7 @@ class RunWorker(QThread):
         if (not self.cfg.send_as_c or self.cfg.mode == "GENERATE") and self._preparation_cap("supports_vector_store"):
             try:
                 self._set(6, 0, "Indexuji vstupní data pro file_search…", stage="Indexace")
-                vs = with_retry(lambda: client.create_vector_store(f"IN_{ts_code()}"), self.settings.retry, self.breaker)
+                vs = client.create_vector_store(f"IN_{ts_code()}")
                 vs_id = vs.get("id")
                 if vs_id:
                     vs_file = client.add_file_to_vector_store(vs_id, file_id)
@@ -820,8 +818,7 @@ class RunWorker(QThread):
             else:
                 raise ContractError(f"Nepodporovaný formát přímé přílohy: {fid_s}")
         if file_ids or image_ids:
-            metadata = [with_retry(lambda f=fid: client.retrieve_file(f), self.settings.retry, self.breaker)
-                        for fid in file_ids + image_ids]
+            metadata = [client.retrieve_file(fid) for fid in file_ids + image_ids]
             validate_input_file_sizes(metadata)
         return file_ids, image_ids
 
@@ -866,7 +863,7 @@ class RunWorker(QThread):
         if not (supports_vs and supports_fs):
             raise RuntimeError("Diagnostics IN vyžaduje model s podporou vector store + file_search.")
         self._log_debug("Diagnostics IN: create vector store...")
-        vs = with_retry(lambda: client.create_vector_store(f"DIAG_{ts_code()}"), self.settings.retry, self.breaker)
+        vs = client.create_vector_store(f"DIAG_{ts_code()}")
         vs_id = str(vs.get("id") or "")
         if not vs_id:
             raise RuntimeError("Diagnostics IN: nepodařilo se vytvořit vector store.")
@@ -895,11 +892,7 @@ class RunWorker(QThread):
 
     def _wait_vector_store_files(self, client: OpenAIClient, vs_id: str, vs_file_ids: List[str], timeout_s: int = 180) -> None:
         context = VectorStorePollingContext(
-            retrieve=lambda vector_store_id, file_id: with_retry(
-                lambda: client.retrieve_vector_store_file(vector_store_id, file_id),
-                self.settings.retry,
-                self.breaker,
-            ),
+            retrieve=lambda vector_store_id, file_id: client.retrieve_vector_store_file(vector_store_id, file_id),
             check_stop=self._check_stop,
             progress_emit=self.progress_event.emit,
             evidence_emit=lambda event, payload: self.log.event(event, payload),
@@ -1336,7 +1329,7 @@ class RunWorker(QThread):
             if supports_fs:
                 try:
                     self._set(18, 0, "Vytvářím a indexuji vector store pro file_search…", stage="Indexace")
-                    vs = with_retry(lambda: client.create_vector_store(f"{(self.cfg.project or root_name)}{ts_code()}"), self.settings.retry, self.breaker)
+                    vs = client.create_vector_store(f"{(self.cfg.project or root_name)}{ts_code()}")
                     vs_id = vs.get("id")
                     if vs_id:
                         vs_file_ids: List[str] = []
