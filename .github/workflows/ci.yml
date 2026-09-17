@@ -37,12 +37,12 @@ jobs:
         run: python -m ruff check --select F,B,E9 kajovo kajovong utf8nobom tests Build tools
       - name: Strict checks for hardened core
         run: |
-          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF kajovo/core/runs kajovo/core/openai_transport.py tests/test_openai_transport.py tests/test_openai_retry_semantics.py tests/test_architecture_contracts.py tests/test_python312_runtime_contract.py
+          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF kajovo/core/runs kajovo/core/openai_transport.py tests/test_openai_transport.py tests/test_openai_retry_semantics.py tests/test_run_contracts.py tests/test_run_cancellation.py tests/test_run_lifecycle.py tests/test_architecture_contracts.py tests/test_python312_runtime_contract.py
           python -m mypy --follow-imports=skip kajovo/core/runs kajovo/core/openai_transport.py
       - name: Architecture regression
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q tests/test_architecture_contracts.py tests/test_python312_runtime_contract.py
+        run: python -m pytest -q tests/test_architecture_contracts.py tests/test_python312_runtime_contract.py tests/test_run_contracts.py tests/test_run_cancellation.py tests/test_run_lifecycle.py
 
   python312-contract:
     runs-on: ubuntu-latest
@@ -69,6 +69,9 @@ jobs:
           python -m pytest -q \
             tests/test_python312_runtime_contract.py \
             tests/test_architecture_contracts.py \
+            tests/test_run_contracts.py \
+            tests/test_run_cancellation.py \
+            tests/test_run_lifecycle.py \
             tests/test_api_client.py \
             tests/test_openai_transport.py \
             tests/test_openai_retry_semantics.py \
