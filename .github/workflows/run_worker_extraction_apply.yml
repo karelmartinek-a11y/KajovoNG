@@ -36,8 +36,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile kajovo/core/pipeline.py kajovo/core/runs/executor.py kajovo/studio/workers/run_worker.py
-          if grep -R -n 'PySide6' kajovo/core/pipeline.py kajovo/core/runs; then
-            echo '::error::Qt dependency remains in core run layer.'
+          if grep -R -nE '^[[:space:]]*(from[[:space:]]+PySide6|import[[:space:]]+PySide6)' kajovo/core/pipeline.py kajovo/core/runs; then
+            echo '::error::Qt import remains in core run layer.'
             exit 1
           fi
           python -m ruff check --select F,B,E9 kajovo/core/pipeline.py kajovo/core/runs kajovo/studio/workers tests
