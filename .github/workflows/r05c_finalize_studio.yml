@@ -59,7 +59,9 @@ jobs:
           ! grep -R -nE '^\s*(from|import)\s+kajovo\.desktop' kajovo tests scripts tools --include='*.py'
           test ! -e aa.txt
           test ! -d LOG
+          git add -A
           ! git ls-files | grep -E '(^LOG/|^aa\.txt$|__pycache__|\.py[co]$|\.pytest_cache|\.mypy_cache|\.ruff_cache)'
+          git diff --cached --check
       - name: Focused Studio contracts
         run: >-
           python -m pytest -q
