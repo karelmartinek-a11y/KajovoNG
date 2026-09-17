@@ -1,0 +1,64 @@
+name: r05b-studio-audit-migration
+
+on:
+  push:
+    branches:
+      - codex/r05-ui-consolidation-20260917
+    paths:
+      - 'tools/_r05b_migrate_studio_audit.py'
+      - '.github/workflows/r05b_studio_audit_migration.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-and-verify:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install headless Qt runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install canonical environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Apply deterministic Studio audit migration
+        run: python tools/_r05b_migrate_studio_audit.py
+      - name: Static verification
+        run: |
+          python -m ruff check --fix --exit-zero --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
+            kajovo/studio/ui_audit.py \
+            tests/test_ui_audit_inheritance.py \
+            tests/test_ui_forensic_contract.py \
+            scripts/audit_ui.py
+          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
+            kajovo/studio/ui_audit.py \
+            tests/test_ui_audit_inheritance.py \
+            tests/test_ui_forensic_contract.py \
+            scripts/audit_ui.py
+      - name: Forensic audit verification
+        run: |
+          python scripts/audit_ui.py --check > /tmp/studio_ui_audit.json
+          python -m pytest -q tests/test_ui_audit_inheritance.py tests/test_ui_forensic_contract.py
+      - name: Commit verified Studio audit migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'karelmartinek-a11y'
+          git config user.email 'karel.martinek@post.cz'
+          git add \
+            kajovo/studio/ui_audit.py \
+            tests/test_ui_audit_inheritance.py \
+            tests/test_ui_forensic_contract.py \
+            scripts/audit_ui.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'refactor: move forensic UI audit to Studio'
+          git push origin HEAD:codex/r05-ui-consolidation-20260917
