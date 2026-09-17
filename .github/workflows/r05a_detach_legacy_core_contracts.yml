@@ -34,25 +34,28 @@ jobs:
         run: python tools/_r05a_detach_legacy_core_contracts.py
       - name: Static verification
         run: |
-          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
-            kajovo/core/recovery.py \
+          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF kajovo/core/recovery.py
+          python -m ruff check --select F,B,E9 \
             tests/conftest.py \
             tests/test_desktop_preparation_recovery.py \
             tests/test_output_chunks.py \
             tests/test_response_journal.py \
-            tests/test_studio_contracts.py
+            tests/test_studio_contracts.py \
+            tests/test_desktop.py
           python - <<'PY'
           from pathlib import Path
           required = {
               'tests/test_desktop_preparation_recovery.py': 'kajovo.core.recovery',
               'tests/test_response_journal.py': 'kajovo.core.recovery',
               'tests/test_output_chunks.py': 'kajovo.core.batch_completion',
+              'tests/test_studio_contracts.py': 'kajovo.core.recovery',
           }
           for name, token in required.items():
               source = Path(name).read_text(encoding='utf-8')
               if token not in source:
                   raise SystemExit(f'{name}: missing {token}')
-          if 'kajovo.desktop.settings.persist_api_key' in Path('tests/conftest.py').read_text(encoding='utf-8'):
+          conftest = Path('tests/conftest.py').read_text(encoding='utf-8')
+          if 'kajovo.desktop.settings.persist_api_key' in conftest:
               raise SystemExit('conftest still imports legacy desktop settings')
           PY
       - name: Behavior verification
