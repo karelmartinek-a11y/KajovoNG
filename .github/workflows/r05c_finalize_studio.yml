@@ -21,6 +21,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: true
+          lfs: true
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
