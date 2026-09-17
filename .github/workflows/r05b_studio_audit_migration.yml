@@ -45,8 +45,10 @@ jobs:
             tests/test_ui_forensic_contract.py \
             scripts/audit_ui.py
       - name: Forensic audit verification
+        shell: bash
         run: |
-          python scripts/audit_ui.py --check > /tmp/studio_ui_audit.json
+          set -o pipefail
+          python scripts/audit_ui.py --check | tee /tmp/studio_ui_audit.json
           python -m pytest -q tests/test_ui_audit_inheritance.py tests/test_ui_forensic_contract.py
       - name: Commit verified Studio audit migration
         shell: bash
