@@ -6,6 +6,7 @@ on:
       - codex/final-nine-hardening-20260917
     paths:
       - 'tools/_finalize_nine_hardening.py'
+      - 'tools/_finalize_nine_postfix.py'
       - '.github/workflows/finalize_nine_hardening.yml'
 
 permissions:
@@ -37,6 +38,7 @@ jobs:
           python tools/_r05c_finalize_studio.py
           python tools/_r05c_postfix.py
           python tools/_finalize_nine_hardening.py
+          python tools/_finalize_nine_postfix.py
       - name: Normalize extracted modules and migrated tests
         shell: bash
         run: |
@@ -102,6 +104,7 @@ jobs:
             tools/_r05c_postfix.py \
             tools/_fix_cascade_type_shadow.py \
             tools/_finalize_nine_hardening.py \
+            tools/_finalize_nine_postfix.py \
             .github/workflows/r05a_detach_legacy_core_contracts.yml \
             .github/workflows/r05b_studio_audit_migration.yml \
             .github/workflows/r05c_finalize_studio.yml \
