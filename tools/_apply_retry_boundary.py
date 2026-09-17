@@ -6,11 +6,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def replace_once(text: str, old: str, new: str, label: str) -> str:
+def replace_exact(
+    text: str,
+    old: str,
+    new: str,
+    label: str,
+    *,
+    expected: int = 1,
+) -> str:
     count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f"{label}: očekáván 1 výskyt, nalezeno {count}")
-    return text.replace(old, new, 1)
+    if count != expected:
+        raise RuntimeError(
+            f"{label}: očekáváno {expected} výskytů, nalezeno {count}"
+        )
+    return text.replace(old, new, expected)
 
 
 def replace_function(text: str, name: str, replacement: str) -> str:
@@ -26,7 +35,12 @@ def replace_function(text: str, name: str, replacement: str) -> str:
 def migrate_client() -> None:
     path = ROOT / "kajovo/core/openai_client.py"
     text = path.read_text(encoding="utf-8")
-    text = text.replace("    SubmissionOutcomeUnknown,\n", "")
+    text = replace_exact(
+        text,
+        "    SubmissionOutcomeUnknown,\n",
+        "",
+        "unused SubmissionOutcomeUnknown import",
+    )
 
     text = replace_function(
         text,
@@ -114,28 +128,55 @@ def migrate_client() -> None:
 def migrate_pipeline() -> None:
     path = ROOT / "kajovo/core/pipeline.py"
     text = path.read_text(encoding="utf-8")
-    text = replace_once(
+    text = replace_exact(
         text,
         "from .retry import CircuitBreaker, with_retry\n",
         "",
         "pipeline retry import",
     )
-    text = replace_once(
+    text = replace_exact(
         text,
         "        self.breaker = CircuitBreaker(settings.retry.circuit_breaker_failures, settings.retry.circuit_breaker_cooldown_s)\n",
         "",
         "pipeline breaker",
     )
-    replacements = {
-        "with_retry(lambda f=fid: client.retrieve_file(f), self.settings.retry, self.breaker)": "client.retrieve_file(fid)",
-        "with_retry(lambda: client.create_vector_store(f\"IN_{ts_code()}\"), self.settings.retry, self.breaker)": "client.create_vector_store(f\"IN_{ts_code()}\")",
-        "[with_retry(lambda f=fid: client.retrieve_file(f), self.settings.retry, self.breaker)\n                        for fid in file_ids + image_ids]": "[client.retrieve_file(fid) for fid in file_ids + image_ids]",
-        "with_retry(lambda: client.create_vector_store(f\"DIAG_{ts_code()}\"), self.settings.retry, self.breaker)": "client.create_vector_store(f\"DIAG_{ts_code()}\")",
-        "retrieve=lambda vector_store_id, file_id: with_retry(\n                lambda: client.retrieve_vector_store_file(vector_store_id, file_id),\n                self.settings.retry,\n                self.breaker,\n            ),": "retrieve=lambda vector_store_id, file_id: client.retrieve_vector_store_file(vector_store_id, file_id),",
-        "with_retry(lambda: client.create_vector_store(f\"{(self.cfg.project or root_name)}{ts_code()}\"), self.settings.retry, self.breaker)": "client.create_vector_store(f\"{(self.cfg.project or root_name)}{ts_code()}\")",
-    }
-    for old, new in replacements.items():
-        text = replace_once(text, old, new, f"pipeline {old[:32]}")
+
+    # Nejdřív nahrazujeme delší výraz, který obsahuje stejný retrieve pattern.
+    text = replace_exact(
+        text,
+        "[with_retry(lambda f=fid: client.retrieve_file(f), self.settings.retry, self.breaker)\n                        for fid in file_ids + image_ids]",
+        "[client.retrieve_file(fid) for fid in file_ids + image_ids]",
+        "pipeline attachment metadata read",
+    )
+    replacements = (
+        (
+            "with_retry(lambda f=fid: client.retrieve_file(f), self.settings.retry, self.breaker)",
+            "client.retrieve_file(fid)",
+            "pipeline classify attachment read",
+        ),
+        (
+            "with_retry(lambda: client.create_vector_store(f\"IN_{ts_code()}\"), self.settings.retry, self.breaker)",
+            "client.create_vector_store(f\"IN_{ts_code()}\")",
+            "pipeline IN vector store create",
+        ),
+        (
+            "with_retry(lambda: client.create_vector_store(f\"DIAG_{ts_code()}\"), self.settings.retry, self.breaker)",
+            "client.create_vector_store(f\"DIAG_{ts_code()}\")",
+            "pipeline diagnostics vector store create",
+        ),
+        (
+            "retrieve=lambda vector_store_id, file_id: with_retry(\n                lambda: client.retrieve_vector_store_file(vector_store_id, file_id),\n                self.settings.retry,\n                self.breaker,\n            ),",
+            "retrieve=lambda vector_store_id, file_id: client.retrieve_vector_store_file(vector_store_id, file_id),",
+            "pipeline vector store polling read",
+        ),
+        (
+            "with_retry(lambda: client.create_vector_store(f\"{(self.cfg.project or root_name)}{ts_code()}\"), self.settings.retry, self.breaker)",
+            "client.create_vector_store(f\"{(self.cfg.project or root_name)}{ts_code()}\")",
+            "pipeline project vector store create",
+        ),
+    )
+    for old, new, label in replacements:
+        text = replace_exact(text, old, new, label)
     if "with_retry" in text or "self.breaker" in text:
         raise RuntimeError("Po migraci zůstala v pipeline vnější retry vrstva.")
     path.write_text(text, encoding="utf-8")
@@ -144,13 +185,13 @@ def migrate_pipeline() -> None:
 def migrate_cascade() -> None:
     path = ROOT / "kajovo/core/cascade_pipeline.py"
     text = path.read_text(encoding="utf-8")
-    text = replace_once(
+    text = replace_exact(
         text,
         "from .retry import CircuitBreaker, with_retry\n",
         "",
         "cascade retry import",
     )
-    text = replace_once(
+    text = replace_exact(
         text,
         "        self.breaker = CircuitBreaker(\n            settings.retry.circuit_breaker_failures,\n            settings.retry.circuit_breaker_cooldown_s,\n        )\n",
         "",
@@ -161,10 +202,59 @@ def migrate_cascade() -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def migrate_response_journal_test() -> None:
+    path = ROOT / "tests/test_response_journal.py"
+    text = path.read_text(encoding="utf-8")
+    old = '''@pytest.mark.parametrize("sdk", [False, True])
+def test_client_background_does_not_validate_unfinished_output(sdk):
+    client = OpenAIClient("test")
+    client.validate_access = Mock()
+    client._policy = Mock()
+    result = {"id": "resp_test", "status": "queued", "output": []}
+    if sdk:
+        client._sdk = Mock()
+        client._sdk.responses.create.return_value.model_dump.return_value = result
+        client._sdk.responses.retrieve.return_value.model_dump.return_value = result
+        client._sdk.responses.cancel.return_value.model_dump.return_value = result
+        client._sdk.responses.create.return_value._request_id = None
+    else:
+        client._sdk = None
+        client._req = Mock(return_value=result)
+    assert client.create_response({"model": "gpt-5.4", "input": "x", "background": True, "store": True})["status"] == "queued"
+    assert client.retrieve_response("resp_test")["id"] == "resp_test"
+    assert client.cancel_response("resp_test")["id"] == "resp_test"
+'''
+    new = '''@pytest.mark.parametrize("sdk", [False, True])
+def test_client_background_does_not_validate_unfinished_output(sdk):
+    client = OpenAIClient("test")
+    client.validate_access = Mock()
+    client._policy = Mock()
+    result = {"id": "resp_test", "status": "queued", "output": []}
+    client._sdk = Mock() if sdk else None
+    client._req = Mock(return_value=result)
+    assert client.create_response({"model": "gpt-5.4", "input": "x", "background": True, "store": True})["status"] == "queued"
+    assert client.retrieve_response("resp_test")["id"] == "resp_test"
+    assert client.cancel_response("resp_test")["id"] == "resp_test"
+    assert client._req.call_count == 3
+    if sdk:
+        client._sdk.responses.create.assert_not_called()
+        client._sdk.responses.retrieve.assert_not_called()
+        client._sdk.responses.cancel.assert_not_called()
+'''
+    text = replace_exact(
+        text,
+        old,
+        new,
+        "response journal SDK compatibility test",
+    )
+    path.write_text(text, encoding="utf-8")
+
+
 def main() -> None:
     migrate_client()
     migrate_pipeline()
     migrate_cascade()
+    migrate_response_journal_test()
     print("Autoritativní OpenAI retry boundary byla aplikována.")
 
 
