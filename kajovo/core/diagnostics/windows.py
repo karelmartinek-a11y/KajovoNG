@@ -1,20 +1,47 @@
 from __future__ import annotations
 
-import os, subprocess, time, threading
-from typing import List, Tuple
+import logging
+import os
+import subprocess
+import threading
+import time
+from collections.abc import Callable
+
 from ..utils import ensure_dir
 
-def collect_windows_diagnostics(output_base_dir: str, on_line=None) -> Tuple[str, List[str]]:
+LOGGER = logging.getLogger(__name__)
+
+
+def collect_windows_diagnostics(
+    output_base_dir: str,
+    on_line: Callable[[str], None] | None = None,
+) -> tuple[str, list[str]]:
     ensure_dir(output_base_dir)
     script = os.path.join(os.path.dirname(__file__), "windows_collect.ps1")
     ts = time.strftime("%Y%m%d-%H%M%S")
     out_dir = os.path.join(output_base_dir, f"Diag_{ts}")
     ensure_dir(out_dir)
-    cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", script, "-OutDir", out_dir]
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
-    stdout_lines: List[str] = []
-    stderr_lines: List[str] = []
-    def _reader(stream, sink, prefix):
+    cmd = [
+        "powershell",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        script,
+        "-OutDir",
+        out_dir,
+    ]
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def _reader(stream, sink: list[str], prefix: str) -> None:
         if not stream:
             return
         for line in iter(stream.readline, ""):
@@ -22,29 +49,49 @@ def collect_windows_diagnostics(output_base_dir: str, on_line=None) -> Tuple[str
             if on_line:
                 try:
                     on_line(f"{prefix}{line.rstrip()}")
-                except Exception:
-                    pass
-    t_out = threading.Thread(target=_reader, args=(p.stdout, stdout_lines, "WIN: "), daemon=True)
-    t_err = threading.Thread(target=_reader, args=(p.stderr, stderr_lines, "WIN ERR: "), daemon=True)
-    t_out.start()
-    t_err.start()
+                except Exception as exc:
+                    LOGGER.warning(
+                        "Callback diagnostického logu selhal (%s): %s",
+                        type(exc).__name__,
+                        exc,
+                    )
+
+    stdout_thread = threading.Thread(
+        target=_reader,
+        args=(process.stdout, stdout_lines, "WIN: "),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_reader,
+        args=(process.stderr, stderr_lines, "WIN ERR: "),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
     try:
-        p.wait(timeout=120)
+        process.wait(timeout=120)
     except subprocess.TimeoutExpired as exc:
-        p.kill()
-        p.wait()
+        process.kill()
+        process.wait()
         raise RuntimeError("Windows diagnostika překročila limit 120 sekund.") from exc
-    t_out.join(timeout=1.0)
-    t_err.join(timeout=1.0)
-    p_stdout = "".join(stdout_lines)
-    p_stderr = "".join(stderr_lines)
+    stdout_thread.join(timeout=1.0)
+    stderr_thread.join(timeout=1.0)
+    process_stdout = "".join(stdout_lines)
+    process_stderr = "".join(stderr_lines)
     log_txt = os.path.join(out_dir, "_collector_stdout_stderr.txt")
-    with open(log_txt, "w", encoding="utf-8") as f:
-        f.write("STDOUT:\n" + (p_stdout or "") + "\n\nSTDERR:\n" + (p_stderr or ""))
-    if p.returncode != 0:
-        raise RuntimeError(f"Windows diagnostika selhala ({p.returncode}), log: {log_txt}")
-    files: List[str] = []
-    for root, _, fnames in os.walk(out_dir):
-        for fn in fnames:
-            files.append(os.path.join(root, fn))
+    with open(log_txt, "w", encoding="utf-8") as stream:
+        stream.write(
+            "STDOUT:\n"
+            + (process_stdout or "")
+            + "\n\nSTDERR:\n"
+            + (process_stderr or "")
+        )
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"Windows diagnostika selhala ({process.returncode}), log: {log_txt}"
+        )
+    files: list[str] = []
+    for root, _, names in os.walk(out_dir):
+        for name in names:
+            files.append(os.path.join(root, name))
     return out_dir, files
