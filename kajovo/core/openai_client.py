@@ -8,14 +8,12 @@ from typing import Any, Dict, List, Optional
 import requests
 from .request_rules import validate_response_payload, validate_vector_attributes
 from .compat import is_compatible_path
-
-
-class OpenAIError(Exception):
-    def __init__(self, message: str, status_code: Optional[int] = None, *, param=None, code=None):
-        super().__init__(message)
-        self.status_code = status_code
-        self.param = param
-        self.code = code
+from .openai_transport import (
+    OpenAIError,
+    OpenAITransport,
+    SubmissionOutcomeUnknown,
+    operation_spec,
+)
 
 
 class OpenAIClient:
@@ -41,89 +39,34 @@ class OpenAIClient:
 
         self.session = requests.Session()
         self.session.headers.update({"Authorization": f"Bearer {api_key}"})
+        self._transport = OpenAITransport(
+            base_url=self.base_url,
+            api_key=api_key,
+            timeout_s=self.timeout_s,
+            session=self.session,
+            backoff_base_s=self.backoff_base_s,
+            backoff_cap_s=self.backoff_cap_s,
+        )
 
-    def _should_retry(self, status_code: Optional[int], error: Optional[Exception]) -> bool:
-        if error is not None:
-            return isinstance(error, (requests.Timeout, requests.ConnectionError))
-        if status_code is None:
-            return False
-        return status_code == 429 or 500 <= status_code < 600
-
-    def _retry_delay(self, attempt: int, retry_after_header: str) -> float:
-        try:
-            if retry_after_header:
-                return max(0.0, min(float(retry_after_header), self.backoff_cap_s))
-        except Exception:
-            pass
-        return min(self.backoff_cap_s, self.backoff_base_s * (2 ** max(0, attempt - 1)))
-
-    @staticmethod
-    def _safe_err_excerpt(text: str, max_chars: int = 1200) -> str:
-        if not text:
-            return ""
-        return text[:max_chars]
-
-    def _req(self, method: str, path: str, json_body: Optional[Dict[str, Any]]=None, files=None, timeout: Optional[float]=None, max_attempts=None) -> Any:
-        url = self.base_url + path
-        req_timeout = float(timeout if timeout is not None else self.timeout_s)
-        last_error: Optional[str] = None
-        file_positions = []
-        for value in (files or {}).values():
-            stream = value[1] if isinstance(value, tuple) else value
-            if hasattr(stream, "tell") and hasattr(stream, "seek"):
-                file_positions.append((stream, stream.tell()))
-        attempts = 1 if method == "POST" and path in ("/responses", "/batches") else self.max_attempts
-        if max_attempts is not None:
-            attempts = min(attempts, max_attempts)
-        for attempt in range(1, attempts + 1):
-            for stream, position in file_positions:
-                stream.seek(position)
-            r = None
-            err: Optional[Exception] = None
-            try:
-                headers = {"Authorization": f"Bearer {self.api_key}"}
-                if files is None:
-                    headers["Content-Type"] = "application/json"
-                    r = self.session.request(method, url, headers=headers, json=json_body, timeout=req_timeout)
-                else:
-                    r = self.session.request(method, url, headers={"Authorization": f"Bearer {self.api_key}"}, data=json_body, files=files, timeout=req_timeout)
-                if r.status_code >= 400:
-                    excerpt = self._safe_err_excerpt(getattr(r, "text", ""))
-                    if not self._should_retry(r.status_code, None) or attempt >= attempts:
-                        try:
-                            detail = r.json().get("error", {})
-                            detail = detail if isinstance(detail, dict) else {}
-                        except (ValueError, AttributeError):
-                            detail = {}
-                        error = OpenAIError(
-                            f"{method} {path} -> {r.status_code}: {excerpt}",
-                            status_code=r.status_code,
-                            param=detail.get("param"),
-                            code=detail.get("code"),
-                        )
-                        error.request_id = r.headers.get("x-request-id")
-                        raise error
-                    delay = self._retry_delay(attempt, str(r.headers.get("retry-after", "")))
-                    time.sleep(delay)
-                    continue
-                if r.headers.get("content-type", "").startswith("application/json"):
-                    result = r.json()
-                    if path == "/responses" and isinstance(result, dict) and r.headers.get("x-request-id"):
-                        result["_request_id"] = r.headers["x-request-id"]
-                    return result
-                return r.content
-            except OpenAIError:
-                raise
-            except Exception as ex:
-                err = ex
-                last_error = str(ex)
-                if not self._should_retry(None, err) or attempt >= attempts:
-                    raise OpenAIError(
-                        f"{method} {path} failed: {self._safe_err_excerpt(last_error or '')}"
-                    ) from ex
-                time.sleep(self._retry_delay(attempt, ""))
-        raise OpenAIError(
-            f"{method} {path} failed: {self._safe_err_excerpt(last_error or 'unknown error')}"
+    def _req(
+        self,
+        method: str,
+        path: str,
+        json_body: Optional[Dict[str, Any]] = None,
+        files=None,
+        timeout: Optional[float] = None,
+        max_attempts=None,
+    ) -> Any:
+        """Kompatibilitni fasada; retry rozhoduje vyhradne OpenAITransport."""
+        spec = operation_spec(method, path)
+        return self._transport.request(
+            spec,
+            method,
+            path,
+            json_body=json_body,
+            files=files,
+            timeout=timeout,
+            max_attempts=max_attempts,
         )
 
     def create_image(self, endpoint, body):

@@ -505,11 +505,7 @@ class CascadeRunWorker(QThread):
         out_abs = os.path.abspath(out_dir)
         for rel in expected:
             abs_path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
-            uploaded = with_retry(
-                lambda path=abs_path: client.upload_file(path, purpose="user_data"),
-                self.settings.retry,
-                self.breaker,
-            )
+            uploaded = client.upload_file(abs_path, purpose='user_data')
             file_id = str(uploaded.get("id") or "").strip()
             if not file_id:
                 raise RuntimeError(f"Krok {idx}: upload souboru nevrátil file_id: {rel}")
@@ -577,11 +573,7 @@ class CascadeRunWorker(QThread):
                 path = self._resolve_text(item.value, {})
                 if not os.path.isfile(path):
                     raise RuntimeError(f"Vstupní soubor neexistuje: {path}")
-                uploaded = with_retry(
-                    lambda p=path: client.upload_file(p, purpose="user_data"),
-                    self.settings.retry,
-                    self.breaker,
-                )
+                uploaded = client.upload_file(path, purpose='user_data')
                 file_id = str(uploaded.get("id") or "").strip()
                 if not file_id:
                     raise RuntimeError(f"Upload souboru nevrátil file_id: {path}")
@@ -603,11 +595,7 @@ class CascadeRunWorker(QThread):
                     if file_id:
                         file_ids.append(file_id)
                     elif value.get("path") and os.path.isfile(str(value["path"])):
-                        uploaded = with_retry(
-                            lambda p=str(value["path"]): client.upload_file(p, purpose="user_data"),
-                            self.settings.retry,
-                            self.breaker,
-                        )
+                        uploaded = client.upload_file(str(value['path']), purpose='user_data')
                         file_id = str(uploaded.get("id") or "").strip()
                         if not file_id:
                             raise RuntimeError("Upload návazného souboru nevrátil file_id.")
@@ -733,11 +721,7 @@ class CascadeRunWorker(QThread):
             resolved_path = self._resolve_text(local_path, context)
             if not os.path.isfile(resolved_path):
                 raise RuntimeError(f"Lokální soubor neexistuje: {resolved_path}")
-            uploaded = with_retry(
-                lambda p=resolved_path: client.upload_file(p, purpose="user_data"),
-                self.settings.retry,
-                self.breaker,
-            )
+            uploaded = client.upload_file(resolved_path, purpose='user_data')
             file_id = str(uploaded.get("id") or "").strip()
             if not file_id:
                 raise RuntimeError(f"Upload souboru nevrátil file_id: {resolved_path}")
@@ -848,11 +832,7 @@ class CascadeRunWorker(QThread):
             for output, _row in file_rows:
                 rel = output.file_name
                 path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
-                uploaded = with_retry(
-                    lambda p=path: client.upload_file(p, purpose="user_data"),
-                    self.settings.retry,
-                    self.breaker,
-                )
+                uploaded = client.upload_file(path, purpose='user_data')
                 file_id = str(uploaded.get("id") or "").strip()
                 if not file_id:
                     raise RuntimeError(f"Krok {idx}: upload výstupu nevrátil file_id: {rel}")

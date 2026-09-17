@@ -4,6 +4,7 @@ import time, random
 from typing import Callable, TypeVar, Optional
 from .config import RetryPolicy
 from .openai_client import OpenAIError
+from .openai_transport import SubmissionOutcomeUnknown
 
 T = TypeVar("T")
 
@@ -38,6 +39,8 @@ def with_retry(fn: Callable[[], T], policy: RetryPolicy, breaker: Optional[Circu
             if breaker:
                 breaker.on_success()
             return out
+        except SubmissionOutcomeUnknown:
+            raise
         except OpenAIError as e:
             last = e
             msg = str(e)

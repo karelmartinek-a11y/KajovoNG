@@ -680,7 +680,7 @@ class RunWorker(QThread):
         if json_path:
             try:
                 self._log_debug("Diagnostics IN: upload JSON to Files API...")
-                up = with_retry(lambda p=json_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
+                up = client.upload_file(json_path, purpose='user_data')
                 diag_file_ids.append(up["id"])
                 self._remember_file_name(up["id"], os.path.basename(json_path))
                 self.log.event("upload.diagnostics", {"local": json_path, "file_id": up["id"], "purpose": "user_data", "bytes": os.path.getsize(json_path)})
@@ -733,7 +733,7 @@ class RunWorker(QThread):
             return None
         self._set(4, 0, "Kontroluji a nahrávám vstupní data…", stage="Vstupní data")
         zip_path = self._zip_in_dir(in_dir)
-        up = with_retry(lambda: client.upload_file(zip_path, purpose="user_data"), self.settings.retry, self.breaker)
+        up = client.upload_file(zip_path, purpose='user_data')
         file_id = up["id"]
         self._remember_file_name(file_id, os.path.basename(zip_path))
         info: Dict[str, Any] = {"zip_path": zip_path, "file_id": file_id, "vector_store_id": None}
@@ -748,7 +748,7 @@ class RunWorker(QThread):
                 vs = with_retry(lambda: client.create_vector_store(f"IN_{ts_code()}"), self.settings.retry, self.breaker)
                 vs_id = vs.get("id")
                 if vs_id:
-                    vs_file = with_retry(lambda: client.add_file_to_vector_store(vs_id, file_id), self.settings.retry, self.breaker)
+                    vs_file = client.add_file_to_vector_store(vs_id, file_id)
                     vs_file_id = str(vs_file.get("id") or "")
                     if vs_file_id:
                         self._wait_vector_store_files(client, vs_id, [vs_file_id])
@@ -875,7 +875,7 @@ class RunWorker(QThread):
         for fid in diag_file_ids:
             if not fid:
                 continue
-            vs_file = with_retry(lambda v=vs_id, f=fid: client.add_file_to_vector_store(v, f), self.settings.retry, self.breaker)
+            vs_file = client.add_file_to_vector_store(vs_id, fid)
             vs_file_id = str(vs_file.get("id") or "")
             if vs_file_id:
                 vs_file_ids.append(vs_file_id)
@@ -1255,7 +1255,7 @@ class RunWorker(QThread):
         self._set(45, 0, "Lokálně kontroluji a nahrávám pracovní BATCH…", stage="Příprava BATCH")
         # Nahrává se přímo skutečný pracovní JSONL. upload_file provede pouze
         # lokální validaci obsahu a nevytváří žádnou zkušební dávku.
-        uploaded = with_retry(lambda: client.upload_file(path, purpose="batch"), self.settings.retry, self.breaker)
+        uploaded = client.upload_file(path, purpose='batch')
         evidence = {
             "batch_input_file_id": uploaded["id"],
             "submission_input_file_id": uploaded["id"],
@@ -1304,7 +1304,7 @@ class RunWorker(QThread):
             with open(manifest_path, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-            mf_up = with_retry(lambda: client.upload_file(manifest_path, purpose="user_data"), self.settings.retry, self.breaker)
+            mf_up = client.upload_file(manifest_path, purpose='user_data')
             manifest_file_id = mf_up["id"]
             self._remember_file_name(manifest_file_id, os.path.basename(manifest_path))
             self._log_debug(f"Mirror manifest uploaded: {manifest_file_id}")
@@ -1316,7 +1316,7 @@ class RunWorker(QThread):
                 self._progress_stage = "Upload"
                 self.progress_event.emit(ProgressEvent("Upload", completed=i, total=len(up_items), unit="souborů", detail=it.rel_path))
                 self._log_debug(f"Upload mirror file: {it.rel_path}")
-                up = with_retry(lambda p=it.abs_path: client.upload_file(p, purpose="user_data"), self.settings.retry, self.breaker)
+                up = client.upload_file(it.abs_path, purpose='user_data')
                 uploaded.append((it.rel_path, up["id"]))
                 self.subprogress.emit(int((i + 1) * 100 / max(1, len(up_items))))
                 self.progress_event.emit(ProgressEvent("Upload", completed=i + 1, total=len(up_items), unit="souborů", detail=it.rel_path))
@@ -1342,18 +1342,14 @@ class RunWorker(QThread):
                         vs_file_ids: List[str] = []
                         for rel, fid in uploaded[:2000]:
                             self._check_stop()
-                            vs_file = with_retry(
-                            lambda v=vs_id, f=fid, r=rel: client.add_file_to_vector_store(v, f, attributes={"source_path": os.path.join(root, r)}),
-                                self.settings.retry,
-                                self.breaker,
-                            )
+                            vs_file = client.add_file_to_vector_store(vs_id, fid, attributes={'source_path': os.path.join(root, rel)})
                             try:
                                 vs_file_id = str(vs_file.get("id") or "")
                                 if vs_file_id:
                                     vs_file_ids.append(vs_file_id)
                             except Exception:
                                 pass
-                        mf_vs_file = with_retry(lambda: client.add_file_to_vector_store(vs_id, manifest_file_id, attributes={"source": "mirror_manifest"}), self.settings.retry, self.breaker)
+                        mf_vs_file = client.add_file_to_vector_store(vs_id, manifest_file_id, attributes={'source': 'mirror_manifest'})
                         try:
                             mf_vs_id = str(mf_vs_file.get("id") or "")
                             if mf_vs_id:
