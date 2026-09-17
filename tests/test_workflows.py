@@ -232,19 +232,19 @@ def test_worker_keeps_independent_run_configuration(tmp_path):
 
 
 def test_custom_cascade_records_each_step(tmp_path):
-    from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
+    from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunExecutor
     from kajovo.core.cascade_types import CascadeDefinition, CascadeStep
     settings = AppSettings(log_dir=str(tmp_path / "LOG"))
     definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-4o-mini", input_text="test")])
     cfg = CascadeRunConfig("project", definition, "", str(tmp_path / "out"), run_id="RUN_090920261200_TEST")
-    worker = CascadeRunWorker(cfg, settings, "test")
+    worker = CascadeRunExecutor(cfg, settings, "test")
     client = Mock()
     client.create_response.return_value = response(1, "answer")
     results, errors = [], []
     worker.finished_ok.connect(results.append)
     worker.finished_err.connect(errors.append)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
     assert not errors
     assert results[0]["run_id"] == cfg.run_id
     assert list((tmp_path / "LOG" / cfg.run_id / "responses").glob("*.json"))

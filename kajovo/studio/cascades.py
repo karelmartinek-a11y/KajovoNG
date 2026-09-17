@@ -8,17 +8,26 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QDoubleSpinBox, QFileDialog, QListWidget,
-    QListWidgetItem, QPlainTextEdit, QTabWidget, QWidget,
+    QAbstractItemView,
+    QDialog,
+    QDoubleSpinBox,
+    QFileDialog,
+    QListWidget,
+    QListWidgetItem,
+    QPlainTextEdit,
+    QTabWidget,
+    QWidget,
 )
 
 from kajovo.core.cascade_contract import validate_cascade_definition
-from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
+from kajovo.core.cascade_pipeline import CascadeRunConfig
 from kajovo.core.cascade_types import CascadeDefinition, CascadeInput, CascadeOutput, CascadeStep
 from kajovo.core.utils import atomic_write_text, new_run_id
+
+from .cascade_items import CascadeItemDialog
 from .components import Form, PathInput, action, actions, caption, confirm, scroll, vertical
 from .resources import ValueDialog
-from .cascade_items import CascadeItemDialog
+from .workers.cascade_worker import CascadeRunWorker
 
 
 class CascadesPage(QWidget):

@@ -4,20 +4,21 @@ from __future__ import annotations
 
 import copy
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from kajovo.core.batch_completion import pending_batch_ids, read_state
-from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
+from kajovo.core.cascade_pipeline import CascadeRunConfig
 from kajovo.core.cascade_types import CascadeDefinition
 from kajovo.core.delivery_preparation import validate_preparation_snapshot
 from kajovo.core.model_capabilities import ModelCapabilitiesCache
-from kajovo.core.runs.config import UiRunConfig
-from kajovo.studio.workers.run_worker import RunWorker
 from kajovo.core.runlog import RunLogger, verified_output_evidence
+from kajovo.core.runs.config import UiRunConfig
 from kajovo.core.utils import new_run_id
-
+from kajovo.studio.workers.cascade_worker import CascadeRunWorker
+from kajovo.studio.workers.run_worker import RunWorker
 
 SUPPORTED_DIRECT_MODES = {"GENERATE", "MODIFY", "QA", "QFILE", "KASKADA"}
 
@@ -70,7 +71,7 @@ class HistoryBranchLauncher:
         if pending_batch_ids(state):
             raise ValueError("Zdrojový běh již odeslal BATCH; dokončete jej v původním běhu.")
         pending = state.get("response_pending") or {}
-        if state.get("status") == "submission_unknown" or pending.get("status") == "submitting" and not pending.get("id"):
+        if state.get("status") == "submission_unknown" or (pending.get("status") == "submitting" and not pending.get("id")):
             raise ValueError("Výsledek původního odeslání není potvrzen; nový submit je zablokován.")
         return state
 
@@ -208,6 +209,7 @@ class HistoryBranchLauncher:
         merged = {**default_state(self.context.settings), **ui}
         if merged.get("in_dir"):
             from kajovo.core.utils import safe_join_under_root
+
             from .history_artifacts import ArtifactGuard
             archive = state.get("input_archive") or {}
             if not archive.get("complete"):

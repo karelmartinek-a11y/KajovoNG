@@ -90,3 +90,14 @@ def test_compatibility_renderer_targets_production_studio():
     assert "kajovo.desktop" not in imports
     source = renderer.read_text(encoding="utf-8")
     assert "from render_studio import main" in source
+
+def test_cascade_pipeline_is_qt_free():
+    """Cascade orchestrace musí zůstat v core bez QThread/Signal závislosti."""
+    path = ROOT / "kajovo" / "core" / "cascade_pipeline.py"
+    violations = _violations([path], ("PySide6",))
+    assert not violations, violations
+    source = path.read_text(encoding="utf-8")
+    assert "class CascadeRunExecutor" in source
+    assert "class CascadeRunWorker" not in source
+    assert "QThread" not in source
+

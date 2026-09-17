@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import copy
 import json
 import os
 import re
 import tempfile
 import time
-import jsonschema
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Signal
+import jsonschema
 
 from .cascade_contract import (
     CascadeValidationError,
@@ -30,6 +30,7 @@ from .contracts import ContractError, validate_paths
 from .openai_client import OpenAIClient
 from .progress import ProgressEvent
 from .request_rules import validate_response_payload
+from .runs.ports import EventPort
 from .structured_output import (
     resolve_schema,
     response_format,
@@ -45,13 +46,12 @@ from .utils import (
     validate_relative_path,
 )
 
-
 PLACEHOLDER_RE = re.compile(
     r"\{\{\s*step\.(\d+)\.(response_id|json|text|out_file_path|out_file_id)(?::([^}]+))?\s*\}\}"
 )
 
 
-PRESET_MANIFEST_SCHEMA: Dict[str, Any] = {
+PRESET_MANIFEST_SCHEMA: dict[str, Any] = {
     "description": "Souborový manifest pro přímé uložení do OUT.",
     "type": "object",
     "required": ["files"],
@@ -75,7 +75,7 @@ PRESET_MANIFEST_SCHEMA: Dict[str, Any] = {
 }
 
 
-PRESET_PROMPTS_SCHEMA: Dict[str, Any] = {
+PRESET_PROMPTS_SCHEMA: dict[str, Any] = {
     "description": "Definice kaskády promptů.",
     "type": "object",
     "additionalProperties": False,
@@ -120,20 +120,13 @@ class CascadeRunConfig:
     in_dir: str
     out_dir: str
     run_id: str = ""
-    resume_snapshot: Optional[Dict[str, Any]] = None
+    resume_snapshot: dict[str, Any] | None = None
     recovery_instruction: str = ""
-    lineage: Optional[Dict[str, Any]] = None
+    lineage: dict[str, Any] | None = None
 
 
-class CascadeRunWorker(QThread):
-    progress = Signal(int)
-    progress_event = Signal(object)
-    subprogress = Signal(int)
-    status = Signal(str)
-    logline = Signal(str)
-    finished_ok = Signal(dict)
-    finished_err = Signal(str)
-    failure_detail = Signal(object)
+class CascadeRunExecutor:
+    """Qt-free executor kaskády; thread lifecycle vlastní pouze UI adaptér."""
 
     STEP_ATTEMPTS = 3
 
@@ -142,18 +135,24 @@ class CascadeRunWorker(QThread):
         cfg: CascadeRunConfig,
         settings,
         api_key: str,
-        parent: Optional[QObject] = None,
-    ):
-        super().__init__(parent)
+    ) -> None:
+        self.progress = EventPort()
+        self.progress_event = EventPort()
+        self.subprogress = EventPort()
+        self.status = EventPort()
+        self.logline = EventPort()
+        self.finished_ok = EventPort()
+        self.finished_err = EventPort()
+        self.failure_detail = EventPort()
         self.cfg = copy.deepcopy(cfg)
         if not self.cfg.out_dir.strip():
             self.cfg.out_dir = self.cfg.cascade.default_out_dir.strip()
         self.settings = copy.deepcopy(settings)
         self.api_key = api_key
         self._stop = False
-        self.logger: Optional[CascadeLogger] = None
+        self.logger: CascadeLogger | None = None
         self._failed_step_index = 0
-        self._runtime_cache: Dict[str, Any] = {}
+        self._runtime_cache: dict[str, Any] = {}
 
     def request_stop(self):
         self._stop = True
@@ -170,7 +169,7 @@ class CascadeRunWorker(QThread):
         if not instruction:
             return ""
         return (
-            "\n\n[NOVÁ VĚTEV – explicitní pokyn platí pouze pro tento a následující nově prováděné kroky]\n"
+            "\n\n[NOVÁ VĚTEV - explicitní pokyn platí pouze pro tento a následující nově prováděné kroky]\n"
             + instruction
         )
 
@@ -225,7 +224,7 @@ class CascadeRunWorker(QThread):
         base.mkdir(parents=True, exist_ok=True)
         return str(base / self._cascade_filename(self.cfg.cascade.name))
 
-    def _read_runtime_state(self) -> Dict[str, Any]:
+    def _read_runtime_state(self) -> dict[str, Any]:
         path = self._runtime_path()
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -233,7 +232,7 @@ class CascadeRunWorker(QThread):
         except (OSError, ValueError, TypeError):
             return {}
 
-    def _write_runtime_state(self, patch: Dict[str, Any]) -> None:
+    def _write_runtime_state(self, patch: dict[str, Any]) -> None:
         state = self._read_runtime_state()
         state.update(patch)
         state["cascade_name"] = self.cfg.cascade.name
@@ -243,7 +242,7 @@ class CascadeRunWorker(QThread):
             json.dumps(state, ensure_ascii=False, indent=2, default=str),
         )
 
-    def _resolve_text(self, text: Optional[str], context: Dict[str, Any]) -> str:
+    def _resolve_text(self, text: str | None, context: dict[str, Any]) -> str:
         if not text:
             return ""
 
@@ -271,7 +270,7 @@ class CascadeRunWorker(QThread):
 
         return PLACEHOLDER_RE.sub(repl, text)
 
-    def _resolve_json(self, obj: Any, context: Dict[str, Any]) -> Any:
+    def _resolve_json(self, obj: Any, context: dict[str, Any]) -> Any:
         if isinstance(obj, str):
             return self._resolve_text(obj, context)
         if isinstance(obj, list):
@@ -280,7 +279,7 @@ class CascadeRunWorker(QThread):
             return {key: self._resolve_json(value, context) for key, value in obj.items()}
         return obj
 
-    def _schema_for_step(self, step: CascadeStep) -> Optional[Dict[str, Any]]:
+    def _schema_for_step(self, step: CascadeStep) -> dict[str, Any] | None:
         if step.deterministic:
             return runtime_schema_for_step(step)
         if step.output_type != "json":
@@ -293,7 +292,7 @@ class CascadeRunWorker(QThread):
             return copy.deepcopy(step.output_schema_custom)
         return None
 
-    def _validate_schema_minimal(self, schema: Dict[str, Any]) -> None:
+    def _validate_schema_minimal(self, schema: dict[str, Any]) -> None:
         if not isinstance(schema, dict):
             raise RuntimeError("Schema musí být JSON object.")
         if "type" not in schema and "properties" not in schema:
@@ -314,16 +313,16 @@ class CascadeRunWorker(QThread):
 
         check_refs(schema)
 
-    def _validate_json_output(self, obj: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    def _validate_json_output(self, obj: dict[str, Any], schema: dict[str, Any]) -> None:
         if schema:
             self._validate_schema_minimal(schema)
         jsonschema.validate(obj, schema)
         if not isinstance(obj, dict):
             raise RuntimeError("JSON výstup musí být objekt.")
 
-    def _normalize_content_parts(self, resolved_content_json: Any, idx: int) -> List[Dict[str, Any]]:
+    def _normalize_content_parts(self, resolved_content_json: Any, idx: int) -> list[dict[str, Any]]:
         if isinstance(resolved_content_json, list):
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for part in resolved_content_json:
                 if not isinstance(part, dict):
                     raise RuntimeError(
@@ -336,7 +335,7 @@ class CascadeRunWorker(QThread):
         raise RuntimeError(f"input_content_json musí být object nebo list (krok {idx})")
 
     @staticmethod
-    def _extract_input_file_ids(parts: List[Dict[str, Any]]) -> set[str]:
+    def _extract_input_file_ids(parts: list[dict[str, Any]]) -> set[str]:
         ids: set[str] = set()
         for part in parts:
             if isinstance(part, dict) and str(part.get("type") or "") == "input_file":
@@ -355,7 +354,7 @@ class CascadeRunWorker(QThread):
         return (self.cfg.cascade.default_out_dir or "").strip()
 
     @staticmethod
-    def _decode_file_content(row: Dict[str, Any]) -> bytes:
+    def _decode_file_content(row: dict[str, Any]) -> bytes:
         content = row.get("content")
         if not isinstance(content, str):
             raise ContractError("Obsah výstupního souboru musí být text nebo base64.")
@@ -371,12 +370,12 @@ class CascadeRunWorker(QThread):
 
     def _write_files_atomically(
         self,
-        rows: List[Dict[str, Any]],
+        rows: list[dict[str, Any]],
         out_dir: str,
         step_idx: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         out_abs = os.path.abspath(out_dir)
-        normalized: List[Tuple[str, bytes]] = []
+        normalized: list[tuple[str, bytes]] = []
         for row in rows:
             rel = self._normalize_expected_rel_path(str(row.get("path") or ""))
             dst = safe_join_under_root(out_abs, rel.replace("/", os.sep))
@@ -384,8 +383,8 @@ class CascadeRunWorker(QThread):
             normalized.append((dst, data))
 
         ensure_dir(out_abs)
-        written: List[Dict[str, Any]] = []
-        temp_paths: List[str] = []
+        written: list[dict[str, Any]] = []
+        temp_paths: list[str] = []
         try:
             for dst, data in normalized:
                 ensure_dir(os.path.dirname(dst))
@@ -406,10 +405,8 @@ class CascadeRunWorker(QThread):
                 )
         finally:
             for temp_path in temp_paths:
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(temp_path)
-                except OSError:
-                    pass
         if self.logger:
             for row in written:
                 self.logger.record_fs_change(
@@ -429,10 +426,10 @@ class CascadeRunWorker(QThread):
 
     def _save_manifest_to_out(
         self,
-        files: List[Dict[str, Any]],
+        files: list[dict[str, Any]],
         out_dir: str,
         step_idx: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         validate_paths(files)
         normalized = []
         for row in files:
@@ -451,9 +448,9 @@ class CascadeRunWorker(QThread):
         step: CascadeStep,
         idx: int,
         json_output: Any,
-        context: Dict[str, Any],
+        context: dict[str, Any],
         client: OpenAIClient,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         expected = [
             self._normalize_expected_rel_path(path)
             for path in (step.expected_out_files or [])
@@ -472,7 +469,7 @@ class CascadeRunWorker(QThread):
         if not isinstance(files, list):
             raise RuntimeError(f"Krok {idx}: očekáván JSON manifest se seznamem 'files'.")
 
-        normalized_manifest: List[Dict[str, Any]] = []
+        normalized_manifest: list[dict[str, Any]] = []
         for row in files:
             if not isinstance(row, dict):
                 raise RuntimeError(f"Krok {idx}: položka files[] musí být object.")
@@ -496,7 +493,7 @@ class CascadeRunWorker(QThread):
             self._decode_file_content(row)
         self._save_manifest_to_out(normalized_manifest, out_dir, idx)
 
-        result: Dict[str, Dict[str, str]] = {}
+        result: dict[str, dict[str, str]] = {}
         out_abs = os.path.abspath(out_dir)
         for rel in expected:
             abs_path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
@@ -512,7 +509,7 @@ class CascadeRunWorker(QThread):
     def _load_resume_cache(
         self,
         start_index: int,
-    ) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, Any], set[str]]:
+    ) -> tuple[dict[str, Any], dict[str, str], dict[str, Any], set[str]]:
         if start_index <= 0:
             return {}, {}, {}, set()
         state = self._read_runtime_state()
@@ -554,11 +551,11 @@ class CascadeRunWorker(QThread):
         *,
         step: CascadeStep,
         idx: int,
-        values: Dict[str, Any],
+        values: dict[str, Any],
         client: OpenAIClient,
-    ) -> Tuple[str, List[str]]:
-        extra_text: List[str] = []
-        file_ids: List[str] = []
+    ) -> tuple[str, list[str]]:
+        extra_text: list[str] = []
+        file_ids: list[str] = []
 
         for item in step.inputs:
             if item.source == "text":
@@ -630,11 +627,11 @@ class CascadeRunWorker(QThread):
         *,
         step: CascadeStep,
         idx: int,
-        context: Dict[str, Any],
-        context_response_ids: Dict[str, str],
-        values: Dict[str, Any],
+        context: dict[str, Any],
+        context_response_ids: dict[str, str],
+        values: dict[str, Any],
         client: OpenAIClient,
-    ) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
+    ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
         if step.deterministic:
             resolved_input_text, file_ids = self._resolve_deterministic_inputs(
                 step=step,
@@ -644,7 +641,7 @@ class CascadeRunWorker(QThread):
             )
             if self.cfg.recovery_instruction:
                 resolved_input_text += self._recovery_suffix()
-            content_parts: List[Dict[str, Any]] = [
+            content_parts: list[dict[str, Any]] = [
                 {"type": "input_text", "text": resolved_input_text}
             ]
             existing_file_ids = set()
@@ -653,7 +650,7 @@ class CascadeRunWorker(QThread):
                     content_parts.append({"type": "input_file", "file_id": file_id})
                     existing_file_ids.add(file_id)
             schema = self._schema_for_step(step)
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "model": step.model,
                 "instructions": self._deterministic_instructions(step),
                 "input": [{"type": "message", "role": "user", "content": content_parts}],
@@ -669,11 +666,11 @@ class CascadeRunWorker(QThread):
             return payload, schema or {}, file_ids
 
         # Legacy compatibility path.
-        file_ids: List[str] = []
+        legacy_file_ids: list[str] = []
         for expression in step.files_existing_ids or []:
             resolved = self._resolve_text(expression, context).strip()
             if resolved:
-                file_ids.append(resolved)
+                legacy_file_ids.append(resolved)
         resolved_input = self._resolve_text(step.input_text, context)
         if self.cfg.recovery_instruction:
             resolved_input += self._recovery_suffix()
@@ -695,7 +692,7 @@ class CascadeRunWorker(QThread):
         # content part cannot create chargeable/orphaned uploads.
         preflight_parts = copy.deepcopy(content_parts)
         preflight_existing = self._extract_input_file_ids(preflight_parts)
-        for file_id in file_ids:
+        for file_id in legacy_file_ids:
             if file_id and file_id not in preflight_existing:
                 preflight_parts.append({"type": "input_file", "file_id": file_id})
                 preflight_existing.add(file_id)
@@ -720,10 +717,10 @@ class CascadeRunWorker(QThread):
             file_id = str(uploaded.get("id") or "").strip()
             if not file_id:
                 raise RuntimeError(f"Upload souboru nevrátil file_id: {resolved_path}")
-            file_ids.append(file_id)
+            legacy_file_ids.append(file_id)
 
         existing = self._extract_input_file_ids(content_parts)
-        for file_id in file_ids:
+        for file_id in legacy_file_ids:
             if file_id and file_id not in existing:
                 content_parts.append({"type": "input_file", "file_id": file_id})
                 existing.add(file_id)
@@ -755,22 +752,22 @@ class CascadeRunWorker(QThread):
             payload["previous_response_id"] = resolved_prev
         validate_response_payload(payload)
         client.validate_prepared_payload(payload)
-        return payload, schema or {}, file_ids
+        return payload, schema or {}, legacy_file_ids
 
     def _process_deterministic_output(
         self,
         *,
         step: CascadeStep,
         idx: int,
-        decoded: Dict[str, Any],
+        decoded: dict[str, Any],
         client: OpenAIClient,
-        context: Dict[str, Any],
-        values: Dict[str, Any],
-    ) -> Tuple[Dict[str, Any], Optional[str]]:
+        context: dict[str, Any],
+        values: dict[str, Any],
+    ) -> tuple[dict[str, Any], str | None]:
         out_dir = self._select_out_dir_for_step()
-        file_rows: List[Tuple[CascadeOutput, Dict[str, Any]]] = []
-        decision_value: Optional[str] = None
-        summary: Dict[str, Any] = {}
+        file_rows: list[tuple[CascadeOutput, dict[str, Any]]] = []
+        decision_value: str | None = None
+        summary: dict[str, Any] = {}
 
         for output in step.outputs:
             key = output_machine_key(output)
@@ -842,7 +839,7 @@ class CascadeRunWorker(QThread):
         self,
         current_index: int,
         step: CascadeStep,
-        decision_value: Optional[str],
+        decision_value: str | None,
     ) -> int:
         decisions = [output for output in step.outputs if output.kind == "decision"]
         if not decisions:
@@ -864,11 +861,11 @@ class CascadeRunWorker(QThread):
     def _cache_snapshot(
         self,
         *,
-        context: Dict[str, Any],
-        context_response_ids: Dict[str, str],
-        values: Dict[str, Any],
+        context: dict[str, Any],
+        context_response_ids: dict[str, str],
+        values: dict[str, Any],
         executed_step_ids: set[str],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "legacy_context": copy.deepcopy(context),
             "context_response_ids": copy.deepcopy(context_response_ids),
@@ -879,21 +876,21 @@ class CascadeRunWorker(QThread):
             },
         }
 
-    def _selected_final_outputs(self, values: Dict[str, Any]) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
+    def _selected_final_outputs(self, values: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
         for ref in self.cfg.cascade.final_outputs:
             key = self._value_key(ref.step_id, ref.output_id)
             if key in values:
                 result[key] = copy.deepcopy(values[key])
         return result
 
-    def run(self):
+    def execute(self) -> None:
         run_id = self.cfg.run_id or new_run_id()
         current_index = 0
         current_step_record_id = ""
-        context: Dict[str, Any] = {}
-        context_response_ids: Dict[str, str] = {}
-        values: Dict[str, Any] = {}
+        context: dict[str, Any] = {}
+        context_response_ids: dict[str, str] = {}
+        values: dict[str, Any] = {}
         executed_step_ids: set[str] = set()
         try:
             validate_cascade_definition(self.cfg.cascade, strict=True)
@@ -1013,10 +1010,10 @@ class CascadeRunWorker(QThread):
             client.stopped = lambda: self._stop
 
             total = max(1, len(self.cfg.cascade.steps))
-            per_step_response_ids: Dict[str, str] = {}
-            per_step_text: Dict[str, str] = {}
-            per_step_json: Dict[str, Any] = {}
-            per_step_out_files: Dict[str, Dict[str, Any]] = {}
+            per_step_response_ids: dict[str, str] = {}
+            per_step_text: dict[str, str] = {}
+            per_step_json: dict[str, Any] = {}
+            per_step_out_files: dict[str, dict[str, Any]] = {}
             last_response_id = ""
 
             while current_index < len(self.cfg.cascade.steps):
@@ -1045,13 +1042,13 @@ class CascadeRunWorker(QThread):
                     )
                 )
 
-                last_exc: Optional[BaseException] = None
-                decoded: Dict[str, Any] = {}
-                response: Dict[str, Any] = {}
-                schema: Dict[str, Any] = {}
-                file_ids: List[str] = []
-                step_summary: Dict[str, Any] = {}
-                decision_value: Optional[str] = None
+                last_exc: BaseException | None = None
+                decoded: dict[str, Any] = {}
+                response: dict[str, Any] = {}
+                schema: dict[str, Any] = {}
+                file_ids: list[str] = []
+                step_summary: dict[str, Any] = {}
+                decision_value: str | None = None
 
                 for attempt in range(1, self.STEP_ATTEMPTS + 1):
                     self._check_stop()
@@ -1165,7 +1162,7 @@ class CascadeRunWorker(QThread):
                     current_step_record_id,
                     status="completed",
                     progress=100,
-                    finished_at=datetime.now(timezone.utc).isoformat(),
+                    finished_at=datetime.now(UTC).isoformat(),
                     human_summary=f"Krok {idx} dokončen.",
                 )
                 self.logger.event(
@@ -1302,7 +1299,7 @@ class CascadeRunWorker(QThread):
                         self.logger.bundle.update_step(
                             current_step_record_id,
                             status="cancelled",
-                            finished_at=datetime.now(timezone.utc).isoformat(),
+                            finished_at=datetime.now(UTC).isoformat(),
                             human_summary="Krok byl zrušen uživatelem.",
                         )
                     self.logger.event("cascade.cancelled", {"error": str(ex)})
@@ -1342,7 +1339,7 @@ class CascadeRunWorker(QThread):
                     self.logger.bundle.update_step(
                         current_step_record_id,
                         status="failed",
-                        finished_at=datetime.now(timezone.utc).isoformat(),
+                        finished_at=datetime.now(UTC).isoformat(),
                         technical_summary=technical,
                         human_summary=human,
                     )

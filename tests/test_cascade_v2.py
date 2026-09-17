@@ -8,7 +8,7 @@ from kajovo.core.cascade_contract import (
     output_machine_key,
     validate_cascade_definition,
 )
-from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
+from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunExecutor
 from kajovo.core.cascade_types import (
     CascadeDecisionOption,
     CascadeDefinition,
@@ -18,7 +18,6 @@ from kajovo.core.cascade_types import (
 )
 from kajovo.core.config import AppSettings
 from kajovo.core.run_bundle import LegacyRunAdapter
-
 
 MODEL = "gpt-5.2"
 
@@ -50,7 +49,7 @@ def _response(response_id, output, value):
 
 def _worker(definition, tmp_path):
     settings = AppSettings(log_dir=str(tmp_path / "LOG"))
-    return CascadeRunWorker(
+    return CascadeRunExecutor(
         CascadeRunConfig("test", definition, "", str(tmp_path / "OUT")),
         settings,
         "test",
@@ -100,7 +99,7 @@ def test_same_context_uses_previous_response_id_automatically(tmp_path):
     worker.finished_err.connect(errors.append)
 
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
 
     assert not errors
     assert results
@@ -121,7 +120,7 @@ def test_new_cascade_records_steps_and_explicit_safe_checkpoints(tmp_path):
     ]
     worker = _worker(definition, tmp_path)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
     run_dir = next((tmp_path / "LOG").iterdir())
     adapter = LegacyRunAdapter(run_dir)
     assert [(row["stage"], row["status"]) for row in adapter.steps()] == [
@@ -146,7 +145,7 @@ def test_cascade_safe_checkpoint_archives_required_local_input(tmp_path):
     client.create_response.return_value = _response("resp_1", step.outputs[0], "A")
     worker = _worker(definition, tmp_path)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
     adapter = LegacyRunAdapter(next((tmp_path / "LOG").iterdir()))
     inputs = [row for row in adapter.artifacts() if row.get("kind") == "cascade_input"]
     assert len(inputs) == 1
@@ -162,13 +161,13 @@ def test_cascade_repair_instruction_is_only_in_new_step_request(tmp_path):
     client = Mock()
     client.create_response.return_value = _response("resp_new", step.outputs[0], "hotovo")
     settings = AppSettings(log_dir=str(tmp_path / "LOG"))
-    worker = CascadeRunWorker(
+    worker = CascadeRunExecutor(
         CascadeRunConfig("test", definition, "", str(tmp_path / "OUT"), recovery_instruction="Oprav citaci."),
         settings,
         "test",
     )
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
     payload = client.create_response.call_args.args[0]
     assert "Oprav citaci." in str(payload["input"])
 
@@ -187,7 +186,7 @@ def test_new_context_does_not_inherit_previous_response_id(tmp_path):
     worker.finished_err.connect(errors.append)
 
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
 
     assert not errors
     second_payload = client.create_response.call_args_list[1].args[0]
@@ -226,7 +225,7 @@ def test_decision_routes_to_future_step_and_skips_other_branch(tmp_path):
     worker.finished_err.connect(errors.append)
 
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
 
     assert not errors
     assert client.create_response.call_count == 2
@@ -247,7 +246,7 @@ def test_step_contract_failure_retries_exactly_three_times(tmp_path):
     worker.finished_err.connect(errors.append)
 
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
 
     assert errors
     assert client.create_response.call_count == 3
@@ -283,7 +282,7 @@ def test_resume_from_step_reuses_only_previous_context_lineage(tmp_path):
     errors = []
     worker.finished_err.connect(errors.append)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=first_client):
-        worker.run()
+        worker.execute()
     assert not errors
 
     resumed = CascadeDefinition.from_dict(definition.to_dict())
@@ -296,7 +295,7 @@ def test_resume_from_step_reuses_only_previous_context_lineage(tmp_path):
     resumed_errors = []
     resumed_worker.finished_err.connect(resumed_errors.append)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=second_client):
-        resumed_worker.run()
+        resumed_worker.execute()
 
     assert not resumed_errors
     assert second_client.create_response.call_count == 1
@@ -316,7 +315,7 @@ def test_resume_is_blocked_when_a_previous_step_changed(tmp_path):
     ]
     worker = _worker(definition, tmp_path)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
 
     changed = CascadeDefinition.from_dict(definition.to_dict())
     changed.steps[0].input_text = "Změněné zadání prvního kroku"
@@ -326,7 +325,7 @@ def test_resume_is_blocked_when_a_previous_step_changed(tmp_path):
     errors = []
     blocked_worker.finished_err.connect(errors.append)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=blocked_client):
-        blocked_worker.run()
+        blocked_worker.execute()
 
     assert errors
     blocked_client.create_response.assert_not_called()

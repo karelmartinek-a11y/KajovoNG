@@ -28,7 +28,8 @@ from ..core.model_registry import model_spec, selectable, matrix_version
 from ..core.request_rules import validate_run_options, uses_reasoning_defaults
 from ..core.runs.config import UiRunConfig
 from ..studio.workers.run_worker import RunWorker
-from ..core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
+from ..core.cascade_pipeline import CascadeRunConfig
+from ..studio.workers.cascade_worker import CascadeRunWorker
 from ..core.cascade_types import CascadeDefinition
 from ..core.openai_client import OpenAIClient
 from ..core.runlog import RunLogger, find_last_incomplete_run, verified_output_evidence
