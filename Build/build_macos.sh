@@ -8,8 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-"$PYTHON_BIN" -m pip install --upgrade pip
-"$PYTHON_BIN" -m pip install -e '.[dev]'
+"$PYTHON_BIN" -m pip install -c requirements/constraints.txt -e '.[build]'
+"$PYTHON_BIN" tools/verify_dependency_contract.py
+"$PYTHON_BIN" -m pip check
 "$PYTHON_BIN" Build/generate_icons.py
 
 ICON_ICNS="Build/assets/app_icon.icns"
@@ -41,4 +42,11 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS"
   --add-data "resources/montserrat_bold.ttf:resources" \
   kajovo/app/main.py
 
-echo "Build complete: dist/$APP_NAME.app"
+"$PYTHON_BIN" tools/write_build_metadata.py
+ARTIFACT="dist/$APP_NAME.app"
+if [[ ! -d "$ARTIFACT" ]]; then
+  echo "Build artefakt nebyl vytvořen: $ARTIFACT" >&2
+  exit 1
+fi
+
+echo "Build complete: $ARTIFACT"
