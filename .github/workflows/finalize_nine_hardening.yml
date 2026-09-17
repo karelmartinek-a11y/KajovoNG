@@ -38,18 +38,12 @@ jobs:
         run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
       - name: Apply verified Studio consolidation and final decomposition
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('tools/_r05c_finalize_studio.py')
-          text = path.read_text(encoding='utf-8')
-          strict = '    if missing:\n        raise RuntimeError(f"Missing functions in {relative}: {sorted(missing)}")\n'
-          if strict not in text:
-              raise RuntimeError('Expected remove_functions guard was not found')
-          path.write_text(text.replace(strict, ''), encoding='utf-8')
-          PY
-          python tools/_r05c_finalize_studio.py
-          python tools/_r05c_postfix.py
+          if [ -d kajovo/desktop ]; then
+            python tools/_r05c_finalize_studio.py
+            python tools/_r05c_postfix.py
+          else
+            echo 'Studio/desktop consolidation is already present; continuing from the interrupted checkpoint.'
+          fi
           python tools/_finalize_nine_hardening.py
           python tools/_finalize_nine_postfix.py
           python tools/_finalize_lfs_checkout.py
