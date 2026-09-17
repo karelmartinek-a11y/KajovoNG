@@ -10,12 +10,12 @@ from kajovo.core.openai_transport import (
     CREATE_RESPONSE,
     CREATE_VECTOR_STORE,
     LIST_MODELS,
-    OperationEffect,
-    OperationSpec,
+    UPLOAD_FILE,
     OpenAIError,
     OpenAITransport,
+    OperationEffect,
+    OperationSpec,
     SubmissionOutcomeUnknown,
-    UPLOAD_FILE,
 )
 
 

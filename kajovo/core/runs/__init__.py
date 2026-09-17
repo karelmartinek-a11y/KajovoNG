@@ -8,6 +8,7 @@ zachováno původní runtime chování.
 from .cancellation import CancellationToken, RunCancelled
 from .config import UiRunConfig
 from .contracts import (
+    TERMINAL_STATUSES,
     InvalidRunTransition,
     RunEvent,
     RunFailure,
@@ -15,12 +16,12 @@ from .contracts import (
     RunPhase,
     RunResult,
     RunStatus,
-    TERMINAL_STATUSES,
     phase_for_status,
     validate_transition,
 )
 
 __all__ = [
+    "TERMINAL_STATUSES",
     "CancellationToken",
     "InvalidRunTransition",
     "RunCancelled",
@@ -30,7 +31,6 @@ __all__ = [
     "RunPhase",
     "RunResult",
     "RunStatus",
-    "TERMINAL_STATUSES",
     "UiRunConfig",
     "phase_for_status",
     "validate_transition",

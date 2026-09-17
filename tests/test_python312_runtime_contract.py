@@ -20,11 +20,11 @@ def test_declared_python_contract_includes_312_and_ci_gate():
 
 
 def test_production_import_contract():
-    import kajovo  # noqa: F401
-    import kajovo.app.main  # noqa: F401
-    import kajovo.core.openai_client  # noqa: F401
-    import kajovo.core.run_bundle  # noqa: F401
-    import kajovo.core.runs  # noqa: F401
+    import kajovo
+    import kajovo.app.main
+    import kajovo.core.openai_client
+    import kajovo.core.run_bundle
+    import kajovo.core.runs
     import kajovo.studio.application  # noqa: F401
 
 

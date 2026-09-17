@@ -19,12 +19,11 @@ def test_net_013_unknown_side_effect_is_not_retried_by_generic_wrapper(tmp_path)
     client._sdk = None
     client.session.request = Mock(side_effect=requests.Timeout("lost"))
 
-    with patch("kajovo.core.retry.time.sleep"):
-        with pytest.raises(SubmissionOutcomeUnknown):
-            with_retry(
-                lambda: client.upload_file(str(source)),
-                RetryPolicy(max_attempts=4),
-            )
+    with patch("kajovo.core.retry.time.sleep"), pytest.raises(SubmissionOutcomeUnknown):
+        with_retry(
+            lambda: client.upload_file(str(source)),
+            RetryPolicy(max_attempts=4),
+        )
 
     assert client.session.request.call_count == 1
 
