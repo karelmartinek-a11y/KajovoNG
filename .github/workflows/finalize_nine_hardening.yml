@@ -7,6 +7,7 @@ on:
     paths:
       - 'tools/_finalize_nine_hardening.py'
       - 'tools/_finalize_nine_postfix.py'
+      - 'tools/_finalize_lfs_checkout.py'
       - '.github/workflows/finalize_nine_hardening.yml'
 
 permissions:
@@ -23,6 +24,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: true
+          lfs: true
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
@@ -39,19 +41,20 @@ jobs:
           python tools/_r05c_postfix.py
           python tools/_finalize_nine_hardening.py
           python tools/_finalize_nine_postfix.py
+          python tools/_finalize_lfs_checkout.py
       - name: Normalize extracted modules and migrated tests
         shell: bash
         run: |
           python -m ruff check --fix --exit-zero --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
-            kajovo/core/runs kajovo/core/pipeline.py tests/test_hardening_contracts.py \
-            tests/test_ui_progress.py tests/test_progress_completion.py \
+            kajovo/core/runs kajovo/core/pipeline.py kajovo/core/diagnostics/windows.py \
+            tests/test_hardening_contracts.py tests/test_ui_progress.py tests/test_progress_completion.py \
             tests/test_batch_completion_ui.py tests/test_studio_contracts.py \
             tests/test_response_journal.py tests/test_process_audit_regressions.py \
             tests/test_run_bundle.py tests/test_photo_studio.py \
             tests/test_architecture_contracts.py tests/test_studio.py
           python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
-            kajovo/core/runs kajovo/core/pipeline.py tests/test_hardening_contracts.py \
-            tests/test_ui_progress.py tests/test_progress_completion.py \
+            kajovo/core/runs kajovo/core/pipeline.py kajovo/core/diagnostics/windows.py \
+            tests/test_hardening_contracts.py tests/test_ui_progress.py tests/test_progress_completion.py \
             tests/test_batch_completion_ui.py tests/test_studio_contracts.py \
             tests/test_response_journal.py tests/test_process_audit_regressions.py \
             tests/test_run_bundle.py tests/test_photo_studio.py \
@@ -62,7 +65,7 @@ jobs:
       - name: Type and architecture gates
         shell: bash
         run: |
-          python -m mypy --follow-imports=skip kajovo/core/runs kajovo/core/openai_transport.py kajovo/core/cascade_pipeline.py
+          python -m mypy --follow-imports=skip kajovo/core/runs kajovo/core/openai_transport.py kajovo/core/cascade_pipeline.py kajovo/core/diagnostics/windows.py
           python -m pytest -q \
             tests/test_hardening_contracts.py \
             tests/test_architecture_contracts.py \
@@ -70,7 +73,8 @@ jobs:
             tests/test_run_lifecycle.py \
             tests/test_run_cancellation.py \
             tests/test_run_worker_adapter.py \
-            tests/test_cascade_worker_adapter.py
+            tests/test_cascade_worker_adapter.py \
+            tests/test_repository_contract.py
           python scripts/audit_ui.py --check
       - name: Focused behavioral regression
         run: >-
@@ -105,6 +109,7 @@ jobs:
             tools/_fix_cascade_type_shadow.py \
             tools/_finalize_nine_hardening.py \
             tools/_finalize_nine_postfix.py \
+            tools/_finalize_lfs_checkout.py \
             .github/workflows/r05a_detach_legacy_core_contracts.yml \
             .github/workflows/r05b_studio_audit_migration.yml \
             .github/workflows/r05c_finalize_studio.yml \
