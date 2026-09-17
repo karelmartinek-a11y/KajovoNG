@@ -6,6 +6,7 @@ on:
       - codex/r05-ui-consolidation-20260917
     paths:
       - 'tools/_r05c_finalize_studio.py'
+      - 'tools/_r05c_postfix.py'
       - '.github/workflows/r05c_finalize_studio.yml'
 
 permissions:
@@ -31,7 +32,9 @@ jobs:
       - name: Install canonical environment
         run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
       - name: Apply Studio-only migration
-        run: python tools/_r05c_finalize_studio.py
+        run: |
+          python tools/_r05c_finalize_studio.py
+          python tools/_r05c_postfix.py
       - name: Normalize and verify touched Python
         shell: bash
         run: |
