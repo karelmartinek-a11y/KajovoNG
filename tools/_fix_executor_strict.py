@@ -8,6 +8,19 @@ EXECUTOR = ROOT / "kajovo" / "core" / "runs" / "executor.py"
 PROCESS_AUDIT = ROOT / "tests" / "test_process_audit_regressions.py"
 RUN_STUDIO = ROOT / "tests" / "test_run_studio.py"
 
+TARGET_MARKERS = (
+    'self.log.exception("run", e)',
+    'self.log.event("diagnostics.windows.collected"',
+    'self.log.exception("diagnostics.windows.failed", e)',
+    'self.log.event("diagnostics.ssh.collected"',
+    'self.log.exception("diagnostics.ssh.failed", e)',
+    'self.log.event("upload.in_dir"',
+    'self.log.event("vector_store.in_dir"',
+    'self.log.event("versing.snapshot.created"',
+    'self.log.event("upload.mirror"',
+    'self.log.event("contract.mismatch"',
+)
+
 
 def replace_exact(path: Path, old: str, new: str, expected: int) -> None:
     text = path.read_text(encoding="utf-8")
@@ -21,6 +34,12 @@ def replace_exact(path: Path, old: str, new: str, expected: int) -> None:
     raise RuntimeError(
         f"Neočekávaná kardinalita migrace v {path}: old={old_count}, new={new_count}, expected={expected}."
     )
+
+
+def is_strict_ruff_target(body: str) -> bool:
+    if any(marker in body for marker in TARGET_MARKERS):
+        return True
+    return 'self.log.save_json(' in body and 'resume_structure_' in body
 
 
 def fix_executor() -> None:
@@ -40,13 +59,12 @@ def fix_executor() -> None:
         r"(?P=indent)except Exception:\n"
         r"(?P=indent)    pass\n"
     )
-    target = re.compile(r"\bself\.log\.(?:event|exception|save_json)\(")
     replaced = 0
 
     def replace(match: re.Match[str]) -> str:
         nonlocal replaced
         body = match.group("body")
-        if not target.search(body):
+        if not is_strict_ruff_target(body):
             return match.group(0)
         replaced += 1
         indent = match.group("indent")
@@ -61,16 +79,16 @@ def fix_executor() -> None:
 
     text = pattern.sub(replace, text)
     remaining_targets = sum(
-        1 for match in pattern.finditer(text) if target.search(match.group("body"))
+        1 for match in pattern.finditer(text) if is_strict_ruff_target(match.group("body"))
     )
     if replaced not in {0, 12} or remaining_targets != 0:
         raise RuntimeError(
-            "Evidence migrace neodpovídá strict-Ruff kontraktu: "
+            "Evidence migrace neodpovídá explicitnímu strict-Ruff allow-listu: "
             f"replaced={replaced}, remaining={remaining_targets}."
         )
 
     EXECUTOR.write_text(text, encoding="utf-8")
-    print(f"Upraveno {replaced} evidence catchů bez tichého pass.")
+    print(f"Upraveno {replaced} explicitních strict-Ruff evidence catchů.")
 
 
 def fix_migrated_tests() -> None:
