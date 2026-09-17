@@ -16,6 +16,23 @@ def build_audit() -> None:
     text = text.replace('sorted(desktop.glob("*.py"))', 'sorted(studio.glob("*.py"))')
     text = text.replace("AST všech kajovo/desktop modulů", "AST všech kajovo/studio modulů")
     text = text.replace("result = audit_desktop(root)", "result = audit_studio(root)")
+    old_prefixes = '''            root in core_names
+            or expression.startswith("self.client.")
+            or expression.startswith("client.")
+            or expression.startswith("OpenAIClient")
+            or expression.startswith("self.jobs.")
+            or expression.startswith("self.log.")
+            or expression.startswith("self.bundle.")
+'''
+    new_prefixes = '''            root in core_names
+            or expression.startswith(
+                ("self.client.", "client.", "OpenAIClient", "self.jobs.", "self.log.", "self.bundle.")
+            )
+'''
+    if old_prefixes in text:
+        text = text.replace(old_prefixes, new_prefixes, 1)
+    elif new_prefixes not in text:
+        raise RuntimeError("Studio audit backend-call predicate has an unexpected shape")
     if "audit_desktop" in text or "desktop.glob" in text:
         raise RuntimeError("Studio audit still contains legacy desktop audit ownership")
     TARGET.write_text(text, encoding="utf-8")
@@ -131,6 +148,7 @@ def write_cli() -> None:
         "from kajovo.studio.ui_audit import audit_studio, write_inventory",
     )
     text = text.replace("audit_desktop(root)", "audit_studio(root)")
+    text = text.replace(" – ", " - ")
     if "kajovo.desktop" in text or "audit_desktop" in text:
         raise RuntimeError("audit_ui CLI still depends on legacy desktop")
     path.write_text(text, encoding="utf-8")
