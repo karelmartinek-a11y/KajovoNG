@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,10 +47,17 @@ def test_core_does_not_depend_on_ui_packages():
     """Core smí být používán UI vrstvami, nikoliv naopak."""
     violations = _violations(
         _python_files("kajovo/core"),
-        ("kajovo.studio", "kajovo.desktop"),
+        ("kajovo.studio", "kajovo.desktop", "PySide6", "PyQt6", "PyQt5"),
     )
     assert not violations, violations
 
+
+
+def test_pipeline_facade_is_qt_free():
+    """Legacy název modulu smí zůstat jen jako Qt-free core fasáda."""
+    path = ROOT / "kajovo" / "core" / "pipeline.py"
+    violations = _violations([path], ("PySide6",))
+    assert not violations, violations
 
 def test_new_runs_layer_is_qt_free():
     """Nově extrahovaná doménová run vrstva musí zůstat nezávislá na PySide6."""
@@ -68,12 +74,9 @@ def test_app_entrypoint_uses_studio_factory():
     assert "create_window" in main
 
 
-def test_distribution_excludes_legacy_desktop_package():
-    """Regresní zdroje mohou zůstat v repu, ale nesmějí být součástí instalace/release."""
-    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    excluded = set(config["tool"]["setuptools"]["packages"]["find"]["exclude"])
-    assert "kajovo.desktop" in excluded
-    assert "kajovo.desktop.*" in excluded
+def test_legacy_desktop_package_is_physically_removed():
+    """Po konsolidaci existuje pouze produkční Studio UI."""
+    assert not (ROOT / "kajovo" / "desktop").exists()
 
 
 def test_compatibility_renderer_targets_production_studio():
@@ -83,3 +86,13 @@ def test_compatibility_renderer_targets_production_studio():
     assert "kajovo.desktop" not in imports
     source = renderer.read_text(encoding="utf-8")
     assert "from render_studio import main" in source
+
+def test_cascade_pipeline_is_qt_free():
+    """Cascade orchestrace musí zůstat v core bez QThread/Signal závislosti."""
+    path = ROOT / "kajovo" / "core" / "cascade_pipeline.py"
+    violations = _violations([path], ("PySide6",))
+    assert not violations, violations
+    source = path.read_text(encoding="utf-8")
+    assert "class CascadeRunExecutor" in source
+    assert "class CascadeRunWorker" not in source
+    assert "QThread" not in source

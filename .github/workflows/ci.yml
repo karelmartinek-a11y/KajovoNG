@@ -11,8 +11,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
 jobs:
-  architecture:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -22,16 +25,87 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install architecture checks
-        run: python -m pip install "pytest>=9.0.3,<10" "ruff>=0.6,<1" "mypy>=1.11,<2"
-      - name: Strict checks for the new run layer
+      - name: Install headless Qt system runtime
         run: |
-          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF kajovo/core/runs tests/test_run_polling.py tests/test_architecture_contracts.py
-          python -m mypy --follow-imports=skip kajovo/core/runs
-      - name: Python 3.12 architecture regression
-        run: python -m pytest -q tests/test_architecture_contracts.py tests/test_run_polling.py
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install canonical quality environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Dependency contract
+        run: python tools/verify_dependency_contract.py
+      - name: Repository Ruff baseline
+        run: python -m ruff check --select F,B,E9 kajovo kajovong utf8nobom tests Build tools
+      - name: Strict checks for hardened core
+        run: |
+          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF kajovo/core/runs kajovo/core/openai_transport.py kajovo/core/cascade_pipeline.py kajovo/studio/workers/cascade_worker.py tests/test_openai_transport.py tests/test_openai_retry_semantics.py tests/test_run_contracts.py tests/test_run_cancellation.py tests/test_run_lifecycle.py tests/test_cascade_worker_adapter.py tests/test_architecture_contracts.py tests/test_python312_runtime_contract.py
+          python -m mypy --follow-imports=skip kajovo/core/runs kajovo/core/openai_transport.py kajovo/core/cascade_pipeline.py kajovo/studio/workers/cascade_worker.py
+      - name: Architecture regression
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests/test_architecture_contracts.py tests/test_python312_runtime_contract.py tests/test_run_contracts.py tests/test_run_cancellation.py tests/test_run_lifecycle.py tests/test_cascade.py tests/test_cascade_v2.py tests/test_cascade_worker_adapter.py
 
-  test:
+  python312-contract:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install headless Qt system runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install supported production contract
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Dependency consistency
+        run: python -m pip check
+      - name: Python 3.12 production contract
+        run: |
+          python -m pytest -q \
+            tests/test_python312_runtime_contract.py \
+            tests/test_architecture_contracts.py \
+            tests/test_run_contracts.py \
+            tests/test_run_cancellation.py \
+            tests/test_run_lifecycle.py \
+            tests/test_api_client.py \
+            tests/test_openai_transport.py \
+            tests/test_openai_retry_semantics.py \
+            tests/test_attachments.py \
+            tests/test_run_polling.py \
+            tests/test_response_journal.py \
+            tests/test_delivery_pipeline.py \
+            tests/test_batch_completion.py \
+            tests/test_cascade.py \
+            tests/test_cascade_v2.py \
+            tests/test_cascade_worker_adapter.py
+
+  python313-compat:
+    name: Python 3.13 compatibility smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install production compatibility environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Compatibility smoke
+        run: python tools/compatibility_smoke.py
+      - name: Dependency consistency
+        run: python -m pip check
+      - name: Dependency vulnerability gate
+        run: python -m pip_audit
+
+  python312-full:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: windows-latest
     env:
       QT_QPA_PLATFORM: offscreen
@@ -42,15 +116,38 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.13'
+          python-version: '3.12'
           cache: pip
-      - name: Install
-        run: python -m pip install -e .[dev]
-      - name: Static checks
-        run: python -m ruff check --select F,B,E9 kajovo kajovong utf8nobom tests Build
-      - name: Tests and coverage gate
-        run: python -m pytest -q --cov=kajovo --cov=kajovong --cov=utf8nobom --cov-report=term --cov-report=xml --cov-fail-under=70
+      - name: Install canonical test environment
+        run: python -m pip install -c requirements/constraints.txt -e .[dev,build]
+      - name: Full tests and coverage gate
+        run: python -m pytest -q --cov=kajovo --cov=kajovong --cov=utf8nobom --cov-report=term-missing --cov-report=xml --cov-report=json:coverage.json --cov-fail-under=70
+      - name: Critical coverage gate
+        run: python tools/check_critical_coverage.py coverage.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ github.sha }}
+          path: |
+            coverage.json
+            coverage.xml
+          if-no-files-found: error
       - name: Dependency consistency
         run: python -m pip check
+
+  dependency-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install canonical audit environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Dependency contract
+        run: python tools/verify_dependency_contract.py
       - name: Dependency vulnerability gate
         run: python -m pip_audit

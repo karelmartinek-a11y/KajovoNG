@@ -37,3 +37,5 @@ resources/app_icon.png
 *.sqlite-wal
 *.sqlite-shm
 *.before-cost-v1.bak
+.mypy_cache/
+/build-metadata/

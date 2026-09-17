@@ -1,7 +1,7 @@
 import json
 import pytest
 from kajovo.core.contracts import ContractError, validate_chunk_metadata
-from kajovo.desktop.batches import import_bundle
+from kajovo.core.batch_completion import import_bundle
 
 
 def chunk(index, count, more, following):

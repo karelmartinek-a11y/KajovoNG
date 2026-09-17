@@ -190,8 +190,8 @@ def test_repair_instruction_is_present_in_actual_new_qa_request(tmp_path, monkey
     checkpoint = adapter.checkpoints()[0]
     preview = launcher.preview(adapter, checkpoint["checkpoint_id"], "repair", "QA")
     worker = launcher.launch(adapter, preview, "Oprav pouze citaci.").worker
-    worker._create_response = Mock(return_value={"id": "resp_new", "status": "completed", "output_text": '{"text":"ok"}'})
-    worker._run_qa(Mock(), [], None)
+    worker._executor._create_response = Mock(return_value={"id": "resp_new", "status": "completed", "output_text": '{"text":"ok"}'})
+    worker._executor._run_qa(Mock(), [], None)
     requests = LegacyRunAdapter(Path(settings.log_dir) / "RUN_TARGET").requests()
     payload = next(row["full_payload"]["payload"] for row in requests if row.get("request_record_id"))
     assert "Oprav pouze citaci." in str(payload["input"])
@@ -208,8 +208,8 @@ def test_edited_qa_rerun_instruction_is_present_in_actual_new_request(tmp_path, 
     checkpoint = adapter.checkpoints()[0]
     preview = launcher.preview(adapter, checkpoint["checkpoint_id"], "rerun", "QA")
     worker = launcher.launch(adapter, preview, "Zaměř odpověď na klávesovou navigaci.").worker
-    worker._create_response = Mock(return_value={"id": "resp_new", "status": "completed", "output_text": '{"text":"ok"}'})
-    worker._run_qa(Mock(), [], None)
+    worker._executor._create_response = Mock(return_value={"id": "resp_new", "status": "completed", "output_text": '{"text":"ok"}'})
+    worker._executor._run_qa(Mock(), [], None)
     requests = LegacyRunAdapter(Path(settings.log_dir) / "RUN_QA_EDITED").requests()
     payload = next(row["full_payload"]["payload"] for row in requests if row.get("request_record_id"))
     assert "Zaměř odpověď na klávesovou navigaci." in str(payload["input"])

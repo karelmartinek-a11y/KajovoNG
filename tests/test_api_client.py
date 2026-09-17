@@ -6,6 +6,7 @@ import pytest
 import requests
 
 from kajovo.core.openai_client import OpenAIClient, OpenAIError
+from kajovo.core.openai_transport import SubmissionOutcomeUnknown
 
 
 def test_paginated_files_are_complete():
@@ -19,15 +20,14 @@ def test_paginated_files_are_complete():
         assert "after=a" in request.call_args.args[1]
 
 
-def test_sdk_mutation_failure_does_not_repeat_via_rest():
+def test_response_submit_uses_transport_even_when_sdk_exists():
     client = OpenAIClient("test")
     client._sdk = Mock()
-    client._sdk.responses.create.side_effect = RuntimeError("lost response")
-    client.validate_access = Mock()
-    with patch.object(client, "_req") as request:
-        with pytest.raises(OpenAIError):
-            client._send_response({"model": "gpt-4.1", "input": "test"})
-        request.assert_not_called()
+    result = {"id": "resp_1", "status": "completed", "output": []}
+    with patch.object(client, "_req", return_value=result) as request:
+        assert client._send_response({"model": "gpt-4.1", "input": "test"}) == result
+    client._sdk.responses.create.assert_not_called()
+    request.assert_called_once()
 
 
 @pytest.mark.parametrize("identifier", ["../files/file-other", "file-a?limit=1", "file-a#fragment", "", "file-a/b"])
@@ -39,7 +39,7 @@ def test_resource_id_cannot_change_endpoint(identifier):
     client._sdk.files.delete.assert_not_called()
 
 
-def test_multipart_header_and_retry_rewind():
+def test_multipart_upload_timeout_is_not_retried_or_rewound():
     client = OpenAIClient("test")
     assert "Content-Type" not in client.session.headers
     stream = io.BytesIO(b"complete")
@@ -47,13 +47,12 @@ def test_multipart_header_and_retry_rewind():
 
     def request(*args, **kwargs):
         bodies.append(kwargs["files"]["file"][1].read())
-        if len(bodies) == 1:
-            raise requests.Timeout()
-        return Mock(status_code=200, headers={"content-type": "application/json"}, json=lambda: {})
+        raise requests.Timeout("lost")
 
-    with patch.object(client.session, "request", side_effect=request), patch("kajovo.core.openai_client.time.sleep"):
-        client._req("POST", "/files", files={"file": ("x.txt", stream)})
-    assert bodies == [b"complete", b"complete"]
+    with patch.object(client.session, "request", side_effect=request):
+        with pytest.raises(SubmissionOutcomeUnknown):
+            client._req("POST", "/files", files={"file": ("x.txt", stream)})
+    assert bodies == [b"complete"]
 
 
 class OpenAIClientErrorMappingTests(unittest.TestCase):
@@ -71,6 +70,6 @@ class OpenAIClientErrorMappingTests(unittest.TestCase):
         ok = Mock(status_code=200, headers={"content-type": "application/json"})
         ok.json.return_value = {"data": []}
         client.session.request = Mock(side_effect=[requests.Timeout("t"), ok])
-        with patch("kajovo.core.openai_client.time.sleep", return_value=None):
-            out = client._req("GET", "/models")
+        client._transport.sleeper = lambda _seconds: None
+        out = client._req("GET", "/models")
         self.assertEqual(out, {"data": []})

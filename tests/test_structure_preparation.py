@@ -151,7 +151,7 @@ def test_new_a2_is_prepared_before_live_or_batch_generation(tmp_path, batch):
     results, errors = [], []
     worker.finished_ok.connect(results.append)
     worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks", return_value=("obsah", "resp_file")) as generate:
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks", return_value=("obsah", "resp_file")) as generate:
         worker.run()
     assert not errors
     assert client.create_response.call_count == 3
@@ -194,7 +194,7 @@ def test_repair_receives_all_errors_and_current_prepared_manifest(tmp_path):
     client.create_batch.return_value = {"id": "batch_work"}
     errors = []
     worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
     assert not errors
     assert client.create_response.call_count == 4
@@ -220,7 +220,7 @@ def test_unrepairable_manifest_blocks_all_file_generation(tmp_path, batch):
     client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload())] + [response(i + 2, spec) for i in range(3)]
     errors = []
     worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks") as generate:
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks") as generate:
         worker.run()
     assert errors and "controller" in errors[0]
     assert client.create_response.call_count == 4

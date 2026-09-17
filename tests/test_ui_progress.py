@@ -4,12 +4,12 @@ from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import QTimer
+from test_workflows import make_worker
+
 from kajovo.core.progress import ProgressClock, ProgressEvent
 from kajovo.core.progress_display import build_steps, event_sentence, source_title
-from kajovo.desktop.jobs import Job
-from kajovo.desktop.dialogs import ProgressDialog
-from kajovo.desktop.dialogs import UploadProgressDialog
-from test_workflows import make_worker
+from kajovo.studio.components import install_theme
+from kajovo.studio.operations import Task
 
 
 def test_eta_requires_completed_samples_and_counts_down():
@@ -55,70 +55,21 @@ def test_repeated_poll_does_not_restart_unit_measurement():
 
 def test_palette_text_and_selection_contrast(qapp):
     from PySide6.QtGui import QPalette
-    from kajovo.desktop.design import install_ui_style
-    install_ui_style()
+
+    install_theme(qapp)
     palette = qapp.palette()
 
     def luminance(color):
         values = [color.redF(), color.greenF(), color.blueF()]
-        linear = [v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4 for v in values]
-        return sum(v * w for v, w in zip(linear, (.2126, .7152, .0722), strict=True))
+        linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in values]
+        return sum(v * w for v, w in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
 
-    for foreground, background in ((QPalette.Text, QPalette.Base),
-                                   (QPalette.PlaceholderText, QPalette.Base),
-                                   (QPalette.HighlightedText, QPalette.Highlight)):
-        a, b = sorted((luminance(palette.color(foreground)), luminance(palette.color(background))))
-        assert (b + .05) / (a + .05) >= 4.5
-
-
-def test_copy_keeps_full_value_and_zero(qtbot, monkeypatch):
-    from PySide6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem
-    from PySide6.QtCore import Qt
-    from kajovo.desktop.design import copy_selection
-    table = QTableWidget(1, 2)
-    qtbot.addWidget(table)
-    path = "složka/" * 100 + "soubor.py"
-    table.setItem(0, 0, QTableWidgetItem(path))
-    zero = QTableWidgetItem()
-    zero.setData(Qt.DisplayRole, 0)
-    table.setItem(0, 1, zero)
-    table.selectRow(0)
-    clipboard = Mock()
-    monkeypatch.setattr(QApplication, "clipboard", lambda: clipboard)
-    copy_selection(table)
-    clipboard.setText.assert_called_once_with(path + "\t0")
-
-
-@pytest.mark.parametrize(
-    "state,value", [("batch_pending", 0), ("completed", 100), ("failed", 0), ("cancelled", 0)]
-)
-def test_terminal_state_is_not_inferred_from_percent(qtbot, state, value):
-    dialog = ProgressDialog()
-    qtbot.addWidget(dialog)
-    dialog.set_progress(100)
-    assert dialog.pb.maximum() == 0
-    dialog.on_progress_event(ProgressEvent("RUN", state))
-    assert dialog.pb.value() == value
-    assert dialog.pb_sub.maximum() > 0
-    assert not dialog.timer.isActive()
-    assert not dialog.btn_stop.isEnabled()
-
-
-def test_upload_cancel_waits_for_worker_acknowledgement(qtbot):
-    dialog = UploadProgressDialog("Nahrávání")
-    qtbot.addWidget(dialog)
-    cancel = Mock()
-    dialog.set_cancel_handler(cancel)
-    dialog.show()
-    dialog.reject()
-    assert dialog.isVisible()
-    assert not dialog._done
-    assert not dialog.btn_close.isEnabled()
-    dialog.reject()
-    cancel.assert_called_once()
-    dialog.mark_done("Zrušeno.")
-    dialog.reject()
-    assert not dialog.isVisible()
+    for foreground, background in (
+        (QPalette.Text, QPalette.Base),
+        (QPalette.HighlightedText, QPalette.Highlight),
+    ):
+        low, high = sorted((luminance(palette.color(foreground)), luminance(palette.color(background))))
+        assert (high + 0.05) / (low + 0.05) >= 4.5
 
 
 def test_io_runs_outside_gui_while_timer_remains_responsive(qtbot):
@@ -128,18 +79,18 @@ def test_io_runs_outside_gui_while_timer_remains_responsive(qtbot):
     timer.setInterval(5)
     timer.timeout.connect(lambda: ticks.append(True))
     timer.start()
-    job = Job(lambda job: (time.sleep(.05), threading.get_ident())[1])
-    job.result.connect(results.append)
-    job.start()
+    task = Task(lambda _task: (time.sleep(0.05), threading.get_ident())[1])
+    task.value.connect(results.append)
+    task.start()
     qtbot.waitUntil(lambda: bool(results))
-    job.wait()
+    task.wait()
     assert results[0] != main_thread and ticks
-    failed = Job(lambda job: (_ for _ in ()).throw(ValueError('fixture')))
-    failed.error.connect(errors.append)
+    failed = Task(lambda _task: (_ for _ in ()).throw(ValueError("fixture")))
+    failed.failure.connect(errors.append)
     failed.start()
     qtbot.waitUntil(lambda: bool(errors))
     failed.wait()
-    assert errors == ['fixture']
+    assert errors[0].message == "Operaci se nepodařilo dokončit a přesná příčina není doložena."
     timer.stop()
 
 

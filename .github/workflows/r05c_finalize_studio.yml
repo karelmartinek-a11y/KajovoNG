@@ -1,0 +1,92 @@
+name: r05c-finalize-studio
+
+on:
+  push:
+    branches:
+      - codex/final-nine-hardening-20260917
+    paths:
+      - 'tools/_r05c_finalize_studio.py'
+      - 'tools/_r05c_postfix.py'
+      - '.github/workflows/r05c_finalize_studio.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-verify-commit:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+          lfs: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install headless Qt runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install canonical environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Apply Studio-only migration
+        run: |
+          python tools/_r05c_finalize_studio.py
+          python tools/_r05c_postfix.py
+      - name: Normalize and verify touched Python
+        shell: bash
+        run: |
+          python -m ruff check --fix --exit-zero --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
+            tests/test_ui_progress.py tests/test_progress_completion.py \
+            tests/test_batch_completion_ui.py tests/test_studio_contracts.py \
+            tests/test_response_journal.py tests/test_process_audit_regressions.py \
+            tests/test_run_bundle.py tests/test_photo_studio.py \
+            tests/test_architecture_contracts.py tests/test_studio.py
+          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
+            tests/test_ui_progress.py tests/test_progress_completion.py \
+            tests/test_batch_completion_ui.py tests/test_studio_contracts.py \
+            tests/test_response_journal.py tests/test_process_audit_regressions.py \
+            tests/test_run_bundle.py tests/test_photo_studio.py \
+            tests/test_architecture_contracts.py tests/test_studio.py
+          python -m compileall -q kajovo tests scripts
+          git diff --check
+      - name: Legacy UI and hygiene guards
+        shell: bash
+        run: |
+          test ! -d kajovo/desktop
+          ! grep -R -nE '^\s*(from|import)\s+kajovo\.desktop' kajovo tests scripts tools --include='*.py'
+          test ! -e aa.txt
+          test ! -d LOG
+          git add -A
+          ! git ls-files | grep -E '(^LOG/|^aa\.txt$|__pycache__|\.py[co]$|\.pytest_cache|\.mypy_cache|\.ruff_cache)'
+          git diff --cached --check
+      - name: Focused Studio contracts
+        run: >-
+          python -m pytest -q
+          tests/test_studio.py
+          tests/test_ui_forensic_contract.py
+          tests/test_ui_audit_inheritance.py
+          tests/test_ui_progress.py
+          tests/test_progress_completion.py
+          tests/test_batch_completion_ui.py
+          tests/test_studio_contracts.py
+          tests/test_photo_studio.py
+          tests/test_run_bundle.py
+          tests/test_process_audit_regressions.py
+          tests/test_response_journal.py
+          tests/test_architecture_contracts.py
+      - name: Full regression and coverage
+        run: python -m pytest -q --cov=kajovo --cov-report=term-missing --cov-fail-under=70
+      - name: Commit verified Studio consolidation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'karelmartinek-a11y'
+          git config user.email 'karel.martinek@post.cz'
+          git add -A
+          git diff --cached --check
+          git commit -m 'refactor: remove legacy desktop UI and tracked runtime artifacts'
+          git push origin HEAD:codex/final-nine-hardening-20260917

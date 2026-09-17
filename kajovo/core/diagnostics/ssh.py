@@ -4,7 +4,7 @@ import os
 import subprocess
 from typing import Callable, List, Optional, Tuple
 
-import paramiko
+import paramiko  # type: ignore[import-untyped]
 
 
 def execute_ssh_repair(script: bytes, cfg, timeout_s: int = 120) -> subprocess.CompletedProcess:

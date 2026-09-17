@@ -6,7 +6,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from kajovo.core.config import AppSettings
-from kajovo.core.pipeline import UiRunConfig, RunWorker
+from kajovo.core.runs.config import UiRunConfig
+from kajovo.core.runs.executor import RunExecutor as RunWorker
 from kajovo.core.runlog import RunLogger
 from delivery_fixtures import delivery_payloads, plan_payload, requirements_payload, structure_payload
 
@@ -94,7 +95,7 @@ def test_complete_offline_workflow(tmp_path, mode, maximum_quality):
     errors, results = [], []
     worker.finished_err.connect(errors.append)
     worker.finished_ok.connect(results.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
     assert not errors
     assert len(results) == 1
@@ -177,7 +178,7 @@ def test_premature_file_termination_preserves_output(tmp_path):
     errors, results = [], []
     worker.finished_err.connect(errors.append)
     worker.finished_ok.connect(results.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
     assert errors and not results
     assert "chunk" in errors[0].lower() or "část" in errors[0].lower()
@@ -231,19 +232,19 @@ def test_worker_keeps_independent_run_configuration(tmp_path):
 
 
 def test_custom_cascade_records_each_step(tmp_path):
-    from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunWorker
+    from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunExecutor
     from kajovo.core.cascade_types import CascadeDefinition, CascadeStep
     settings = AppSettings(log_dir=str(tmp_path / "LOG"))
     definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-4o-mini", input_text="test")])
     cfg = CascadeRunConfig("project", definition, "", str(tmp_path / "out"), run_id="RUN_090920261200_TEST")
-    worker = CascadeRunWorker(cfg, settings, "test")
+    worker = CascadeRunExecutor(cfg, settings, "test")
     client = Mock()
     client.create_response.return_value = response(1, "answer")
     results, errors = [], []
     worker.finished_ok.connect(results.append)
     worker.finished_err.connect(errors.append)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
-        worker.run()
+        worker.execute()
     assert not errors
     assert results[0]["run_id"] == cfg.run_id
     assert list((tmp_path / "LOG" / cfg.run_id / "responses").glob("*.json"))
@@ -266,7 +267,7 @@ def test_batch_uses_only_supported_jsonl_fields(tmp_path):
     results, errors = [], []
     worker.finished_ok.connect(results.append)
     worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.pipeline.OpenAIClient", return_value=client):
+    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
     assert not errors
     assert results[0]["batch_id"] == "batch_test"

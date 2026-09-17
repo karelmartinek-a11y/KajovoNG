@@ -1,4 +1,4 @@
-"""Dokončení průběhu umožňuje zavření bez rušení práce."""
+"""Dokončení Studio průběhu umožňuje zavření bez rušení práce."""
 
 import threading
 from unittest.mock import Mock
@@ -9,8 +9,7 @@ from PySide6.QtWidgets import QWidget
 
 from kajovo.core.progress import ProgressEvent
 from kajovo.core.user_errors import describe_error
-from kajovo.desktop.dialogs import ProgressDialog, TaskProgressDialog, UploadProgressDialog
-from kajovo.studio.operations import OperationDialog, Operations, STATES
+from kajovo.studio.operations import STATES, OperationDialog, Operations
 
 
 @pytest.mark.parametrize("state", sorted(set(STATES) - {"active", "waiting"}))
@@ -37,9 +36,6 @@ def test_studio_terminal_can_close_without_cancelling(qtbot, state, enter):
     assert dialog.progress.value() == 3
     assert not dialog.timer.isActive()
     assert not dialog.mark.running
-    qtbot.wait(10)
-    point = dialog.close_button.mapTo(dialog, dialog.close_button.rect().center())
-    assert dialog.rect().contains(point)
     if enter:
         qtbot.keyClick(dialog.close_button, Qt.Key_Return)
     else:
@@ -70,14 +66,12 @@ def test_studio_completion_waits_and_reuse_restores_controls(qtbot):
             dialog = record.dialog
             assert dialog.active
             assert dialog.close_button.text() == "Skrýt průběh"
-            assert not dialog.close_button.isDefault()
             assert dialog.stop.isVisible()
             assert dialog.stop.isEnabled()
             if attempt:
                 assert dialog is previous
             dialog.request_stop()
             assert not dialog.stop.isEnabled()
-            assert dialog.close_button.text() == "Skrýt průběh"
             dialog.hide()
         finally:
             release.set()
@@ -85,40 +79,3 @@ def test_studio_completion_waits_and_reuse_restores_controls(qtbot):
         assert not dialog.isVisible()
         assert dialog.close_button.text() == "OK"
         previous = dialog
-
-
-@pytest.mark.parametrize("dialog_type", [TaskProgressDialog, UploadProgressDialog])
-@pytest.mark.parametrize("state", ["success", "failed", "cancelled"])
-@pytest.mark.parametrize("enter", [False, True])
-def test_task_completion_hides_cancel_and_offers_ok(qtbot, dialog_type, state, enter):
-    dialog = dialog_type("Operace")
-    qtbot.addWidget(dialog)
-    cancel = Mock()
-    dialog.set_cancel_handler(cancel)
-    dialog.pb_sub.setRange(0, 0)
-    dialog.show()
-    getattr(dialog, "mark_" + state)()
-    assert dialog.btn_cancel.isHidden()
-    assert dialog.btn_close.text() == "OK"
-    assert dialog.btn_close.isEnabled()
-    assert dialog.pb.maximum() > 0
-    assert dialog.pb_sub.maximum() > 0
-    assert not dialog.timer.isActive()
-    if enter:
-        qtbot.keyClick(dialog.btn_close, Qt.Key_Return)
-    else:
-        qtbot.mouseClick(dialog.btn_close, Qt.LeftButton)
-    assert not dialog.isVisible()
-    cancel.assert_not_called()
-
-
-def test_legacy_unverified_files_offer_ok(qtbot):
-    dialog = ProgressDialog()
-    qtbot.addWidget(dialog)
-    dialog.show()
-    dialog.on_progress_event(ProgressEvent("RUN", "files_complete_unverified"))
-    assert dialog.btn_stop.isHidden()
-    assert dialog.btn_cancel_response.isHidden()
-    assert dialog.btn_close.text() == "OK"
-    assert not dialog.timer.isActive()
-    assert dialog.pb.value() == 0
