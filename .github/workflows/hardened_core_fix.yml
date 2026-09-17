@@ -1,0 +1,61 @@
+name: hardened-core-fix
+
+on:
+  push:
+    branches:
+      - codex/production-hardening-20260917
+    paths:
+      - '.github/workflows/hardened_core_fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install canonical quality environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Apply safe strict Ruff fixes
+        run: |
+          python -m ruff check --fix --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
+            kajovo/core/runs \
+            kajovo/core/openai_transport.py \
+            tests/test_openai_transport.py \
+            tests/test_openai_retry_semantics.py \
+            tests/test_run_contracts.py \
+            tests/test_run_cancellation.py \
+            tests/test_run_lifecycle.py \
+            tests/test_architecture_contracts.py \
+            tests/test_python312_runtime_contract.py
+      - name: Verify strict Ruff
+        run: |
+          python -m ruff check --select F,B,E9,I,UP,C4,PIE,SIM,RUF \
+            kajovo/core/runs \
+            kajovo/core/openai_transport.py \
+            tests/test_openai_transport.py \
+            tests/test_openai_retry_semantics.py \
+            tests/test_run_contracts.py \
+            tests/test_run_cancellation.py \
+            tests/test_run_lifecycle.py \
+            tests/test_architecture_contracts.py \
+            tests/test_python312_runtime_contract.py
+      - name: Verify mypy
+        run: python -m mypy --follow-imports=skip kajovo/core/runs kajovo/core/openai_transport.py
+      - name: Commit verified Ruff fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'karelmartinek-a11y'
+          git config user.email 'karel.martinek@post.cz'
+          git add kajovo/core/runs kajovo/core/openai_transport.py tests/test_openai_transport.py tests/test_openai_retry_semantics.py tests/test_run_contracts.py tests/test_run_cancellation.py tests/test_run_lifecycle.py tests/test_architecture_contracts.py tests/test_python312_runtime_contract.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'style: satisfy hardened-core static gates'
+          git push origin HEAD:codex/production-hardening-20260917
