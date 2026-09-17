@@ -7,12 +7,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar, QWidget
+from PySide6.QtWidgets import QCheckBox, QDialog, QListWidget, QListWidgetItem
 
 from kajovo.core.progress import ProgressClock, ProgressEvent
-from kajovo.core.progress_display import build_steps, event_sentence, source_title, stage_title, state_title
 from kajovo.core.user_errors import UserError, describe_error
-from .components import BranchMark, DetailDialog, action, actions, caption, scroll, vertical
+from kajovo.progress_ui import DIALOG_STYLE, ProcessInspector
+from .components import BranchMark, DetailDialog, action, actions, caption, vertical
 
 
 class Cancelled(Exception):
@@ -47,20 +47,49 @@ class Task(QThread):
 
 
 STATES = {
-    "active": "Pracuji", "waiting": "Čekám na službu", "completed": "Dokončeno",
-    "failed": "Operace selhala", "partial": "Dokončeno s chybami",
-    "cancelled": "Zastaveno", "batch_pending": "Dávka byla předána službě",
+    "created": "Vytvořeno",
+    "preparing": "Připravuje se",
+    "running": "Běží",
+    "active": "Pracuji",
+    "waiting": "Čekám na službu",
+    "validating_result": "Ověřuji výsledek",
+    "repairing": "Opravuji podklad",
+    "completed": "Dokončeno",
+    "failed": "Operace selhala",
+    "error": "Operace selhala",
+    "partial": "Dokončeno s chybami",
+    "cancelled": "Zastaveno",
+    "stopped": "Zastaveno",
+    "batch_prepared": "Dávka je připravena",
+    "batch_pending": "Dávka byla předána službě",
     "response_pending": "Odpověď se stále zpracovává",
-    "submission_unknown": "Výsledek odeslání není znám", "dry_run": "Návrh je připraven bez zápisu",
+    "submission_unknown": "Výsledek odeslání není znám",
+    "dry_run": "Návrh je připraven bez zápisu",
     "files_complete_unverified": "Soubory jsou převzaté, funkčnost nebyla ověřena",
+    "ready_to_import": "Výsledek je připraven k převzetí",
+    "importing": "Přebírám vzdálený výsledek",
     "cancelling": "Žádost o zrušení byla přijata, čeká se na potvrzení služby",
+    "expired": "Vypršel čas služby",
+    "corrupt_state": "Chyba evidence",
+    "unknown": "Neznámý stav",
 }
 
-STAGES = {"RUN": "Pracovní běh", "A0": "Příprava dlouhého zadání", "A0R": "Upřesnění požadavků",
-          "A1": "Návrh řešení", "A2": "Struktura projektu", "A2Q": "Nezávislá kontrola návrhu",
-          "A3": "Vytváření souborů", "B0R": "Upřesnění požadovaných změn", "B1": "Plán změn",
-          "B2": "Struktura změn", "B2Q": "Nezávislá kontrola změn", "B3": "Úprava souborů",
-          "Upload": "Nahrávání podkladů", "BATCH": "Zpracování dávky"}
+STAGES = {
+    "RUN": "Pracovní běh",
+    "A0": "Příprava dlouhého zadání",
+    "A0R": "Upřesnění požadavků",
+    "A1": "Návrh řešení",
+    "A2": "Struktura projektu",
+    "A2Q": "Nezávislá kontrola návrhu",
+    "A3": "Vytváření souborů",
+    "B0R": "Upřesnění požadovaných změn",
+    "B1": "Plán změn",
+    "B2": "Struktura změn",
+    "B2Q": "Nezávislá kontrola změn",
+    "B3": "Úprava souborů",
+    "Upload": "Nahrávání podkladů",
+    "BATCH": "Zpracování dávky",
+}
 
 
 @dataclass
@@ -76,11 +105,15 @@ class Operation:
 
 
 class OperationDialog(QDialog):
+    """Studio progress dialog používající stejný procesní inspektor jako desktop."""
+
     def __init__(self, title, parent=None, reduced_motion=False):
         super().__init__(parent)
         self.setObjectName("operation.progress")
         self.setWindowTitle(title)
-        self.resize(620, 530)
+        self.resize(1080, 740)
+        self.setMinimumSize(760, 560)
+        self.setStyleSheet(DIALOG_STYLE)
         self.clock = ProgressClock()
         self.events = []
         self.active = True
@@ -89,40 +122,24 @@ class OperationDialog(QDialog):
         self.error = None
         self.result = None
         root = vertical(self)
-        contents = QWidget()
-        body = vertical(contents)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
         self.mark = BranchMark()
-        body.addWidget(self.mark)
-        body.addWidget(caption(title, "section"))
-        self.summary = caption("Připravuji operaci")
-        body.addWidget(self.summary)
-        self.stage = caption("Čekám na první zprávu", "muted")
-        body.addWidget(self.stage)
-        self.source = caption("Zdroj práce: zatím neurčen", "muted")
-        body.addWidget(self.source)
-        self.plan = caption("Plán běhu: čekám na první doložený krok", "muted")
-        body.addWidget(self.plan)
-        self.next_step = caption("Další krok: bude uveden po zahájení běhu", "muted")
-        body.addWidget(self.next_step)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setTextVisible(False)
-        body.addWidget(self.progress)
-        self.counts = caption("")
-        body.addWidget(self.counts)
-        self.times = caption("", "muted")
-        body.addWidget(self.times)
+        self.mark.hide()
+        self.inspector = ProcessInspector(title)
+        root.addWidget(self.inspector, 1)
+        self.summary = self.inspector.activity_label
+        self.stage = self.inspector.phase_label
+        self.source = self.inspector.source_label
+        self.plan = self.inspector.meta_label
+        self.next_step = self.inspector.next_label
+        self.progress = self.inspector.unit_progress
+        self.counts = self.inspector.progress_note
+        self.times = self.inspector.time_label
+        self.log = self.inspector.log
         self.notification = QCheckBox("Oznámit výsledek elektronickou poštou")
         self.notification.setObjectName("operation.notification")
         self.notification.hide()
-        body.addWidget(self.notification)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(2000)
-        self.log.setAccessibleName("Pracovní události")
-        self.log.setMinimumHeight(100)
-        body.addWidget(self.log, 1)
-        root.addWidget(scroll(contents), 1)
         self.stop = action("operation.stop", "Zastavit", self.request_stop, "danger")
         self.stop.setEnabled(False)
         self.details = action("operation.details", "Podrobnosti chyby", self.show_details)
@@ -131,7 +148,15 @@ class OperationDialog(QDialog):
         self.result_button.hide()
         self.close_button = action("operation.hide", "Skrýt průběh", self.hide)
         self.close_button.setAutoDefault(False)
-        root.addWidget(actions(self.close_button, self.stop, self.details, self.result_button))
+        controls = actions(
+            self.notification,
+            self.close_button,
+            self.stop,
+            self.details,
+            self.result_button,
+        )
+        controls.setStyleSheet(DIALOG_STYLE)
+        root.addWidget(controls)
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.tick)
@@ -147,49 +172,25 @@ class OperationDialog(QDialog):
         self.events.append(event)
         self.events[:] = self.events[-2000:]
         self.clock.update(event)
+        self.inspector.on_event(event, self.clock)
         if event.stage == "RUN" and event.state in STATES and event.state not in {"active", "waiting"}:
             self.summary.setText(STATES[event.state])
-            self.tick()
-            return
-        stage = stage_title(event.stage)
-        self.stage.setText(stage + (" · " + event.detail if event.detail else ""))
-        self.source.setText("Zdroj práce: " + source_title(getattr(event, "source", "local")))
-        self.summary.setText(event_sentence(event) if event.detail else state_title(event.state))
-        self._refresh_plan()
-        if event.total is not None and event.total > 0 and event.completed is not None:
-            self.progress.show()
-            self.progress.setRange(0, event.total)
-            self.progress.setValue(event.completed)
-            self.counts.setText(f"Dokončeno {event.completed} z {event.total} {event.unit}")
-        else:
-            self.progress.setRange(0, 0)
-            self.counts.setText("Služba neposkytuje měřitelný postup.")
         self.tick()
 
     def _refresh_plan(self):
-        steps = build_steps(self.events, quality=any(e.stage in {"A2Q", "B2Q"} for e in self.events))
-        if not steps:
-            return
-        self.plan.setText("Plán běhu: " + "  →  ".join(
-            ("✓ " if step.state == "done" else "▶ " if step.state == "current" else "○ ") + step.title
-            for step in steps
-        ))
-        index = next((i for i, step in enumerate(steps) if step.state == "current"), len(steps) - 1)
-        next_step = next((step.title for step in steps[index + 1:] if step.state == "pending"), "hotový výsledek")
-        self.next_step.setText("Další krok: " + next_step)
+        self.inspector.refresh(self.clock)
 
     def tick(self):
-        elapsed, age, eta = self.clock.times()
-        text = f"Uplynulo {int(elapsed)} sekund · poslední zpráva před {int(age)} sekundami"
-        if eta is not None:
-            text += f" · odhad zbývajícího času {int(eta)} sekund"
-        self.times.setText(text)
+        self.inspector.refresh(self.clock)
 
     def request_stop(self):
         if self.active and self.stop_callback:
-            self.stop_callback()
             self.stop.setEnabled(False)
-            self.summary.setText("Čekám na bezpečné ukončení operace")
+            event = ProgressEvent("RUN", "cancelling", detail="Čekám na bezpečné ukončení operace")
+            self.events.append(event)
+            self.clock.update(event)
+            self.inspector.on_event(event, self.clock)
+            self.stop_callback()
 
     def finish(self, state, error=None):
         self.active = False
@@ -203,11 +204,13 @@ class OperationDialog(QDialog):
         self.close_button.setDefault(True)
         self.close_button.setFocus()
         self.notification.setEnabled(False)
-        self.clock.update(ProgressEvent("RUN", state))
-        self.summary.setText(error.message if error else STATES.get(state, state))
+        event = ProgressEvent("RUN", state, detail=error.message if error else STATES.get(state, state))
+        self.events.append(event)
+        self.clock.update(event)
+        self.inspector.on_event(event, self.clock)
         if self.progress.maximum() == 0:
             self.progress.hide()
-        elif self.counts.text():
+        elif self.counts.text() and self.progress.isVisible():
             self.counts.setText("Poslední doložený postup: " + self.counts.text())
         self.details.setVisible(error is not None)
         self.result_button.setVisible(self.result is not None)
@@ -215,13 +218,23 @@ class OperationDialog(QDialog):
 
     def show_details(self):
         if self.error:
-            DetailDialog("Podrobnosti chyby", self.error.message, self,
-                         self.error.detail + "\n\n" + self.error.next_step).exec()
+            DetailDialog(
+                "Podrobnosti chyby",
+                self.error.message,
+                self,
+                self.error.detail + "\n\n" + self.error.next_step,
+            ).exec()
 
     def show_result(self):
         from dataclasses import asdict, is_dataclass
+
         value = asdict(self.result) if is_dataclass(self.result) else self.result
-        DetailDialog("Výsledek operace", "Úplné vrácené podklady jsou dostupné v technických podrobnostech.", self, value).exec()
+        DetailDialog(
+            "Výsledek operace",
+            "Úplné vrácené podklady jsou dostupné v technických podrobnostech.",
+            self,
+            value,
+        ).exec()
 
     def closeEvent(self, event):
         if self.active:
@@ -251,13 +264,32 @@ class Operations(QObject):
         if not directory:
             return
         path = Path(directory).expanduser().resolve()
-        if any(path == other or path in other.parents or other in path.parents
-               for other in self._output_reservations.values()):
+        if any(
+            path == other or path in other.parents or other in path.parents
+            for other in self._output_reservations.values()
+        ):
             raise ValueError("Do tohoto adresáře nebo jeho části již zapisuje jiná operace.")
 
-    def start(self, title, function, receive=None, cancellable=False, popup=True, output_dir=None, identifier=None):
+    def start(
+        self,
+        title,
+        function,
+        receive=None,
+        cancellable=False,
+        popup=True,
+        output_dir=None,
+        identifier=None,
+    ):
         worker = Task(function, self)
-        return self.adopt(title, worker, receive, cancellable=cancellable, popup=popup, output_dir=output_dir, identifier=identifier)
+        return self.adopt(
+            title,
+            worker,
+            receive,
+            cancellable=cancellable,
+            popup=popup,
+            output_dir=output_dir,
+            identifier=identifier,
+        )
 
     def start_read(self, title, function, receive=None, *, popup=False, identifier=None):
         """Krátké lokální čtení bez konstrukce a uchovávání progresového dialogu.
@@ -303,7 +335,17 @@ class Operations(QObject):
         self.changed.emit()
         return record
 
-    def adopt(self, title, worker, receive=None, *, cancellable=True, popup=True, identifier=None, output_dir=None):
+    def adopt(
+        self,
+        title,
+        worker,
+        receive=None,
+        *,
+        cancellable=True,
+        popup=True,
+        identifier=None,
+        output_dir=None,
+    ):
         self.assert_output_available(output_dir)
         identifier = identifier or uuid4().hex
         previous = self.records.get(identifier)
@@ -312,6 +354,8 @@ class Operations(QObject):
         if previous:
             dialog = previous.dialog
             dialog.clock = ProgressClock()
+            dialog.events = []
+            dialog.inspector.events = []
             dialog.active = True
             dialog.error = None
             dialog.result = None
@@ -331,6 +375,7 @@ class Operations(QObject):
             dialog.progress.show()
             dialog.timer.start()
             dialog.mark.set_running(dialog.isVisible(), self.reduced_motion)
+            dialog.inspector.refresh(dialog.clock)
         else:
             dialog = OperationDialog(title, self.parent(), self.reduced_motion)
         record = Operation(identifier, title, worker, dialog)
@@ -345,11 +390,21 @@ class Operations(QObject):
         if hasattr(worker, "status"):
             worker.status.connect(dialog.summary.setText)
         if hasattr(worker, "logline"):
-            worker.logline.connect(dialog.log.appendPlainText)
+            worker.logline.connect(dialog.inspector.append_log)
         success = worker.value if isinstance(worker, Task) else worker.finished_ok
-        failure = worker.failure if isinstance(worker, Task) else getattr(worker, "failure_detail", worker.finished_err)
+        failure = (
+            worker.failure
+            if isinstance(worker, Task)
+            else getattr(worker, "failure_detail", worker.finished_err)
+        )
         success.connect(lambda value: setattr(record, "result", value))
-        failure.connect(lambda error: setattr(record, "error", error if isinstance(error, UserError) else describe_error(RuntimeError(str(error)))))
+        failure.connect(
+            lambda error: setattr(
+                record,
+                "error",
+                error if isinstance(error, UserError) else describe_error(RuntimeError(str(error))),
+            )
+        )
         worker.finished.connect(lambda: self._finished(record, receive))
         if popup:
             dialog.show()
@@ -364,15 +419,32 @@ class Operations(QObject):
 
     def _finished(self, record, receive):
         self._output_reservations.pop((id(self), record.identifier), None)
-        terminal_events = [e.state for e in record.events if e.stage == "RUN" and e.state in STATES and e.state not in {"active", "waiting"}]
+        terminal_events = [
+            e.state
+            for e in record.events
+            if e.stage == "RUN" and e.state in STATES and e.state not in {"active", "waiting"}
+        ]
         result_status = record.result.get("status") if isinstance(record.result, dict) else None
         if isinstance(record.result, dict) and record.result.get("batch_id") and not result_status:
             result_status = "batch_pending"
         elif getattr(record.result, "batch_id", ""):
             status = getattr(record.result, "status", "")
-            result_status = {"downloaded": "completed", "partial": "partial", "failed": "failed", "cancelled": "cancelled"}.get(status, "batch_pending")
-        record.terminal = "failed" if record.error else (terminal_events[-1] if terminal_events else result_status or "completed")
-        if not record.error and receive and record.terminal not in {"cancelled", "response_pending", "submission_unknown"}:
+            result_status = {
+                "downloaded": "completed",
+                "partial": "partial",
+                "failed": "failed",
+                "cancelled": "cancelled",
+            }.get(status, "batch_pending")
+        record.terminal = (
+            "failed"
+            if record.error
+            else (terminal_events[-1] if terminal_events else result_status or "completed")
+        )
+        if (
+            not record.error
+            and receive
+            and record.terminal not in {"cancelled", "response_pending", "submission_unknown"}
+        ):
             try:
                 receive(record.result)
             except Exception as error:
@@ -395,8 +467,12 @@ class Operations(QObject):
             self.listing.setWordWrap(True)
             self.listing.setAccessibleName("Běžící a dokončené operace")
             root.addWidget(self.listing, 1)
-            root.addWidget(actions(action("operations.detail", "Otevřít průběh", self.open_selected),
-                                   action("operations.close", "Zavřít přehled", self.overview.hide)))
+            root.addWidget(
+                actions(
+                    action("operations.detail", "Otevřít průběh", self.open_selected),
+                    action("operations.close", "Zavřít přehled", self.overview.hide),
+                )
+            )
             self.listing.itemDoubleClicked.connect(self.open_selected)
         self.refresh_overview()
         self.overview.show()
@@ -405,10 +481,14 @@ class Operations(QObject):
     def refresh_overview(self):
         if self.overview is None:
             return
-        selected = self.listing.currentItem().data(Qt.UserRole) if self.listing.currentItem() else None
+        selected = (
+            self.listing.currentItem().data(Qt.UserRole) if self.listing.currentItem() else None
+        )
         self.listing.clear()
         for record in reversed(list(self.records.values())):
-            item = QListWidgetItem(record.title + "\n" + STATES.get(record.terminal or "active", record.terminal))
+            item = QListWidgetItem(
+                record.title + "\n" + STATES.get(record.terminal or "active", record.terminal)
+            )
             item.setData(Qt.UserRole, record.identifier)
             self.listing.addItem(item)
             if record.identifier == selected:
