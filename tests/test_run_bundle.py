@@ -118,7 +118,7 @@ def test_checkpoint_validates_required_artifact_and_blocks_missing(tmp_path):
     assert bundle.validate_checkpoint(checkpoint["checkpoint_id"])["safe_to_continue"] is True
     archived = bundle.root / artifact["path_in_bundle"]
     archived.unlink()
-    with pytest.raises(ValueError, match="(?i)artefakt"):
+    with pytest.raises(ValueError, match=r"(?i)artefakt"):
         bundle.validate_checkpoint(checkpoint["checkpoint_id"])
 
 
@@ -204,90 +204,3 @@ def test_history_index_is_rebuildable_and_searchable(tmp_path):
     Path(index.path).unlink()
     second = index.rebuild()
     assert second[0]["run_id"] == first[0]["run_id"]
-
-
-def test_history_run_explorer_constructs_and_shows_legacy_without_guessing(qtbot, tmp_path):
-    from kajovo.desktop.history import ResponseRequestPanel
-
-    run = tmp_path / "RUN_130920261230_LEGACY"
-    (run / "requests").mkdir(parents=True)
-    (run / "responses").mkdir()
-    (run / "run_state.json").write_text(
-        json.dumps(
-            {
-                "status": "completed",
-                "project": "legacy",
-                "ui_state": {"mode": "QA", "prompt": "old prompt"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    panel = ResponseRequestPanel(str(tmp_path))
-    qtbot.addWidget(panel)
-    assert panel.lst_runs.count() == 1
-    assert "LEGACY" in panel.lst_runs.item(0).text()
-    assert panel.timeline.topLevelItemCount() == 1
-    assert panel.timeline.topLevelItem(0).text(1) == "Legacy běh"
-    assert not panel.btn_continue.isEnabled()
-    assert panel.btn_clone.isEnabled()
-
-
-def test_history_filters_use_derived_index(qtbot, tmp_path):
-    from kajovo.desktop.history import ResponseRequestPanel
-
-    for run_id, project, mode in (
-        ("RUN_140920260105_A", "Alpha", "QA"),
-        ("RUN_140920260106_B", "Beta", "QFILE"),
-    ):
-        logger = RunLogger(str(tmp_path), run_id, project)
-        logger.update_state(
-            {
-                "ui_state": {"mode": mode, "prompt": project, "model": "gpt-5.6-luna"},
-                "status": "running",
-            }
-        )
-    panel = ResponseRequestPanel(str(tmp_path))
-    qtbot.addWidget(panel)
-    assert panel.lst_runs.count() == 2
-    panel.ed_fulltext.setText("alpha")
-    panel.apply_filters()
-    assert panel.lst_runs.count() == 1
-    assert "Alpha" in panel.lst_runs.item(0).text()
-    panel.reset_filters()
-    panel.mode_filter.setCurrentText("QFILE")
-    panel.apply_filters()
-    assert panel.lst_runs.count() == 1
-    assert "QFILE" in panel.lst_runs.item(0).text()
-
-
-def test_history_custom_date_interval_filters_runs(qtbot, tmp_path):
-    from kajovo.desktop.history import ResponseRequestPanel
-
-    for run_id, project, created_at in (
-        ("RUN_100920261200_A", "Older", "2026-09-10T12:00:00+00:00"),
-        ("RUN_120920261200_B", "Inside", "2026-09-12T12:00:00+00:00"),
-        ("RUN_140920261200_C", "Newer", "2026-09-14T12:00:00+00:00"),
-    ):
-        logger = RunLogger(str(tmp_path), run_id, project)
-        logger.update_state({"ui_state": {"mode": "QA", "prompt": project}, "status": "running"})
-        logger.bundle.update_run({"created_at": created_at, "project": project, "mode": "QA"})
-    panel = ResponseRequestPanel(str(tmp_path))
-    qtbot.addWidget(panel)
-    panel.period.setCurrentText("Vlastní interval")
-    panel.ed_date_from.setText("11.09.2026")
-    panel.ed_date_to.setText("13.09.2026")
-    panel.apply_filters()
-    assert panel.lst_runs.count() == 1
-    assert "Inside" in panel.lst_runs.item(0).text()
-
-
-def test_history_files_offer_compare_and_direct_provenance_actions(qtbot, tmp_path):
-    from kajovo.desktop.history import ResponseRequestPanel
-
-    logger = RunLogger(str(tmp_path), "RUN_140920261300_UI", "demo")
-    logger.update_state({"ui_state": {"mode": "QA", "prompt": "x"}, "status": "running"})
-    panel = ResponseRequestPanel(str(tmp_path))
-    qtbot.addWidget(panel)
-    assert panel.btn_compare_artifacts.text() == "Porovnat vybrané"
-    assert panel.btn_source_request.text() == "Zdrojový request"
-    assert panel.btn_source_response.text() == "Zdrojová response"

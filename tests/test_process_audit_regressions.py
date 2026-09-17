@@ -5,14 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import pytest
-
-from kajovo.core.batch_submit import exact_batch_matches
 from kajovo.core.batch_completion import recover_unknown_submission
+from kajovo.core.batch_submit import exact_batch_matches
 from kajovo.core.openai_client import OpenAIClient
-from kajovo.core.runs.executor import RunExecutor as RunWorker
 from kajovo.core.progress import ProgressClock, ProgressEvent
 from kajovo.core.runlog import RunLogger, verified_output_evidence
+from kajovo.core.runs.executor import RunExecutor as RunWorker
 
 
 def test_exact_batch_recovery_uses_input_file_id_and_endpoint(tmp_path):
@@ -99,23 +97,6 @@ def test_rerun_reads_real_hashed_runlogger_manifest_and_verifies_hash(tmp_path):
     assert verified_output_evidence(logger.paths.run_dir, str(out)) == []
 
 
-def test_modify_requires_in_for_both_delivery_modes():
-    from kajovo.desktop.application import MainWindow
-
-    window = SimpleNamespace(ed_in=Mock(), ed_out=Mock())
-    window.ed_in.text.return_value = ""
-    window.ed_out.text.return_value = "out"
-    for batch in (False, True):
-        with pytest.raises(ValueError, match="MODIFY vyžaduje"):
-            MainWindow._validate_paths(window, "MODIFY", batch)
-
-
-def test_batch_submit_instruction_remains_manual_refresh():
-    source = Path("kajovo/desktop/application.py").read_text(encoding="utf-8")
-    assert "Obnovit stav; tím zahájíte periodické sledování" in source
-    assert "start_monitoring(" not in source
-
-
 def test_partial_run_is_a_real_terminal_progress_state():
     clock = ProgressClock(now=10.0)
     event = ProgressEvent("RUN", "partial", detail="Částečný výstup", timestamp=12.5)
@@ -141,15 +122,6 @@ def test_missing_deliverables_report_records_reason(tmp_path):
     assert "automaticky nedodává" in text
 
 
-def test_live_generate_partial_semantics_are_wired_end_to_end():
-    pipeline = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
-    desktop = Path("kajovo/desktop/application.py").read_text(encoding="utf-8")
-    assert '"status": "partial" if missing_deliverables else "files_complete_unverified"' in pipeline
-    assert 'final_status in ("completed", "partial", "dry_run", "files_complete_unverified")' in pipeline
-    assert 'terminal_status == "partial"' in desktop
-    assert "Kájovo NG · částečný výstup" in desktop
-
-
 def test_user_progress_no_longer_exposes_obsolete_english_stage_messages():
     source = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
     obsolete = (
@@ -162,3 +134,43 @@ def test_user_progress_no_longer_exposes_obsolete_english_stage_messages():
     assert not any(message in source for message in obsolete)
     assert 'stage="Lokální validace"' in source
     assert 'stage="Příprava BATCH"' in source
+
+
+def test_modify_requires_existing_input_in_studio(qtbot, tmp_path):
+    from kajovo.core.config import AppSettings
+    from kajovo.studio.context import StudioContext
+    from kajovo.studio.operations import Operations
+    from kajovo.studio.workbench import Workbench
+
+    context = StudioContext(
+        AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache")),
+        Operations(None),
+        api_key="test-key",
+    )
+    context.models = ["gpt-4.1"]
+    workbench = Workbench(context)
+    qtbot.addWidget(workbench)
+    workbench.widgets["project"].setText("test")
+    workbench.prompt.setPlainText("Uprav projekt.")
+    workbench.widgets["mode"].setCurrentIndex(workbench.widgets["mode"].findData("MODIFY"))
+    workbench.widgets["model"].setCurrentIndex(workbench.widgets["model"].findData("gpt-4.1"))
+    workbench.widgets["out_dir"].setText(str(tmp_path / "out"))
+    workbench.widgets["in_dir"].clear()
+    assert not workbench.validate()
+    assert "vstupní adresář" in workbench.validation.text()
+
+
+def test_batch_monitoring_starts_only_after_explicit_refresh():
+    source = Path("kajovo/studio/batches.py").read_text(encoding="utf-8")
+    assert "self.timer.timeout.connect(lambda: self.refresh(automatic=True))" in source
+    assert "if not automatic:" in source
+    assert "self.poll_started = time.monotonic()" in source
+
+
+def test_live_generate_partial_semantics_are_wired_end_to_end():
+    pipeline = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
+    from kajovo.studio.operations import STATES
+
+    assert '"status": "partial" if missing_deliverables else "files_complete_unverified"' in pipeline
+    assert 'final_status in ("completed", "partial", "dry_run", "files_complete_unverified")' in pipeline
+    assert STATES["partial"] == "Dokončeno s chybami"

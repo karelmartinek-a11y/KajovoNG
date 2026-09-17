@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,12 +74,9 @@ def test_app_entrypoint_uses_studio_factory():
     assert "create_window" in main
 
 
-def test_distribution_excludes_legacy_desktop_package():
-    """Regresní zdroje mohou zůstat v repu, ale nesmějí být součástí instalace/release."""
-    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    excluded = set(config["tool"]["setuptools"]["packages"]["find"]["exclude"])
-    assert "kajovo.desktop" in excluded
-    assert "kajovo.desktop.*" in excluded
+def test_legacy_desktop_package_is_physically_removed():
+    """Po konsolidaci existuje pouze produkční Studio UI."""
+    assert not (ROOT / "kajovo" / "desktop").exists()
 
 
 def test_compatibility_renderer_targets_production_studio():

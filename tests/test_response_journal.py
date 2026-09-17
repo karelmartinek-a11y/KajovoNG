@@ -1,22 +1,22 @@
 """Výpadky a obnova bez skutečných síťových nebo placených požadavků."""
 
+import copy
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
-import copy
-import hashlib
 
 import pytest
+from delivery_fixtures import delivery_payloads
 from PySide6.QtCore import QLockFile
+from test_workflows import make_worker, response
 
 from kajovo.core.openai_client import OpenAIClient, OpenAIError
-from kajovo.core.response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
+from kajovo.core.recovery import recover_run
 from kajovo.core.request_rules import validate_response_payload
+from kajovo.core.response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
 from kajovo.core.runlog import RunLogger
 from kajovo.core.runs.executor import RunExecutor as RunWorker
-from kajovo.core.recovery import recover_run
-from test_workflows import make_worker, response
-from delivery_fixtures import delivery_payloads
 
 
 class Clock:
@@ -202,7 +202,7 @@ def test_worker_recovers_preparation_and_file_without_reposting(tmp_path, mode, 
         "input_tokens": 1000, "request_hash": content_hash(payload)}
     client.upload_file.return_value = {"id": "file_test"}
     client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 1}
-    client.create_response.side_effect = results[:pending_index] + [{"id": results[pending_index]["id"], "status": "queued"}]
+    client.create_response.side_effect = [*results[:pending_index], {"id": results[pending_index]["id"], "status": "queued"}]
     worker.settings.response_poll_timeout_s = 0.001
     # Přerušení ihned po přijetí ID bez čekání v reálném čase.
     def stop_get(*args):
@@ -267,40 +267,6 @@ def test_missing_remote_id_is_not_recreated(journal):
     assert client.create_response.call_count == 1
 
 
-@pytest.mark.parametrize("state", ["response_pending", "submission_unknown", "cancelled"])
-def test_progress_dialog_finishes_with_recoverable_status(qtbot, state):
-    from kajovo.desktop.dialogs import ProgressDialog
-    from kajovo.core.progress import ProgressEvent
-    dialog = ProgressDialog()
-    qtbot.addWidget(dialog)
-    dialog.btn_cancel_response.show()
-    dialog.on_progress_event(ProgressEvent("RUN", state, detail="Uložené ID"))
-    assert dialog.clock.finished is not None
-    assert dialog.btn_cancel_response.isHidden()
-    assert not dialog.timer.isActive()
-    assert dialog.pb.value() != 100
-
-
-def test_waiting_and_remote_cancellation_are_separate_controls(qtbot, tmp_path):
-    from kajovo.desktop.dialogs import ProgressDialog
-    from kajovo.core.progress import ProgressEvent
-    from PySide6.QtCore import Qt
-    worker = make_worker(tmp_path, "GENERATE")
-    dialog = ProgressDialog()
-    qtbot.addWidget(dialog)
-    dialog.btn_stop.clicked.connect(worker.request_stop)
-    dialog.btn_cancel_response.clicked.connect(worker.request_cancel_response)
-    dialog.btn_cancel_response.show()
-    dialog.on_progress_event(ProgressEvent("Upload"))
-    assert not dialog.btn_cancel_response.isEnabled()
-    dialog.on_progress_event(ProgressEvent("A0R", "waiting"))
-    assert dialog.btn_cancel_response.isEnabled()
-    qtbot.mouseClick(dialog.btn_cancel_response, Qt.LeftButton)
-    assert worker._cancel_response and not worker._stop
-    qtbot.mouseClick(dialog.btn_stop, Qt.LeftButton)
-    assert worker._stop
-
-
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 def test_restart_after_first_output_write_keeps_files_and_response_chain(tmp_path, mode):
     worker = make_worker(tmp_path, mode)
@@ -355,7 +321,7 @@ def test_restart_after_first_output_write_keeps_files_and_response_chain(tmp_pat
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 def test_background_preparation_resumes_then_submits_only_file_batch(tmp_path, mode):
-    from test_delivery_pipeline import _scenario, _client, _run
+    from test_delivery_pipeline import _client, _run, _scenario
     worker, preparation, _ = _scenario(tmp_path, mode, True, True)
     client, calls = _client(preparation[1:])
     first = response(999, preparation[0])
@@ -378,18 +344,35 @@ def test_background_preparation_resumes_then_submits_only_file_batch(tmp_path, m
     next_client.create_batch.assert_called_once()
 
 
+@pytest.mark.parametrize("state", ["response_pending", "submission_unknown", "cancelled"])
+def test_operation_dialog_finishes_with_recoverable_status(qtbot, state):
+    from kajovo.core.progress import ProgressEvent
+    from kajovo.studio.operations import OperationDialog
+
+    dialog = OperationDialog("Práce")
+    qtbot.addWidget(dialog)
+    dialog.on_event(ProgressEvent("RUN", state, detail="Uložené ID"))
+    dialog.finish(state)
+    assert dialog.clock.finished is not None
+    assert not dialog.timer.isActive()
+    assert dialog.progress.maximum() == 0 or dialog.progress.value() != 100
+
+
 def test_settings_expose_separate_generation_limit(qtbot, monkeypatch):
     from kajovo.core.config import AppSettings
-    from kajovo.desktop.settings import SettingsPage
+    from kajovo.studio.context import StudioContext
+    from kajovo.studio.operations import Operations
+    from kajovo.studio.settings import SettingsPage
+
     settings = AppSettings()
-    page = SettingsPage(settings, "")
+    context = StudioContext(settings, Operations(None), api_key="")
+    page = SettingsPage(context)
     qtbot.addWidget(page)
-    assert page.response_timeout.value() == 300
-    assert page.response_poll_timeout.value() == 3600
-    page.apply_state({"response_poll_timeout": 7200})
-    assert page.get_state()["response_poll_timeout"] == 7200
+    assert page.editors["response_timeout_s"].value() == 300
+    assert page.editors["response_poll_timeout_s"].value() == 3600
+    page.editors["response_poll_timeout_s"].setValue(7200)
+    assert page.snapshot().response_poll_timeout_s == 7200
     save = Mock()
-    monkeypatch.setattr("kajovo.desktop.settings.save_settings", save)
-    monkeypatch.setattr("kajovo.desktop.settings.msg_info", Mock())
+    monkeypatch.setattr("kajovo.studio.settings.save_settings", save)
     page.save()
     assert save.call_args.args[0].response_poll_timeout_s == 7200

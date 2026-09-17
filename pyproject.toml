@@ -39,7 +39,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["kajovo", "kajovo.*", "kajovong", "utf8nobom"]
-exclude = ["tests*", "kajovo.desktop", "kajovo.desktop.*"]
+exclude = ["tests*"]
 namespaces = false
 
 [tool.setuptools.package-data]

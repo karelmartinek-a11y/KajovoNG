@@ -189,41 +189,37 @@ def test_invalid_jsonl_is_not_silently_ignored(tmp_path):
         download_results(client, job, tmp_path / "log")
 
 
-def test_photo_studio_panel_constructs_without_api(qtbot, tmp_path):
+def test_photo_studio_page_constructs_without_api(qtbot, tmp_path):
     from kajovo.core.config import AppSettings
-    from kajovo.desktop.photos import PhotoStudioPanel
+    from kajovo.studio.context import StudioContext
+    from kajovo.studio.operations import Operations
+    from kajovo.studio.photos import PhotosPage
 
-    settings = AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache"))
-    panel = PhotoStudioPanel(settings, api_key_provider=lambda: "", model_provider=lambda: [])
-    qtbot.addWidget(panel)
-    assert panel.prompt_editor.isEnabled()
-    assert panel.template_list.count() >= 6
-    assert panel.image_model.count() >= 1
-    assert panel.btn_submit.isEnabled()
+    context = StudioContext(
+        AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache")),
+        Operations(None),
+        api_key="",
+    )
+    context.models = [_image_model()]
+    page = PhotosPage(context)
+    qtbot.addWidget(page)
+    context.models_changed.emit()
+    assert page.prompt.isEnabled()
+    assert page.template.count() >= 6
+    assert page.image_model.count() >= 1
+    assert page.start_button.isEnabled()
 
 
-def test_install_photo_studio_adds_real_main_navigation(qtbot, tmp_path, monkeypatch):
-    from unittest.mock import patch
-
+def test_photo_studio_is_real_main_navigation_page(qtbot, tmp_path):
     from kajovo.core.config import AppSettings
-    from kajovo.desktop.application import MainWindow
-    from kajovo.desktop.jobs import Jobs
-    from kajovo.desktop.photos import install_photo_studio
+    from kajovo.studio.application import create_window
+    from kajovo.studio.photos import PhotosPage
 
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    settings = AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache"))
-    with patch("kajovo.desktop.application.get_secret", return_value=None):
-        window = MainWindow(settings)
+    window = create_window(
+        AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache")),
+        api_key="",
+    )
     qtbot.addWidget(window)
-    panel = install_photo_studio(window)
-    assert panel is window.photo_panel
-    assert "photos" in window.pages
-    assert "photos" in window.navigation
-    assert window.stack.count() == 10
+    assert isinstance(window.pages["photos"], PhotosPage)
     window.select_page("photos")
-    assert window.stack.currentWidget() is window.pages["photos"][0]
-    for manager in window.findChildren(Jobs):
-        for job in list(manager.active):
-            job.request_stop()
-            job.wait(5000)
+    assert window.stack.widget(window.stack.currentIndex()).widget() is window.pages["photos"]
