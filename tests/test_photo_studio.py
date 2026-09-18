@@ -84,9 +84,10 @@ def test_image_model_selector_excludes_general_responses_models():
     assert "gpt-5.6-luna" not in models
     assert "gpt-5.6-sol" not in models
     assert models
+    assert models[0] == "gpt-image-2.5-sunburst"
     for model in models:
         spec = model_spec(model)
-        assert spec["batch"] is True
+        assert bool((spec.get("image_capabilities") or {}).get("batch", spec["batch"])) is True
         assert "inpainting" in spec["features"]
         assert any(
             isinstance(endpoint, list)

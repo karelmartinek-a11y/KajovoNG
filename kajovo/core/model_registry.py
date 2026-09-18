@@ -80,9 +80,11 @@ def relevant_for_usage(model, usage):
     except ValueError:
         return False
     if usage == "photo_edit_batch":
+        image_capabilities = spec.get("image_capabilities") or {}
+        image_batch = bool(image_capabilities.get("batch", spec["batch"]))
         return (
             not spec["deprecated"]
-            and spec["batch"]
+            and image_batch
             and "inpainting" in spec["features"]
             and "v1/images/edits" in _endpoint_names(spec)
         )

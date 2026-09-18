@@ -100,9 +100,11 @@ def _is_image_edit_model(model: str) -> bool:
     ale nejsou platnou hodnotou parametru model pro Image API.
     """
     spec = model_spec(model)
+    image_capabilities = spec.get("image_capabilities") or {}
+    image_batch = bool(image_capabilities.get("batch", spec["batch"]))
     return (
         not spec["deprecated"]
-        and spec["batch"]
+        and image_batch
         and "inpainting" in spec["features"]
         and IMAGE_EDIT_ENDPOINT.lstrip("/") in _endpoints(spec)
     )
