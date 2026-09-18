@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
@@ -109,12 +109,16 @@ class ModelsPage(QWidget):
         self.render()
 
     def details(self):
-        try:
-            spec = model_spec(self.selected())
-        except ValueError as error:
-            self.notice.setText(str(error))
+        model = self.selected()
+        if not model:
+            self.notice.setText("Vyberte model.")
             return
-        DetailDialog("Pravidla vybraného modelu", self.selected(), self, spec).exec()
+        DetailDialog(
+            "Pravidla vybraného modelu",
+            model,
+            self,
+            self.context.model_details(model),
+        ).exec()
 
 
 class StudioWindow(QMainWindow):
@@ -227,6 +231,8 @@ class StudioWindow(QMainWindow):
         self.shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
         self.shortcut.activated.connect(self.start_current)
         self.select_page("run")
+        if self.context.api_key:
+            QTimer.singleShot(0, self.context.ensure_models)
 
     def open_history_batch(self, identifier):
         self.select_page("batch")
@@ -249,6 +255,8 @@ class StudioWindow(QMainWindow):
             button.setChecked(name == key)
         if key == "history" and not self.history.records:
             self.history.refresh()
+        if key in {"photos", "cascade", "models"}:
+            self.context.ensure_models()
         if self.width() < 1000:
             self.navigation_area.hide()
         if key in self.detached:

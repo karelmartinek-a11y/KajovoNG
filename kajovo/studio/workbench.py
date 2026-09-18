@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
 )
 
 from kajovo.core.model_capabilities import ModelCapabilitiesCache
-from kajovo.core.model_registry import selectable
 from kajovo.core.runs.config import UiRunConfig
 from kajovo.studio.workers.run_worker import RunWorker
 from kajovo.core.request_rules import validate_run_options
@@ -122,7 +121,10 @@ class Workbench(QWidget):
         context.models_changed.connect(self.refresh_models)
         context.attachments_changed.connect(self.update_attachments)
         context.key_changed.connect(self.validate)
+        self.widgets["mode"].currentIndexChanged.connect(self.refresh_models)
+        self.widgets["send_as_c"].toggled.connect(self.refresh_models)
         self.reset()
+        self.refresh_models()
 
     def browse(self, field):
         value = QFileDialog.getExistingDirectory(self, "Vybrat adresář", field.text())
@@ -190,20 +192,41 @@ class Workbench(QWidget):
                 state[name] = ""
         return UiRunConfig(**{field.name: state[field.name] for field in fields(UiRunConfig) if field.name in state})
 
-    def refresh_models(self):
+    def _model_usage(self, key):
+        mode = self.widgets["mode"].currentData()
+        batch = self.widgets["send_as_c"].isChecked()
+        if key == "model":
+            if mode == "GENERATE":
+                return "generate_plan"
+            if mode == "MODIFY":
+                return "responses_batch" if batch else "responses"
+            if mode == "QA":
+                return "qa"
+            return "qfile"
+        if key == "model_a1":
+            return "generate_plan"
+        if key == "model_a2":
+            return "generate_structure"
+        return "generate_file_batch" if batch else "generate_file"
+
+    def refresh_models(self, *_):
+        if not hasattr(self, "widgets"):
+            return
         for key in ("model", "model_a1", "model_a2", "model_a3"):
             widget = self.widgets[key]
-            selected = widget.currentData()
+            usage = self._model_usage(key)
+            values = self.context.models_for_usage(usage)
+            recommended = self.context.recommended_model(usage)
             widget.blockSignals(True)
             widget.clear()
             if key != "model":
                 widget.addItem("Použít hlavní model", "")
-            for model in self.context.models:
-                if selectable(model):
-                    widget.addItem(model, model)
-            if selected and widget.findData(selected) < 0:
-                widget.addItem(str(selected) + " · nedostupný", selected)
-            widget.setCurrentIndex(widget.findData(selected))
+            for model in values:
+                widget.addItem(model, model)
+            target = widget.findData(recommended) if recommended else -1
+            if target < 0 and key != "model":
+                target = 0
+            widget.setCurrentIndex(target)
             widget.blockSignals(False)
         self.validate()
 

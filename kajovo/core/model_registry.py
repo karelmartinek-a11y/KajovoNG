@@ -35,6 +35,83 @@ def selectable(model):
     return spec["responses"] and "structured_outputs" in spec["features"] and not spec["deprecated"]
 
 
+_USAGE_PREFERENCES = {
+    "responses": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "responses_batch": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "generate_plan": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "generate_structure": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "generate_file": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "generate_file_batch": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "qa": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "qfile": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "cascade": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
+    "photo_prompt": ("gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-5.6"),
+    "photo_edit_batch": (
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-sunburst-2026-09-08",
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-flare-2026-09-08",
+        "gpt-image-2",
+        "gpt-image-2-2026-04-21",
+        "gpt-image-1.5",
+        "gpt-image-1.5-2025-12-16",
+    ),
+}
+
+
+def usage_names():
+    return tuple(_USAGE_PREFERENCES)
+
+
+def _endpoint_names(spec):
+    return {
+        entry[1]
+        for entry in spec.get("endpoints", [])
+        if isinstance(entry, list) and len(entry) >= 2 and isinstance(entry[1], str)
+    }
+
+
+def relevant_for_usage(model, usage):
+    """Použitelnost modelu pro konkrétní UI/workflow; účetová dostupnost se řeší zvlášť."""
+    if usage not in _USAGE_PREFERENCES:
+        raise ValueError(f"Neznámý profil použití modelu: {usage}")
+    try:
+        spec = model_spec(model)
+    except ValueError:
+        return False
+    if usage == "photo_edit_batch":
+        image_capabilities = spec.get("image_capabilities") or {}
+        image_batch = bool(image_capabilities.get("batch", spec["batch"]))
+        return (
+            not spec["deprecated"]
+            and image_batch
+            and "inpainting" in spec["features"]
+            and "v1/images/edits" in _endpoint_names(spec)
+        )
+    if not selectable(model):
+        return False
+    if usage in {"responses_batch", "generate_file_batch"} and not spec["batch"]:
+        return False
+    return True
+
+
+def model_usages(model):
+    return [usage for usage in usage_names() if relevant_for_usage(model, usage)]
+
+
+def models_for_usage(available_models, usage):
+    """Vrátí pouze modely dostupné účtu a relevantní pro daný účel, doporučené první."""
+    candidates = model_ids() if available_models is None else tuple(dict.fromkeys(available_models))
+    allowed = [model for model in candidates if relevant_for_usage(model, usage)]
+    preferred = {name: index for index, name in enumerate(_USAGE_PREFERENCES[usage])}
+    return sorted(allowed, key=lambda value: (preferred.get(value, 10_000), value))
+
+
+def recommended_model(available_models, usage):
+    values = models_for_usage(available_models, usage)
+    return values[0] if values else ""
+
+
 def validate_model_parameters(payload, batch=False):
     model = payload["model"]
     spec = model_spec(model)

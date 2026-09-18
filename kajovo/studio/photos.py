@@ -128,6 +128,7 @@ class PhotosPage(QWidget):
         root.addWidget(actions(self.start_button))
         context.models_changed.connect(self.refresh_models)
         self.refresh_templates()
+        self.refresh_models()
 
     def add_paths(self, paths):
         existing = {self.photos.item(i).data(Qt.UserRole) for i in range(self.photos.count())}
@@ -172,18 +173,22 @@ class PhotosPage(QWidget):
         if path:
             self.output.setText(path)
 
-    def refresh_models(self):
-        for widget, values in ((self.image_model, photo_batch.image_edit_model_ids(self.context.models)),
-                               (self.prompt_model, photo_batch.response_prompt_models(self.context.models))):
-            selected = widget.currentData() or (widget.currentText().strip() if widget.isEditable() else None)
+    def refresh_models(self, *_):
+        for widget, usage in (
+            (self.image_model, "photo_edit_batch"),
+            (self.prompt_model, "photo_prompt"),
+        ):
+            values = self.context.models_for_usage(usage)
+            recommended = self.context.recommended_model(usage)
+            widget.blockSignals(True)
             widget.clear()
-            for value in values if self.context.models else []:
+            for value in values:
                 widget.addItem(value, value)
-            if selected and widget.findData(selected) < 0:
-                widget.addItem(str(selected) + " · nedostupný", selected)
-            if selected:
-                widget.setCurrentIndex(widget.findData(selected))
+            widget.setCurrentIndex(widget.findData(recommended) if recommended else -1)
+            widget.blockSignals(False)
         self.refresh_image_options()
+        if self.context.models and not self.image_model.currentData():
+            self.notice.setText("Účet nemá model povolený pro Image Edit BATCH podle pevné matice.")
 
     def refresh_image_options(self):
         model = self.image_model.currentData()
@@ -279,6 +284,10 @@ class PhotosPage(QWidget):
         return record
 
     def improve(self):
+        if not self.context.models:
+            self.context.ensure_models()
+            self.notice.setText("Načítám katalog modelů účtu.")
+            return
         prompt = self.prompt.toPlainText()
         model = self.prompt_model.currentData()
         if not prompt.strip() or model not in self.context.models:
@@ -296,6 +305,10 @@ class PhotosPage(QWidget):
             self.prompt.setPlainText(self.professional.original_prompt)
 
     def start(self):
+        if not self.context.models:
+            self.context.ensure_models()
+            self.notice.setText("Načítám katalog modelů účtu.")
+            return
         paths = [item.data(Qt.UserRole) for item in self.photos.selectedItems()]
         model = self.image_model.currentData()
         prompt = self.prompt.toPlainText()
