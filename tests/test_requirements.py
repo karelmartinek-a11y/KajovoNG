@@ -61,8 +61,11 @@ def test_exact_instructions():
     for stage, instruction in zip(stages, blocks[1:], strict=True):
         expected = blocks[0] + "\n\n" + instruction
         if stage in ("A3_FILE", "B3_FILE"):
-            assert subject.stage_instructions(stage).startswith(expected + "\n\n")
-            assert "500 řádků" in subject.stage_instructions(stage)
+            actual = subject.stage_instructions(stage)
+            assert actual.startswith(expected + "\n\n")
+            assert "jediné úplné" in actual
+            assert "chunk_index=0" in actual
+            assert "500 řádků" not in actual
         else:
             assert subject.stage_instructions(stage) == expected
     with pytest.raises(ValueError):
