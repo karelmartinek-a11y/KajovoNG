@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -13,7 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from .model_registry import model_ids, model_spec
+from PIL import Image, UnidentifiedImageError
+
+from .batch_submit import exact_batch_matches
+from .model_registry import model_spec, models_for_usage
 from .utils import atomic_write_text
 
 IMAGE_EDIT_ENDPOINT = "/v1/images/edits"
@@ -31,6 +35,9 @@ class PhotoBatchItem:
     status: str = "pending"
     output_path: str = ""
     output_sha256: str = ""
+    output_width: int = 0
+    output_height: int = 0
+    output_format_detected: str = ""
     error_message: str = ""
 
 
@@ -102,49 +109,34 @@ def _is_image_edit_model(model: str) -> bool:
 
 
 def image_edit_model_ids(available_models: Iterable[str] | None = None) -> list[str]:
-    available = set(available_models or ())
-    result = [
-        model
-        for model in model_ids()
-        if _is_image_edit_model(model) and (not available or model in available)
-    ]
-    preferred = {
-        name: index
-        for index, name in enumerate(
-            (
-                "gpt-image-2.5-sunburst",
-                "gpt-image-2.5-sunburst-2026-09-08",
-                "gpt-image-2.5-flare",
-                "gpt-image-2.5-flare-2026-09-08",
-                "gpt-image-2",
-                "gpt-image-2-2026-04-21",
-                "gpt-image-1.5",
-                "gpt-image-1.5-2025-12-16",
-            )
-        )
-    }
-    return sorted(result, key=lambda value: (preferred.get(value, 1000), value))
+    return models_for_usage(available_models, "photo_edit_batch")
 
 
 def response_prompt_models(available_models: Iterable[str] | None = None) -> list[str]:
-    available = set(available_models or ())
-    result = []
-    for model in model_ids():
-        spec = model_spec(model)
-        if (
-            not spec["deprecated"]
-            and spec["responses"]
-            and "structured_outputs" in spec["features"]
-            and (not available or model in available)
-        ):
-            result.append(model)
-    preferred = {
-        name: index
-        for index, name in enumerate(
-            ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.4-mini")
-        )
-    }
-    return sorted(result, key=lambda value: (preferred.get(value, 1000), value))
+    return models_for_usage(available_models, "photo_prompt")
+
+
+def inspect_photo_bytes(data: bytes, expected_format: str | None = None) -> dict:
+    if not data or len(data) > 100 * 1024 * 1024:
+        raise ValueError("Obrázek je prázdný nebo překračuje 100 MB.")
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format not in {"PNG", "JPEG", "WEBP"} or getattr(image, "n_frames", 1) != 1:
+                raise ValueError("Použijte statický PNG, JPEG nebo WebP.")
+            if image.width * image.height > 64_000_000:
+                raise ValueError("Obrázek překračuje aplikační limit 64 MP.")
+            info = {"format": image.format, "width": image.width, "height": image.height}
+            image.verify()
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise ValueError("Obrázek není úplný nebo jej nelze dekódovat.") from exc
+    expected = {"png": "PNG", "jpeg": "JPEG", "jpg": "JPEG", "webp": "WEBP"}.get(
+        str(expected_format or "").lower()
+    )
+    if expected and info["format"] != expected:
+        raise ValueError(f"Výsledek má formát {info['format']}, očekáván byl {expected}.")
+    return info
 
 
 def validate_source_image(path: str | Path) -> Path:
@@ -153,6 +145,13 @@ def validate_source_image(path: str | Path) -> Path:
         raise ValueError(f"Neplatná nebo nepodporovaná fotografie: {source}")
     if not 0 < source.stat().st_size <= 100 * 1024 * 1024:
         raise ValueError(f"Neplatná velikost fotografie: {source.name}")
+    expected = {
+        ".png": "png",
+        ".jpg": "jpeg",
+        ".jpeg": "jpeg",
+        ".webp": "webp",
+    }[source.suffix.lower()]
+    inspect_photo_bytes(source.read_bytes(), expected)
     return source
 
 
@@ -448,6 +447,8 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
     save_job(job, log_dir)
 
     report("Odesílám pracovní Image Edit BATCH.", 92)
+    job.status = "submission_unknown"
+    save_job(job, log_dir)
     submitted = ImageEditBatchAdapter(client).submit(job.input_file_id, rows)
     apply_batch_status(job, submitted)
     client._validate_resource_id(job.batch_id)
@@ -470,7 +471,26 @@ def apply_batch_status(job: PhotoBatchJob, payload: dict) -> PhotoBatchJob:
 
 def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJob:
     if not job.batch_id:
-        raise ValueError("Photo Job nemá batch_id.")
+        if job.status != "submission_unknown" or not job.input_file_id:
+            raise ValueError("Photo Job nemá batch_id.")
+        matches = exact_batch_matches(
+            client.list_batches(),
+            job.input_file_id,
+            IMAGE_EDIT_ENDPOINT,
+        )
+        if not matches:
+            raise ValueError(
+                "Neurčitý Image Edit submit zatím nelze přesně dohledat; "
+                "novou dávku neposílejte, aby nevznikl duplicitní placený běh."
+            )
+        if len(matches) != 1:
+            raise ValueError(
+                "Neurčitý Image Edit submit odpovídá více dávkám; "
+                "automatické přiřazení není bezpečné."
+            )
+        apply_batch_status(job, matches[0])
+        if not job.batch_id:
+            raise ValueError("Dohledaná dávka nemá platné batch_id.")
     apply_batch_status(job, client.retrieve_batch(job.batch_id))
     save_job(job, log_dir)
     return job
@@ -544,6 +564,7 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
                 continue
             try:
                 binary = base64.b64decode(data[0]["b64_json"], validate=True)
+                image_info = inspect_photo_bytes(binary, job.output_format)
             except (ValueError, TypeError) as exc:
                 item.status = "failed"
                 item.error_message = str(exc)
@@ -563,6 +584,9 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             _atomic_bytes(target, binary)
             item.output_path = str(target)
             item.output_sha256 = hashlib.sha256(binary).hexdigest()
+            item.output_width = int(image_info["width"])
+            item.output_height = int(image_info["height"])
+            item.output_format_detected = str(image_info["format"])
             item.status = "downloaded"
             item.error_message = ""
             if reporter:

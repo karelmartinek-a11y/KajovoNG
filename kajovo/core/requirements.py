@@ -29,17 +29,12 @@ def stage_instructions(stage: str, *, batch: bool = False) -> str:
     if stage not in _STAGE_INSTRUCTIONS:
         raise ValueError(f"Neznámá fáze: {stage}")
     instructions = CORE_INSTRUCTIONS + "\n\n" + _STAGE_INSTRUCTIONS[stage]
-    if stage in ("A3_FILE", "B3_FILE") and batch:
+    if stage in ("A3_FILE", "B3_FILE"):
         instructions += (
-            "\n\nDávkové dodání: vrať celé znění souboru v jediné úplné části, "
-            "bez pokračování. Obsah nezkracuj ani nevynechávej."
-        )
-    elif stage in ("A3_FILE", "B3_FILE"):
-        instructions += (
-            "\n\nTechnické dělení výstupu: jeden chunk smí obsahovat nejvýše "
-            "500 řádků obsahu souboru. Delší soubor vrať v navazujících chunkech "
-            "podle předepsaného kontraktu; zachovej úplný obsah, pořadí a návaznost "
-            "bez vynechání nebo opakování řádků."
+            "\n\nSouborové dodání: vrať celé znění cílového souboru v jediné úplné "
+            "části. Nic nezkracuj, nevynechávej a nepokračuj dalším response. "
+            "Objekt chunking musí přesně uvádět chunk_index=0, chunk_count=1, "
+            "has_more=false a next_chunk_index=null."
         )
     return instructions
 

@@ -150,15 +150,17 @@ def structure_response_format(contract: str) -> Dict[str, Any]:
 
 
 def file_response_format(contract: str, path: str, chunk_index: int, action=None) -> Dict[str, Any]:
+    if chunk_index != 0:
+        raise ValueError("Souborový kontrakt vyžaduje jeden úplný artefakt s chunk_index=0.")
     properties = {
         "contract": {"type": "string", "enum": [contract]},
         "path": {"type": "string", **({"enum": [path]} if path is not None else {})},
         "content": {"type": "string"},
         "chunking": {"type": "object", "properties": {
-            "chunk_index": {"type": "integer", "enum": [chunk_index]},
-            "chunk_count": {"type": "integer", "minimum": 1},
-            "has_more": {"type": "boolean"},
-            "next_chunk_index": {"type": ["integer", "null"], "enum": [chunk_index + 1, None]},
+            "chunk_index": {"type": "integer", "enum": [0]},
+            "chunk_count": {"type": "integer", "enum": [1]},
+            "has_more": {"type": "boolean", "enum": [False]},
+            "next_chunk_index": {"type": "null"},
         }, "required": ["chunk_index", "chunk_count", "has_more", "next_chunk_index"], "additionalProperties": False},
     }
     if action is not None:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from PIL import Image
 
 from kajovo.core.model_registry import model_spec
 from kajovo.core.photo_batch import (
@@ -19,6 +21,12 @@ from kajovo.core.photo_batch import (
 )
 from kajovo.core.photo_prompt import professionalize_payload, professionalize_prompt
 from kajovo.core.photo_templates import PhotoTemplateStore
+
+
+def _image_bytes(fmt="PNG"):
+    stream = io.BytesIO()
+    Image.new("RGB", (8, 6), (120, 130, 140)).save(stream, format=fmt)
+    return stream.getvalue()
 
 
 def test_builtin_templates_are_visible_and_immutable(tmp_path):
@@ -128,7 +136,7 @@ def test_image_batch_adapter_performs_one_working_post_only():
 
 def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
     source = tmp_path / "room.jpg"
-    source.write_bytes(b"original-jpeg")
+    source.write_bytes(_image_bytes("JPEG"))
     output_dir = tmp_path / "out"
     log_dir = tmp_path / "log"
     job = new_job(
@@ -149,7 +157,7 @@ def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
     item = job.items[0]
     job.batch_id = "batch_test"
     job.output_file_id = "file_output"
-    generated = b"fake-png-bytes"
+    generated = _image_bytes("PNG")
     line = {
         "custom_id": item.custom_id,
         "response": {"status_code": 200, "body": {"data": [{"b64_json": base64.b64encode(generated).decode()}]}},
@@ -169,11 +177,44 @@ def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
     target = Path(result.items[0].output_path)
     assert target.name == "room_edited.png"
     assert target.read_bytes() == generated
+    assert result.items[0].output_width == 8
+    assert result.items[0].output_height == 6
+    assert result.items[0].output_format_detected == "PNG"
+
+
+def test_corrupt_image_payload_is_not_marked_downloaded(tmp_path):
+    source = tmp_path / "room.jpg"
+    source.write_bytes(_image_bytes("JPEG"))
+    job = new_job(
+        source_paths=[str(source)], human_prompt="x", professional_prompt="", final_prompt="x",
+        prompt_source="manual", template_id="", prompt_model="", prompt_response_id="",
+        image_model=_image_model(), quality="high", size="auto", output_format="png",
+        output_dir=str(tmp_path / "out"),
+    )
+    job.batch_id = "batch_bad_image"
+    job.output_file_id = "file_bad_image"
+    item = job.items[0]
+    line = {
+        "custom_id": item.custom_id,
+        "response": {"status_code": 200, "body": {
+            "data": [{"b64_json": base64.b64encode(b"not-an-image").decode()}]
+        }},
+    }
+    client = Mock()
+    client.retrieve_batch.return_value = {
+        "status": "completed", "output_file_id": "file_bad_image",
+        "request_counts": {"total": 1, "completed": 1, "failed": 0},
+    }
+    client.file_content.return_value = (json.dumps(line) + "\n").encode()
+    result = download_results(client, job, tmp_path / "log")
+    assert result.status == "failed"
+    assert result.items[0].status == "failed"
+    assert not list((tmp_path / "out").glob("*_edited.png"))
 
 
 def test_invalid_jsonl_is_not_silently_ignored(tmp_path):
     source = tmp_path / "room.jpg"
-    source.write_bytes(b"source")
+    source.write_bytes(_image_bytes("JPEG"))
     job = new_job(
         source_paths=[str(source)], human_prompt="x", professional_prompt="", final_prompt="x",
         prompt_source="manual", template_id="", prompt_model="", prompt_response_id="",

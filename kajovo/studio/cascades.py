@@ -68,7 +68,7 @@ class CascadesPage(QWidget):
         body = vertical(detail)
         self.step_form = Form()
         self.title = self.step_form.text("cascade.step.title", "Název kroku")
-        self.model = self.step_form.text("cascade.step.model", "Přesný model kroku")
+        self.model = self.step_form.choice("cascade.step.model", "Model kroku", [])
         self.context_id = self.step_form.text("cascade.step.context", "Sdílený kontext")
         self.deterministic = self.step_form.check("cascade.step.deterministic", "Deterministický krok")
         self.inherit_temperature = self.step_form.check("cascade.step.default_temperature", "Použít výchozí teplotu modelu", True)
@@ -110,9 +110,21 @@ class CascadesPage(QWidget):
                                action("cascade.save", "Uložit", self.save),
                                action("cascade.save_as", "Uložit jako", lambda: self.save(force_path=True)),
                                action("cascade.start", "Spustit kaskádu", self.start, "primary")))
+        context.models_changed.connect(self.refresh_models)
+        self.refresh_models()
 
     def selected(self):
         return self.definition.step_by_id(self.current_id) if self.current_id else None
+
+    def refresh_models(self, *_):
+        values = self.context.models_for_usage("cascade")
+        recommended = self.context.recommended_model("cascade")
+        self.model.blockSignals(True)
+        self.model.clear()
+        for value in values:
+            self.model.addItem(value, value)
+        self.model.setCurrentIndex(self.model.findData(recommended) if recommended else -1)
+        self.model.blockSignals(False)
 
     def draw_steps(self, selected=None):
         self.loading = True
@@ -136,7 +148,8 @@ class CascadesPage(QWidget):
         step = self.selected()
         if step:
             self.title.setText(step.title)
-            self.model.setText(step.model)
+            index = self.model.findData(step.model)
+            self.model.setCurrentIndex(index if index >= 0 else -1)
             self.context_id.setText(step.context_id)
             self.deterministic.setChecked(step.deterministic)
             self.inherit_temperature.setChecked(step.temperature is None)
@@ -192,7 +205,9 @@ class CascadesPage(QWidget):
         step = self.selected()
         if step:
             step.title = self.title.text()
-            step.model = self.model.text().strip()
+            selected_model = self.model.currentData()
+            if selected_model:
+                step.model = selected_model
             step.context_id = self.context_id.text()
             step.deterministic = self.deterministic.isChecked()
             step.temperature = None if self.inherit_temperature.isChecked() else self.temperature.value()
@@ -203,7 +218,10 @@ class CascadesPage(QWidget):
 
     def add_step(self):
         self.commit_step(redraw=False)
-        step = CascadeStep(title=f"Krok {len(self.definition.steps) + 1}", model=self.context.settings.default_model)
+        step = CascadeStep(
+            title=f"Krok {len(self.definition.steps) + 1}",
+            model=self.context.recommended_model("cascade"),
+        )
         self.definition.steps.append(step)
         self.draw_steps(step.id)
 
@@ -331,7 +349,11 @@ class CascadesPage(QWidget):
         if not self.context.api_key or not self.project.text().strip():
             self.validation.setText("Vyplňte projekt a uložte přístupový klíč.")
             return
-        if any(step.model not in self.context.models for step in self.definition.steps):
+        if not self.context.models:
+            self.context.ensure_models()
+            self.validation.setText("Načítám katalog modelů účtu.")
+            return
+        if any(step.model not in self.context.models_for_usage("cascade") for step in self.definition.steps):
             self.validation.setText("Některý krok používá model nedostupný v katalogu účtu.")
             return
         cfg = CascadeRunConfig(self.project.text(), copy.deepcopy(self.definition), self.input.text(), self.output.text(), new_run_id())

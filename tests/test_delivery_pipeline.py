@@ -385,34 +385,23 @@ def test_quality_gate_added_file_is_really_delivered(tmp_path, mode, batch):
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 @pytest.mark.parametrize("quality", [False, True])
-def test_live_file_chunks_keep_order_content_and_canonical_context(tmp_path, mode, quality):
+def test_live_file_delivery_returns_one_complete_file_without_model_chunking(tmp_path, mode, quality):
     worker, preparation, file = _scenario(tmp_path, mode, False, quality)
-    first, last = deepcopy(file), deepcopy(file)
-    first.update(content="První část\n" * 500,
-                 chunking={"chunk_index": 0, "chunk_count": 2, "has_more": True, "next_chunk_index": 1})
-    last.update(content="Dokončení\n" * 250,
-                chunking={"chunk_index": 1, "chunk_count": 2, "has_more": False, "next_chunk_index": None})
-    client, calls = _client([*preparation, first, last])
+    file["content"] = "".join(f"Řádek {index}\n" for index in range(750))
+    client, calls = _client([*preparation, file])
     results, errors = _run(worker, client)
     assert not errors and results[0]["status"] == "files_complete_unverified"
-    assert Path(worker.cfg.out_dir, file["path"]).read_text(encoding="utf-8") == first["content"] + last["content"]
-    assert calls[-1]["previous_response_id"] == f"resp_{len(preparation)}"
-    report = json.loads((Path(worker.log.paths.run_dir) / "cost_context_report.json").read_text("utf-8"))
-    rows = list(report["requests"].values())
-    assert len(rows) == len(calls)
-    continued = next(row for row in rows if row.get("response_id") == f"resp_{len(calls) - 1}")
-    assert continued["input_tokens_exact"] and continued["input_tokens"] == 1000
-    assert continued["status"] == "completed" and not continued["blockers"]
-    for index, call in enumerate(calls[-2:]):
-        assert "500 řádků" in call["instructions"]
-        text = "".join(part["text"] for message in call["input"] for part in message["content"]
-                       if part["type"] == "input_text")
-        context = json.loads(text.split("\n")[1])
-        if index == 0:
-            assert context["file_context"]["working_context"]["target_file"]["path"] == file["path"]
-        else:
-            assert "file_context_hash" in context and "file_context" not in context
-        assert "specification" not in context
+    assert Path(worker.cfg.out_dir, file["path"]).read_text(encoding="utf-8") == file["content"]
+    assert len(calls) == len(preparation) + 1
+    final = calls[-1]
+    assert "jediné úplné" in final["instructions"]
+    assert "500 řádků" not in final["instructions"]
+    chunk = final["text"]["format"]["schema"]["properties"]["chunking"]["properties"]
+    assert chunk["chunk_index"]["enum"] == [0]
+    assert chunk["chunk_count"]["enum"] == [1]
+    assert chunk["has_more"]["enum"] == [False]
+    assert chunk["next_chunk_index"]["type"] == "null"
+    assert "previous_response_id" not in final
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])

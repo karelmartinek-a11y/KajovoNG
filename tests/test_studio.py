@@ -64,13 +64,13 @@ def test_batch_clears_incompatible_output_diagnostics(studio):
     assert not workbench.widgets["diag_windows_out"].isEnabled()
 
 
-def test_missing_saved_model_is_not_silently_substituted(studio):
+def test_catalog_reload_selects_recommended_compatible_model(studio):
     state = studio.workbench.state()
     state["model"] = "missing-model"
     studio.workbench.apply_state(state)
-    studio.workbench.refresh_models()
     assert studio.workbench.state()["model"] == "missing-model"
-    assert not studio.workbench.start_button.isEnabled()
+    studio.workbench.refresh_models()
+    assert studio.workbench.state()["model"] == "gpt-4.1"
 
 
 def test_failed_key_persistence_does_not_change_account(studio, monkeypatch):
@@ -273,8 +273,9 @@ def test_photo_submission_uses_only_explicit_selection(studio, monkeypatch, tmp_
     from PySide6.QtCore import Qt
     page = studio.photos
     paths = [tmp_path / "first.png", tmp_path / "second.png"]
+    from PIL import Image
     for path in paths:
-        path.write_bytes(b"test")
+        Image.new("RGB", (8, 6), (10, 20, 30)).save(path, format="PNG")
     page.add_paths([str(path) for path in paths])
     page.photos.clearSelection()
     page.photos.item(1).setSelected(True)
