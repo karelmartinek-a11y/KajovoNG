@@ -3,7 +3,17 @@ from unittest.mock import Mock
 
 import pytest
 
-from kajovo.core.contracts import ContractError, parse_json_strict, validate_paths
+from kajovo.core.contracts import (
+    ContractError,
+    file_response_format,
+    parse_json_strict,
+    validate_paths,
+)
+
+
+def test_file_response_contract_rejects_transport_chunking():
+    with pytest.raises(ValueError, match="chunk_index=0"):
+        file_response_format("A3_FILE", "app.py", 1)
 
 
 @pytest.mark.parametrize("text", ['{"x":1,"x":2}', '{"x":NaN}', '{"x":Infinity}', 'prefix {"x":NaN} suffix', '{"x":1e999}'])
