@@ -17,6 +17,7 @@ from kajovo.core.photo_batch import (
     image_edit_model_ids,
     image_edit_row,
     new_job,
+    refresh_job,
     validate_image_edit_rows,
 )
 from kajovo.core.photo_prompt import professionalize_payload, professionalize_prompt
@@ -137,7 +138,8 @@ def test_image_batch_adapter_performs_one_working_post_only():
 
 def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
     source = tmp_path / "room.jpg"
-    source.write_bytes(_image_bytes("JPEG"))
+    original = _image_bytes("JPEG")
+    source.write_bytes(original)
     output_dir = tmp_path / "out"
     log_dir = tmp_path / "log"
     job = new_job(
@@ -173,7 +175,7 @@ def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
     }
     client.file_content.return_value = (json.dumps(line) + "\n").encode()
     result = download_results(client, job, log_dir)
-    assert source.read_bytes() == b"original-jpeg"
+    assert source.read_bytes() == original
     assert result.items[0].status == "downloaded"
     target = Path(result.items[0].output_path)
     assert target.name == "room_edited.png"
@@ -211,6 +213,40 @@ def test_corrupt_image_payload_is_not_marked_downloaded(tmp_path):
     assert result.status == "failed"
     assert result.items[0].status == "failed"
     assert not list((tmp_path / "out").glob("*_edited.png"))
+
+
+def test_unknown_photo_batch_submit_recovers_exact_remote_match(tmp_path):
+    source = tmp_path / "room.jpg"
+    source.write_bytes(_image_bytes("JPEG"))
+    job = new_job(
+        source_paths=[str(source)], human_prompt="x", professional_prompt="", final_prompt="x",
+        prompt_source="manual", template_id="", prompt_model="", prompt_response_id="",
+        image_model=_image_model(), quality="high", size="auto", output_format="png",
+        output_dir=str(tmp_path / "out"),
+    )
+    job.status = "submission_unknown"
+    job.input_file_id = "file_input"
+    client = Mock()
+    client.list_batches.return_value = [{
+        "id": "batch_recovered",
+        "input_file_id": "file_input",
+        "endpoint": "/v1/images/edits",
+        "status": "validating",
+        "request_counts": {"total": 1, "completed": 0, "failed": 0},
+    }]
+    client.retrieve_batch.return_value = {
+        "id": "batch_recovered",
+        "status": "in_progress",
+        "request_counts": {"total": 1, "completed": 0, "failed": 0},
+    }
+
+    recovered = refresh_job(client, job, tmp_path / "log")
+
+    assert recovered.batch_id == "batch_recovered"
+    assert recovered.status == "in_progress"
+    client.list_batches.assert_called_once_with()
+    client.retrieve_batch.assert_called_once_with("batch_recovered")
+    assert (tmp_path / "log" / "PHOTO" / job.job_id / "photo_job.json").is_file()
 
 
 def test_invalid_jsonl_is_not_silently_ignored(tmp_path):

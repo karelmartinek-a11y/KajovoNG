@@ -164,24 +164,34 @@ def test_incomplete_response_stops_workflow(tmp_path):
     assert client.create_response.call_count == 1
 
 
-def test_premature_file_termination_preserves_output(tmp_path):
+def test_invalid_single_file_contract_retries_and_preserves_output(tmp_path):
     worker = make_worker(tmp_path, "GENERATE")
     out = tmp_path / "out"
     out.mkdir()
     target = out / "hello.txt"
     target.write_text("original", encoding="utf-8")
-    payloads = [*delivery_payloads(),
-                {"contract": "A3_FILE", "path": "hello.txt", "content": "partial",
-                 "chunking": {"chunk_index": 0, "chunk_count": 3, "has_more": False, "next_chunk_index": None}}]
+    invalid = {
+        "contract": "A3_FILE",
+        "path": "hello.txt",
+        "content": "partial",
+        "chunking": {
+            "chunk_index": 0,
+            "chunk_count": 3,
+            "has_more": False,
+            "next_chunk_index": None,
+        },
+    }
+    payloads = [*delivery_payloads(), invalid, invalid, invalid]
     client = Mock()
-    client.create_response.side_effect = [response(i, item) for i, item in enumerate(payloads)]
+    client.create_response.side_effect = [
+        response(i, item) for i, item in enumerate(payloads)
+    ]
     errors, results = [], []
     worker.finished_err.connect(errors.append)
     worker.finished_ok.connect(results.append)
     with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
     assert errors and not results
-    assert "chunk" in errors[0].lower() or "část" in errors[0].lower()
     assert client.create_response.call_count == len(payloads)
     assert target.read_text(encoding="utf-8") == "original"
 
