@@ -248,14 +248,17 @@ def test_invalid_preserved_coverage(field, value):
 
 
 @pytest.mark.parametrize("stage", ["A3", "B3", "A3_FILE", "B3_FILE"])
-def test_batch_requires_single_complete_file_without_live_line_limit(stage):
+def test_live_and_batch_require_single_complete_file_without_line_chunking(stage):
     live = subject.stage_instructions(stage)
     batch = subject.stage_instructions(stage, batch=True)
-    assert "500 řádků" in live
-    assert "500" not in batch
-    assert "v jediné úplné části" in batch
-    assert "bez pokračování" in batch
-    assert batch.startswith(subject.CORE_INSTRUCTIONS + "\n\n")
+    for instructions in (live, batch):
+        assert "500 řádků" not in instructions
+        assert "v jediné úplné části" in instructions
+        assert "chunk_index=0" in instructions
+        assert "chunk_count=1" in instructions
+        assert "has_more=false" in instructions
+        assert "next_chunk_index=null" in instructions
+        assert instructions.startswith(subject.CORE_INSTRUCTIONS + "\n\n")
 
 
 def test_batch_does_not_change_preparation_instructions():
