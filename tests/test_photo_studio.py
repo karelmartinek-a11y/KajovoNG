@@ -137,7 +137,8 @@ def test_image_batch_adapter_performs_one_working_post_only():
 
 def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
     source = tmp_path / "room.jpg"
-    source.write_bytes(_image_bytes("JPEG"))
+    original = _image_bytes("JPEG")
+    source.write_bytes(original)
     output_dir = tmp_path / "out"
     log_dir = tmp_path / "log"
     job = new_job(
@@ -173,7 +174,7 @@ def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
     }
     client.file_content.return_value = (json.dumps(line) + "\n").encode()
     result = download_results(client, job, log_dir)
-    assert source.read_bytes() == b"original-jpeg"
+    assert source.read_bytes() == original
     assert result.items[0].status == "downloaded"
     target = Path(result.items[0].output_path)
     assert target.name == "room_edited.png"
