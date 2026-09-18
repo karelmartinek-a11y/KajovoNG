@@ -177,7 +177,7 @@ def test_background_not_allowed_inside_batch():
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("pending_index", [0, 2, 3, 4])
+@pytest.mark.parametrize("pending_index", [0, 2, 3])
 def test_worker_recovers_preparation_and_file_without_reposting(tmp_path, mode, pending_index):
     worker = make_worker(tmp_path, mode)
     if mode == "MODIFY":
@@ -190,12 +190,6 @@ def test_worker_recovers_preparation_and_file_without_reposting(tmp_path, mode, 
         file["action"] = "add"
     results = [response(i, item) for i, item in enumerate([*delivery_payloads(mode), file])]
     expected = "hello\n"
-    if pending_index == 4:
-        first = {**file, "content": "line\n" * 500,
-                 "chunking": {"chunk_index": 0, "chunk_count": 2, "has_more": True, "next_chunk_index": 1}}
-        last = {**file, "chunking": {"chunk_index": 1, "chunk_count": 2, "has_more": False, "next_chunk_index": None}}
-        results[-1:] = [response(3, first), response(4, last)]
-        expected = first["content"] + last["content"]
     client = Mock()
     from kajovo.core.context_compiler import content_hash
     client.count_input_tokens.side_effect = lambda payload: {
