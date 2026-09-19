@@ -1598,6 +1598,203 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
     return result
 
 
+
+def _repeat_v3_batch(
+    client,
+    run_dir,
+    state,
+    source,
+    selected,
+    feedback,
+):
+    if state.get("submission_unknown") or state.get("pending_batch_submission"):
+        raise ContractError(
+            "Neznámý submit musí být dohledán před novým odesláním."
+        )
+    staged_files = list(state.get("staged_files") or [])
+    verified_artifacts = _v3_verified_artifacts(
+        run_dir, source, staged_files
+    )
+    if not selected <= set(verified_artifacts):
+        raise ContractError(
+            "Targeted repair vyžaduje existující validovaný staged artefakt."
+        )
+
+    originals = {}
+    bundle = RunBundle(Path(run_dir))
+    root = Path(run_dir).resolve()
+    for artifact in bundle.artifacts():
+        if artifact.get("role") != "in_project_file":
+            continue
+        metadata = artifact.get("metadata") or {}
+        rel = str(
+            metadata.get("relative_path")
+            or artifact.get("reconstruction_role")
+            or ""
+        )
+        path_in_bundle = artifact.get("path_in_bundle")
+        if not rel or not isinstance(path_in_bundle, str):
+            continue
+        source_path = (root / path_in_bundle).resolve()
+        try:
+            source_path.relative_to(root)
+        except ValueError:
+            continue
+        if not source_path.is_file():
+            continue
+        try:
+            originals[rel] = source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+
+    current_by_path = {
+        str(row.get("path")): row
+        for row in staged_files
+        if isinstance(row, dict) and row.get("path")
+    }
+    expected_target_hashes = {
+        path: current_by_path[path].get("expected_target_hash")
+        for path in selected
+        if path in current_by_path
+    }
+    ui = dict(state.get("ui_state") or {})
+    cfg = _v3_cfg_namespace(state)
+    model = str(source["requests"][0]["body"]["model"])
+    temperature = source["requests"][0]["body"].get("temperature")
+    repair_instruction = str(feedback or "").strip() or (
+        "Znovu vyrob pouze vybraný cílový soubor podle jeho zmrazeného kontraktu."
+    )
+    manifest = build_manifest(
+        Path(run_dir).name,
+        str(ui.get("prompt") or source["snapshot"].get("prompt") or ""),
+        source["snapshot"]["plan"],
+        source["snapshot"]["structure"],
+        model,
+        temperature,
+        sorted(selected),
+        requirements=source["snapshot"]["requirements"],
+        maximum_quality=bool(source["snapshot"].get("maximum_quality")),
+        mode=source["mode"],
+        originals=originals,
+        recovery_instruction=repair_instruction,
+        run_config=cfg,
+        expected_target_hashes=expected_target_hashes,
+        verified_artifacts=verified_artifacts,
+    )
+    # A repair is terminal for exactly the explicitly selected targets; it must
+    # not accidentally continue unrelated deferred tasks from the source batch.
+    manifest["deferred_paths"] = []
+    manifest["blocked_requested_paths"] = []
+
+    repo, orders = _reserve_v3_followup(run_dir, state, manifest)
+    data = encode_requests(manifest)
+    request_path = (
+        Path(run_dir)
+        / "requests"
+        / f"repair_{uuid.uuid4().hex[:12]}.jsonl"
+    )
+    request_path.write_bytes(data)
+    for row in manifest["requests"]:
+        client.validate_access(row["body"], batch=True)
+    uploaded = client.upload_file(str(request_path), purpose="batch")
+    input_file_id = str(uploaded.get("id") or "")
+    if not input_file_id:
+        raise ContractError("Targeted repair upload nemá Files ID.")
+
+    from .orchestration.batch_manifest import (
+        from_file_manifest,
+        transition as transition_batch_manifest,
+    )
+    v4 = from_file_manifest(
+        Path(run_dir).name,
+        manifest,
+        wave_no=int(source.get("wave_no") or 0),
+    )
+    v4 = transition_batch_manifest(
+        v4, "input_uploaded", input_file_id=input_file_id
+    )
+    v4 = transition_batch_manifest(v4, "submitting")
+    state.setdefault("batch_manifests_v4", {})[v4["manifest_id"]] = v4
+    state["pending_batch_submission"] = {
+        "input_file_id": input_file_id,
+        "manifest": manifest,
+        "manifest_v4_id": v4["manifest_id"],
+    }
+    state["submission_input_file_id"] = input_file_id
+    state["submission_endpoint"] = "/v1/responses"
+    state["submission_jsonl_sha256"] = hashlib.sha256(data).hexdigest()
+    state["submission_unknown"] = True
+    atomic_write_text(
+        str(Path(run_dir) / "run_state.json"),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+    try:
+        batch = submit_verified_batch(
+            client, input_file_id, manifest["requests"]
+        )
+    except Exception as exc:
+        definite_reject = (
+            getattr(exc, "request_sent", None) is False
+            or getattr(exc, "status_code", None)
+            in {400, 401, 403, 404, 422, 429}
+        )
+        if definite_reject:
+            for order in orders.values():
+                repo.release(order.budget_reservation_id)
+            v4 = transition_batch_manifest(v4, "failed")
+            state["submission_unknown"] = False
+        else:
+            for order in orders.values():
+                repo.mark_submitted(
+                    order.budget_reservation_id, None, unknown=True
+                )
+            v4 = transition_batch_manifest(v4, "submission_unknown")
+            state["status"] = "submission_unknown"
+        state["batch_manifests_v4"][v4["manifest_id"]] = v4
+        atomic_write_text(
+            str(Path(run_dir) / "run_state.json"),
+            json.dumps(state, ensure_ascii=False, indent=2),
+        )
+        raise
+
+    batch_id = str(batch.get("id") or "")
+    if not batch_id:
+        for order in orders.values():
+            repo.mark_submitted(
+                order.budget_reservation_id, None, unknown=True
+            )
+        state["status"] = "submission_unknown"
+        state["submission_unknown"] = True
+        v4 = transition_batch_manifest(v4, "submission_unknown")
+        state["batch_manifests_v4"][v4["manifest_id"]] = v4
+        atomic_write_text(
+            str(Path(run_dir) / "run_state.json"),
+            json.dumps(state, ensure_ascii=False, indent=2),
+        )
+        raise ContractError(
+            "Targeted repair nemá potvrzené provider ID; nový submit je zablokován."
+        )
+
+    for order in orders.values():
+        repo.mark_submitted(
+            order.budget_reservation_id, batch_id, unknown=False
+        )
+    v4 = transition_batch_manifest(
+        v4, "submitted", provider_batch_id=batch_id
+    )
+    state["batch_manifests_v4"][v4["manifest_id"]] = v4
+    state.setdefault("generate_batches", {})[batch_id] = manifest
+    state.setdefault("batch_records", {})[batch_id] = batch
+    state.pop("pending_batch_submission", None)
+    state["submission_unknown"] = False
+    state["status"] = "batch_pending"
+    atomic_write_text(
+        str(Path(run_dir) / "run_state.json"),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+    return {"batch_id": batch_id, "files": len(manifest["requests"])}
+
+
 def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
     from .requirements import stage_instructions
 
@@ -1610,6 +1807,16 @@ def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
     encode_requests(source)
     if source.get("version") != 3:
         raise ContractError("Legacy dávku lze importovat; nové odeslání vyžaduje implementační přípravu a manifest v3.")
+    selected = set(paths)
+    if (
+        (source.get("snapshot") or {}).get("structure", {}).get("contract")
+        == "IMPLEMENTATION_GRAPH_V3"
+    ):
+        if not selected or not selected <= set(source["expected"].values()):
+            raise ContractError("Vyberte pouze soubory z manifestu dávky.")
+        return _repeat_v3_batch(
+            client, run_dir, state, source, selected, feedback
+        )
     if state.get("submission_unknown") or state.get("pending_batch_submission") or state.get("status") == "submission_unknown":
         raise ContractError("Neznámý submit musí být dohledán před novým odesláním.")
     selected = set(paths)
