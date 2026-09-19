@@ -590,11 +590,8 @@ def _reserve_photo_submit(job, rows, log_dir):
 
 
 def _mark_photo_submission(job, rows, log_dir, provider_id=None, *, unknown):
-    repo, order = _photo_work_order(job, rows)[:2] and (
-        _photo_repo(log_dir),
-        _photo_work_order(job, rows)[1],
-    )
-    repo.mark_submitted(
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    _photo_repo(log_dir).mark_submitted(
         order.budget_reservation_id,
         provider_id,
         unknown=unknown,
@@ -695,12 +692,40 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
     client._validate_resource_id(job.input_file_id)
     save_job(job, log_dir)
 
+    _reserve_photo_submit(job, rows, log_dir)
     report("Odesílám pracovní Image Edit BATCH.", 92)
     job.status = "submission_unknown"
     save_job(job, log_dir)
-    submitted = ImageEditBatchAdapter(client).submit(job.input_file_id, rows)
+    try:
+        submitted = ImageEditBatchAdapter(client).submit(job.input_file_id, rows)
+    except Exception as exc:
+        definite_reject = (
+            getattr(exc, "request_sent", None) is False
+            or getattr(exc, "status_code", None)
+            in {400, 401, 403, 404, 422, 429}
+        )
+        if definite_reject:
+            _release_photo_reservation(job, rows, log_dir)
+            job.status = "failed"
+        else:
+            _mark_photo_submission(
+                job, rows, log_dir, None, unknown=True
+            )
+            job.status = "submission_unknown"
+        save_job(job, log_dir)
+        raise
     apply_batch_status(job, submitted)
+    if not job.batch_id:
+        _mark_photo_submission(job, rows, log_dir, None, unknown=True)
+        job.status = "submission_unknown"
+        save_job(job, log_dir)
+        raise ValueError(
+            "Image Edit BATCH nemá potvrzené provider ID; nový submit je zablokován."
+        )
     client._validate_resource_id(job.batch_id)
+    _mark_photo_submission(
+        job, rows, log_dir, job.batch_id, unknown=False
+    )
     save_job(job, log_dir)
     report(f"BATCH vytvořen: {job.batch_id}", 100)
     return job
@@ -740,6 +765,21 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
         apply_batch_status(job, matches[0])
         if not job.batch_id:
             raise ValueError("Dohledaná dávka nemá platné batch_id.")
+        if job.schema_version >= 2:
+            rows = [
+                image_edit_row(
+                    item,
+                    model=job.image_model,
+                    prompt=job.final_prompt,
+                    quality=job.quality,
+                    size=job.size,
+                    output_format=job.output_format,
+                )
+                for item in job.items
+            ]
+            _mark_photo_submission(
+                job, rows, log_dir, job.batch_id, unknown=False
+            )
     apply_batch_status(job, client.retrieve_batch(job.batch_id))
     save_job(job, log_dir)
     return job
@@ -822,6 +862,13 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             item = by_id[cid]
             response = row.get("response") or {}
             body = response.get("body") or {}
+            if job.schema_version >= 2 and isinstance(body, dict):
+                _settle_photo_usage(
+                    job,
+                    cid,
+                    body.get("usage") or {},
+                    log_dir,
+                )
             if row.get("error") or int(response.get("status_code") or 200) >= 400:
                 item.status = "failed"
                 item.error_message = json.dumps(
