@@ -205,6 +205,9 @@ jobs:
       - name: Build with canonical Windows script
         shell: pwsh
         run: .\Build\build_windows.ps1 -Python "python" -AppName "Kajovo"
+      - name: Install release audit tool
+        shell: pwsh
+        run: python -m pip install -c requirements/constraints.txt "pip-audit>=2.7,<3"
       - name: Compatibility and dependency smoke
         shell: pwsh
         run: |
@@ -306,6 +309,9 @@ jobs:
           PYTHON_BIN: python
           APP_NAME: Kajovo
         run: ./Build/build_macos.sh
+      - name: Install release audit tool
+        shell: bash
+        run: python -m pip install -c requirements/constraints.txt 'pip-audit>=2.7,<3'
       - name: Compatibility and dependency smoke
         shell: bash
         run: |
