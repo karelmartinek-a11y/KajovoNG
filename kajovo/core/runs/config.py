@@ -67,6 +67,13 @@ class UiRunConfig:
     auto_repair: str = "off"
     verification_profile_ids: list[str] | None = None
 
+    # QFILE: cesta je důvěryhodný lokální vstup. Pokud chybí, plánovací
+    # request je povolen pouze při explicitním qfile_suggest_path=True.
+    qfile_output_path: str = ""
+    qfile_output_format: str = "txt"
+    qfile_suggest_path: bool = False
+    qfile_plan: dict[str, Any] | None = None
+
     preparation_snapshot: dict[str, Any] | None = None
     completed_hashes: dict[str, str] | None = None
     # Explicitní pokyn opravné větve. Používá se výhradně v nově
