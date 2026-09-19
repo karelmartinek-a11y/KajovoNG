@@ -171,6 +171,123 @@ class OrchestrationRepository:
                 db.rollback()
                 raise
 
+
+    def reserve_many(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        max_cost_microusd: int | None,
+        max_input_tokens: int,
+        max_output_tokens: int,
+        max_paid_requests: int,
+    ) -> None:
+        if not rows:
+            return
+        with self.connect() as db:
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                run_ids: set[str] = set()
+                new_rows: list[dict[str, Any]] = []
+                for row in rows:
+                    existing = db.execute(
+                        "SELECT cost_microusd,input_limit,output_limit FROM reservations WHERE reservation_id=?",
+                        (row["reservation_id"],),
+                    ).fetchone()
+                    expected = (
+                        row["cost_microusd"],
+                        row["input_limit"],
+                        row["output_limit"],
+                    )
+                    if existing:
+                        if tuple(existing) != expected:
+                            raise OrchestrationError(
+                                "RESERVATION_CONFLICT", row["reservation_id"]
+                            )
+                        continue
+                    run = db.execute(
+                        "SELECT run_id FROM work_orders WHERE work_order_hash=?",
+                        (row["work_order_hash"],),
+                    ).fetchone()
+                    if not run:
+                        raise OrchestrationError(
+                            "WORK_ORDER_UNKNOWN", row["work_order_hash"]
+                        )
+                    run_ids.add(str(run[0]))
+                    new_rows.append(row)
+                if len(run_ids) > 1:
+                    raise OrchestrationError(
+                        "BATCH_RUN_MISMATCH",
+                        "Jedna rezervace dávky nesmí míchat různé runy.",
+                    )
+                if not new_rows:
+                    db.commit()
+                    return
+                run_id = next(iter(run_ids))
+                summary = db.execute(
+                    """
+                    SELECT COUNT(*),
+                           COALESCE(SUM(r.input_limit),0),
+                           COALESCE(SUM(r.output_limit),0),
+                           COALESCE(SUM(CASE WHEN r.state='released' THEN 0 ELSE r.cost_microusd END),0)
+                    FROM reservations r
+                    JOIN work_orders w ON w.work_order_hash=r.work_order_hash
+                    WHERE w.run_id=? AND r.state!='released'
+                    """,
+                    (run_id,),
+                ).fetchone()
+                count, input_used, output_used, cost_used = map(int, summary)
+                proposed_input = sum(int(row["input_limit"]) for row in new_rows)
+                proposed_output = sum(int(row["output_limit"]) for row in new_rows)
+                proposed_known_cost = sum(
+                    int(row["cost_microusd"])
+                    for row in new_rows
+                    if row["cost_microusd"] is not None
+                )
+                if count + len(new_rows) > max_paid_requests:
+                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit placených požadavků.")
+                if input_used + proposed_input > max_input_tokens:
+                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit vstupních tokenů.")
+                if output_used + proposed_output > max_output_tokens:
+                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit výstupních tokenů.")
+                if (
+                    max_cost_microusd is not None
+                    and cost_used + proposed_known_cost > max_cost_microusd
+                ):
+                    raise OrchestrationError("BUDGET_EXCEEDED", "Schválený cenový limit.")
+                for row in new_rows:
+                    db.execute(
+                        "INSERT INTO reservations(reservation_id,work_order_hash,state,cost_microusd,input_limit,output_limit,created_at) VALUES(?,?,?,?,?,?,?)",
+                        (
+                            row["reservation_id"],
+                            row["work_order_hash"],
+                            "reserved",
+                            row["cost_microusd"],
+                            row["input_limit"],
+                            row["output_limit"],
+                            _now(),
+                        ),
+                    )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+
+    def release(self, reservation_id: str) -> None:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state FROM reservations WHERE reservation_id=?",
+                (reservation_id,),
+            ).fetchone()
+            if not row or row[0] != "reserved":
+                db.rollback()
+                raise OrchestrationError("RELEASE_UNSAFE", reservation_id)
+            db.execute(
+                "UPDATE reservations SET state='released' WHERE reservation_id=?",
+                (reservation_id,),
+            )
+            db.commit()
+
     def mark_submitted(self, reservation_id: str, provider_id: str | None, *, unknown: bool) -> None:
         state = "unknown" if unknown else "submitted"
         with self.connect() as db:
