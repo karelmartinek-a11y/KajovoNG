@@ -209,7 +209,22 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
         from ..orchestration.ledger import mark_submission, release_reservation
         from ..response_journal import SubmissionUnknown
 
-        if isinstance(exc, (SubmissionUnknown, SubmissionOutcomeUnknown)):
+        confirmed_id = (
+            self._response_journal.confirmed_id(payload)
+            if self._response_journal is not None
+            else ""
+        )
+        if confirmed_id:
+            # Polling may stop or a terminal remote failure may be raised after
+            # the provider already returned a durable Response ID. That is a
+            # known submission, never submission_unknown.
+            mark_submission(
+                self.log,
+                work_order,
+                confirmed_id,
+                unknown=False,
+            )
+        elif isinstance(exc, (SubmissionUnknown, SubmissionOutcomeUnknown)):
             mark_submission(self.log, work_order, None, unknown=True)
         elif (
             getattr(exc, "request_sent", None) is False
