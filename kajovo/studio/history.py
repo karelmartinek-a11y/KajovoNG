@@ -146,7 +146,7 @@ class HistoryPage(QWidget):
         self.model_filter.setPlaceholderText("Model")
         for combo, label, values in (
             (self.mode_filter, "Druh běhu", ["GENERATE", "MODIFY", "QA", "QFILE", "KASKADA", "COMIC"]),
-            (self.status_filter, "Stav", ["completed", "files_complete_unverified", "partial", "failed", "running", "batch_pending", "ready_to_import", "dry_run", "unknown"]),
+            (self.status_filter, "Stav", ["completed", "completed_unverified", "files_complete_unverified", "partial", "failed", "running", "batch_pending", "ready_to_import", "dry_run", "unknown"]),
             (self.transport_filter, "LIVE/BATCH", ["LIVE", "BATCH"]),
         ):
             combo.setAccessibleName(label)
