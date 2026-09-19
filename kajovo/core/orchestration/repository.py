@@ -50,6 +50,12 @@ class OrchestrationRepository:
         db.execute("PRAGMA foreign_keys=ON")
         return db
 
+    def has_run(self, run_id: str) -> bool:
+        with self.connect() as db:
+            return db.execute(
+                "SELECT 1 FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone() is not None
+
     def register_run(
         self,
         run_id: str,
