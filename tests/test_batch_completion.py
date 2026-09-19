@@ -103,7 +103,9 @@ def test_import_archives_staging_not_out_and_keeps_bundle_open_for_publish(tmp_p
         for row in staged_artifacts
     )
     assert not list(Path(worker.cfg.out_dir).glob("**/*")) if Path(worker.cfg.out_dir).exists() else True
-    assert bundle.verify_integrity()["valid"]
+    integrity = bundle.verify_integrity()
+    assert integrity["status"] == "unsealed"
+    assert not integrity["valid"]
     assert bundle.run_record()["status"] == "files_complete_unverified"
 
 
