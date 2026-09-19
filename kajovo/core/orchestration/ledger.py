@@ -114,7 +114,6 @@ def reserve_batch(logger, cfg, client, requests: list[dict[str, Any]],
         raise ContractError("BATCH budget evidence neodpovídá počtu požadavků.")
     ledger = _load(logger)
     candidate = copy.deepcopy(ledger["reservations"])
-    normalized: list[tuple[str, dict[str, Any]]] = []
     for row, supplied in zip(requests, measurements, strict=True):
         body = row["body"]
         measurement = enforce_budget(copy.deepcopy(supplied))
@@ -122,7 +121,6 @@ def reserve_batch(logger, cfg, client, requests: list[dict[str, Any]],
         if key in candidate:
             continue
         candidate[key] = _reservation(body, measurement)
-        normalized.append((key, measurement))
     summary = _summarize(candidate)
     limits = _limits(cfg)
     _check(summary, limits)
