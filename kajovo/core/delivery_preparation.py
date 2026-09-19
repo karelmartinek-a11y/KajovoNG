@@ -68,10 +68,52 @@ def validate_preparation_snapshot(snapshot, mode, maximum_quality):
     data = {key: value for key, value in snapshot.items() if key != "snapshot_hash"}
     if snapshot.get("snapshot_hash") != digest(data):
         raise ContractError("Snímek přípravy byl změněn nebo poškozen.")
-    if snapshot.get("version") != 1 or snapshot.get("mode") != mode:
+    version = snapshot.get("version")
+    if version not in {1, 2} or snapshot.get("mode") != mode:
         raise ContractError("Nepodporovaná verze nebo režim snímku přípravy.")
     if snapshot.get("maximum_quality") is not maximum_quality:
         raise ContractError("ReRun musí zachovat původní Maximum Quality.")
+
+    if version == 2:
+        stage = str(snapshot.get("canonical_stage") or "")
+        prefix = "A" if mode == "GENERATE" else "B"
+        known = (
+            stage in {
+                prefix + "0R",
+                prefix + "1",
+                prefix + "2_SPINE",
+                prefix + "2",
+                prefix + "2Q",
+            }
+            or stage.startswith(prefix + "2_DETAIL_")
+        )
+        if not known or not isinstance(snapshot.get("source_snapshot_hash"), str):
+            raise ContractError(
+                "Snímek V2 neobsahuje známou dokončenou fázi nebo SourcePack hash."
+            )
+        graph = snapshot.get("graph")
+        if stage in {prefix + "2", prefix + "2Q"}:
+            if not isinstance(graph, dict):
+                raise ContractError("Snímek V2 nemá kanonický IMPLEMENTATION_GRAPH_V3.")
+            from .orchestration.preparation import GRAPH_SCHEMA
+            try:
+                jsonschema.Draft202012Validator(GRAPH_SCHEMA).validate(graph)
+            except jsonschema.ValidationError as exc:
+                raise ContractError(
+                    f"Neplatný IMPLEMENTATION_GRAPH_V3 v checkpointu: {exc.message}"
+                ) from exc
+            if (
+                graph.get("mode") != mode
+                or graph.get("source_snapshot_hash")
+                != snapshot.get("source_snapshot_hash")
+            ):
+                raise ContractError(
+                    "IMPLEMENTATION_GRAPH_V3 neodpovídá režimu nebo SourcePacku checkpointu."
+                )
+        if stage == prefix + "2Q" and not maximum_quality:
+            raise ContractError("Standard nesmí obnovit Maximum Quality checkpoint.")
+        return copy.deepcopy(snapshot)
+
     prefix = "A" if mode == "GENERATE" else "B"
     stages = [prefix + suffix for suffix in ("0R", "1", "2", "2Q")]
     if snapshot.get("canonical_stage") not in stages or not snapshot.get("response_id"):
