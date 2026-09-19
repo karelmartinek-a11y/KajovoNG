@@ -73,6 +73,7 @@ class UiRunConfig:
     qfile_output_format: str = "txt"
     qfile_suggest_path: bool = False
     qfile_plan: dict[str, Any] | None = None
+    qa_continue_conversation: bool = False
 
     preparation_snapshot: dict[str, Any] | None = None
     completed_hashes: dict[str, str] | None = None
