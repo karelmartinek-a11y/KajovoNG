@@ -62,6 +62,7 @@ STATE_META = {
     "completed": ("✓", "Dokončeno", "success"),
     "closed": ("✓", "Dokončeno / uzavřeno", "success"),
     "dry_run": ("◇", "Dry-run / návrh bez zápisu", "focus"),
+    "plan_ready": ("◆", "Ověřený plán připraven", "success"),
     "partial": ("⚠", "Částečně dokončeno", "warning"),
     "files_complete_unverified": ("?", "Soubory převzaty, funkčnost neověřena", "warning"),
     "unfinished_record": ("?", "Konec fáze nezapsán", "warning"),
@@ -141,7 +142,7 @@ PROVIDER_STATES = {
     "cancelling", "cancelled", "expired",
 }
 TERMINAL_STATES = {
-    "completed", "closed", "dry_run", "partial", "files_complete_unverified",
+    "completed", "closed", "dry_run", "plan_ready", "partial", "files_complete_unverified",
     "unfinished_record", "cancelled", "stopped", "failed", "error", "submission_unknown",
     "corrupt_state", "unknown", "expired", "response_pending", "batch_pending",
 }
