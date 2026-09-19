@@ -11,15 +11,27 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable
 
 from .batch_submit import exact_batch_matches
 from .comic_types import IMAGE_MODEL, ComicError
 from .image_runtime import inspect_image
+from .orchestration.contracts import canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.image_slots import image_policy
+from .orchestration.repository import OrchestrationRepository
+from .orchestration.run_config import (
+    DEFAULT_MAX_COST_MICROUSD,
+    DEFAULT_MAX_INPUT_TOKENS,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_PAID_REQUESTS,
+    build_run_config_v2,
+)
+from .orchestration.work_order import freeze_order
 from .model_registry import model_spec, models_for_usage
 from .photo_prompt import manual_photo_plan
+from .context_pricing import VERSION as PRICING_VERSION, observed_image_cost
 from .utils import atomic_write_text
 
 IMAGE_EDIT_ENDPOINT = "/v1/images/edits"
@@ -447,6 +459,193 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             continue
     return jobs
+
+
+def _photo_cfg(job):
+    return SimpleNamespace(
+        mode="PHOTO",
+        model=job.image_model,
+        send_as_c=True,
+        maximum_quality=job.quality in {"xhigh", "max"},
+        max_cost_microusd=DEFAULT_MAX_COST_MICROUSD,
+        max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+        max_paid_requests=DEFAULT_MAX_PAID_REQUESTS,
+        unknown_pricing="explicit_token_budget",
+        auto_repair="off",
+        verification_profile_ids=[],
+        stop_after_plan=False,
+        dry_run=False,
+        execution_approval_id=f"user-start:{job.job_id}",
+        project="Photo Studio",
+        prompt=job.final_prompt,
+        in_dir="",
+        out_dir=job.output_dir,
+        attached_file_ids=[],
+        input_file_ids=[],
+        attached_vector_store_ids=[],
+        qfile_output_path="",
+        qfile_output_format="",
+        qfile_suggest_path=False,
+        qa_continue_conversation=False,
+        response_id="",
+    )
+
+
+def _photo_repo(log_dir):
+    return OrchestrationRepository(Path(log_dir) / "orchestration.sqlite3")
+
+
+def _photo_work_order(job, rows):
+    cfg = _photo_cfg(job)
+    projection = {
+        "photo_plan_sha256": job.photo_plan_sha256,
+        "items": [
+            {
+                "custom_id": row["custom_id"],
+                "body_sha256": canonical_sha256(row["body"]),
+            }
+            for row in rows
+        ],
+        "source_sha256": [
+            item.source_sha256 for item in job.items
+        ],
+    }
+    order = freeze_order(
+        cfg,
+        {
+            "run_id": job.job_id,
+            "step_id": "PHOTO_BATCH_SUBMIT",
+            "task_id": "PHOTO_BATCH_SUBMIT",
+            "stage": "PHOTO",
+            "route": "image_batch",
+            "target_id": job.job_id,
+            "target_path": None,
+            "expected_target_hash": None,
+            "contract_name": "PHOTO_BATCH_V1",
+            "schema": {
+                "endpoint": IMAGE_EDIT_ENDPOINT,
+                "row_count": len(rows),
+                "photo_plan_sha256": job.photo_plan_sha256,
+            },
+            "prompt": job.final_prompt,
+            "model": job.image_model,
+            "model_capability": model_spec(job.image_model),
+            "source_snapshot": projection,
+            "attempt_no": 1,
+            "approval_id": cfg.execution_approval_id,
+        },
+        projection,
+    )
+    return cfg, order, projection
+
+
+def _reserve_photo_submit(job, rows, log_dir):
+    cfg, order, projection = _photo_work_order(job, rows)
+    repo = _photo_repo(log_dir)
+    run_config = build_run_config_v2(cfg)
+    repo.register_run(
+        job.job_id,
+        lineage_id=job.job_id,
+        scope_hash=canonical_sha256(
+            {
+                "run_config_v2": run_config,
+                "photo_plan_sha256": job.photo_plan_sha256,
+                "sources": [item.source_sha256 for item in job.items],
+                "output_dir": job.output_dir,
+            }
+        ),
+        policy_hash=canonical_sha256(run_config),
+        config=run_config,
+        approval_id=order.approval_id,
+        status="running",
+    )
+    repo.register_work_order(
+        order,
+        body_ref=canonical_sha256(rows),
+        input_hash=order.input_projection_hash,
+    )
+    repo.reserve(
+        reservation_id=order.budget_reservation_id,
+        work_order_hash=order.order_hash,
+        cost_microusd=None,
+        input_limit=0,
+        output_limit=0,
+        max_cost_microusd=cfg.max_cost_microusd,
+        max_input_tokens=cfg.max_input_tokens,
+        max_output_tokens=cfg.max_output_tokens,
+        max_paid_requests=cfg.max_paid_requests,
+    )
+    root = save_job(job, log_dir)
+    atomic_write_text(
+        str(root / "work_order_v2.json"),
+        json.dumps(
+            {**order.to_dict(), "order_hash": order.order_hash},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+    )
+    return repo, order
+
+
+def _mark_photo_submission(job, rows, log_dir, provider_id=None, *, unknown):
+    repo, order = _photo_work_order(job, rows)[:2] and (
+        _photo_repo(log_dir),
+        _photo_work_order(job, rows)[1],
+    )
+    repo.mark_submitted(
+        order.budget_reservation_id,
+        provider_id,
+        unknown=unknown,
+    )
+
+
+def _release_photo_reservation(job, rows, log_dir):
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    _photo_repo(log_dir).release(order.budget_reservation_id)
+
+
+def _settle_photo_usage(job, custom_id, usage, log_dir):
+    if not job.batch_id or not isinstance(usage, dict):
+        return
+    rows = [
+        image_edit_row(
+            item,
+            model=job.image_model,
+            prompt=job.final_prompt,
+            quality=job.quality,
+            size=job.size,
+            output_format=job.output_format,
+        )
+        for item in job.items
+    ]
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    observed = observed_image_cost(job.image_model, usage, batch=True)
+    actual = (
+        round(float(observed["usd"]) * 1_000_000)
+        if isinstance(observed, dict)
+        and isinstance(observed.get("usd"), (int, float))
+        else None
+    )
+    _photo_repo(log_dir).settle(
+        order.budget_reservation_id,
+        provider="openai-image",
+        provider_item_id=f"{job.batch_id}:{custom_id}",
+        usage=usage,
+        actual_cost_microusd=actual,
+        price_snapshot_hash=canonical_sha256(
+            {
+                "pricing_version": (
+                    observed.get("pricing_version")
+                    if isinstance(observed, dict)
+                    else PRICING_VERSION
+                ),
+                "model": job.image_model,
+                "batch": True,
+            }
+        ),
+    )
 
 
 def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
