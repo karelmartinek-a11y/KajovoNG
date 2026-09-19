@@ -39,6 +39,15 @@ class ResponseJournal:
                         "Evidence požadavku má neplatný hash; automatické pokračování je zablokováno."
                     )
 
+    def confirmed_id(self, payload) -> str:
+        """Return provider ID only when this exact background payload has one."""
+        body = copy.deepcopy(payload)
+        body.update(background=True, store=True)
+        entry = self.entries.get(digest(body))
+        if not isinstance(entry, dict):
+            return ""
+        return str(entry.get("id") or "")
+
     def save(self):
         # Čas pollingu a identita GET patří provozní evidenci; nesmějí vytvářet
         # další kopii všech pracovních payloadů při každé kontrole stavu.
