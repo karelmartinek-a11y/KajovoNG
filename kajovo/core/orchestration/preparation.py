@@ -10,7 +10,6 @@ from typing import Any
 import jsonschema
 
 from .contracts import canonical_sha256
-from .errors import OrchestrationError
 from .waves import build_execution_dag
 from ..context_budget import preparation_measurement
 from ..contracts import ContractError, validate_paths
@@ -471,8 +470,10 @@ def _inventory(worker) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         source = (root / bundle_path).resolve()
         try:
             source.relative_to(root)
-        except ValueError:
-            raise ContractError(f"Project inventory artifact escapes Run Bundle: {path}")
+        except ValueError as exc:
+            raise ContractError(
+                f"Project inventory artifact escapes Run Bundle: {path}"
+            ) from exc
         data = source.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
         if digest != artifact.get("sha256"):
@@ -635,7 +636,7 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
         "version": 2,
         "mode": mode,
         "maximum_quality": bool(worker.cfg.maximum_quality),
-        "source_snapshot_hash": getattr(worker, "source_pack").hash,
+        "source_snapshot_hash": worker.source_pack.hash,
         "requirements": None,
         "plan": None,
         "spine": None,
@@ -773,7 +774,7 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
     graph = {
         "contract": "IMPLEMENTATION_GRAPH_V3",
         "mode": mode,
-        "source_snapshot_hash": getattr(worker, "source_pack").hash,
+        "source_snapshot_hash": worker.source_pack.hash,
         "requirements_hash": canonical_sha256(requirements),
         "plan_hash": canonical_sha256(plan),
         "spine": spine,
