@@ -176,12 +176,23 @@ def test_background_not_allowed_inside_batch():
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 @pytest.mark.parametrize(
-    "pending_contract",
-    ["A0R_REQUIREMENTS_V2", "A2_SPINE_V1", "FILE_CONTENT_V1"],
+    "pending_stage",
+    ["requirements", "spine", "file"],
 )
 def test_worker_recovers_v2_stage_without_reposting(
-    tmp_path, mode, pending_contract
+    tmp_path, mode, pending_stage
 ):
+    pending_contract = {
+        "requirements": (
+            "A0R_REQUIREMENTS_V2"
+            if mode == "GENERATE"
+            else "B0R_REQUIREMENTS_V2"
+        ),
+        "spine": (
+            "A2_SPINE_V1" if mode == "GENERATE" else "B2_SPINE_V1"
+        ),
+        "file": "FILE_CONTENT_V1",
+    }[pending_stage]
     worker, client, responder = scenario(tmp_path, mode)
     original_create = responder
     pending = {}
