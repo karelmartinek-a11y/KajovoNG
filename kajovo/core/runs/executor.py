@@ -15,6 +15,9 @@ from ..delivery_preparation import (
     validate_preparation_snapshot,
 )
 from ..openai_client import OpenAIClient
+from ..orchestration.authorization import create_execution_authorization
+from ..orchestration.contracts import canonical_sha256
+from ..orchestration.repository import repository_for_logger
 from ..orchestration.run_config import build_run_config_v2, run_scope_hash
 from ..orchestration.source_pack import freeze_run_sources
 from ..openai_transport import SubmissionOutcomeUnknown
@@ -70,20 +73,10 @@ class RunExecutor(RunContext):
             if saved_state.get("status") == "submission_unknown" or saved_state.get("submission_unknown"):
                 raise SubmissionUnknown("Nejasné předchozí odeslání blokuje nové operace.")
             self.transition(RunStatus.PREPARING)
-            # Každý nový běh ukládá přesný rekonstruovatelný vstup ještě před
-            # prvním síťovým požadavkem. RunLogger z něj vytvoří kanonický
-            # input_ready checkpoint; u legacy záznamů se nic nedopočítává.
+            # Schválený run config je sestaven lokálně; input_ready checkpoint se
+            # vytvoří až po zmrazení SourcePacku a autorizace.
             run_config_v2 = build_run_config_v2(self.cfg)
-            self.log.update_state({
-                "ui_state": self.cfg.__dict__,
-                "run_config_v2": run_config_v2,
-                "run_scope_hash": run_scope_hash(self.cfg),
-            })
-            if self.cfg.mode in ("GENERATE", "MODIFY"):
-                self._response_journal = ResponseJournal(self.log, self.settings.response_poll_timeout_s)
-                saved_state = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
-                self._response_file_ids = saved_state.get("response_file_ids", {})
-                self.log.update_state({"response_transport": "background"})
+            base_scope_hash = run_scope_hash(self.cfg)
 
             if not self.api_key or not self.cfg.model or not self.cfg.prompt.strip():
                 raise ValueError("Běh vyžaduje API klíč, model a neprázdné zadání.")
@@ -98,9 +91,30 @@ class RunExecutor(RunContext):
                 self._verify_completed_files()
                 if self.cfg.preparation_snapshot:
                     validate_preparation_snapshot(self.cfg.preparation_snapshot, self.cfg.mode, self.cfg.maximum_quality)
+            source_pack = freeze_run_sources(self.cfg, self.settings, self.log)
+            scope_hash = canonical_sha256({
+                "run_scope_hash": base_scope_hash,
+                "source_pack_hash": source_pack.hash,
+            })
+            authorization = create_execution_authorization(
+                self.log.run_id, run_config_v2, scope_hash
+            )
+            self.cfg.execution_approval_id = authorization.approval_id
+            self.log.save_json(
+                "manifests", "execution_authorization_v1", authorization.to_dict()
+            )
             self.log.update_state(
                 {
-                    "status": "running", "error": None, "failure_detail": None, "failed_at": None,
+                    "ui_state": self.cfg.__dict__,
+                    "run_config_v2": run_config_v2,
+                    "run_scope_hash": scope_hash,
+                    "source_pack_hash": source_pack.hash,
+                    "source_pack_id": source_pack.pack_id,
+                    "execution_authorization": authorization.to_dict(),
+                    "status": "running",
+                    "error": None,
+                    "failure_detail": None,
+                    "failed_at": None,
                     "started_at": time.time(),
                     "mode": self.cfg.mode,
                     "send_as_c": self.cfg.send_as_c,
@@ -108,11 +122,23 @@ class RunExecutor(RunContext):
                     "out_dir": self.cfg.out_dir,
                 }
             )
-            source_pack = freeze_run_sources(self.cfg, self.settings, self.log)
-            self.log.update_state({
-                "source_pack_hash": source_pack.hash,
-                "source_pack_id": source_pack.pack_id,
-            })
+            repository_for_logger(self.log).register_run(
+                self.log.run_id,
+                lineage_id=self.log.run_id,
+                scope_hash=scope_hash,
+                policy_hash=authorization.policy_hash,
+                config=run_config_v2,
+                approval_id=authorization.approval_id,
+                status="running",
+            )
+            if self.cfg.mode in ("GENERATE", "MODIFY"):
+                self._response_journal = ResponseJournal(
+                    self.log, self.settings.response_poll_timeout_s
+                )
+                saved_state = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
+                self._response_file_ids = saved_state.get("response_file_ids", {})
+                self.log.update_state({"response_transport": "background"})
+
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
             client.configure_validation(self.settings)
             client.stopped = lambda: self._stop
