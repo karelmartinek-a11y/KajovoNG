@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from .contracts import canonical_sha256
 from .errors import OrchestrationError
