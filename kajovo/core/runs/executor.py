@@ -16,6 +16,7 @@ from ..delivery_preparation import (
 )
 from ..openai_client import OpenAIClient
 from ..orchestration.run_config import build_run_config_v2, run_scope_hash
+from ..orchestration.source_pack import freeze_run_sources
 from ..openai_transport import SubmissionOutcomeUnknown
 from ..progress import ProgressEvent
 from ..request_rules import validate_run_options
@@ -107,6 +108,11 @@ class RunExecutor(RunContext):
                     "out_dir": self.cfg.out_dir,
                 }
             )
+            source_pack = freeze_run_sources(self.cfg, self.settings, self.log)
+            self.log.update_state({
+                "source_pack_hash": source_pack.hash,
+                "source_pack_id": source_pack.pack_id,
+            })
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
             client.configure_validation(self.settings)
             client.stopped = lambda: self._stop
