@@ -149,8 +149,124 @@ def freeze_sources(inputs: Sequence[ApprovedInput], store=None) -> SourcePack:
     return SourcePack(1, "SOURCE-PACK-" + canonical_sha256(payload)[:24], tuple(frozen), 1)
 
 
-def freeze_run_sources(cfg, settings, log) -> SourcePack:
-    """Zmrazí lokálně dostupný scope před prvním placeným requestem."""
+def _remote_file_ids(cfg, client) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+
+    def add(value) -> None:
+        identifier = str(value or "").strip()
+        if identifier and identifier not in seen:
+            values.append(identifier)
+            seen.add(identifier)
+
+    for identifier in list(getattr(cfg, "input_file_ids", None) or []):
+        add(identifier)
+    for identifier in list(getattr(cfg, "attached_file_ids", None) or []):
+        add(identifier)
+
+    for vector_store_id in list(
+        getattr(cfg, "attached_vector_store_ids", None) or []
+    ):
+        if client is None:
+            raise OrchestrationError(
+                "SOURCE_REMOTE_CLIENT_REQUIRED",
+                "Připojený vector store nelze zmrazit bez read-only API klienta.",
+            )
+        try:
+            rows = client.list_vector_store_files(vector_store_id)
+        except Exception as exc:
+            raise OrchestrationError(
+                "SOURCE_VECTOR_STORE_UNAVAILABLE",
+                f"Nelze načíst obsah vector store {vector_store_id}.",
+            ) from exc
+        if not isinstance(rows, list):
+            raise OrchestrationError(
+                "SOURCE_VECTOR_STORE_INVALID",
+                f"Vector store {vector_store_id} vrátil neplatný seznam souborů.",
+            )
+        for row in rows:
+            if not isinstance(row, dict):
+                raise OrchestrationError(
+                    "SOURCE_VECTOR_STORE_INVALID",
+                    f"Vector store {vector_store_id} obsahuje neplatný file záznam.",
+                )
+            add(row.get("file_id") or row.get("id"))
+    return values
+
+
+def _freeze_remote_inputs(cfg, log, client, inputs: list[ApprovedInput]) -> None:
+    identifiers = _remote_file_ids(cfg, client)
+    if not identifiers:
+        return
+    if client is None:
+        raise OrchestrationError(
+            "SOURCE_REMOTE_CLIENT_REQUIRED",
+            "Připojené Files ID nelze přesně zmrazit bez read-only API klienta.",
+        )
+
+    root = Path(log.paths.misc_dir) / "source_pack_remote"
+    root.mkdir(parents=True, exist_ok=True)
+    for index, file_id in enumerate(identifiers, 1):
+        try:
+            metadata = client.retrieve_file(file_id)
+            data = client.file_content(file_id)
+        except Exception as exc:
+            raise OrchestrationError(
+                "SOURCE_REMOTE_UNAVAILABLE",
+                f"Nelze přesně zmrazit připojený soubor {file_id}.",
+            ) from exc
+        if not isinstance(metadata, dict) or not isinstance(data, (bytes, bytearray)):
+            raise OrchestrationError(
+                "SOURCE_REMOTE_INVALID",
+                f"Připojený soubor {file_id} nemá platná metadata nebo bajty.",
+            )
+        binary = bytes(data)
+        declared_size = metadata.get("bytes")
+        if isinstance(declared_size, int) and not isinstance(declared_size, bool):
+            if declared_size >= 0 and declared_size != len(binary):
+                raise OrchestrationError(
+                    "SOURCE_REMOTE_SIZE_MISMATCH",
+                    f"Připojený soubor {file_id} změnil velikost během zmrazení.",
+                )
+        filename = str(metadata.get("filename") or file_id).strip() or file_id
+        suffix = Path(filename).suffix.lower()
+        media = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        kind = "image" if media.startswith("image/") else "file"
+        source_id = (
+            "SRC-REMOTE-"
+            + hashlib.sha256(file_id.encode("utf-8")).hexdigest()[:20]
+        )
+        digest = hashlib.sha256(binary).hexdigest()
+        local = root / f"{index:05d}_{digest[:16]}{suffix}"
+        local.write_bytes(binary)
+        log.bundle.archive_artifact(
+            local,
+            role="remote_input",
+            kind="source_pack_input",
+            reconstruction_role=filename,
+            reusable=True,
+            metadata={
+                "source_id": source_id,
+                "provider_file_id": file_id,
+                "filename": filename,
+                "sha256": digest,
+                "media_type": media,
+            },
+        )
+        inputs.append(
+            ApprovedInput(
+                source_id,
+                kind,
+                binary,
+                media,
+                "context",
+                filename,
+            )
+        )
+
+
+def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
+    """Zmrazí celý schválený scope před prvním placeným requestem."""
     inputs: list[ApprovedInput] = []
     prompt = str(getattr(cfg, "prompt", "") or "")
     prompt_bytes = prompt.encode("utf-8")
@@ -178,6 +294,7 @@ def freeze_run_sources(cfg, settings, log) -> SourcePack:
             "run prompt",
         )
     )
+    _freeze_remote_inputs(cfg, log, client, inputs)
     root = str(getattr(cfg, "in_dir", "") or "").strip()
     if root:
         root_path = Path(root).resolve()
