@@ -115,8 +115,12 @@ def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrde
     prompt = str(task["prompt"])
     model = str(task["model"])
     route = str(task.get("route") or "responses_live")
-    attempt_no = int(task.get("attempt_no", 0))
-    approval_id = str(task.get("approval_id") or f"user-start:{task['run_id']}")
+    attempt_no = int(task.get("attempt_no", 1))
+    approval_id = str(
+        task.get("approval_id")
+        or getattr(config, "execution_approval_id", "")
+        or f"user-start:{task['run_id']}"
+    )
     source_snapshot = task.get("source_snapshot") or {}
     capability = task.get("model_capability") or {}
     policy = {
