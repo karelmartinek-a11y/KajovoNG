@@ -15,6 +15,10 @@ from .comic_store import ComicStore, now, uid
 from .comic_types import (BIBLE_SCHEMA, DESCRIPTOR_SCHEMA, IMAGE_MODEL, TEXT_MODEL, ComicError,
                           PanelFormat, canonical, checked_text, normalize_bible, validate_document, validate_overlays)
 from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, source_bytes, validate_image_request
+from .orchestration.errors import OrchestrationError
+from .orchestration.image_slots import (
+    FrozenAssetIndex, FrozenImageAsset, ImageRole, compile_slots, normalization_policy_hash,
+)
 from .progress import ProgressEvent
 from .response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
 from .runlog import RunLogger
@@ -255,6 +259,45 @@ class ComicService:
             body.update(images=[{"file_id": ref} for ref in refs])
         return body
 
+    def _frozen_image_index(self, project_id, asset_ids):
+        transform_hash = normalization_policy_hash()
+        frozen = []
+        for asset_id in sorted(set(asset_ids)):
+            record = self.store.get("assets", asset_id)
+            if record["project_id"] != project_id:
+                raise ComicError("broken_reference", "Reference patří jinému komiksu.")
+            data = self.store.asset_path(asset_id).read_bytes()
+            if hashlib.sha256(data).hexdigest() != record["sha256"]:
+                raise ComicError("corrupt_asset", "Kontrolní otisk reference nesouhlasí.")
+            inspect_image(data)
+            metadata = record["metadata"]
+            if metadata.get("normalization_policy_hash") == transform_hash:
+                normalized, storage_id = data, asset_id
+            else:
+                candidates = self.store.rows(
+                    "assets", "project_id=? AND json_extract(metadata, '$.original_asset')=? "
+                    "AND json_extract(metadata, '$.normalization_policy_hash')=?",
+                    (project_id, asset_id, transform_hash),
+                )
+                if candidates:
+                    storage_id = candidates[0]["id"]
+                    normalized = self.store.asset_path(storage_id).read_bytes()
+                    if hashlib.sha256(normalized).hexdigest() != candidates[0]["sha256"]:
+                        raise ComicError("corrupt_asset", "Změněná normalizovaná reference.")
+                    inspect_image(normalized)
+                else:
+                    normalized = normalized_image(data)
+                    storage_id = asset_id if normalized == data else self.store.asset(
+                        project_id, normalized,
+                        {"role": "working", "original_asset": asset_id,
+                         "original_sha256": record["sha256"],
+                         "normalization_policy_hash": transform_hash},
+                    )
+            frozen.append(FrozenImageAsset(
+                asset_id, storage_id, hashlib.sha256(normalized).hexdigest(), transform_hash,
+            ))
+        return FrozenAssetIndex(tuple(frozen), image_capability()["max_references"])
+
     def compile_panel(self, panel_id, edit=""):
         panel = self.store.get("panels", panel_id)
         project = self.store.get("projects", panel["project_id"])
@@ -267,14 +310,14 @@ class ComicService:
         document = self.store.get("prompts", panel["prompt_id"])["document"]
         validate_document(document)
         validate_overlays(panel["overlays"], project["style"]["sfx"])
-        parts, entities, assets, seen = [], [], [], set()
+        parts, entities, roles, seen = [], [], [], set()
         base = None
         if edit:
             checked_text(edit, "Požadavek editace", 4000, True)
             if not panel["active_version"]:
                 raise ComicError("missing_version", "Panel zatím nemá aktivní verzi.")
             base = self.store.get("panel_versions", panel["active_version"])
-            assets.append(base["raw_asset_id"])
+            roles.append(ImageRole("EDIT_BASE", base["raw_asset_id"], "edit_base", "EDIT_BASE"))
         for node in document["nodes"]:
             if node["type"] == "text":
                 parts.append(node["text"])
@@ -288,20 +331,29 @@ class ComicService:
                 if revision["bible_id"] != project["bible_id"]:
                     raise ComicError("entity_style_stale", f"{entity['name']}: vytvořte referenci pro aktuální bibli.")
                 seen.add(entity["id"])
-                entities.append({"name": entity["name"], "id": entity["id"], "revision": revision["id"], "descriptor": revision["descriptor"], "image_index": len(assets) + 1})
-                assets.append(revision["asset_id"])
-        assets.extend(r["asset_id"] for r in self.store.references(project["id"]))
-        assets = list(dict.fromkeys(assets))
-        if len(assets) > image_capability()["max_references"]:
-            raise ComicError("too_many_references", f"Panel potřebuje {len(assets)} referencí; maximum je 16. Odeberte entitu nebo stylovou referenci.")
-        for asset in assets:
-            inspect_image(self.store.asset_path(asset).read_bytes())
+                entities.append({"name": entity["name"], "id": entity["id"], "revision": revision["id"], "descriptor": revision["descriptor"]})
+                roles.append(ImageRole("ENTITY-" + entity["id"], revision["asset_id"], "identity_reference", entity["id"]))
+        for reference in self.store.references(project["id"]):
+            asset_id = reference["asset_id"]
+            roles.append(ImageRole("STYLE-" + asset_id, asset_id, "style_reference", asset_id))
+        try:
+            slots = compile_slots(roles, self._frozen_image_index(project["id"], [role.asset_id for role in roles]))
+        except OrchestrationError as exc:
+            raise ComicError(exc.code, str(exc)) from exc
+        role_slots = {role.role_id: role for role in slots.roles}
+        entities.sort(key=lambda entity: entity["id"])
+        for entity in entities:
+            slot = role_slots["ENTITY-" + entity["id"]]
+            entity.update(image_index=slot.index, slot_id=slot.slot_id)
+        assets = [slot.asset_id for slot in slots.slots]
+        reference_slots = asdict(slots)
         scene = "".join(parts).strip()
         if not scene:
             raise ComicError("invalid_input", "Napište zadání panelu.")
         prompt = "Vytvoř jediný profesionální komiksový panel. Zachovej identitu všech referencí a styl bible. "
         prompt += "Nekresli dialogové bubliny, titulky ani SFX: přesný text přidává aplikace. Vyhraď volné místo podle textových oblastí.\n"
         prompt += canonical({"bible": bible["result"], "scene": scene, "entities": entities,
+                             "reference_slots": reference_slots,
                              "text_areas": [{k: v for k, v in layer.items() if k != "text"} for layer in panel["overlays"]]})
         if edit:
             prompt += "\nEDITACE PRVNÍHO OBRÁZKU: Zachovej kompozici a vše mimo výslovnou změnu: " + edit
@@ -310,7 +362,8 @@ class ComicService:
         body = self.image_body(prompt, fmt.native_size(image_capability()), ["file_pending"] * len(assets))
         validate_image_request(endpoint, body)
         return {"panel_id": panel_id, "panel_revision": panel["revision"], "project_id": project["id"], "bible_id": bible["id"],
-                "document": document, "entities": entities, "assets": assets, "body": body, "endpoint": endpoint,
+                "document": document, "entities": entities, "assets": assets, "reference_slots": reference_slots,
+                "body": body, "endpoint": endpoint,
                 "format": asdict(fmt), "overlays": panel["overlays"], "base_version": base["id"] if base else None, "edit": edit}
 
     def start_panels(self, project, panels, edit=""):

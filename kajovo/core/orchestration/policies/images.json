@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "default_model": "gpt-image-2.5-sunburst-2026-09-08",
+  "model_must_be_available_and_capability_validated": true,
+  "max_references_policy": 16,
+  "max_input_bytes_policy": 50000000,
+  "max_decoded_pixels_policy": 64000000,
+  "max_target_edge": 16384,
+  "image_count": 1,
+  "output_format": "png",
+  "quality": "high",
+  "background": "opaque",
+  "input_fidelity": "high_if_supported_else_omit",
+  "exif_normalization": "transpose_once_then_strip_metadata",
+  "source_storage": "immutable_original_and_normalized_separately",
+  "source_hash_check_before_upload": true,
+  "asset_dedup_key": [
+    "normalized_sha256",
+    "transform_policy_hash"
+  ],
+  "reference_order": [
+    "edit_base",
+    "identity_references_by_entity_id",
+    "style_references_by_id"
+  ],
+  "index_assignment": "after dedup; 1-based; roles reference canonical slot_id",
+  "actual_limit": "minimum of local policy and verified model capability",
+  "fit_default": "pad",
+  "crop_requires_explicit_user_choice": true,
+  "photo_review_default": "live",
+  "image_repair_max_additional_generations": 1,
+  "image_review_uncertain": "needs_human",
+  "pixel_exact_protection": "local composition outside user-approved binary mask; equality of normalized decoded pixels, not JPEG bytes",
+  "comic_overlay": {
+    "max_items": 40,
+    "min_font_points": 10,
+    "max_font_points": 18,
+    "default_font_points": 12,
+    "max_text_characters": 3000,
+    "text_overflow": "block_no_truncation",
+    "sfx_default": false,
+    "model_draws_text": false
+  },
+  "story": {
+    "max_scenes": 64,
+    "max_panels": 512,
+    "script_unit": "scene",
+    "storyboard_unit": "scene",
+    "continuity_review_pair_window": 2
+  }
+}

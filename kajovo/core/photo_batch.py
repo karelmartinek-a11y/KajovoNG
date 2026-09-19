@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import json
 import os
 import re
@@ -14,9 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from PIL import Image, UnidentifiedImageError
-
 from .batch_submit import exact_batch_matches
+from .comic_types import IMAGE_MODEL, ComicError
+from .image_runtime import inspect_image
+from .orchestration.errors import OrchestrationError
+from .orchestration.image_slots import image_policy
 from .model_registry import model_spec, models_for_usage
 from .utils import atomic_write_text
 
@@ -118,34 +119,25 @@ def response_prompt_models(available_models: Iterable[str] | None = None) -> lis
     return models_for_usage(available_models, "photo_prompt")
 
 
-def inspect_photo_bytes(data: bytes, expected_format: str | None = None) -> dict:
-    if not data or len(data) > 100 * 1024 * 1024:
-        raise ValueError("Obrázek je prázdný nebo překračuje 100 MB.")
+def inspect_photo_bytes(data: bytes, expected_format: str | None = None, *, model=IMAGE_MODEL) -> dict:
+    """Společná technická validace PHOTO/COMIC; base64 samo není důkaz obrazu."""
     try:
-        with Image.open(io.BytesIO(data)) as image:
-            if image.format not in {"PNG", "JPEG", "WEBP"} or getattr(image, "n_frames", 1) != 1:
-                raise ValueError("Použijte statický PNG, JPEG nebo WebP.")
-            if image.width * image.height > 64_000_000:
-                raise ValueError("Obrázek překračuje aplikační limit 64 MP.")
-            info = {"format": image.format, "width": image.width, "height": image.height}
-            image.verify()
-        with Image.open(io.BytesIO(data)) as image:
-            image.load()
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
-        raise ValueError("Obrázek není úplný nebo jej nelze dekódovat.") from exc
+        info = inspect_image(data, model)
+    except ComicError as exc:
+        raise OrchestrationError("IMAGE_INVALID", str(exc)) from exc
     expected = {"png": "PNG", "jpeg": "JPEG", "jpg": "JPEG", "webp": "WEBP"}.get(
         str(expected_format or "").lower()
     )
     if expected and info["format"] != expected:
-        raise ValueError(f"Výsledek má formát {info['format']}, očekáván byl {expected}.")
-    return info
+        raise OrchestrationError("IMAGE_INVALID", f"Výsledek má formát {info['format']}, očekáván byl {expected}.")
+    return {key: info[key] for key in ("format", "width", "height")}
 
 
 def validate_source_image(path: str | Path) -> Path:
     source = Path(path).expanduser().resolve()
     if not source.is_file() or source.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
         raise ValueError(f"Neplatná nebo nepodporovaná fotografie: {source}")
-    if not 0 < source.stat().st_size <= 100 * 1024 * 1024:
+    if not 0 < source.stat().st_size <= image_policy()["max_input_bytes_policy"]:
         raise ValueError(f"Neplatná velikost fotografie: {source.name}")
     expected = {
         ".png": "png",
@@ -560,13 +552,13 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
                 )
                 continue
             data = body.get("data") or []
-            if not data or not isinstance(data[0], dict) or not data[0].get("b64_json"):
+            if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict) or not data[0].get("b64_json"):
                 item.status = "failed"
-                item.error_message = "Výsledek neobsahuje data[0].b64_json."
+                item.error_message = "Výsledek musí obsahovat právě jeden obrázek s data[0].b64_json."
                 continue
             try:
                 binary = base64.b64decode(data[0]["b64_json"], validate=True)
-                image_info = inspect_photo_bytes(binary, job.output_format)
+                image_info = inspect_photo_bytes(binary, job.output_format, model=job.image_model)
             except (ValueError, TypeError) as exc:
                 item.status = "failed"
                 item.error_message = str(exc)

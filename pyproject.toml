@@ -43,6 +43,7 @@ exclude = ["tests*"]
 namespaces = false
 
 [tool.setuptools.package-data]
+"kajovo.core.orchestration" = ["policies/*.json"]
 "kajovo.core.diagnostics" = ["*.ps1"]
 "kajovo.core" = ["openai_model_matrix.json"]
 

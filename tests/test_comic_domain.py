@@ -176,11 +176,13 @@ def test_compiler_entity_combinations(comic, tmp_path, kinds):
     entities = [make_entity(service, project, tmp_path, kind) for kind in kinds]
     panel = make_panel(service, project, entities)
     snapshot = service.compile_panel(panel)
-    assert len(snapshot["assets"]) == len(kinds)
+    assert len(snapshot["assets"]) == int(bool(kinds))
     assert len(snapshot["entities"]) == len(kinds)
     assert snapshot["endpoint"].endswith("edits" if kinds else "generations")
-    for i, entity in enumerate(snapshot["entities"], 1):
-        assert entity["image_index"] == i
+    # CHANGE COMIC, oddíl 7: shodné bajty sdílejí jeden obraz, ne jednu roli.
+    for entity in snapshot["entities"]:
+        assert entity["image_index"] == 1
+        assert entity["slot_id"] == "IMAGE-001"
 
 
 def test_archived_and_foreign_reference_rejected(comic, tmp_path):
@@ -293,3 +295,84 @@ def test_duplicate_remaps_entities_and_has_no_jobs(comic, tmp_path):
 
 
 from kajovo.core.response_journal import SubmissionUnknown
+
+
+def test_change_reference_slots_reach_real_batch_body_without_index_shift(comic, tmp_path, record_property):
+    """COM-03: edit base, prvni entita a styl sdili bytes, druha entita je jina."""
+    from kajovo.core.comic_store import canonical, now, uid
+    from kajovo.core.image_runtime import normalized_image
+
+    service, client, project = comic
+    red, blue = png((64, 64), 'red'), png((64, 64), 'blue')
+    style = service.store.asset(project, red, {'role': 'working'})
+    service.store.add_reference(project, style)
+    service.run(service.start_bible(project))
+    entity_ids = sorted([make_entity(service, project, tmp_path), make_entity(service, project, tmp_path)])
+    # Explicitne sestavene schvalene vstupni reference; zadny provider kandidat se neopravuje.
+    for entity, data in zip(entity_ids, (red, blue), strict=True):
+        previous = service.store.get('entity_revisions', service.store.get('entities', entity)['active_revision'])
+        source = service.store.asset(project, data, {'role': 'generated_raw'})
+        revision = uid()
+        with service.store.transaction() as db:
+            db.execute('INSERT INTO entity_revisions VALUES(?,?,?,?,?,?,?)', (
+                revision, entity, previous['bible_id'], previous['descriptor'], source,
+                canonical({'test_input': 'approved_reference'}), now(),
+            ))
+            db.execute('UPDATE entities SET active_revision=?,revision=revision+1 WHERE id=?', (revision, entity))
+    panel = make_panel(service, project, list(reversed(entity_ids)))
+    base_asset, version = service.store.asset(project, red, {'role': 'generated_raw'}), uid()
+    with service.store.transaction() as db:
+        db.execute('INSERT INTO panel_versions VALUES(?,?,?,?,?,?,?,?,?)', (
+            version, panel, None, None, base_asset, base_asset, '[]', '{}', now(),
+        ))
+        db.execute('UPDATE panels SET active_version=? WHERE id=?', (version, panel))
+    text_calls, image_calls, submit_calls = len(client.responses), client.image_calls, client.submits
+    snap = service.compile_panel(panel, 'Preserve the scene.')
+    assert [entry['id'] for entry in snap['entities']] == entity_ids
+    assert [entry['image_index'] for entry in snap['entities']] == [1, 2]
+    assert [entry['slot_id'] for entry in snap['entities']] == ['IMAGE-001', 'IMAGE-002']
+    mapping = {role['role_id']: role['index'] for role in snap['reference_slots']['roles']}
+    assert mapping['EDIT_BASE'] == mapping['ENTITY-' + entity_ids[0]] == mapping['STYLE-' + style] == 1
+    assert mapping['ENTITY-' + entity_ids[1]] == 2
+    assert len(snap['assets']) == 2
+    assert service.store.asset_path(base_asset).read_bytes() == red
+    assert service.store.asset_path(style).read_bytes() == red
+    operation = service.start_panels(project, [panel], 'Preserve the scene.')
+    service.run(operation)
+    row = client.batch_rows['batch_1'][0]
+    actual_inputs = [client.files[image['file_id']] for image in row['body']['images']]
+    assert actual_inputs == [normalized_image(red), normalized_image(blue)]
+    assert len(client.responses) == text_calls
+    assert client.image_calls == image_calls
+    assert client.submits == submit_calls + 1
+    record_property('observed_transport_call_count', 1)
+    record_property('transport_kind', 'offline controlled batch adapter')
+    record_property('fixture_sha256', snap['reference_slots']['slots'][0]['normalized_sha256'])
+
+
+def test_change_normalized_reference_keeps_original_metadata_bytes(comic):
+    import hashlib
+    from PIL.PngImagePlugin import PngInfo
+    from kajovo.core.orchestration.image_slots import normalization_policy_hash
+
+    service, client, project = comic
+    stream = io.BytesIO()
+    image = Image.new('RGBA', (16, 16), (10, 20, 30, 200))
+    metadata = PngInfo()
+    metadata.add_text('private-note', 'not transmitted')
+    image.save(stream, 'PNG', pnginfo=metadata)
+    original = stream.getvalue()
+    identifier = service.store.asset(project, original, {'role': 'original'})
+    before_calls = len(client.responses), client.image_calls, client.submits
+    first = service._frozen_image_index(project, [identifier]).assets[0]
+    second = service._frozen_image_index(project, [identifier]).assets[0]
+    assert first == second
+    assert first.storage_id != identifier
+    assert first.transform_policy_hash == normalization_policy_hash()
+    assert service.store.asset_path(identifier).read_bytes() == original
+    normalized = service.store.asset_path(first.storage_id).read_bytes()
+    assert hashlib.sha256(normalized).hexdigest() == first.normalized_sha256
+    with Image.open(io.BytesIO(normalized)) as result:
+        assert 'private-note' not in result.info
+        assert result.getpixel((0, 0)) == (10, 20, 30, 200)
+    assert (len(client.responses), client.image_calls, client.submits) == before_calls

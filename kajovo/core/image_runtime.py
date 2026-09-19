@@ -6,6 +6,7 @@ from pathlib import Path
 from PIL import Image, ImageOps, UnidentifiedImageError
 from .comic_types import ComicError, IMAGE_MODEL
 from .model_registry import model_spec
+from .orchestration.image_slots import image_policy
 
 
 def image_capability(model=IMAGE_MODEL):
@@ -17,13 +18,14 @@ def image_capability(model=IMAGE_MODEL):
 
 def inspect_image(data, model=IMAGE_MODEL):
     cap = image_capability(model)
-    if not data or len(data) > cap["max_input_bytes"]:
+    policy = image_policy()
+    if not data or len(data) > min(cap["max_input_bytes"], policy["max_input_bytes_policy"]):
         raise ComicError("image_too_large", "Obrázek musí být menší než 50 MB.")
     try:
         with Image.open(io.BytesIO(data)) as im:
             if im.format not in cap["input_formats"] or getattr(im, "n_frames", 1) != 1:
                 raise ComicError("unsupported_image_format", "Použijte statický PNG, JPEG nebo WebP.")
-            if im.width * im.height > cap["max_input_pixels"]:
+            if im.width * im.height > min(cap["max_input_pixels"], policy["max_decoded_pixels_policy"]):
                 raise ComicError("image_too_large", "Obrázek přesahuje aplikační limit 64 MP.")
             info = {"format": im.format, "width": im.width, "height": im.height, "mime": Image.MIME[im.format]}
             im.verify()
@@ -50,7 +52,11 @@ def source_bytes(path):
 def normalized_image(data):
     inspect_image(data)
     with Image.open(io.BytesIO(data)) as im:
-        image = ImageOps.exif_transpose(im).convert("RGBA" if "A" in im.getbands() else "RGB")
+        oriented = ImageOps.exif_transpose(im)
+        transparent = "A" in oriented.getbands() or "transparency" in oriented.info
+        pixels = oriented.convert("RGBA" if transparent else "RGB")
+        # Nový pixelový objekt nepřenáší EXIF, ICC ani textová metadata zdroje.
+        image = Image.frombytes(pixels.mode, pixels.size, pixels.tobytes())
         output = io.BytesIO()
         image.save(output, format="PNG")
     result = output.getvalue()

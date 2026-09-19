@@ -7,7 +7,9 @@ import re
 
 import jsonschema
 
-from .contracts import ContractError, _load_json, extract_text_from_response
+from .contracts import ContractError, ValidationIssue, _load_json, extract_text_from_response
+from .orchestration.contracts import parse_json_strict
+from .orchestration.errors import OrchestrationError
 
 
 class OutputContractError(ContractError):
@@ -156,8 +158,13 @@ def _validate_output(response, payload):
         raise ContractError(f"Odpověď není dokončená: {response.get('status', 'chybí stav')}; {response.get('incomplete_details') or response.get('error') or ''}")
     raw = extract_text_from_response(response)
     try:
-        parsed = _load_json(raw)
+        parsed = parse_json_strict(raw)
         jsonschema.Draft202012Validator(payload["text"]["format"]["schema"], format_checker=jsonschema.FormatChecker()).validate(parsed)
+    except OrchestrationError as exc:
+        failure = OutputContractError(str(exc), response)
+        failure.code = exc.code
+        failure.issues = [ValidationIssue(exc.code, "response", "", str(exc))]
+        raise failure from exc
     except (ValueError, ContractError, jsonschema.ValidationError) as exc:
         raise OutputContractError(f"Odpověď porušuje výstupní kontrakt: {exc}", response) from exc
     return parsed
