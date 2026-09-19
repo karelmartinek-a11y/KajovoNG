@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Any
 from ..contracts import (
     ContractError,
 )
-from ..progress import ProgressEvent
-from ..orchestration.executor import classify_response
 from ..orchestration.errors import OrchestrationError
+from ..orchestration.executor import classify_response
+from ..progress import ProgressEvent
 from ..request_rules import uses_reasoning_defaults
 from ..requirements import apply_quality
 from ..structured_output import (
@@ -206,8 +206,8 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
                 raise
     except Exception as exc:
         from ..openai_transport import SubmissionOutcomeUnknown
-        from ..response_journal import SubmissionUnknown
         from ..orchestration.ledger import mark_submission, release_reservation
+        from ..response_journal import SubmissionUnknown
 
         if isinstance(exc, (SubmissionUnknown, SubmissionOutcomeUnknown)):
             mark_submission(self.log, work_order, None, unknown=True)
