@@ -35,6 +35,21 @@ class RemotePending(RuntimeError):
     """Vzdálená dávka stále běží a nesmí být duplikována."""
 
 
+def read_checkpoint(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def write_checkpoint(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -72,6 +87,7 @@ class Budget:
         self.batch_requests = 0
         self.image_items = 0
         self.unknown: list[str] = []
+        self.seen_usage: set[str] = set()
 
     def before(self, *, known_max: float | None, label: str) -> None:
         if self.unknown:
@@ -186,32 +202,44 @@ def _usage_cost(usage: Any, model: str, *, batch: bool) -> float | None:
     return float(return_value["usd"]) if return_value else None
 
 
-def _find_usage(value: Any, model: str = ""):
+def _find_usage(value: Any, model: str = "", identity: str = ""):
     if isinstance(value, dict):
+        identifiers = [
+            str(value[key]) for key in (
+                "id", "response_id", "provider_item_id", "reservation_id", "custom_id", "batch_id"
+            ) if value.get(key)
+        ]
+        current_identity = ":".join(identifiers) or identity
         usage = value.get("usage")
         if isinstance(usage, dict):
-            yield model or str(value.get("model") or "") or MODEL, usage
+            yield model or str(value.get("model") or "") or MODEL, usage, current_identity
         child_model = str(value.get("model") or model)
         for child in value.values():
-            yield from _find_usage(child, child_model)
+            yield from _find_usage(child, child_model, current_identity)
     elif isinstance(value, list):
         for child in value:
-            yield from _find_usage(child, model)
+            yield from _find_usage(child, model, identity)
 
 
 def settle_evidence(root: Path, budget: Budget, report: dict[str, Any], *, image_model: str | None = None) -> None:
     """Sečte jen doložené usage; při neúplném usage zachová UNKNOWN."""
     seen: set[str] = set()
+    found_usage = False
     for path in root.rglob("*.json"):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        for model, usage in _find_usage(payload):
-            key = sha256_bytes((str(path) + json.dumps(usage, sort_keys=True)).encode())
-            if key in seen:
+        for model, usage, identity in _find_usage(payload):
+            found_usage = True
+            key = sha256_bytes(json.dumps(
+                {"identity": identity, "model": model, "usage": usage},
+                sort_keys=True,
+            ).encode())
+            if key in seen or key in budget.seen_usage:
                 continue
             seen.add(key)
+            budget.seen_usage.add(key)
             if image_model and model == image_model:
                 from kajovo.core.context_pricing import observed_image_cost
 
@@ -223,7 +251,7 @@ def settle_evidence(root: Path, budget: Budget, report: dict[str, Any], *, image
                 usd = _usage_cost(usage, model or MODEL, batch=report["execution"] == "batch")
                 report["token_usage"].append(usage)
                 budget.add(usd, text=True, batch=report["execution"] == "batch")
-    if not seen:
+    if not found_usage:
         budget.unknown.append(f"{report['case']}: provider usage nebylo nalezeno")
 
 
@@ -296,12 +324,12 @@ def _generated_path(run_dir: Path, out: Path, name: str) -> Path:
     raise RuntimeError(f"Výstup {name} nebyl nalezen v OUT ani stagingu")
 
 
-def _state_report(report: dict[str, Any], budget: Budget) -> None:
-    report["paid_request_count"] = budget.paid_requests
-    report["text_requests"] = budget.text_requests
-    report["batch_requests"] = budget.batch_requests
-    report["image_items"] = budget.image_items
-    report["settled_cost_usd"] = round(budget.cost, 8) if not budget.unknown else None
+def _state_report(report: dict[str, Any], budget: Budget, *, cost_before: float = 0.0, paid_before: int = 0, text_before: int = 0, batch_before: int = 0, image_before: int = 0) -> None:
+    report["paid_request_count"] = budget.paid_requests - paid_before
+    report["text_requests"] = budget.text_requests - text_before
+    report["batch_requests"] = budget.batch_requests - batch_before
+    report["image_items"] = budget.image_items - image_before
+    report["settled_cost_usd"] = round(budget.cost - cost_before, 8) if not budget.unknown else None
     report["unknown_cost"] = bool(budget.unknown)
     report["unknown_cost_items"] = list(budget.unknown)
 
@@ -406,16 +434,62 @@ def run_photo(root: Path, client, settings, budget: Budget, main_sha: str, avail
     _synthetic_png(source)
     model = choose_image_model(available)
     report = _base_report("photo-batch", main_sha, model)
-    job = photo_batch.new_job(source_paths=[str(source)], human_prompt="Change the red square to blue. Preserve the rest of the image.", professional_prompt="Change the red square to blue. Preserve the rest of the image.", final_prompt="Change the red square to blue. Preserve the rest of the image.", prompt_source="manual", template_id="manual_photo_plan", prompt_model="", prompt_response_id="", image_model=model, quality="low", size="1024x1024", output_format="png", output_dir=str(case_root / "OUT"))
+    checkpoint_path = case_root / "acceptance_state.json"
+    checkpoint = read_checkpoint(checkpoint_path)
+    prompt = "Change the red square to blue. Preserve the rest of the image."
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    if checkpoint and (
+        checkpoint.get("case") != "photo-batch"
+        or checkpoint.get("source_sha256") != sha256_file(source)
+        or checkpoint.get("prompt_hash") != prompt_hash
+        or checkpoint.get("model") != model
+    ):
+        raise Blocked("BLOCKED_CHECKPOINT_MISMATCH")
+    job = None
     try:
-        job = photo_batch.prepare_and_submit(client, job, settings.log_dir)
+        if checkpoint.get("job_id"):
+            jobs = photo_batch.load_jobs(settings.log_dir)
+            job = next((candidate for candidate in jobs if candidate.job_id == checkpoint["job_id"]), None)
+            if job is None:
+                raise Blocked("BLOCKED_PHOTO_CHECKPOINT_MISSING")
+        else:
+            job = photo_batch.new_job(
+                source_paths=[str(source)], human_prompt=prompt,
+                professional_prompt=prompt, final_prompt=prompt,
+                prompt_source="manual", template_id="manual_photo_plan",
+                prompt_model="", prompt_response_id="", image_model=model,
+                quality="low", size="1024x1024", output_format="png",
+                output_dir=str(case_root / "OUT"),
+            )
+            write_checkpoint(checkpoint_path, {
+                "case": "photo-batch", "job_id": job.job_id,
+                "photo_job_path": str(Path(settings.log_dir) / "PHOTO" / job.job_id / "photo_job.json"),
+                "batch_id": "", "input_file_id": "", "source_sha256": sha256_file(source),
+                "model": model, "prompt_hash": prompt_hash, "status": "preparing",
+            })
+            job = photo_batch.prepare_and_submit(client, job, settings.log_dir)
+        report["job_id"] = job.job_id
         report["batch_ids"] = [job.batch_id]
-        report["input_file_ids"] = [job.input_file_id]
+        report["input_file_ids"] = [
+            *(item.uploaded_file_id for item in job.items if item.uploaded_file_id),
+            job.input_file_id,
+        ]
+        write_checkpoint(checkpoint_path, {
+            **checkpoint, "case": "photo-batch", "job_id": job.job_id,
+            "photo_job_path": str(Path(settings.log_dir) / "PHOTO" / job.job_id / "photo_job.json"),
+            "batch_id": job.batch_id, "input_file_id": job.input_file_id,
+            "source_sha256": sha256_file(source), "model": model,
+            "prompt_hash": prompt_hash, "status": job.status,
+        })
         while True:
             job = photo_batch.refresh_job(client, job, settings.log_dir)
             if job.status not in {"completed", "failed", "expired", "cancelled"}:
                 report["status"] = "pending"
                 report["errors"] = ["REMOTE_PENDING"]
+                write_checkpoint(checkpoint_path, {
+                    **read_checkpoint(checkpoint_path), "batch_id": job.batch_id,
+                    "input_file_id": job.input_file_id, "status": job.status,
+                })
                 raise RemotePending(job.batch_id)
             job = photo_batch.download_results(client, job, settings.log_dir)
             if job.status != "completed":
@@ -429,6 +503,10 @@ def run_photo(root: Path, client, settings, budget: Budget, main_sha: str, avail
             report["content_acceptance"] = "unverified"
             report["human_review_required"] = True
             report["status"] = "technical_pass_human_pending"
+            write_checkpoint(checkpoint_path, {
+                **read_checkpoint(checkpoint_path), "batch_id": job.batch_id,
+                "input_file_id": job.input_file_id, "status": job.status,
+            })
             break
     except RemotePending:
         raise
@@ -442,7 +520,7 @@ def run_photo(root: Path, client, settings, budget: Budget, main_sha: str, avail
     return report
 
 
-def run_comic(root: Path, client, settings, budget: Budget, main_sha: str, available: list[str]) -> dict[str, Any]:
+def run_comic_legacy(root: Path, client, settings, budget: Budget, main_sha: str, available: list[str]) -> dict[str, Any]:
     from kajovo.core.comic_service import ComicService
     from kajovo.core.config import AppSettings
 
@@ -479,6 +557,97 @@ def run_comic(root: Path, client, settings, budget: Budget, main_sha: str, avail
         report["content_acceptance"] = "unverified"
         report["human_review_required"] = True
         report["status"] = "technical_pass_human_pending"
+    except RemotePending:
+        raise
+    except Blocked:
+        raise
+    except Exception as exc:
+        report["status"] = "failed"
+        report["errors"].append(str(exc))
+    finally:
+        report["finished_at"] = now()
+    return report
+
+
+def run_comic(root: Path, client, settings, budget: Budget, main_sha: str, available: list[str]) -> dict[str, Any]:
+    """Resumovatelná COMIC acceptance nad jedním persistentním stavem."""
+    from kajovo.core.comic_service import ComicService
+    from kajovo.core.config import AppSettings
+
+    case_root = root / "comic-panels"
+    checkpoint_path = case_root / "acceptance_state.json"
+    checkpoint = read_checkpoint(checkpoint_path)
+    exact_image_model = "gpt-image-2.5-sunburst-2026-09-08"
+    if exact_image_model not in available:
+        raise Blocked("BLOCKED_IMAGE_MODEL_UNAVAILABLE")
+    comic_settings = AppSettings(
+        comic_library_dir=str(case_root / "COMICS"),
+        log_dir=str(case_root / "LOG"),
+        response_timeout_s=600,
+        response_poll_timeout_s=3600,
+        batch_poll_interval_s=5,
+        batch_timeout_s=3600,
+    )
+    service = ComicService(comic_settings, client)
+    report = _base_report("comic-panels", main_sha, [MODEL, exact_image_model])
+    try:
+        project = checkpoint.get("project_id")
+        if not project:
+            project = service.store.project(
+                "Live acceptance", "synthetic panel",
+                {"description": "clean comic", "line": "jemná", "color": "barevná", "balloon": "dialogová", "sfx": False},
+            )
+            checkpoint = {
+                "case": "comic-panels", "project_id": project,
+                "bible_operation_id": "", "panel_id": "", "panel_operation_id": "",
+                "stage": "project",
+            }
+            write_checkpoint(checkpoint_path, checkpoint)
+        bible = checkpoint.get("bible_operation_id")
+        if not bible:
+            bible = service.start_bible(project)
+            checkpoint = {**read_checkpoint(checkpoint_path), "bible_operation_id": bible, "stage": "bible_pending"}
+            write_checkpoint(checkpoint_path, checkpoint)
+        bible_status = service.store.get("operations", bible)["status"]
+        if bible_status not in {"completed", "failed", "partial"}:
+            value = service.run(bible)
+            bible_status = service.store.get("operations", bible)["status"]
+            if value.get("status") in {"batch_pending", "response_pending", "submission_unknown"} or bible_status in {"preparing", "running", "response_pending", "submission_unknown"}:
+                raise RemotePending("comic-bible")
+        if bible_status != "completed":
+            raise RuntimeError("Bible nebyla dokončena")
+        panel = checkpoint.get("panel_id")
+        if not panel:
+            panel = service.store.panel(project, "Live panel")
+            service.store.save_panel(
+                panel, 2, "Live panel",
+                {"version": 1, "nodes": [{"type": "text", "text": "A simple clean comic panel: a blue circle centered on a plain white background. No text."}]},
+                {"width": 816, "height": 816, "dpi": 300, "fit": "pad", "experimental": False}, [],
+            )
+            checkpoint = {**read_checkpoint(checkpoint_path), "panel_id": panel, "stage": "panel_prepared"}
+            write_checkpoint(checkpoint_path, checkpoint)
+        operation = checkpoint.get("panel_operation_id")
+        if not operation:
+            operation = service.start_panels(project, [panel])
+            checkpoint = {**read_checkpoint(checkpoint_path), "panel_operation_id": operation, "stage": "panel_pending"}
+            write_checkpoint(checkpoint_path, checkpoint)
+        panel_status = service.store.get("operations", operation)["status"]
+        if panel_status not in {"completed", "failed", "partial"}:
+            value = service.run(operation)
+            panel_status = service.store.get("operations", operation)["status"]
+            if value.get("status") in {"batch_pending", "response_pending", "submission_unknown"} or panel_status in {"preparing", "running", "response_pending", "submission_unknown", "batch_pending"}:
+                raise RemotePending("comic-panel")
+        if panel_status != "completed":
+            raise RuntimeError("Panelová dávka nebyla dokončena")
+        version = service.store.get("panels", panel)["active_version"]
+        asset = service.store.get("panel_versions", version)["asset_id"]
+        report["batch_ids"] = [row["provider_id"] for row in service.store.rows("batches", "operation_id=?", (operation,)) if row.get("provider_id")]
+        report["artifact_sha256"] = [sha256_file(service.store.asset_path(asset))]
+        report["technical_validation"] = "passed"
+        report["content_acceptance"] = "unverified"
+        report["human_review_required"] = True
+        report["status"] = "technical_pass_human_pending"
+        write_checkpoint(checkpoint_path, {**read_checkpoint(checkpoint_path), "stage": "completed"})
     except RemotePending:
         raise
     except Blocked:
@@ -549,24 +718,32 @@ def main(argv: list[str] | None = None) -> int:
         budget = Budget(args.max_total_usd)
         reports: list[dict[str, Any]] = []
         for case in cases:
+            before = {
+                "cost": budget.cost, "paid": budget.paid_requests,
+                "text": budget.text_requests, "batch": budget.batch_requests,
+                "image": budget.image_items,
+            }
             if case == "generate-live":
                 budget.before(known_max=0.20, label=case)
                 report = run_generate(case, root, client, key, settings, budget, main_sha, False)
-                settle_evidence(root / "_runtime" / "LOG", budget, report)
+                settle_evidence(root / "_runtime" / "LOG" / "RUN_LIVE_ACCEPTANCE_generate_live", budget, report)
             elif case == "generate-batch":
                 budget.before(known_max=0.10, label=case)
                 report = run_generate(case, root, client, key, settings, budget, main_sha, True)
-                settle_evidence(root / "_runtime" / "LOG", budget, report)
+                settle_evidence(root / "_runtime" / "LOG" / "RUN_LIVE_ACCEPTANCE_generate_batch", budget, report)
             elif case == "photo-batch":
                 choose_image_model(available)
                 budget.before(known_max=0.50, label=case)
                 report = run_photo(root, client, settings, budget, main_sha, available)
-                settle_evidence(root / "photo-batch", budget, report, image_model=report["models"])
+                settle_evidence(Path(settings.log_dir) / "PHOTO" / str(report.get("job_id") or ""), budget, report, image_model=report["models"])
             else:
                 budget.before(known_max=0.50, label=case)
                 report = run_comic(root, client, settings, budget, main_sha, available)
                 settle_evidence(root / "comic-panels", budget, report, image_model="gpt-image-2.5-sunburst-2026-09-08")
-            _state_report(report, budget)
+            _state_report(
+                report, budget, cost_before=before["cost"], paid_before=before["paid"],
+                text_before=before["text"], batch_before=before["batch"], image_before=before["image"],
+            )
             enrich_ids(root, report)
             reports.append(report)
             write_evidence(root, reports, budget, main_sha)
