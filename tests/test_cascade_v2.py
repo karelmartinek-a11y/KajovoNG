@@ -69,6 +69,10 @@ def _worker(definition, tmp_path):
     )
 
 
+def _run_dir(tmp_path):
+    return next(path for path in (tmp_path / "LOG").iterdir() if path.is_dir())
+
+
 def test_forward_decision_target_is_allowed_in_draft_but_not_at_run():
     decision = CascadeOutput(
         name="Verdikt",
@@ -158,7 +162,7 @@ def test_new_cascade_records_steps_and_explicit_safe_checkpoints(tmp_path):
     worker = _worker(definition, tmp_path)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
         worker.execute()
-    run_dir = next((tmp_path / "LOG").iterdir())
+    run_dir = _run_dir(tmp_path)
     adapter = LegacyRunAdapter(run_dir)
     assert [(row["stage"], row["status"]) for row in adapter.steps()] == [
         (first.id, "completed"), (second.id, "completed")
@@ -183,7 +187,7 @@ def test_cascade_safe_checkpoint_archives_required_local_input(tmp_path):
     worker = _worker(definition, tmp_path)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
         worker.execute()
-    adapter = LegacyRunAdapter(next((tmp_path / "LOG").iterdir()))
+    adapter = LegacyRunAdapter(_run_dir(tmp_path))
     inputs = [row for row in adapter.artifacts() if row.get("kind") == "cascade_input"]
     assert len(inputs) == 1
     checkpoint = adapter.checkpoints()[0]
