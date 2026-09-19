@@ -11,6 +11,8 @@ from ..contracts import (
 )
 from ..model_registry import model_spec
 from ..openai_client import OpenAIClient
+from ..orchestration.projection import projection_from_file_context
+from ..orchestration.work_order import freeze_order
 from ..progress import ProgressEvent
 from ..request_rules import uses_reasoning_defaults
 from ..requirements import stage_instructions
@@ -20,8 +22,6 @@ from ..structured_output import (
     prepare_payload,
     validate_output,
 )
-from ..orchestration.projection import projection_from_file_context
-from ..orchestration.work_order import freeze_order
 from ..utils import ts_code
 
 if TYPE_CHECKING:
