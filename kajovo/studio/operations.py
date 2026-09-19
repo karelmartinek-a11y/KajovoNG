@@ -65,6 +65,7 @@ STATES = {
     "response_pending": "Odpověď se stále zpracovává",
     "submission_unknown": "Výsledek odeslání není znám",
     "dry_run": "Návrh je připraven bez zápisu",
+    "plan_ready": "Ověřený plán je připraven; výroba nebyla spuštěna",
     "files_complete_unverified": "Soubory jsou převzaté, funkčnost nebyla ověřena",
     "ready_to_import": "Výsledek je připraven k převzetí",
     "importing": "Přebírám vzdálený výsledek",
