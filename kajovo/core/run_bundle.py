@@ -39,12 +39,13 @@ RUN_STATUSES = {
     "submission_unknown",
     "files_complete_unverified",
     "plan_ready",
+    "qfile_plan_ready",
     "closed",
     "corrupt_state",
     "unknown",
 }
 TERMINAL_STATUSES = {"completed", "partial", "failed", "cancelled", "stopped", "closed",
-                     "files_complete_unverified", "dry_run", "plan_ready"}
+                     "files_complete_unverified", "dry_run", "plan_ready", "qfile_plan_ready"}
 ARTIFACT_BUCKETS = {"inputs", "intermediate", "outputs", "external"}
 
 
