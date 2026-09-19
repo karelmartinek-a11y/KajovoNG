@@ -1,5 +1,6 @@
 """Výpadky a obnova bez skutečných síťových nebo placených požadavků."""
 
+import copy
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -10,7 +11,6 @@ from change_v2_fixtures import make_client, run, scenario, staged_path
 from test_workflows import make_worker
 
 from kajovo.core.openai_client import OpenAIClient, OpenAIError
-from kajovo.core.recovery import recover_run
 from kajovo.core.request_rules import validate_response_payload
 from kajovo.core.response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
 from kajovo.core.runlog import RunLogger
@@ -303,16 +303,22 @@ def test_plan_ready_checkpoint_resumes_without_repaying_preparation(tmp_path, mo
     snapshot = worker.cfg.preparation_snapshot
     assert snapshot["canonical_stage"] in {"A2Q", "B2Q"}
 
-    # Production choice changes after the durable plan checkpoint. The
-    # preparation snapshot itself remains immutable and is reused.
-    worker.cfg.stop_after_plan = False
-    worker.cfg.preparation_snapshot = snapshot
+    # Continue is a new run over the immutable preparation checkpoint.
+    # The source run remains plan_ready and its authorization scope is unchanged.
+    next_cfg = copy.deepcopy(worker.cfg)
+    next_cfg.stop_after_plan = False
+    next_cfg.preparation_snapshot = copy.deepcopy(snapshot)
+    next_cfg.execution_approval_id = ""
     resumed_client, resumed_responder = make_client(mode)
     resumed = RunWorker(
-        worker.cfg,
+        next_cfg,
         worker.settings,
         "test",
-        RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True),
+        RunLogger(
+            worker.settings.log_dir,
+            "RUN_130920260200_CONT",
+            "test",
+        ),
     )
     resumed_results, resumed_errors = [], []
     resumed.finished_ok.connect(resumed_results.append)
