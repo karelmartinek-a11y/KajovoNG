@@ -1265,6 +1265,10 @@ class CascadeRunExecutor:
                     )
                     try:
                         response = client.create_response(payload)
+                    except OutputContractError as exc:
+                        response = getattr(exc, "response", None)
+                        if not isinstance(response, dict):
+                            raise
                     except Exception as exc:
                         if isinstance(
                             exc, SubmissionOutcomeUnknown
