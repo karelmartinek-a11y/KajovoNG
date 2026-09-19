@@ -32,6 +32,7 @@ VALUES = {
     "cancelled": "Zastaveno", "active": "Probíhá", "running": "Probíhá",
     "waiting": "Čeká", "batch_pending": "Předáno do dávky", "submission_unknown": "Výsledek odeslání není znám",
     "response_pending": "Čeká na odpověď", "dry_run": "Návrh bez zápisu",
+    "plan_ready": "Ověřený plán je připraven; výrobní krok nebyl spuštěn",
     "files_complete_unverified": "Soubory převzaté, funkčnost neověřena",
     "clone": "Klonování zadání", "continue": "Pokračování", "repair": "Oprava",
     "rerun": "Opakované spuštění", "reuse_artifacts": "Opětovné použití souborů",
