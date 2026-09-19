@@ -549,7 +549,18 @@ def encode_requests(manifest):
         raise ContractError("Důkazy dokončených souborů musí být objekt.")
     validate_paths([{"path": path} for path in completed])
     structure = manifest["snapshot"]["structure"]
-    paths = {file["path"] for file in structure.get("touched_files" if manifest.get("mode") == "MODIFY" else "files", [])}
+    v3_graph = structure.get("contract") == "IMPLEMENTATION_GRAPH_V3"
+    source_files = (
+        list((structure.get("spine") or {}).get("files") or [])
+        if v3_graph
+        else list(
+            structure.get(
+                "touched_files" if manifest.get("mode") == "MODIFY" else "files",
+                [],
+            )
+        )
+    )
+    paths = {file["path"] for file in source_files}
     if (not set(completed) <= paths or set(completed) & set(manifest["expected"].values())
             or set(completed) & set(manifest.get("omitted", []))):
         raise ContractError("Dokončené soubory neodpovídají specifikaci a výběru dávky.")
@@ -568,7 +579,7 @@ def encode_requests(manifest):
     validate_paths([{"path": p} for p in manifest["expected"].values()])
     compiler = ContextCompiler(manifest["snapshot"]) if manifest.get("version") == 3 else None
     for row in rows:
-        validate_response_payload(row["body"])
+        validate_response_payload(row["body"], batch=True if v3_graph else False)
         if row["method"] != "POST" or row["url"] != "/v1/responses" or row["body"].get("previous_response_id"):
             raise ContractError("Souborová úloha musí být samostatný požadavek Responses.")
         context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
@@ -581,7 +592,10 @@ def encode_requests(manifest):
                    for path, value in original_sources.items()):
                 raise ContractError("Původní obsah neodpovídá auditnímu snapshotu.")
             expected_context = compiler.compile(
-                context["file"]["path"], originals=original_sources)
+                context["file"]["path"],
+                originals=original_sources,
+                verified_artifacts=manifest.get("verified_dependency_artifacts") or {},
+            )
             if compiled != expected_context or "specification" in context or row["body"].get("tools"):
                 raise ContractError("FileContext neodpovídá kanonické přípravě.")
             enforce_budget(measure_request(row["body"], compiled=compiled, batch=True))
@@ -591,7 +605,17 @@ def encode_requests(manifest):
             raise ContractError("Úloha neodpovídá společné specifikaci nebo cílové cestě.")
         if manifest.get("version") in {2, 3}:
             modifying = manifest["mode"] == "MODIFY"
-            files = manifest["snapshot"]["structure"]["touched_files" if modifying else "files"]
+            files = (
+                list(
+                    (
+                        manifest["snapshot"]["structure"].get("spine") or {}
+                    ).get("files") or []
+                )
+                if v3_graph
+                else manifest["snapshot"]["structure"][
+                    "touched_files" if modifying else "files"
+                ]
+            )
             if context["file"] not in files:
                 raise ContractError("Souborová úloha mění kanonickou specifikaci souboru.")
             if manifest.get("version") == 3:
