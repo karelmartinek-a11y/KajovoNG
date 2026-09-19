@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {"type": "integer", "enum": [2]},
+    "workflow": {"type": "string", "enum": ["GENERATE", "MODIFY", "QA", "QFILE", "CASCADE", "PHOTO", "COMIC"]},
+    "execution": {"type": "string", "enum": ["live", "batch"]},
+    "quality": {"type": "string", "enum": ["standard", "maximum"]},
+    "model_bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"stage": {"type": "string"}, "model": {"type": "string"}},
+        "required": ["stage", "model"],
+        "additionalProperties": false
+      }
+    },
+    "max_cost_microusd": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+    "max_input_tokens": {"type": "integer"},
+    "max_output_tokens": {"type": "integer"},
+    "max_paid_requests": {"type": "integer"},
+    "unknown_pricing": {"type": "string", "enum": ["block", "explicit_token_budget"]},
+    "auto_repair": {"type": "string", "enum": ["off", "within_approval"]},
+    "verification_profile_ids": {"type": "array", "items": {"type": "string"}},
+    "stop_after_plan": {"type": "boolean"},
+    "dry_run": {"type": "boolean"}
+  },
+  "required": [
+    "version", "workflow", "execution", "quality", "model_bindings",
+    "max_cost_microusd", "max_input_tokens", "max_output_tokens",
+    "max_paid_requests", "unknown_pricing", "auto_repair",
+    "verification_profile_ids", "stop_after_plan", "dry_run"
+  ],
+  "additionalProperties": false
+}
