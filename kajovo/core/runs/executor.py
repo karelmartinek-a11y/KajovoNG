@@ -15,12 +15,12 @@ from ..delivery_preparation import (
     validate_preparation_snapshot,
 )
 from ..openai_client import OpenAIClient
+from ..openai_transport import SubmissionOutcomeUnknown
 from ..orchestration.authorization import create_execution_authorization
 from ..orchestration.contracts import canonical_sha256
 from ..orchestration.repository import repository_for_logger
 from ..orchestration.run_config import build_run_config_v2, run_scope_hash
 from ..orchestration.source_pack import freeze_run_sources, source_context
-from ..openai_transport import SubmissionOutcomeUnknown
 from ..progress import ProgressEvent
 from ..request_rules import validate_run_options
 from ..response_journal import (
