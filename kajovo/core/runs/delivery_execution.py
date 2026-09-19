@@ -6,7 +6,7 @@ import shutil
 import time
 from typing import TYPE_CHECKING, Any
 
-from ..utils import atomic_write_text, ensure_dir, is_versing_snapshot_dir
+from ..utils import atomic_write_text, is_versing_snapshot_dir
 from .contracts import RunStatus
 from .delivery import DeliveryContext, save_out_files
 
