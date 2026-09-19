@@ -238,6 +238,30 @@ class ComicService:
             operation, log, execution=execution
         )
         cfg = self._image_cfg(operation)
+        with repo.connect() as db:
+            previous = db.execute(
+                "SELECT w.attempt_no,r.state "
+                "FROM work_orders w JOIN reservations r "
+                "ON r.work_order_hash=w.work_order_hash "
+                "WHERE w.run_id=? AND w.task_id=? "
+                "ORDER BY w.attempt_no DESC LIMIT 1",
+                (operation["run_id"], task_id),
+            ).fetchone()
+        attempt_no = 1
+        if previous:
+            prior_attempt, prior_state = int(previous[0]), str(previous[1])
+            if prior_state == "released":
+                attempt_no = prior_attempt + 1
+                if attempt_no > 3:
+                    raise ComicError(
+                        "retry_limit",
+                        "Obrazová operace již vyčerpala tři schválené pokusy.",
+                    )
+            else:
+                raise SubmissionUnknown(
+                    "Předchozí obrazový WorkOrder již mohl být odeslán; "
+                    "automatický resubmit je zablokován."
+                )
         order = freeze_order(
             cfg,
             {
@@ -268,7 +292,7 @@ class ComicService:
                 "model": IMAGE_MODEL,
                 "model_capability": model_spec(IMAGE_MODEL),
                 "source_snapshot": projection,
-                "attempt_no": 1,
+                "attempt_no": attempt_no,
                 "approval_id": cfg.execution_approval_id,
             },
             projection,
