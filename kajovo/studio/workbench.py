@@ -29,7 +29,8 @@ MODES = [("Vytvořit projekt", "GENERATE"), ("Upravit projekt", "MODIFY"),
 
 def default_state(settings):
     text = ("project", "prompt", "response_id", "in_dir", "out_dir", "model_a1", "model_a2", "model_a3", "ssh_pin")
-    flags = ("send_as_c", "in_equals_out", "versing", "maximum_quality", "diag_windows_in", "diag_windows_out", "diag_ssh_in", "diag_ssh_out")
+    flags = ("send_as_c", "in_equals_out", "versing", "maximum_quality", "stop_after_plan", "dry_run",
+             "diag_windows_in", "diag_windows_out", "diag_ssh_in", "diag_ssh_out")
     state = dict.fromkeys(text, "")
     state.update(dict.fromkeys(flags, False))
     state.update(model=settings.default_model, mode="GENERATE", temperature=settings.default_temperature,
@@ -82,7 +83,9 @@ class Workbench(QWidget):
         for key, title in (("in_equals_out", "Zapisovat do vstupního adresáře"),
                            ("versing", "Pořídit snímek souborů"),
                            ("send_as_c", "Souborové úlohy zpracovat dávkově"),
-                           ("maximum_quality", "Maximální propracovanost")):
+                           ("maximum_quality", "Maximální propracovanost"),
+                           ("stop_after_plan", "Zastavit po ověřené přípravě plánu"),
+                           ("dry_run", "MODIFY bez publikace do projektu (dry-run)")):
             self.options.check(key, title)
         temperature = QDoubleSpinBox()
         temperature.setRange(0, 2)
@@ -239,13 +242,19 @@ class Workbench(QWidget):
             return False
         mode = self.widgets["mode"].currentData()
         grouped = mode in {"GENERATE", "MODIFY"}
-        for key in ("maximum_quality", "send_as_c"):
+        for key in ("maximum_quality", "send_as_c", "stop_after_plan"):
             widget = self.widgets[key]
             widget.setEnabled(grouped)
             if not grouped:
                 widget.blockSignals(True)
                 widget.setChecked(False)
                 widget.blockSignals(False)
+        dry_run = self.widgets["dry_run"]
+        dry_run.setEnabled(mode == "MODIFY")
+        if mode != "MODIFY":
+            dry_run.blockSignals(True)
+            dry_run.setChecked(False)
+            dry_run.blockSignals(False)
         linked = self.widgets["in_equals_out"].isChecked()
         self.widgets["out_dir"].setReadOnly(linked)
         if linked:
@@ -289,7 +298,12 @@ class Workbench(QWidget):
         if len(self.context.operations.active) >= 4:
             self.validation.setText("Počkejte na dokončení některé ze čtyř aktivních operací.")
             return
-        target = Path(cfg.out_dir).resolve() if cfg.out_dir and not cfg.send_as_c and cfg.mode != "QA" else None
+        target = (
+            Path(cfg.out_dir).resolve()
+            if cfg.out_dir and not cfg.send_as_c and cfg.mode != "QA"
+            and not cfg.dry_run and not cfg.stop_after_plan
+            else None
+        )
         try:
             self.context.operations.assert_output_available(target)
         except ValueError as error:
