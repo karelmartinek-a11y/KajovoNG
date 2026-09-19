@@ -39,6 +39,9 @@ class PhotoBatchItem:
     output_width: int = 0
     output_height: int = 0
     output_format_detected: str = ""
+    technical_validation: str = "pending"
+    content_acceptance: str = "unverified"
+    content_acceptance_note: str = ""
     error_message: str = ""
 
 
@@ -523,6 +526,28 @@ def _jsonl(data: bytes, name: str) -> list[dict]:
     return rows
 
 
+
+def mark_content_acceptance(
+    job: PhotoBatchJob,
+    item_id: str,
+    acceptance: str,
+    log_dir: str | Path,
+    note: str = "",
+) -> PhotoBatchJob:
+    """Explicit human/model acceptance; never inferred from valid image bytes."""
+    if acceptance not in {"accepted", "rejected", "unverified"}:
+        raise ValueError("Content acceptance musí být accepted, rejected nebo unverified.")
+    item = next((row for row in job.items if row.item_id == item_id), None)
+    if item is None:
+        raise ValueError("Fotografie nepatří do tohoto Photo Jobu.")
+    if item.technical_validation != "passed" or not item.output_path:
+        raise ValueError("Obsah lze posoudit až po úspěšné technické validaci výsledku.")
+    item.content_acceptance = acceptance
+    item.content_acceptance_note = str(note or "").strip()
+    save_job(job, log_dir)
+    return job
+
+
 def download_results(client, job, log_dir, reporter=None, progress=None):
     refresh_job(client, job, log_dir)
     if job.status != "completed" or not (job.output_file_id or job.error_file_id):
@@ -561,6 +586,7 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
                 image_info = inspect_photo_bytes(binary, job.output_format, model=job.image_model)
             except (ValueError, TypeError) as exc:
                 item.status = "failed"
+                item.technical_validation = "failed"
                 item.error_message = str(exc)
                 continue
             ext = "jpg" if job.output_format == "jpeg" else job.output_format
@@ -581,6 +607,9 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             item.output_width = int(image_info["width"])
             item.output_height = int(image_info["height"])
             item.output_format_detected = str(image_info["format"])
+            item.technical_validation = "passed"
+            item.content_acceptance = "unverified"
+            item.content_acceptance_note = ""
             item.status = "downloaded"
             item.error_message = ""
             if reporter:
