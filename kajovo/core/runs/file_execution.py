@@ -20,6 +20,7 @@ from ..structured_output import (
     prepare_payload,
     validate_output,
 )
+from ..orchestration.projection import projection_from_file_context
 from ..orchestration.work_order import freeze_order
 from ..utils import ts_code
 
@@ -49,6 +50,12 @@ def _gen_file_chunks(
     )
     compiled = ContextCompiler(self._delivery_snapshot).compile(
         path, originals=getattr(self, "_delivery_originals", None)
+    )
+    projection = projection_from_file_context(contract.split("_", 1)[0], path, compiled)
+    self.log.save_json(
+        "manifests",
+        f"projection_{path.replace('/', '_')}",
+        {**projection.to_dict(), "projection_hash": projection.hash},
     )
     step_model = str(model_override or self.cfg.model or "").strip()
     instructions = stage_instructions("A3" if contract == "A3_FILE" else "B3")
@@ -150,10 +157,10 @@ def _gen_file_chunks(
                 "model": step_model,
                 "model_capability": self._model_caps(step_model),
                 "source_snapshot": self._delivery_snapshot,
-                "attempt_no": attempt,
+                "attempt_no": attempt + 1,
                 "approval_id": f"user-start:{self.log.run_id}",
             },
-            compiled,
+            projection.to_dict(),
         )
         self.log.save_json(
             "manifests",
