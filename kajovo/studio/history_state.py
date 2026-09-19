@@ -35,6 +35,7 @@ _STATES = {
     "stopped": ("Zrušeno", "×", "muted", True),
     "dry_run": ("Dry-run", "◇", "muted", True),
     "plan_ready": ("Plán připraven", "◆", "success", True),
+    "qfile_plan_ready": ("Návrh QFILE připraven", "◆", "warning", True),
     "submission_unknown": ("Neznámý výsledek", "?", "warning", False),
     "files_complete_unverified": ("Neověřeno", "?", "warning", True),
     "closed": ("Dokončeno", "✓", "success", True),
