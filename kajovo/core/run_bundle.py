@@ -38,6 +38,7 @@ RUN_STATUSES = {
     "dry_run",
     "submission_unknown",
     "files_complete_unverified",
+    "plan_ready",
     "closed",
     "corrupt_state",
     "unknown",
@@ -194,6 +195,7 @@ class RunRecord:
     output_summary: str = ""
     artifact_bundle_id: str = ""
     configuration_snapshot_hash: str = ""
+    run_scope_hash: str = ""
     run_bundle_hash: str = ""
     kind: str = "run"
     legacy: bool = False
