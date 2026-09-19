@@ -90,7 +90,14 @@ class RunExecutor(RunContext):
             if self.cfg.mode in ("GENERATE", "MODIFY"):
                 self._verify_completed_files()
                 if self.cfg.preparation_snapshot:
-                    validate_preparation_snapshot(self.cfg.preparation_snapshot, self.cfg.mode, self.cfg.maximum_quality)
+                    if self.cfg.preparation_snapshot.get("version") == 1:
+                        validate_preparation_snapshot(
+                            self.cfg.preparation_snapshot,
+                            self.cfg.mode,
+                            self.cfg.maximum_quality,
+                        )
+                    elif self.cfg.preparation_snapshot.get("version") != 2:
+                        raise ContractError("Neznámá verze preparation checkpointu.")
             source_pack = freeze_run_sources(self.cfg, self.settings, self.log)
             self.source_pack = source_pack
             self.source_context = source_context(self.log, source_pack)
