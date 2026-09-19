@@ -7,6 +7,17 @@ from kajovo.core.cascade_types import CascadeDefinition, CascadeStep
 from kajovo.core.config import AppSettings
 
 
+def _client():
+    client = _client()
+    from kajovo.core.context_compiler import content_hash
+
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 128,
+        "request_hash": content_hash(payload),
+    }
+    return client
+
+
 def test_schema_cannot_retrieve_external_urls():
     worker = CascadeRunExecutor(CascadeRunConfig("test", CascadeDefinition("test"), "", "out"), AppSettings(), "test")
     with pytest.raises(ValueError):
@@ -82,7 +93,7 @@ def test_text_cascade_cannot_complete_with_partial_response(tmp_path):
     definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.6-luna", input_text="test")])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
-    client = Mock()
+    client = _client()
     client.create_response.return_value = {"id": "resp_test", "status": "incomplete", "output_text": "partial"}
     errors, results = [], []
     worker.finished_err.connect(errors.append)
@@ -113,7 +124,7 @@ def test_text_cascade_unwraps_native_schema(tmp_path):
     definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.6-luna", input_text="Ahoj")])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
-    client = Mock()
+    client = _client()
     client.create_response.return_value = {"id": "resp_test", "status": "completed", "output_text": '{"text":"Ahoj"}'}
     results, errors = [], []
     worker.finished_ok.connect(results.append)
@@ -133,7 +144,7 @@ def test_missing_custom_schema_is_prepared_automatically(tmp_path):
         output_type="json", output_schema_kind="custom")])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
-    client = Mock()
+    client = _client()
     client.create_response.side_effect = [
         {"id": "resp_schema", "status": "completed", "output_text": json.dumps({"schema_json": json.dumps(obj({"answer": {"type": "string"}}))})},
         {"id": "resp_result", "status": "completed", "output_text": '{"answer":"hotovo"}'}]
@@ -154,7 +165,7 @@ def test_invalid_cascade_content_is_rejected_before_local_upload(tmp_path):
         files_local_paths=[str(local)], input_content_json=[{"type": "input_text", "text": 123}])])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
-    client = Mock()
+    client = _client()
     errors = []
     worker.finished_err.connect(errors.append)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
