@@ -1045,6 +1045,49 @@ class ComicService:
                             db.execute("UPDATE entities SET active_revision=? WHERE id=?", (new_revision, new))
                 if entity["archived"]:
                     store.archive_entity(new)
+            document_map = {}
+
+            def remap_document_value(value):
+                if isinstance(value, str):
+                    return entity_map.get(value, value)
+                if isinstance(value, list):
+                    return [remap_document_value(item) for item in value]
+                if isinstance(value, dict):
+                    return {
+                        key: remap_document_value(item)
+                        for key, item in value.items()
+                    }
+                return value
+
+            for document in store.rows(
+                "comic_documents",
+                "project_id=?",
+                (project_id,),
+                order="created_at",
+            ):
+                new_document = uid()
+                document_map[document["id"]] = new_document
+                with store.transaction() as db:
+                    db.execute(
+                        "INSERT INTO comic_documents"
+                        "(id,project_id,kind,source_id,input,result,provenance,created_at) "
+                        "VALUES(?,?,?,?,?,?,?,?)",
+                        (
+                            new_document,
+                            target,
+                            document["kind"],
+                            document_map.get(document["source_id"]),
+                            canonical(remap_document_value(document["input"])),
+                            canonical(remap_document_value(document["result"])),
+                            canonical({
+                                "copied_from": document["id"],
+                                "provenance": remap_document_value(
+                                    document["provenance"]
+                                ),
+                            }),
+                            now(),
+                        ),
+                    )
             for panel in store.rows("panels", "project_id=? AND deleted=0", (project_id,), order="position,created_at"):
                 self.check_stop()
                 new = store.panel(target, panel["name"])
