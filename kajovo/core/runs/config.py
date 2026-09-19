@@ -66,6 +66,9 @@ class UiRunConfig:
     unknown_pricing: str = "block"
     auto_repair: str = "off"
     verification_profile_ids: list[str] | None = None
+    # Runtime autorizace vzniká až po zmrazení SourcePacku; není uživatelským
+    # vstupem, ale musí mít stabilní typované místo pro WorkOrdery.
+    execution_approval_id: str = ""
 
     # QFILE: cesta je důvěryhodný lokální vstup. Pokud chybí, plánovací
     # request je povolen pouze při explicitním qfile_suggest_path=True.
