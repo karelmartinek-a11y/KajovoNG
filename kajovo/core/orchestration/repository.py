@@ -297,13 +297,32 @@ class OrchestrationRepository:
         state = "unknown" if unknown else "submitted"
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT state,provider_id FROM reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
-            if not row or row[0] not in {"reserved", "submitted", "unknown"}:
+            row = db.execute(
+                "SELECT state,provider_id FROM reservations WHERE reservation_id=?",
+                (reservation_id,),
+            ).fetchone()
+            if not row:
                 db.rollback()
                 raise OrchestrationError("RESERVATION_STATE", reservation_id)
-            if row[1] and provider_id and row[1] != provider_id:
+            current_state, current_provider = row
+            if (
+                current_provider
+                and provider_id
+                and current_provider != provider_id
+            ):
                 db.rollback()
-                raise OrchestrationError("PROVIDER_ID_CONFLICT", reservation_id)
+                raise OrchestrationError(
+                    "PROVIDER_ID_CONFLICT", reservation_id
+                )
+            if current_state == "settled":
+                # Recovery may replay the bookkeeping edge after the exact
+                # provider response has already been settled. Settlement is
+                # stronger evidence than submitted/unknown; never downgrade it.
+                db.commit()
+                return
+            if current_state not in {"reserved", "submitted", "unknown"}:
+                db.rollback()
+                raise OrchestrationError("RESERVATION_STATE", reservation_id)
             db.execute(
                 "UPDATE reservations SET state=?,provider_id=COALESCE(provider_id,?) WHERE reservation_id=?",
                 (state, provider_id, reservation_id),
