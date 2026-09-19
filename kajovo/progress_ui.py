@@ -63,6 +63,7 @@ STATE_META = {
     "closed": ("✓", "Dokončeno / uzavřeno", "success"),
     "dry_run": ("◇", "Dry-run / návrh bez zápisu", "focus"),
     "plan_ready": ("◆", "Ověřený plán připraven", "success"),
+    "qfile_plan_ready": ("◆", "Návrh QFILE čeká na potvrzení", "warning"),
     "partial": ("⚠", "Částečně dokončeno", "warning"),
     "files_complete_unverified": ("?", "Soubory převzaty, funkčnost neověřena", "warning"),
     "unfinished_record": ("?", "Konec fáze nezapsán", "warning"),
