@@ -82,6 +82,7 @@ jobs:
             tests/test_model_catalog.py \
             tests/test_workflows.py \
             tests/test_contracts.py \
+            tests/test_orchestration_repository.py \
             tests/test_delivery_pipeline.py \
             tests/test_batch_completion.py \
             tests/test_photo_studio.py \
