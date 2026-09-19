@@ -172,6 +172,18 @@ def test_bible_real_request_contract_and_saved_revision(comic):
     assert bible["provenance"]["work_order_hash"]
     service.run(service.start_bible(project))
     assert len(service.store.rows("bibles")) == 2
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(Path(service.settings.log_dir) / "orchestration.sqlite3")
+    with repo.connect() as db:
+        routes = db.execute(
+            "SELECT route FROM work_orders ORDER BY rowid"
+        ).fetchall()
+        states = db.execute(
+            "SELECT state FROM reservations ORDER BY rowid"
+        ).fetchall()
+    assert ("responses_live",) in routes
+    assert ("settled",) in states
 
 
 @pytest.mark.parametrize("kind,count", [("character", 1), ("character", 3), ("environment", 1)])
