@@ -589,7 +589,18 @@ def _reserve_photo_submit(job, rows, log_dir):
     return repo, order
 
 
+def _photo_ledger_present(job, log_dir):
+    return (
+        Path(log_dir)
+        / "PHOTO"
+        / job.job_id
+        / "work_order_v2.json"
+    ).is_file()
+
+
 def _mark_photo_submission(job, rows, log_dir, provider_id=None, *, unknown):
+    if not _photo_ledger_present(job, log_dir):
+        return
     _cfg, order, _projection = _photo_work_order(job, rows)
     _photo_repo(log_dir).mark_submitted(
         order.budget_reservation_id,
@@ -599,12 +610,19 @@ def _mark_photo_submission(job, rows, log_dir, provider_id=None, *, unknown):
 
 
 def _release_photo_reservation(job, rows, log_dir):
+    if not _photo_ledger_present(job, log_dir):
+        return
     _cfg, order, _projection = _photo_work_order(job, rows)
     _photo_repo(log_dir).release(order.budget_reservation_id)
 
 
 def _settle_photo_usage(job, custom_id, usage, log_dir):
-    if not job.batch_id or not isinstance(usage, dict):
+    if (
+        not job.batch_id
+        or not isinstance(usage, dict)
+        or not usage
+        or not _photo_ledger_present(job, log_dir)
+    ):
         return
     rows = [
         image_edit_row(
