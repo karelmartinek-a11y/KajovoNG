@@ -281,6 +281,13 @@ def _build_manifest_v3(
         context = {"file_context": compiled, "file": file}
         if recovery_instruction:
             context["recovery_instruction"] = str(recovery_instruction)
+            current = verified_artifacts.get(file["path"])
+            if isinstance(current, dict) and isinstance(current.get("content"), str):
+                context["repair_current_artifact"] = {
+                    "content": current["content"],
+                    "sha256": current.get("output_hash"),
+                    "validation_status": current.get("validation_status"),
+                }
         fmt = file_content_format()
         body = {
             "model": model,
