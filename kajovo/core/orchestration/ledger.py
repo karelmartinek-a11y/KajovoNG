@@ -8,6 +8,7 @@ from ..context_budget import checked_measurement, enforce_budget
 from ..context_compiler import content_hash
 from ..contracts import ContractError
 from .repository import repository_for_logger
+from .work_order import WorkOrder
 
 
 def _empty() -> dict[str, Any]:
@@ -216,10 +217,36 @@ def reserve_batch(
     limits = _limits(cfg)
     _check(summary, limits)
 
-    # SQLite BEGIN IMMEDIATE happens per reservation; all requests are validated
-    # first, so no provider side effect can occur if any row is invalid.
-    for order, reservation in pending:
-        _reserve_sqlite(logger, cfg, order, reservation)
+    repo = repository_for_logger(logger)
+    sql_rows: list[dict[str, Any]] = []
+    for order_value, reservation in pending:
+        if isinstance(order_value, WorkOrder):
+            order = order_value
+        else:
+            value = {
+                key: val for key, val in dict(order_value).items()
+                if key != "order_hash"
+            }
+            order = WorkOrder(**value)
+        repo.register_work_order(
+            order,
+            body_ref=reservation["request_hash"],
+            input_hash=order.input_projection_hash,
+        )
+        sql_rows.append({
+            "reservation_id": order.budget_reservation_id,
+            "work_order_hash": order.order_hash,
+            "cost_microusd": reservation["projected_cost_microusd"],
+            "input_limit": reservation["input_tokens"],
+            "output_limit": reservation["output_tokens"],
+        })
+    repo.reserve_many(
+        sql_rows,
+        max_cost_microusd=limits["max_cost_microusd"],
+        max_input_tokens=limits["max_input_tokens"],
+        max_output_tokens=limits["max_output_tokens"],
+        max_paid_requests=limits["max_paid_requests"],
+    )
 
     ledger["reservations"] = candidate
     ledger["summary"] = {**summary, "limits": limits}
@@ -230,4 +257,46 @@ def reserve_batch(
 def mark_submission(logger, work_order, provider_id: str | None, *, unknown: bool) -> None:
     repository_for_logger(logger).mark_submitted(
         work_order.budget_reservation_id, provider_id, unknown=unknown
+    )
+
+
+def release_reservation(logger, work_order) -> None:
+    repository_for_logger(logger).release(work_order.budget_reservation_id)
+
+
+def settle_usage(logger, work_order, response: dict[str, Any]) -> None:
+    provider_id = str(response.get("id") or "")
+    if not provider_id:
+        return
+    usage = response.get("usage") or {}
+    actual_cost_microusd = None
+    price_hash = None
+    try:
+        from ..context_pricing import PRICES, VERSION, projected_cost
+        model = str(response.get("model") or work_order.model)
+        if isinstance(usage, dict):
+            input_tokens = int(usage.get("input_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or 0)
+            projected = projected_cost(
+                model, input_tokens, output_tokens,
+                batch=work_order.route == "responses_batch",
+            )
+            if projected and isinstance(projected.get("usd"), (int, float)):
+                actual_cost_microusd = round(float(projected["usd"]) * 1_000_000)
+                from .contracts import canonical_sha256
+                price_hash = canonical_sha256({
+                    "version": VERSION,
+                    "model": model,
+                    "price": PRICES.get(model),
+                })
+    except (TypeError, ValueError, KeyError):
+        actual_cost_microusd = None
+        price_hash = None
+    repository_for_logger(logger).settle(
+        work_order.budget_reservation_id,
+        provider="openai",
+        provider_item_id=provider_id,
+        usage=usage if isinstance(usage, dict) else {},
+        actual_cost_microusd=actual_cost_microusd,
+        price_snapshot_hash=price_hash,
     )
