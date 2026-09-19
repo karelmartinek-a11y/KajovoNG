@@ -98,7 +98,17 @@ class RunExecutor(RunContext):
                         )
                     elif self.cfg.preparation_snapshot.get("version") != 2:
                         raise ContractError("Neznámá verze preparation checkpointu.")
-            source_pack = freeze_run_sources(self.cfg, self.settings, self.log)
+            # Read-only Files/vector-store retrieval is allowed before the
+            # first paid generative request so SOURCE_PACK_V1 can freeze exact
+            # remote bytes as part of the authorized run scope.
+            client = OpenAIClient(
+                self.api_key, timeout_s=self.settings.response_timeout_s
+            )
+            client.configure_validation(self.settings)
+            client.stopped = lambda: self._stop
+            source_pack = freeze_run_sources(
+                self.cfg, self.settings, self.log, client=client
+            )
             self.source_pack = source_pack
             self.source_context = source_context(self.log, source_pack)
             scope_hash = canonical_sha256({
@@ -148,9 +158,6 @@ class RunExecutor(RunContext):
                 self._response_file_ids = saved_state.get("response_file_ids", {})
                 self.log.update_state({"response_transport": "background"})
 
-            client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
-            client.configure_validation(self.settings)
-            client.stopped = lambda: self._stop
             if getattr(self, "resume_generate_batch", None):
                 result = self._submit_generate_batch(client, copy.deepcopy(self.resume_generate_batch))
                 self.finished_ok.emit(result)
