@@ -187,10 +187,14 @@ def _gen_file_chunks(
                 "work_order_hash": work_order.order_hash,
             },
         )
+        self._active_work_order = work_order
         try:
-            response = self._create_response(
-                client, working, attempt=attempt, measurement=report
-            )
+            try:
+                response = self._create_response(
+                    client, working, attempt=attempt, measurement=report
+                )
+            finally:
+                self._active_work_order = None
         except RemoteResponseError as exc:
             last_err = exc
             if exc.code != "max_output_tokens":
