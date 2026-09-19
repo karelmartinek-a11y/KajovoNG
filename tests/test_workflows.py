@@ -248,7 +248,7 @@ def test_custom_cascade_records_each_step(tmp_path):
     from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunExecutor
     from kajovo.core.cascade_types import CascadeDefinition, CascadeStep
     settings = AppSettings(log_dir=str(tmp_path / "LOG"))
-    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-4o-mini", input_text="test")])
+    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.6-luna", input_text="test")])
     cfg = CascadeRunConfig("project", definition, "", str(tmp_path / "out"), run_id="RUN_090920261200_TEST")
     worker = CascadeRunExecutor(cfg, settings, "test")
     client = Mock()
