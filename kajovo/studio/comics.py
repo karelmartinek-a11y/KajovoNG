@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import time
 from dataclasses import asdict
 
@@ -71,6 +72,7 @@ class ComicsPage(QWidget):
             ))
             self.tabs.addTab(page, label)
         self.build_style()
+        self.build_story_pipeline()
         history = QWidget()
         body = vertical(history)
         self.jobs = QListWidget()
@@ -206,6 +208,117 @@ class ComicsPage(QWidget):
             (widget.currentTextChanged if isinstance(widget, QComboBox) else widget.textChanged).connect(self.mark_style_dirty)
         self.sfx.toggled.connect(self.mark_style_dirty)
 
+    def build_story_pipeline(self):
+        page = QWidget()
+        body = vertical(page)
+        body.addWidget(
+            caption(
+                "Textová výrobní osa komiksu: Story → Script → Storyboard → "
+                "Continuity. Panely lze vytvořit až z continuity PASS.",
+                "muted",
+            )
+        )
+        body.addWidget(
+            actions(
+                action(
+                    "comic.story.generate",
+                    "Vytvořit Story",
+                    self.generate_story,
+                    "primary",
+                ),
+                action(
+                    "comic.script.generate",
+                    "Vytvořit Script",
+                    self.generate_script,
+                ),
+                action(
+                    "comic.storyboard.generate",
+                    "Vytvořit Storyboard",
+                    self.generate_storyboard,
+                ),
+                action(
+                    "comic.continuity.generate",
+                    "Zkontrolovat Continuity",
+                    self.generate_continuity,
+                ),
+                action(
+                    "comic.storyboard.materialize",
+                    "Převést schválený storyboard na panely",
+                    self.materialize_storyboard,
+                ),
+            )
+        )
+        self.story_pipeline_text = QPlainTextEdit()
+        self.story_pipeline_text.setReadOnly(True)
+        self.story_pipeline_text.setPlaceholderText(
+            "Nejprve sestavte bibli, potom vytvořte Story."
+        )
+        body.addWidget(self.story_pipeline_text, 1)
+        self.tabs.addTab(scroll(page), "Příběh / Storyboard")
+
+    def _start_story_stage(self, stage):
+        try:
+            project = self.require_project()
+            starter = {
+                "story": self.service.start_story,
+                "script": self.service.start_script,
+                "storyboard": self.service.start_storyboard,
+                "continuity": self.service.start_continuity,
+            }[stage]
+            self.execute_operation(starter(project))
+        except Exception as exc:
+            self.fail(exc)
+
+    def generate_story(self):
+        self._start_story_stage("story")
+
+    def generate_script(self):
+        self._start_story_stage("script")
+
+    def generate_storyboard(self):
+        self._start_story_stage("storyboard")
+
+    def generate_continuity(self):
+        self._start_story_stage("continuity")
+
+    def materialize_storyboard(self):
+        try:
+            project = self.require_project()
+            self.launch(
+                "Převod storyboardu na panely",
+                lambda service: service.materialize_storyboard(project),
+                lambda _value: self.refresh_project(),
+                network=False,
+            )
+        except Exception as exc:
+            self.fail(exc)
+
+    def refresh_story_pipeline(self):
+        if not self.project_id:
+            self.story_pipeline_text.clear()
+            return
+        sections = []
+        labels = (
+            ("story", "STORY"),
+            ("script", "SCRIPT"),
+            ("storyboard", "STORYBOARD"),
+            ("continuity", "CONTINUITY"),
+        )
+        for kind, label in labels:
+            document = self.service.latest_document(self.project_id, kind)
+            if document is None:
+                sections.append(f"## {label}\n— zatím nevytvořeno —")
+                continue
+            sections.append(
+                f"## {label} · {document['created_at']}\n"
+                + json.dumps(
+                    document["result"],
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        self.story_pipeline_text.setPlainText("\n\n".join(sections))
+
     def mark_style_dirty(self, *_):
         if not self.loading:
             self.style_dirty = True
@@ -306,6 +419,7 @@ class ComicsPage(QWidget):
             self.bible_versions.setCurrentIndex(self.bible_versions.findData(self.project_record["bible_id"]))
             self.loading = False
             self.show_bible()
+            self.refresh_story_pipeline()
             self.refresh_entities()
             self.refresh_panels()
             self.refresh_jobs()
@@ -737,6 +851,7 @@ class ComicsPage(QWidget):
 
     def refresh_after_operation(self):
         if self.project_id:
+            self.refresh_story_pipeline()
             self.refresh_entities()
             self.refresh_jobs()
             if not self.dirty:
