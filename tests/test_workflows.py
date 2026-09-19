@@ -37,6 +37,9 @@ def make_worker(tmp_path, mode):
                   preparation_snapshot=None,
                   available_models=["gpt-4o-mini"])
     cfg = UiRunConfig(**values)
+    # Testovací historický model není v produkčním ceníku. Test výslovně
+    # schvaluje token-only režim; produkční default zůstává fail-closed.
+    cfg.unknown_pricing = "explicit_token_budget"
     cfg.model_caps = {"ok_basic": True, "supports_temperature": True, "supports_previous_response_id": True}
     settings = AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache"))
     logger = RunLogger(settings.log_dir, "RUN_090920261200_TEST", "test")
