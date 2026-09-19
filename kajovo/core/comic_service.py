@@ -331,6 +331,260 @@ class ComicService:
             self.store.event(db, operation["project_id"], "bible_created", {"bible_id": bible_id})
         self.update_operation(operation["id"], "completed")
 
+    def _document_for_operation(self, operation):
+        rows = self.store.rows(
+            "comic_documents",
+            "project_id=? AND json_extract(provenance, '$.operation_id')=?",
+            (operation["project_id"], operation["id"]),
+            order="created_at DESC",
+        )
+        return rows[0] if rows else None
+
+    def _save_text_document(
+        self,
+        operation,
+        *,
+        kind,
+        schema,
+        instructions,
+        semantic,
+    ):
+        existing = self._document_for_operation(operation)
+        if existing is not None:
+            self.update_operation(operation["id"], "completed")
+            return existing
+        snapshot = operation["snapshot"]
+        result, provenance = self.text_request(
+            operation,
+            instructions,
+            schema,
+            snapshot,
+            [],
+        )
+        normalized = semantic(result)
+        provenance["operation_id"] = operation["id"]
+        document_id = uid()
+        with self.store.transaction() as db:
+            db.execute(
+                "INSERT INTO comic_documents"
+                "(id,project_id,kind,source_id,input,result,provenance,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    document_id,
+                    operation["project_id"],
+                    kind,
+                    snapshot.get("source_document_id"),
+                    canonical(snapshot),
+                    canonical(normalized),
+                    canonical(provenance),
+                    now(),
+                ),
+            )
+            self.store.event(
+                db,
+                operation["project_id"],
+                kind + "_created",
+                {
+                    "document_id": document_id,
+                    "source_document_id": snapshot.get("source_document_id"),
+                },
+            )
+        self.update_operation(operation["id"], "completed")
+        return self.store.get("comic_documents", document_id)
+
+    def _story(self, operation):
+        return self._save_text_document(
+            operation,
+            kind="story",
+            schema=STORY_SCHEMA,
+            instructions=(
+                "Vytvoř kanonický příběh komiksu podle bible, explicitního popisu "
+                "projektu a známých entit. Výstup musí mít stabilní story beat ID, "
+                "úplný dějový oblouk a nesmí přidávat postavy ani prostředí, která "
+                "nejsou doložena vstupem, pokud je projekt výslovně nepožaduje."
+            ),
+            semantic=validate_story,
+        )
+
+    def _script(self, operation):
+        story = operation["snapshot"]["story"]
+        entity_ids = {
+            row["id"] for row in operation["snapshot"].get("entities", [])
+        }
+
+        def semantic(result):
+            value = validate_script(result, story)
+            for scene in value["scenes"]:
+                if not set(scene["entity_ids"]) <= entity_ids:
+                    raise ComicError(
+                        "invalid_output",
+                        "Scénář odkazuje na neznámou entitu projektu.",
+                    )
+            return value
+
+        return self._save_text_document(
+            operation,
+            kind="script",
+            schema=SCRIPT_SCHEMA,
+            instructions=(
+                "Převeď schválený Story do produkčního scénáře. Každá scéna musí "
+                "odkazovat na existující story beat, zachovat bible/entity identity "
+                "a explicitně uvést lokaci, čas, akci, dialogy a použité entity. "
+                "Nevynechej žádný story beat."
+            ),
+            semantic=semantic,
+        )
+
+    def _storyboard(self, operation):
+        script = operation["snapshot"]["script"]
+        entity_ids = {
+            row["id"] for row in operation["snapshot"].get("entities", [])
+        }
+        return self._save_text_document(
+            operation,
+            kind="storyboard",
+            schema=STORYBOARD_SCHEMA,
+            instructions=(
+                "Rozděl schválený scénář do úplného storyboardu panelů. Každý "
+                "panel musí mít stabilní ID, navazovat na existující scénu, přesnou "
+                "pozici, typ záběru, vizuální popis, entity, dialog a caption. "
+                "Pokryj každou scénu a zachovej kontinuitu identity a prostředí."
+            ),
+            semantic=lambda result: validate_storyboard(
+                result, script, entity_ids
+            ),
+        )
+
+    def _continuity(self, operation):
+        storyboard = operation["snapshot"]["storyboard"]
+        return self._save_text_document(
+            operation,
+            kind="continuity",
+            schema=CONTINUITY_SCHEMA,
+            instructions=(
+                "Proveď nezávislou continuity kontrolu Scriptu a Storyboardu proti "
+                "bible a kanonickým entitám. PASS smí být vrácen jen pokud jsou "
+                "schváleny všechny storyboard panely a neexistuje blocking nález. "
+                "Jinak vrať needs_changes a konkrétní opravy."
+            ),
+            semantic=lambda result: validate_continuity(result, storyboard),
+        )
+
+    def materialize_storyboard(self, project_id):
+        storyboard = self.latest_document(project_id, "storyboard")
+        continuity = self.latest_document(project_id, "continuity")
+        if storyboard is None:
+            raise ComicError("storyboard_missing", "Nejprve vytvořte Storyboard.")
+        if (
+            continuity is None
+            or continuity.get("source_id") != storyboard["id"]
+            or continuity["result"].get("status") != "pass"
+        ):
+            raise ComicError(
+                "continuity_missing",
+                "Storyboard lze převést na panely až po PASS continuity kontroly stejné verze.",
+            )
+
+        existing = self.store.rows(
+            "events",
+            "project_id=? AND operation='storyboard_materialized'",
+            (project_id,),
+            order="created_at DESC",
+        )
+        for event in existing:
+            if event["data"].get("storyboard_id") == storyboard["id"]:
+                return list(event["data"].get("panel_ids") or [])
+
+        entities = {
+            row["id"]: row
+            for row in self.store.rows(
+                "entities",
+                "project_id=? AND archived=0",
+                (project_id,),
+                order="created_at",
+            )
+        }
+        created = []
+        for panel_spec in sorted(
+            storyboard["result"]["panels"], key=lambda row: row["position"]
+        ):
+            panel_id = self.store.panel(
+                project_id, f"Storyboard {panel_spec['position']:03d}"
+            )
+            panel = self.store.get("panels", panel_id)
+            nodes = [
+                {
+                    "type": "text",
+                    "text": (
+                        f"SHOT: {panel_spec['shot']}\n"
+                        f"VISUAL: {panel_spec['visual']}"
+                    ),
+                }
+            ]
+            for entity_id in panel_spec["entity_ids"]:
+                entity = entities.get(entity_id)
+                if entity is None:
+                    raise ComicError(
+                        "broken_reference",
+                        "Storyboard odkazuje na entitu, která již není aktivní.",
+                    )
+                nodes.append(
+                    {
+                        "type": entity["kind"] + "_ref",
+                        "entity_id": entity_id,
+                    }
+                )
+            overlays = []
+            for line in panel_spec["dialogue"]:
+                overlays.append(
+                    {
+                        "kind": "dialog",
+                        "text": f"{line['speaker']}: {line['text']}",
+                        "x": 0.08,
+                        "y": min(0.08 + 0.14 * len(overlays), 0.64),
+                        "w": 0.42,
+                        "h": 0.12,
+                        "tail_x": 0.50,
+                        "tail_y": 0.50,
+                        "font_size": 0.04,
+                    }
+                )
+            if panel_spec["caption"]:
+                overlays.append(
+                    {
+                        "kind": "caption",
+                        "text": panel_spec["caption"],
+                        "x": 0.08,
+                        "y": 0.82,
+                        "w": 0.84,
+                        "h": 0.10,
+                        "tail_x": 0.50,
+                        "tail_y": 0.50,
+                        "font_size": 0.035,
+                    }
+                )
+            self.store.save_panel(
+                panel_id,
+                panel["revision"],
+                f"Storyboard {panel_spec['position']:03d}",
+                {"version": 1, "nodes": nodes},
+                panel["format"],
+                overlays,
+            )
+            created.append(panel_id)
+        with self.store.transaction() as db:
+            self.store.event(
+                db,
+                project_id,
+                "storyboard_materialized",
+                {
+                    "storyboard_id": storyboard["id"],
+                    "continuity_id": continuity["id"],
+                    "panel_ids": created,
+                },
+            )
+        return created
+
     def _entity(self, operation):
         snap = operation["snapshot"]
         if "descriptor" not in snap:
