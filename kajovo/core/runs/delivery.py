@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
+import json
 import os
 import time
+from pathlib import Path
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -44,15 +47,85 @@ def save_out_files(context: DeliveryContext, files: list[dict[str, Any]]) -> dic
     out_dir = cfg.out_dir
     validate_paths(files)
     for row in files:
-        safe_join_under_root(out_dir, row["path"])
+        if not cfg.dry_run:
+            safe_join_under_root(out_dir, row["path"])
         if not isinstance(row.get("content"), str):
             raise ContractError("Obsah výstupního souboru musí být text.")
 
-    if cfg.mode == "MODIFY" and context.settings.dry_run_modify:
-        context.log.save_json("manifests", "modify_dry_run", {"files": files})
-        context.log.update_state({"dry_run": True, "written_files": []})
-        context.finish_delivery(files, dry_run=True)
-        return {"saved": [], "dry_run": True}
+    if cfg.mode == "MODIFY" and cfg.dry_run:
+        staging_root = Path(context.log.paths.run_dir) / "staging" / "dry_run"
+        generated_root = staging_root / "generated"
+        ensure_dir(str(generated_root))
+        staged: list[dict[str, Any]] = []
+        diff_parts: list[str] = []
+        for item in files:
+            context.check_stop()
+            rel = item["path"]
+            content = item["content"]
+            dst = safe_join_under_root(str(generated_root), rel)
+            ensure_dir(os.path.dirname(dst))
+            atomic_write_text(dst, content)
+            digest = sha256_file(dst)
+            expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if digest != expected:
+                raise ContractError(f"Dry-run staging neodpovídá ověřenému obsahu: {rel}")
+            source_text = ""
+            source_path = safe_join_under_root(cfg.in_dir, rel) if cfg.in_dir else ""
+            if source_path and os.path.isfile(source_path):
+                try:
+                    source_text = Path(source_path).read_text(encoding="utf-8")
+                except UnicodeDecodeError as exc:
+                    raise ContractError(f"Dry-run diff vyžaduje textový zdroj: {rel}") from exc
+            diff_parts.extend(difflib.unified_diff(
+                source_text.splitlines(keepends=True),
+                content.splitlines(keepends=True),
+                fromfile=f"a/{rel}",
+                tofile=f"b/{rel}",
+            ))
+            staged.append({
+                "path": rel,
+                "staged_path": str(Path(dst).relative_to(Path(context.log.paths.run_dir))),
+                "bytes": os.path.getsize(dst),
+                "sha256": digest,
+                "action": item.get("action", "modify" if source_text else "add"),
+            })
+
+        diff_text = "".join(diff_parts)
+        manifest = {
+            "version": 1,
+            "mode": "MODIFY",
+            "dry_run": True,
+            "publication": "blocked",
+            "staging_root": str(staging_root.relative_to(Path(context.log.paths.run_dir))),
+            "files": staged,
+        }
+        verification = {
+            "version": 1,
+            "status": "passed",
+            "technical_validation": "passed",
+            "content_acceptance": "not_claimed",
+            "published": False,
+            "checks": ["relative_paths", "utf8_content", "staged_sha256", "diff_generated"],
+            "files": [{"path": row["path"], "sha256": row["sha256"]} for row in staged],
+        }
+        atomic_write_text(str(staging_root / "changes.diff"), diff_text)
+        atomic_write_text(str(staging_root / "manifest.json"), json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        atomic_write_text(str(staging_root / "verification.json"), json.dumps(verification, ensure_ascii=False, indent=2) + "\n")
+        context.log.save_json("manifests", "modify_dry_run", manifest)
+        context.log.save_json("manifests", "modify_dry_run_diff", {"diff": diff_text})
+        context.log.save_json("manifests", "modify_dry_run_verification", verification)
+        context.log.update_state({
+            "dry_run": True,
+            "written_files": [],
+            "staged_files": staged,
+            "dry_run_staging": manifest["staging_root"],
+            "verification_evidence": verification,
+        })
+        context.finish_delivery(files, saved=staged, dry_run=True)
+        return {
+            "saved": [], "staged": staged, "dry_run": True,
+            "diff": diff_text, "verification": verification,
+        }
 
     ensure_dir(out_dir)
     if cfg.versing and files:
