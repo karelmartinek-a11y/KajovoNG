@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {"type": "integer", "enum": [4]},
+    "run_id": {"type": "string"},
+    "manifest_id": {"type": "string"},
+    "route": {"type": "string", "enum": ["responses_batch", "image_batch"]},
+    "model": {"type": "string"},
+    "endpoint": {"type": "string"},
+    "wave_no": {"type": "integer"},
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "custom_id": {"type": "string"},
+          "work_order_hash": {"type": "string"},
+          "target_id": {"type": "string"},
+          "target_path": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+          "body_hash": {"type": "string"},
+          "expected_target_hash": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        },
+        "required": ["custom_id", "work_order_hash", "target_id", "target_path", "body_hash", "expected_target_hash"],
+        "additionalProperties": false
+      }
+    },
+    "input_file_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "provider_batch_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "state": {"type": "string", "enum": ["prepared", "input_uploaded", "submitting", "submission_unknown", "submitted", "remote_terminal", "imported", "partial", "failed"]}
+  },
+  "required": ["version", "run_id", "manifest_id", "route", "model", "endpoint", "wave_no", "rows", "input_file_id", "provider_batch_id", "state"],
+  "additionalProperties": false
+}
