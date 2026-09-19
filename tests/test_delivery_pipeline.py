@@ -24,6 +24,7 @@ from change_v2_fixtures import (
 )
 from kajovo.core.contracts import ContractError
 from kajovo.core.generate_batch import process_saved_batch
+from kajovo.core.orchestration.errors import OrchestrationError
 from kajovo.core.orchestration.publish import publish_staged_run
 
 
@@ -160,7 +161,7 @@ def test_modify_dry_run_stages_diff_and_never_changes_out(tmp_path):
     assert state["published_files"] == []
     staging_root = Path(worker.log.paths.run_dir) / state["staging_root"]
     assert (staging_root / "changes.diff").is_file()
-    with pytest.raises(ContractError, match="Dry-run"):
+    with pytest.raises(OrchestrationError, match="PUBLISH_DRY_RUN"):
         publish_staged_run(worker.log.paths.run_dir)
 
 
