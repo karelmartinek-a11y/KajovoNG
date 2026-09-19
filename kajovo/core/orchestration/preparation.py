@@ -235,23 +235,41 @@ def _file_spec_data():
     })
 
 
-def _quality_data():
+def _quality_format(name: str) -> dict[str, Any]:
+    """Strict quality-gate schema uses local refs to stay below depth limits."""
     text = {"type": "string"}
     strings = array(text)
-    return obj({
-        "corrected_spine": _spine_data(),
+    finding = obj({
+        "id": text,
+        "severity": {"type": "string", "enum": ["blocking", "major", "minor"]},
+        "issue": text,
+        "affected_paths": strings,
+        "resolution": text,
+    })
+    ready_data = obj({
+        "corrected_spine": {"$ref": "#/$defs/spine"},
         "corrected_file_specs": array(obj({
             "path": text,
-            "spec": _file_spec_data(),
+            "spec": {"$ref": "#/$defs/file_spec"},
         })),
-        "findings": array(obj({
-            "id": text,
-            "severity": {"type": "string", "enum": ["blocking", "major", "minor"]},
-            "issue": text,
-            "affected_paths": strings,
-            "resolution": text,
-        })),
+        "findings": array(finding),
     })
+    ready = obj({
+        "status": {"type": "string", "enum": ["ready"]},
+        "data": ready_data,
+    })
+    blocked = obj({
+        "status": {"type": "string", "enum": ["blocked"]},
+        "questions": array(_question()),
+    })
+    schema = obj({
+        "result": {"anyOf": [ready, blocked]},
+    })
+    schema["$defs"] = {
+        "spine": _spine_data(),
+        "file_spec": _file_spec_data(),
+    }
+    return response_format(name, schema)
 
 
 FORMATS = {
@@ -276,8 +294,8 @@ FORMATS = {
     "A2_DETAIL": response_format("A2_FILE_SPEC_V1", _result(_file_spec_data())),
     "B2_SPINE": response_format("B2_SPINE_V1", _result(_spine_data())),
     "B2_DETAIL": response_format("B2_FILE_SPEC_V1", _result(_file_spec_data())),
-    "A2Q": response_format("A2Q_QUALITY_GATE_V2", _result(_quality_data())),
-    "B2Q": response_format("B2Q_QUALITY_GATE_V2", _result(_quality_data())),
+    "A2Q": _quality_format("A2Q_QUALITY_GATE_V2"),
+    "B2Q": _quality_format("B2Q_QUALITY_GATE_V2"),
 }
 
 
