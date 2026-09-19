@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from change_v2_fixtures import (
-    _input_json,
+    _file_input_json,
     batch_output_rows,
     default_files,
     format_names,
@@ -250,11 +250,11 @@ def test_live_verified_content_dependency_runs_provider_before_consumer(tmp_path
         == "FILE_CONTENT_V1"
     ]
     paths = [
-        _input_json(call)["file_context"]["working_context"]["target_file"]["path"]
+        _file_input_json(call)["file_context"]["working_context"]["target_file"]["path"]
         for call in file_calls
     ]
     assert paths == ["provider.txt", "consumer.txt"]
-    consumer = _input_json(file_calls[1])
+    consumer = _file_input_json(file_calls[1])
     deps = consumer["file_context"]["working_context"]["verified_dependency_artifacts"]
     assert [row["path"] for row in deps] == ["provider.txt"]
     assert deps[0]["validation_status"] == "verified"
