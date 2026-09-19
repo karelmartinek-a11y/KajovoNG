@@ -36,8 +36,26 @@ def _work_orders(manifest: dict[str, Any]) -> dict[str, WorkOrder]:
 
 
 def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
-    log.save_json("manifests", "batch_manifest_v4", manifest_v4)
-    log.update_state({"batch_manifest_v4": manifest_v4})
+    from pathlib import Path
+    import json
+
+    log.save_json(
+        "manifests",
+        f"batch_manifest_v4_{manifest_v4['manifest_id']}",
+        manifest_v4,
+    )
+    try:
+        state = json.loads(Path(log.state_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    manifests = dict(state.get("batch_manifests_v4") or {})
+    manifests[manifest_v4["manifest_id"]] = manifest_v4
+    log.update_state(
+        {
+            "batch_manifest_v4": manifest_v4,
+            "batch_manifests_v4": manifests,
+        }
+    )
 
 
 def _submit_generate_batch(self: RunContext, client, manifest):
