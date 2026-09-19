@@ -42,11 +42,18 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
             "dry_run": bool(self.cfg.dry_run),
         }
 
-    touched_raw = struct.get("touched_files", []) or []
-    validate_paths(touched_raw)
+    spine_files = list((struct.get("spine") or {}).get("files") or [])
+    touched_raw = [
+        row for row in spine_files if row.get("action") in {"add", "modify"}
+    ]
+    preserved_raw = [
+        row for row in spine_files if row.get("action") == "preserve"
+    ]
+    del preserved_raw
+    validate_paths(spine_files)
     validate_modify_sources(struct, root, items, self.cfg.skip_paths or [])
     if any(item.get("action") not in ("add", "modify") for item in touched_raw):
-        raise ContractError("B2: action musí být add nebo modify.")
+        raise ContractError("B2: výrobní action musí být add nebo modify.")
     if not touched_raw:
         self._verify_completed_files()
         self.log.update_state({"no_changes": True, "written_files": []})
@@ -67,7 +74,7 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         if path in (self.cfg.skip_paths or []):
             continue
         ext = os.path.splitext(path)[1].lower()
-        if tf.get("kind") == "binary" or ext in (self.cfg.skip_exts or []):
+        if tf.get("kind") != "text" or ext in (self.cfg.skip_exts or []):
             self._log_debug(f"B3: skipping due to extension {ext} ({path})")
             omitted.append(path)
             continue
@@ -126,7 +133,10 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
     total_files = len(touched)
     chain_prev_id = str(resp2_id or "")
     out_files: list[dict[str, Any]] = []
-    generation_order = [row for row in touched_raw if row in touched or row["path"] in (self.cfg.skip_paths or [])]
+    generation_order = [
+        row for row in touched_raw
+        if row in touched or row["path"] in (self.cfg.skip_paths or [])
+    ]
     for i, tf in enumerate(generation_order, start=1):
         self._check_stop()
         path = tf.get("path", "")
