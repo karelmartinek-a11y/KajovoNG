@@ -269,8 +269,8 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
                 "model": model,
                 "model_capability": {},
                 "source_snapshot": snapshot,
-                "attempt_no": 0,
-                "approval_id": f"user-start:{run_id}",
+                "attempt_no": 1,
+                "approval_id": getattr(cfg_for_order, "execution_approval_id", "") or f"user-start:{run_id}",
             },
             compiled,
         )
