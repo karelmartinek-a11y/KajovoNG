@@ -188,8 +188,14 @@ def validate_vector_attributes(attributes: dict[str, Any]) -> None:
 def validate_run_options(cfg, check_models=True) -> None:
     if type(getattr(cfg, "maximum_quality", False)) is not bool:
         raise ValueError("Maximum Quality musí být boolean.")
+    if type(getattr(cfg, "stop_after_plan", False)) is not bool:
+        raise ValueError("stop_after_plan musí být boolean.")
+    if type(getattr(cfg, "dry_run", False)) is not bool:
+        raise ValueError("dry_run musí být boolean.")
     if cfg.mode not in ("GENERATE", "MODIFY", "QA", "QFILE"):
         raise ValueError("Neznámý režim běhu.")
+    from .orchestration.run_config import build_run_config_v2
+    build_run_config_v2(cfg)
     if not cfg.model.strip() or not cfg.prompt.strip():
         raise ValueError("Vyberte model a vyplňte zadání.")
     if is_non_response_model(cfg.model):
