@@ -151,9 +151,262 @@ def validate_batch_model(model):
     validate_response_payload({"model": model}, batch=True)
 
 
+
+def _build_manifest_v3(
+    run_id,
+    prompt,
+    plan,
+    structure,
+    model,
+    temperature,
+    paths=None,
+    *,
+    requirements,
+    maximum_quality=False,
+    mode="GENERATE",
+    originals=None,
+    recovery_instruction="",
+    run_config=None,
+    expected_target_hashes=None,
+    verified_artifacts=None,
+):
+    """Build exactly one ready production wave from IMPLEMENTATION_GRAPH_V3."""
+    import jsonschema
+
+    from .orchestration.preparation import GRAPH_SCHEMA
+    from .orchestration.waves import build_execution_dag, ready_tasks
+    from .requirements import apply_quality, stage_instructions
+
+    if mode not in {"GENERATE", "MODIFY"} or structure.get("mode") != mode:
+        raise ContractError("IMPLEMENTATION_GRAPH_V3 neodpovídá workflow.")
+    try:
+        jsonschema.Draft202012Validator(GRAPH_SCHEMA).validate(structure)
+    except jsonschema.ValidationError as exc:
+        raise ContractError(f"Neplatný IMPLEMENTATION_GRAPH_V3: {exc.message}") from exc
+    if not isinstance(requirements, dict) or not isinstance(plan, dict):
+        raise ContractError("V3 BATCH vyžaduje kanonické requirements a plan.")
+
+    validate_batch_model(model)
+    originals = dict(originals or {})
+    if any(not isinstance(value, str) for value in originals.values()):
+        raise ContractError("Původní obsah musí být text.")
+    verified_artifacts = copy.deepcopy(verified_artifacts or {})
+    expected_target_hashes = dict(expected_target_hashes or {})
+
+    snapshot = copy.deepcopy({
+        "prompt": prompt,
+        "plan": plan,
+        "structure": structure,
+        "requirements": requirements,
+        "maximum_quality": maximum_quality,
+        "original_hashes": {
+            path: hashlib.sha256(content.encode("utf-8")).hexdigest()
+            for path, content in originals.items()
+        },
+    })
+    compiler = ContextCompiler(snapshot)
+    dag = build_execution_dag(structure)
+    verified_targets = {
+        path
+        for path, artifact in verified_artifacts.items()
+        if isinstance(artifact, dict)
+        and artifact.get("validation_status") == "verified"
+    }
+    ready = set(ready_tasks(dag, {path: True for path in verified_targets}))
+    if not ready:
+        remaining_content = {
+            path: list(dag.content_dependencies.get(path, ()))
+            for path in compiler.files
+            if path not in verified_targets
+        }
+        raise ContractError(
+            "BATCH nemá připravenou dependency-wave; chybí verified content evidence: "
+            + json.dumps(remaining_content, ensure_ascii=False, sort_keys=True)
+        )
+
+    production_actions = (
+        {"generate"} if mode == "GENERATE" else {"add", "modify"}
+    )
+    production = {
+        row["path"]
+        for row in structure["spine"]["files"]
+        if row["kind"] == "text" and row["action"] in production_actions
+    }
+    requested = set(paths) if paths is not None else production
+    if not requested <= production:
+        raise ContractError(
+            f"BATCH výběr obsahuje neprodukční nebo neznámé cesty: {sorted(requested - production)}"
+        )
+    selected_paths = sorted(requested & ready)
+    blocked_requested = sorted(requested - ready)
+    if not selected_paths:
+        raise ContractError(
+            "Vybrané soubory nejsou v aktuální dependency-wave; nejprve musí projít jejich verified_content dependency."
+        )
+
+    files_by_path = {row["path"]: row for row in structure["spine"]["files"]}
+    selected = [files_by_path[path] for path in selected_paths]
+    if len(selected) > 50_000:
+        raise ContractError("Dávka překračuje 50 000 souborů.")
+
+    stage = "B3_FILE" if mode == "MODIFY" else "A3_FILE"
+    rows, reports, work_orders = [], [], []
+    for index, file in enumerate(selected):
+        if mode == "MODIFY" and file["action"] == "modify":
+            if not isinstance(originals.get(file["path"]), str):
+                raise ContractError(
+                    f"Chybí úplný původní obsah souboru {file['path']}."
+                )
+        compiled = compiler.compile(
+            file["path"],
+            originals=originals,
+            verified_artifacts=verified_artifacts,
+        )
+        context = {"file_context": compiled, "file": file}
+        if recovery_instruction:
+            context["recovery_instruction"] = str(recovery_instruction)
+        fmt = file_content_format()
+        body = {
+            "model": model,
+            "store": False,
+            "instructions": (
+                stage_instructions(stage, batch=True)
+                + "\nWire kontrakt FILE_CONTENT_V1: vrať pouze objekt s polem content. "
+                "Cesta a akce jsou důvěryhodná metadata WorkOrderu."
+            ),
+            "input": canonical(context),
+            "text": fmt,
+        }
+        if temperature is not None and not uses_reasoning_defaults(model):
+            body["temperature"] = temperature
+        routing = configure_file_request(
+            body, compiled, maximum_quality=maximum_quality
+        )
+        apply_quality(body, maximum_quality)
+        report = enforce_budget(
+            measure_request(body, compiled=compiled, batch=True)
+        )
+        validate_response_payload(body, batch=True)
+        custom_id = f"{run_id}_{stage[:2]}_{index:05d}"
+        rows.append({
+            "custom_id": custom_id,
+            "method": "POST",
+            "url": "/v1/responses",
+            "body": body,
+        })
+        report.update(
+            routing=routing, path=file["path"], custom_id=custom_id
+        )
+        reports.append(report)
+
+        cfg_for_order = run_config
+        if cfg_for_order is None:
+            from types import SimpleNamespace
+            cfg_for_order = SimpleNamespace(
+                maximum_quality=maximum_quality,
+                auto_repair="off",
+                unknown_pricing="explicit_token_budget",
+                max_cost_microusd=None,
+                max_input_tokens=2_000_000,
+                max_output_tokens=500_000,
+                max_paid_requests=200,
+                execution_approval_id=f"user-start:{run_id}",
+            )
+        order = freeze_order(
+            cfg_for_order,
+            {
+                "run_id": run_id,
+                "step_id": "batch:" + custom_id,
+                "task_id": custom_id,
+                "stage": stage.split("_", 1)[0],
+                "route": "responses_batch",
+                "target_id": file["path"],
+                "target_path": file["path"],
+                "expected_target_hash": expected_target_hashes.get(file["path"]),
+                "contract_name": "FILE_CONTENT_V1",
+                "schema": fmt["format"]["schema"],
+                "prompt": body["instructions"] + "\n" + body["input"],
+                "model": model,
+                "model_capability": {},
+                "source_snapshot": {
+                    "graph_hash": digest(structure),
+                    "requirements_hash": digest(requirements),
+                    "plan_hash": digest(plan),
+                },
+                "attempt_no": 1,
+                "approval_id": (
+                    getattr(cfg_for_order, "execution_approval_id", "")
+                    or f"user-start:{run_id}"
+                ),
+            },
+            compiled,
+        )
+        work_orders.append({**order.to_dict(), "order_hash": order.order_hash})
+
+    selected_set = set(selected_paths)
+    deferred = sorted(production - selected_set - verified_targets)
+    manifest = {
+        "version": 3,
+        "graph_version": 3,
+        "mode": mode,
+        "snapshot": snapshot,
+        "snapshot_hash": digest(snapshot),
+        "requests": rows,
+        "work_orders": {row["task_id"]: row for row in work_orders},
+        "cost_context_reports": reports,
+        "dependency_waves": {
+            "waves": [list(wave) for wave in dag.waves],
+            "content_dependencies": {
+                key: list(value)
+                for key, value in dag.content_dependencies.items()
+            },
+        },
+        "wave_paths": selected_paths,
+        "deferred_paths": deferred,
+        "blocked_requested_paths": blocked_requested,
+        "verified_dependency_artifacts": {
+            path: verified_artifacts[path]
+            for path in sorted(verified_targets)
+            if path in verified_artifacts
+        },
+        "expected": {
+            row["custom_id"]: file["path"]
+            for row, file in zip(rows, selected, strict=True)
+        },
+        "omitted": sorted(
+            row["path"]
+            for row in structure["spine"]["files"]
+            if row["path"] not in production
+        ),
+    }
+    if recovery_instruction:
+        manifest["recovery_instruction"] = str(recovery_instruction)
+    encode_requests(manifest)
+    return manifest
+
+
 def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=None, *,
                    requirements=None, maximum_quality=False, mode="GENERATE", originals=None,
                    recovery_instruction="", run_config=None, expected_target_hashes=None):
+    if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
+        return _build_manifest_v3(
+            run_id,
+            prompt,
+            plan,
+            structure,
+            model,
+            temperature,
+            paths,
+            requirements=requirements,
+            maximum_quality=maximum_quality,
+            mode=mode,
+            originals=originals,
+            recovery_instruction=recovery_instruction,
+            run_config=run_config,
+            expected_target_hashes=expected_target_hashes,
+            verified_artifacts=None,
+        )
+
     from .requirements import apply_quality, stage_instructions, validate_traceability
 
     if mode not in {"GENERATE", "MODIFY"}:
