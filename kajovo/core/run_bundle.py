@@ -44,7 +44,7 @@ RUN_STATUSES = {
     "unknown",
 }
 TERMINAL_STATUSES = {"completed", "partial", "failed", "cancelled", "stopped", "closed",
-                     "files_complete_unverified", "dry_run"}
+                     "files_complete_unverified", "dry_run", "plan_ready"}
 ARTIFACT_BUCKETS = {"inputs", "intermediate", "outputs", "external"}
 
 
