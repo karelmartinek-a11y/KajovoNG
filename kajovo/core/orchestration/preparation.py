@@ -31,10 +31,12 @@ PROMPTS = {
     "A1": COMMON + "\n\nNavrhni architekturu proti schvalenym requirements. Neprepisuj jejich cele texty, pouzij stabilni ID. Rozdel odpovednosti a uved integracni a verifikacni zamer. Nevymyslej lockfile hashe ani prikazy urcene k okamzitemu provedeni na hostiteli.",
     "A2_SPINE": COMMON + "\n\nNavrhni konecny index souboru a presne interfaces. Prirad kazdou povinnost vlastnikovi. Dependencies jsou pouze cesty uvnitr projektu. Rozlis contract zavislost a skutecnou potrebu verified_content; tu pouzij jen s duvodem. Pro binarni prostredky uved realneho producera.",
     "A2_DETAIL": COMMON + "\n\nVytvor implementacni kontrakt jen pro dodany cil. Specifikuj chovani, relevantni facets, verzovane interfaces, konkretni testy a akceptaci. Nepopisuj implementaci nesouvisejicich souboru. Expected visible tokens je odhad celeho zdrojoveho souboru bez reasoning. Prazdny soubor nepovoluj bez skutecneho duvodu.",
+    "A2Q": COMMON + "\n\nJednej jako nezavisly principal engineer. Proved skutecny pre-implementation quality gate celeho IMPLEMENTATION_GRAPH_V3. Zkontroluj consumer/provider kompatibilitu, typy, error semantics, globalni invarianty, lifecycle, cross-file kontrakty, persistence, acceptance, dependency completeness a blokujici nejasnosti. Opravnene nalezy rovnou zapracuj do kompletniho corrected_spine a corrected_file_specs. Nevracej jen komentar a nerozsiruj produktovy scope.",
     "B0R": COMMON + "\n\nAnalyzuj pozadovanou zmenu proti zmrazenemu projektu. Oddel CHANGE a PRESERVE. Nevydavej nezname chovani za overene. Povolene read-only tools slouzi jen dodanemu scope. Chybejici rozhodujici podklad oznac blocked.",
     "B1": COMMON + "\n\nVytvor plan zmeny. Add/modify/preserve musi odpovidat zmrazenemu inventari. Nepozaduj odstraneni ani prepis nesouvisejicich souboru. Zachovej baseline evidence a specifikuj nove akceptacni pozadavky.",
     "B2_SPINE": COMMON + "\n\nRozpracuj schvaleny plan zmeny do souborovych akci a interfaces. Existing providers a zachovane chovani jsou zavazne. Nerozsiruj scope. Explicitne vyres integraci zmenenych provideru a consumeru.",
     "B2_DETAIL": COMMON + "\n\nPopis jedinou konkretni zmenu souboru nad jeho plnym originalem. Uved preserved behavior, vyzadovane typy a akceptaci. Nezamen zachovani za znovunapsani nesouvisejici aplikace.",
+    "B2Q": COMMON + "\n\nJednej jako nezavisly principal engineer nad existujicim systemem. Proved skutecny pre-implementation quality gate celeho IMPLEMENTATION_GRAPH_V3 proti CHANGE/PRESERVE scope. Hledej nekompletni end-to-end dopad, consumer/provider a typove konflikty, error/recovery mezery, lifecycle, persistence, acceptance, dependency completeness a blokujici nejasnosti. Opravnene nalezy rovnou zapracuj do kompletniho corrected_spine a corrected_file_specs; nevracej jen audit a nemen nedotceny produktovy scope.",
 }
 
 
@@ -207,8 +209,8 @@ def _file_spec_data():
             "kind": {"type": "string", "enum": [
                 "types", "serialization", "storage", "api", "events", "errors",
                 "retry", "timeouts", "idempotency", "transactions", "concurrency",
-                "locking", "auth", "security", "lifecycle", "framework", "versions",
-                "persistence",
+                "locking", "auth", "security", "lifecycle", "invariants",
+                "framework", "versions", "persistence",
             ]},
             "definition": text,
             "obligation_ids": strings,
@@ -221,9 +223,34 @@ def _file_spec_data():
             "criterion_ids": strings,
         })),
         "source_refs": array(_source_ref()),
+        "assumptions": strings,
+        "unresolved_questions": array(obj({
+            "question": text,
+            "blocking": {"type": "boolean"},
+            "source_refs": array(_source_ref()),
+        })),
         "expected_visible_tokens": {"type": "integer"},
         "allow_empty": {"type": "boolean"},
         "preserved_behavior": strings,
+    })
+
+
+def _quality_data():
+    text = {"type": "string"}
+    strings = array(text)
+    return obj({
+        "corrected_spine": _spine_data(),
+        "corrected_file_specs": array(obj({
+            "path": text,
+            "spec": _file_spec_data(),
+        })),
+        "findings": array(obj({
+            "id": text,
+            "severity": {"type": "string", "enum": ["blocking", "major", "minor"]},
+            "issue": text,
+            "affected_paths": strings,
+            "resolution": text,
+        })),
     })
 
 
@@ -249,6 +276,8 @@ FORMATS = {
     "A2_DETAIL": response_format("A2_FILE_SPEC_V1", _result(_file_spec_data())),
     "B2_SPINE": response_format("B2_SPINE_V1", _result(_spine_data())),
     "B2_DETAIL": response_format("B2_FILE_SPEC_V1", _result(_file_spec_data())),
+    "A2Q": response_format("A2Q_QUALITY_GATE_V2", _result(_quality_data())),
+    "B2Q": response_format("B2Q_QUALITY_GATE_V2", _result(_quality_data())),
 }
 
 
