@@ -31,17 +31,18 @@ def _run_qfile(self: RunContext, client: OpenAIClient, diag_file_ids: list[str],
     prompt = self._append_io_reference(prompt, qfile_ref_files)
     prompt = self._with_diag_text(prompt)
 
-    schema = '{"contract":"A3_FILE","path":"string","chunking":{"max_lines":500,"chunk_index":0,"chunk_count":0,"has_more":false,"next_chunk_index":null},"content":"string"}'
+    schema = '{"contract":"A3_FILE","path":"string","chunking":{"chunk_index":0,"chunk_count":1,"has_more":false,"next_chunk_index":null},"content":"string"}'
     instructions = (
         "OUTPUT: VRAŤ POUZE validní JSON. ŽÁDNÝ markdown ani další text. "
-        "KRITICKÉ: content je vždy kompletní výsledné znění souboru (ne diff/patch). "
-        f"CHUNK: max 500 řádků. KONTRAKT: {schema}"
+        "KRITICKÉ: content je kompletní výsledné znění celého souboru v jediné Response "
+        "(ne diff/patch, bez modelového chunkování). "
+        f"KONTRAKT: {schema}"
     )
     gen_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)
     instructions = self._append_io_reference_instructions(instructions, gen_ref_files)
     instructions = self._append_io_reference_instructions(instructions, qfile_ref_files)
     input_text = (
-        "Vrať kompletní obsah jednoho souboru dle zadání níže. "
+        "Vrať kompletní obsah jednoho souboru dle zadání níže v jediné Response. "
         "CHUNK_INDEX=0, chunk_count=1, chunking.has_more=false (QFILE je jednorázový request). "
         "Použij cestu/path popsanou v zadání (žádný manifest). "
         f"Zadání:\n{prompt}"
