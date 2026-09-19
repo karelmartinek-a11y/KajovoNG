@@ -130,13 +130,24 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         manifest["versing"] = bool(self.cfg.versing)
         return self._submit_generate_batch(client, manifest)
 
+    from ..context_compiler import ContextCompiler
+    compiler = ContextCompiler(self._delivery_snapshot)
+    wave_rank = {
+        path: wave_index
+        for wave_index, wave in enumerate(compiler.graph.get("waves") or [])
+        for path in wave
+    }
     total_files = len(touched)
-    chain_prev_id = str(resp2_id or "")
+    chain_prev_id = ""
     out_files: list[dict[str, Any]] = []
-    generation_order = [
-        row for row in touched_raw
-        if row in touched or row["path"] in (self.cfg.skip_paths or [])
-    ]
+    self._delivery_verified_artifacts = {}
+    generation_order = sorted(
+        [
+            row for row in touched_raw
+            if row in touched or row["path"] in (self.cfg.skip_paths or [])
+        ],
+        key=lambda row: (wave_rank.get(row["path"], 10**9), row["path"]),
+    )
     for i, tf in enumerate(generation_order, start=1):
         self._check_stop()
         path = tf.get("path", "")
