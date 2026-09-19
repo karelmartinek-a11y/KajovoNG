@@ -31,6 +31,17 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         self, client, "MODIFY", base_prev_id, b_text, b_input_files, b_input_images,
         tools if supports_fs else None)
 
+    if self.cfg.stop_after_plan:
+        self.progress_event.emit(
+            ProgressEvent("B2Q" if self.cfg.maximum_quality else "B2", detail="Ověřená příprava je hotová; B3 nebylo spuštěno.")
+        )
+        return {
+            "mode": "MODIFY", "plan": plan, "structure": struct,
+            "status": "plan_ready", "checkpoint": "plan_ready",
+            "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
+            "dry_run": bool(self.cfg.dry_run),
+        }
+
     touched_raw = struct.get("touched_files", []) or []
     validate_paths(touched_raw)
     validate_modify_sources(struct, root, items, self.cfg.skip_paths or [])
@@ -43,8 +54,8 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         return {
             "mode": "MODIFY", "plan": plan, "structure": struct,
             "saved": {"saved": []}, "written_files": [], "no_changes": True,
-            "status": "dry_run" if self.settings.dry_run_modify else "completed",
-            "dry_run": bool(self.settings.dry_run_modify),
+            "status": "dry_run" if self.cfg.dry_run else "completed",
+            "dry_run": bool(self.cfg.dry_run),
             "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
         }
     touched = []
@@ -107,7 +118,7 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
             maximum_quality=self.cfg.maximum_quality, mode="MODIFY", originals=originals,
             recovery_instruction=self.cfg.recovery_instruction)
         manifest["overwrite_hashes"] = overwrite_hashes
-        manifest["dry_run"] = bool(self.settings.dry_run_modify)
+        manifest["dry_run"] = bool(self.cfg.dry_run)
         manifest["versing"] = bool(self.cfg.versing)
         return self._submit_generate_batch(client, manifest)
 
@@ -137,7 +148,7 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         )
         if last_resp_id:
             chain_prev_id = last_resp_id
-        out_files.append({"path": path, "content": content})
+        out_files.append({"path": path, "content": content, "action": action})
         self.subprogress.emit(int(i * 100 / max(1, total_files)))
         self.progress_event.emit(ProgressEvent("B3", completed=i, total=total_files, unit="souborů", detail=str(path)))
 
