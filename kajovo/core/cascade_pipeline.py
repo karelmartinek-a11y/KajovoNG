@@ -10,8 +10,8 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import jsonschema
