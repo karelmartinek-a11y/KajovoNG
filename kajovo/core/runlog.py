@@ -398,6 +398,13 @@ class RunLogger:
             reason = (
                 "Kanonická příprava je kompletní a ověřená; A3/B3 ani výrobní Batch nebyly spuštěny."
             )
+        elif patch.get("status") == "qfile_plan_ready":
+            checkpoint_type = "qfile_plan_ready"
+            safe = False
+            reason = (
+                "QFILE návrh cesty je validovaný, ale před výrobou vyžaduje nové explicitní "
+                "potvrzení uživatele."
+            )
         elif "ui_state" in patch and isinstance(state.get("ui_state"), dict):
             mode = str(state["ui_state"].get("mode") or "")
             if mode in {"GENERATE", "MODIFY", "QA", "QFILE"}:
