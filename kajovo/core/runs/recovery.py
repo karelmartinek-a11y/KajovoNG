@@ -48,8 +48,10 @@ def prepare_runtime(self: RunContext, client: OpenAIClient) -> tuple[list[str], 
         base_prev_id = checkpoint["response_id"]
     elif self.cfg.mode in ("GENERATE", "MODIFY"):
         base_prev_id = self._ingest_prompt_if_needed(client, prev_id=self.cfg.response_id or None)
-    else:
+    elif self.cfg.mode == "QA" and bool(getattr(self.cfg, "qa_continue_conversation", False)):
         base_prev_id = self.cfg.response_id or None
+    else:
+        base_prev_id = None
 
     return diag_file_ids, base_prev_id
 
