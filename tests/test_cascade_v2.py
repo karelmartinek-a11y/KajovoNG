@@ -19,7 +19,7 @@ from kajovo.core.cascade_types import (
 from kajovo.core.config import AppSettings
 from kajovo.core.run_bundle import LegacyRunAdapter
 
-MODEL = "gpt-5.2"
+MODEL = "gpt-5.6-luna"
 
 
 def _text_step(title, *, context="Kontext 1", output_id=None):
