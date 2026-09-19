@@ -351,6 +351,7 @@ def scenario(
     content_by_path=None,
     dry_run=False,
     stop_after_plan=False,
+    mutate=None,
 ):
     worker = make_worker(tmp_path, mode)
     worker.cfg.send_as_c = batch
@@ -377,6 +378,7 @@ def scenario(
         mode,
         files=files,
         content_by_path=content_by_path,
+        mutate=mutate,
     )
     return worker, client, responder
 
