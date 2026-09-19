@@ -84,7 +84,7 @@ def test_forward_decision_target_is_allowed_in_draft_but_not_at_run():
         validate_cascade_definition(definition, strict=True)
 
 
-def test_same_context_uses_previous_response_id_automatically(tmp_path):
+def test_same_context_does_not_imply_conversation_dependency(tmp_path):
     first = _text_step("První", context="Společný")
     second = _text_step("Druhý", context="Společný")
     definition = CascadeDefinition("test", steps=[first, second])
@@ -106,6 +106,30 @@ def test_same_context_uses_previous_response_id_automatically(tmp_path):
     first_payload = client.create_response.call_args_list[0].args[0]
     second_payload = client.create_response.call_args_list[1].args[0]
     assert "previous_response_id" not in first_payload
+    assert "previous_response_id" not in second_payload
+
+
+def test_explicit_conversation_dependency_uses_previous_response_id(tmp_path):
+    first = _text_step("První", context="Společný")
+    second = _text_step("Druhý", context="Společný")
+    second.use_conversation_context = True
+    definition = CascadeDefinition("test", steps=[first, second])
+    client = Mock()
+    client.create_response.side_effect = [
+        _response("resp_1", first.outputs[0], "A"),
+        _response("resp_2", second.outputs[0], "B"),
+    ]
+    worker = _worker(definition, tmp_path)
+    results, errors = [], []
+    worker.finished_ok.connect(results.append)
+    worker.finished_err.connect(errors.append)
+
+    with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
+        worker.execute()
+
+    assert not errors
+    assert results
+    second_payload = client.create_response.call_args_list[1].args[0]
     assert second_payload["previous_response_id"] == "resp_1"
 
 
@@ -271,6 +295,7 @@ def test_output_input_reference_must_exist_and_be_previous():
 def test_resume_from_step_reuses_only_previous_context_lineage(tmp_path):
     first = _text_step("První", context="Společný")
     second = _text_step("Druhý", context="Společný")
+    second.use_conversation_context = True
     definition = CascadeDefinition("resume-test", steps=[first, second])
 
     first_client = Mock()
@@ -306,6 +331,7 @@ def test_resume_from_step_reuses_only_previous_context_lineage(tmp_path):
 def test_resume_is_blocked_when_a_previous_step_changed(tmp_path):
     first = _text_step("První", context="Společný")
     second = _text_step("Druhý", context="Společný")
+    second.use_conversation_context = True
     definition = CascadeDefinition("resume-signature", steps=[first, second])
 
     client = Mock()
