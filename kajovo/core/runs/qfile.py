@@ -266,7 +266,11 @@ def _run_qfile(
             "previous_response_id": None,
         },
     )
-    response = self._create_response(client, payload)
+    self._active_work_order = order
+    try:
+        response = self._create_response(client, payload)
+    finally:
+        self._active_work_order = None
     parsed = validate_output(response, payload)
     content = parsed.get("content")
     if not isinstance(content, str):
