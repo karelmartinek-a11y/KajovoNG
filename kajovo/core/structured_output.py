@@ -35,6 +35,52 @@ def text_format():
     return response_format("TEXT_RESPONSE", obj({"text": {"type": "string"}}))
 
 
+def file_content_format():
+    """Canonical CHANGE wire contract: provider returns content only."""
+    return response_format("FILE_CONTENT_V1", obj({"content": {"type": "string"}}))
+
+
+def qfile_plan_format():
+    """Strict QFILE planning result; target path remains untrusted until user confirmation."""
+    text = {"type": "string"}
+    strings = array(text)
+    acceptance = obj({
+        "id": text,
+        "requirement_ids": strings,
+        "method": {"type": "string", "enum": [
+            "schema", "static", "unit", "integration", "smoke", "visual_model", "human"
+        ]},
+        "assertion": text,
+        "mandatory": {"type": "boolean"},
+    })
+    ready = obj({
+        "status": {"type": "string", "enum": ["ready"]},
+        "data": obj({
+            "proposed_path": text,
+            "format": {"type": "string", "enum": [
+                "txt", "md", "json", "toml", "yaml", "csv", "html",
+                "css", "js", "ts", "py", "svg", "xml"
+            ]},
+            "purpose": text,
+            "allow_empty": {"type": "boolean"},
+            "acceptance": array(acceptance),
+        }),
+    })
+    question = obj({
+        "code": {"type": "string", "enum": [
+            "missing_input", "scope_conflict", "unsupported_requirement", "infeasible"
+        ]},
+        "source_refs": strings,
+        "question": text,
+        "blocking": {"type": "boolean"},
+    })
+    blocked = obj({
+        "status": {"type": "string", "enum": ["blocked"]},
+        "questions": array(question),
+    })
+    return response_format("QFILE_PLAN_V1", obj({"result": {"anyOf": [ready, blocked]}}))
+
+
 def validate_schema(schema):
     """Konzervativní podmnožina strict; nepodporované konstrukce neodesíláme."""
     jsonschema.Draft202012Validator.check_schema(schema)
