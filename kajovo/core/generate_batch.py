@@ -387,7 +387,8 @@ def _build_manifest_v3(
 
 def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=None, *,
                    requirements=None, maximum_quality=False, mode="GENERATE", originals=None,
-                   recovery_instruction="", run_config=None, expected_target_hashes=None):
+                   recovery_instruction="", run_config=None, expected_target_hashes=None,
+                   verified_artifacts=None):
     if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
         return _build_manifest_v3(
             run_id,
@@ -404,7 +405,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
             recovery_instruction=recovery_instruction,
             run_config=run_config,
             expected_target_hashes=expected_target_hashes,
-            verified_artifacts=None,
+            verified_artifacts=verified_artifacts,
         )
 
     from .requirements import apply_quality, stage_instructions, validate_traceability
