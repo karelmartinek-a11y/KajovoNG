@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import difflib
 import hashlib
 import json
 import os
@@ -511,6 +512,51 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
     if progress:
         progress(ProgressEvent("Validace kontraktů", detail="Ověřuji výsledky proti uloženému manifestu."))
     result = import_results(manifest, raw_files, target, state.get("generated_hashes"), allowed, progress=progress)
+    if result["dry_run"]:
+        staging_root = Path(run_dir) / "staging" / "dry_run" / str(batch_id)
+        generated_root = staging_root / "generated"
+        generated_root.mkdir(parents=True, exist_ok=True)
+        source_root = str((state.get("ui_state") or {}).get("in_dir") or "")
+        staged, diff_parts = [], []
+        for planned in result.get("planned_files", []):
+            rel, content = planned["path"], planned["content"]
+            destination = safe_join_under_root(str(generated_root), rel)
+            Path(destination).parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(destination, content)
+            digest_value = hashlib.sha256(Path(destination).read_bytes()).hexdigest()
+            before = ""
+            source = safe_join_under_root(source_root, rel) if source_root else ""
+            if source and os.path.isfile(source):
+                before = Path(source).read_text(encoding="utf-8")
+            diff_parts.extend(difflib.unified_diff(
+                before.splitlines(keepends=True), content.splitlines(keepends=True),
+                fromfile=f"a/{rel}", tofile=f"b/{rel}",
+            ))
+            staged.append({
+                "path": rel,
+                "staged_path": str(Path(destination).relative_to(Path(run_dir))),
+                "bytes": os.path.getsize(destination),
+                "sha256": digest_value,
+                "action": "modify" if before else "add",
+            })
+        diff_text = "".join(diff_parts)
+        dry_manifest = {
+            "version": 1, "mode": manifest.get("mode"), "dry_run": True,
+            "publication": "blocked", "batch_id": batch_id,
+            "staging_root": str(staging_root.relative_to(Path(run_dir))),
+            "files": staged,
+        }
+        verification = {
+            "version": 1, "status": "passed", "technical_validation": "passed",
+            "content_acceptance": "not_claimed", "published": False,
+            "checks": ["batch_contracts", "relative_paths", "staged_sha256", "diff_generated"],
+            "files": [{"path": row["path"], "sha256": row["sha256"]} for row in staged],
+        }
+        atomic_write_text(str(staging_root / "changes.diff"), diff_text)
+        atomic_write_text(str(staging_root / "manifest.json"), json.dumps(dry_manifest, ensure_ascii=False, indent=2) + "\n")
+        atomic_write_text(str(staging_root / "verification.json"), json.dumps(verification, ensure_ascii=False, indent=2) + "\n")
+        result.update(staged_files=staged, dry_run_staging=dry_manifest["staging_root"],
+                      diff=diff_text, verification=verification)
     result["usage"] = batch_usage
     result["import_status"] = result["status"]
     for body in result.pop("responses"):
@@ -534,6 +580,10 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
     state["status"] = "partial" if missing or result["errors"] or result["completed_errors"] or state["generate_batch"].get("omitted") else "files_complete_unverified"
     if result["dry_run"]:
         state["dry_run"] = True
+        state["written_files"] = []
+        state["staged_files"] = result.get("staged_files", [])
+        state["dry_run_staging"] = result.get("dry_run_staging")
+        state["verification_evidence"] = result.get("verification")
         if state["status"] == "files_complete_unverified":
             state["status"] = "dry_run"
     known_batches = {state.get("batch_id"), *state.get("generate_batches", {})} - {None}
