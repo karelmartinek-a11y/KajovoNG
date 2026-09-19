@@ -36,7 +36,7 @@ WORK_ORDER_V2_SCHEMA: dict[str, Any] = {
         "source_snapshot_hash": {"type": "string"},
         "budget_reservation_id": {"type": "string"},
         "approval_id": {"type": "string"},
-        "attempt_no": {"type": "integer"},
+        "attempt_no": {"type": "integer", "minimum": 1, "maximum": 3},
     },
     "required": [
         "version", "run_id", "step_id", "task_id", "stage", "route", "target_id",
@@ -86,8 +86,8 @@ def validate_work_order_v2(value: dict[str, Any]) -> None:
         jsonschema.Draft202012Validator(WORK_ORDER_V2_SCHEMA).validate(value)
     except jsonschema.ValidationError as exc:
         raise ValueError(f"WORK_ORDER_V2: {exc.message}") from exc
-    if not 1 <= value["attempt_no"] <= 6:
-        raise ValueError("WORK_ORDER_V2.attempt_no musí být v rozsahu 1 až 6.")
+    if not 1 <= value["attempt_no"] <= 3:
+        raise ValueError("WORK_ORDER_V2.attempt_no musí být v rozsahu 1 až 3.")
     for key in (
         "run_id", "step_id", "task_id", "stage", "target_id",
         "input_projection_hash", "contract_name", "schema_hash", "prompt_hash",
