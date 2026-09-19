@@ -31,10 +31,9 @@ def stage_instructions(stage: str, *, batch: bool = False) -> str:
     instructions = CORE_INSTRUCTIONS + "\n\n" + _STAGE_INSTRUCTIONS[stage]
     if stage in ("A3_FILE", "B3_FILE"):
         instructions += (
-            "\n\nSouborové dodání: vrať celé znění cílového souboru v jediné úplné "
-            "části. Nic nezkracuj, nevynechávej a nepokračuj dalším response. "
-            "Objekt chunking musí přesně uvádět chunk_index=0, chunk_count=1, "
-            "has_more=false a next_chunk_index=null."
+            "\n\nSouborové dodání: vrať celé znění cílového souboru v jediném "
+            "FILE_CONTENT_V1 objektu s jediným polem content. Cestu, action, task ID "
+            "ani transportní bookkeeping nevracej; vlastní je aplikace."
         )
     return instructions
 

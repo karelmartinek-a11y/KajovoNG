@@ -17,7 +17,7 @@ from kajovo.core.runs.config import UiRunConfig
 from kajovo.studio.workers.run_worker import RunWorker
 from kajovo.core.request_rules import validate_run_options
 from kajovo.core.runlog import RunLogger
-from kajovo.core.utils import atomic_write_text, new_run_id
+from kajovo.core.utils import atomic_write_text, new_run_id, validate_relative_path
 from .components import Form, PathInput, action, actions, caption, panel, scroll, vertical
 from .evidence import EvidenceView
 from .components import DetailDialog
@@ -28,11 +28,21 @@ MODES = [("Vytvořit projekt", "GENERATE"), ("Upravit projekt", "MODIFY"),
 
 
 def default_state(settings):
-    text = ("project", "prompt", "response_id", "in_dir", "out_dir", "model_a1", "model_a2", "model_a3", "ssh_pin")
-    flags = ("send_as_c", "in_equals_out", "versing", "maximum_quality", "diag_windows_in", "diag_windows_out", "diag_ssh_in", "diag_ssh_out")
+    text = (
+        "project", "prompt", "response_id", "in_dir", "out_dir",
+        "model_a1", "model_a2", "model_a3", "ssh_pin", "qfile_output_path",
+    )
+    flags = (
+        "send_as_c", "in_equals_out", "versing", "maximum_quality",
+        "stop_after_plan", "dry_run", "qfile_suggest_path", "qa_continue_conversation",
+        "diag_windows_in", "diag_windows_out", "diag_ssh_in", "diag_ssh_out",
+    )
     state = dict.fromkeys(text, "")
     state.update(dict.fromkeys(flags, False))
     state.update(model=settings.default_model, mode="GENERATE", temperature=settings.default_temperature,
+                 unknown_pricing="block", auto_repair="off",
+                 verification_profile_ids=[],
+                 qfile_output_format="txt", qfile_plan=None,
                  attached_file_ids=[], input_file_ids=[], attached_vector_store_ids=[],
                  use_file_search=True, skip_paths=[], skip_exts=[], model_caps={},
                  ssh_user=settings.ssh.user, ssh_host=settings.ssh.host, ssh_key=settings.ssh.key,
@@ -82,13 +92,35 @@ class Workbench(QWidget):
         for key, title in (("in_equals_out", "Zapisovat do vstupního adresáře"),
                            ("versing", "Pořídit snímek souborů"),
                            ("send_as_c", "Souborové úlohy zpracovat dávkově"),
-                           ("maximum_quality", "Maximální propracovanost")):
+                           ("maximum_quality", "Maximální propracovanost"),
+                           ("stop_after_plan", "Zastavit po ověřené přípravě plánu"),
+                           ("dry_run", "MODIFY bez publikace do projektu (dry-run)")):
             self.options.check(key, title)
         temperature = QDoubleSpinBox()
         temperature.setRange(0, 2)
         temperature.setSingleStep(0.1)
         self.options.add("temperature", "Teplota modelu", temperature)
+        self.options.choice(
+            "unknown_pricing",
+            "Neznámá cena modelu",
+            [
+                ("Blokovat placený request bez ověřené ceny", "block"),
+                (
+                    "Výslovně povolit token-only limit · cena zůstává neznámá",
+                    "explicit_token_budget",
+                ),
+            ],
+        )
         self.options.text("response_id", "Identifikátor předchozí odpovědi")
+        self.options.text("qfile_output_path", "QFILE · Výstupní cesta")
+        self.options.choice("qfile_output_format", "QFILE · Výstupní formát", [
+            (value.upper(), value) for value in (
+                "txt", "md", "json", "toml", "yaml", "csv", "html",
+                "css", "js", "ts", "py", "svg", "xml"
+            )
+        ])
+        self.options.check("qfile_suggest_path", "QFILE · Navrhnout název samostatným plánovacím krokem")
+        self.options.check("qa_continue_conversation", "QA · Pokračovat v rozhovoru přes previous_response_id")
         for key, title in (("model_a1", "Model plánování"), ("model_a2", "Model struktury"), ("model_a3", "Model souborů")):
             self.options.choice(key, title, [("Použít hlavní model", "")])
         layout.addWidget(self.options)
@@ -239,13 +271,28 @@ class Workbench(QWidget):
             return False
         mode = self.widgets["mode"].currentData()
         grouped = mode in {"GENERATE", "MODIFY"}
-        for key in ("maximum_quality", "send_as_c"):
+        for key in ("maximum_quality", "send_as_c", "stop_after_plan"):
             widget = self.widgets[key]
             widget.setEnabled(grouped)
             if not grouped:
                 widget.blockSignals(True)
                 widget.setChecked(False)
                 widget.blockSignals(False)
+        dry_run = self.widgets["dry_run"]
+        dry_run.setEnabled(mode == "MODIFY")
+        if mode != "MODIFY":
+            dry_run.blockSignals(True)
+            dry_run.setChecked(False)
+            dry_run.blockSignals(False)
+        qfile = mode == "QFILE"
+        for key in ("qfile_output_path", "qfile_output_format", "qfile_suggest_path"):
+            self.widgets[key].setEnabled(qfile)
+        qa_continue = self.widgets["qa_continue_conversation"]
+        qa_continue.setEnabled(mode == "QA")
+        if mode != "QA":
+            qa_continue.blockSignals(True)
+            qa_continue.setChecked(False)
+            qa_continue.blockSignals(False)
         linked = self.widgets["in_equals_out"].isChecked()
         self.widgets["out_dir"].setReadOnly(linked)
         if linked:
@@ -271,6 +318,18 @@ class Workbench(QWidget):
                 raise ValueError("Úprava projektu vyžaduje existující vstupní adresář.")
             if mode != "QA" and not cfg.out_dir.strip():
                 raise ValueError("Vyberte výstupní adresář.")
+            if mode == "QFILE":
+                if cfg.qfile_output_path:
+                    relative = validate_relative_path(cfg.qfile_output_path)
+                    suffix = Path(relative).suffix.lower().lstrip(".")
+                    if suffix != cfg.qfile_output_format:
+                        raise ValueError(
+                            "QFILE: přípona výstupní cesty musí odpovídat zvolenému formátu."
+                        )
+                elif not cfg.qfile_suggest_path:
+                    raise ValueError(
+                        "QFILE: vyplňte výstupní cestu, nebo zvolte Navrhnout název."
+                    )
             if not self.context.api_key:
                 raise ValueError("Uložte přístupový klíč v Nastavení.")
             validate_run_options(cfg)
@@ -278,7 +337,15 @@ class Workbench(QWidget):
             self.validation.setText(str(error))
             self.start_button.setEnabled(False)
             return False
-        self.validation.setText("Zadání splňuje místní kontrolu; spuštění odešle placenou pracovní operaci.")
+        if cfg.unknown_pricing == "explicit_token_budget":
+            self.validation.setText(
+                "Cena modelu není lokálně doložena. Spuštěním výslovně schvalujete "
+                "token-only rozpočet; cena zůstává neznámá a není vydávána za nulu."
+            )
+        else:
+            self.validation.setText(
+                "Zadání splňuje místní kontrolu; model bez ověřené ceny bude před placeným requestem zablokován."
+            )
         self.start_button.setEnabled(True)
         return True
 
@@ -289,7 +356,12 @@ class Workbench(QWidget):
         if len(self.context.operations.active) >= 4:
             self.validation.setText("Počkejte na dokončení některé ze čtyř aktivních operací.")
             return
-        target = Path(cfg.out_dir).resolve() if cfg.out_dir and not cfg.send_as_c and cfg.mode != "QA" else None
+        target = (
+            Path(cfg.out_dir).resolve()
+            if cfg.out_dir and not cfg.send_as_c and cfg.mode != "QA"
+            and not cfg.dry_run and not cfg.stop_after_plan
+            else None
+        )
         try:
             self.context.operations.assert_output_available(target)
         except ValueError as error:
@@ -313,6 +385,25 @@ class Workbench(QWidget):
             previous = value.get("last_response_id") or value.get("response_id")
             if previous:
                 self.widgets["response_id"].setText(previous)
+            if cfg.mode == "QA":
+                # Provider historii nikdy nezapínáme automaticky; ID pouze zpřístupníme.
+                self.widgets["qa_continue_conversation"].setChecked(False)
+            if value.get("status") == "qfile_plan_ready":
+                plan = value.get("qfile_plan") or {}
+                self.saved_extras["qfile_plan"] = copy.deepcopy(plan)
+                proposed = plan.get("proposed_path")
+                fmt = plan.get("format")
+                if proposed:
+                    self.widgets["qfile_output_path"].setText(str(proposed))
+                if fmt:
+                    index = self.widgets["qfile_output_format"].findData(fmt)
+                    if index >= 0:
+                        self.widgets["qfile_output_format"].setCurrentIndex(index)
+                self.widgets["qfile_suggest_path"].setChecked(False)
+                self.validation.setText(
+                    "QFILE: návrh cesty je připraven. Zkontrolujte jej a znovu klikněte "
+                    "Spustit práci; tím cestu výslovně potvrdíte před výrobou souboru."
+                )
             if value.get("status", "completed") == "completed" and not value.get("batch_id") and not value.get("dry_run"):
                 for enabled, remote in ((cfg.diag_windows_out, False), (cfg.diag_ssh_out, True)):
                     if enabled:

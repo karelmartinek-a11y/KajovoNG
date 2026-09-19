@@ -8,17 +8,20 @@ from typing import TYPE_CHECKING, Any
 from ..contracts import (
     ContractError,
     RemoteResponseError,
-    extract_text_from_response,
-    file_response_format,
-    parse_json_strict,
-    validate_chunk_metadata,
 )
 from ..model_registry import model_spec
 from ..openai_client import OpenAIClient
+from ..orchestration.projection import projection_from_file_context
+from ..orchestration.work_order import freeze_order
 from ..progress import ProgressEvent
 from ..request_rules import uses_reasoning_defaults
 from ..requirements import stage_instructions
-from ..structured_output import OutputContractError, prepare_payload
+from ..structured_output import (
+    OutputContractError,
+    file_content_format,
+    prepare_payload,
+    validate_output,
+)
 from ..utils import ts_code
 
 if TYPE_CHECKING:
@@ -45,16 +48,25 @@ def _gen_file_chunks(
     self._delivery_step_id = self.log.begin_validated_step(
         contract.split("_")[0], kind="file_delivery"
     )
-    compiled = ContextCompiler(self._delivery_snapshot).compile(
-        path, originals=getattr(self, "_delivery_originals", None)
+    compiler = ContextCompiler(self._delivery_snapshot)
+    compiled = compiler.compile(
+        path,
+        originals=getattr(self, "_delivery_originals", None),
+        verified_artifacts=getattr(self, "_delivery_verified_artifacts", None),
+    )
+    projection = projection_from_file_context(contract.split("_", 1)[0], path, compiled)
+    self.log.save_json(
+        "manifests",
+        f"projection_{path.replace('/', '_')}",
+        {**projection.to_dict(), "projection_hash": projection.hash},
     )
     step_model = str(model_override or self.cfg.model or "").strip()
     instructions = stage_instructions("A3" if contract == "A3_FILE" else "B3")
     prompt = (
-        f"Vrať celé znění souboru PATH={path} v jediném A3_FILE artefaktu."
+        f"Vrať celé znění cílového souboru PATH={path} v jediném FILE_CONTENT_V1 objektu."
         if contract == "A3_FILE"
-        else f"Vrať celé výsledné znění souboru PATH={path} ACTION={action} "
-             "v jediném B3_FILE artefaktu."
+        else f"Vrať celé výsledné znění cílového souboru PATH={path} ACTION={action} "
+             "v jediném FILE_CONTENT_V1 objektu."
     )
     if self.cfg.recovery_instruction:
         prompt += self._recovery_suffix()
@@ -70,7 +82,12 @@ def _gen_file_chunks(
             and self.cfg.model_caps.get("supports_temperature", True)
         ),
     )
-    payload["text"] = file_response_format(contract, path, 0, action)
+    payload["instructions"] += (
+        "\nWire kontrakt FILE_CONTENT_V1: vrať pouze objekt s polem content. "
+        "Cesta, akce a identita cíle jsou zmrazené v lokálním WorkOrderu a nesmějí být "
+        "součástí ani výsledkem rozhodování modelu."
+    )
+    payload["text"] = file_content_format()
     if (
         step_model == self.cfg.model
         and self.cfg.model_caps.get("supports_temperature", True)
@@ -122,20 +139,68 @@ def _gen_file_chunks(
             f"context_{path.replace('/', '_')}_attempt_{attempt}",
             {"context": compiled, "routing": routing, "measurement": report},
         )
+        expected_target_hash = (
+            getattr(self, "_delivery_overwrite_hashes", {}).get(path)
+            if contract == "B3_FILE"
+            else (getattr(self.cfg, "completed_hashes", None) or {}).get(path)
+        )
+        work_order = freeze_order(
+            self.cfg,
+            {
+                "run_id": self.log.run_id,
+                "step_id": self._delivery_step_id,
+                "stage": contract.split("_", 1)[0],
+                "route": "responses_live",
+                "target_id": path,
+                "target_path": path,
+                "expected_target_hash": expected_target_hash,
+                "contract_name": "FILE_CONTENT_V1",
+                "schema": working["text"]["format"]["schema"],
+                "prompt": prompt,
+                "model": step_model,
+                "model_capability": self._model_caps(step_model),
+                "source_snapshot": self._delivery_snapshot,
+                "attempt_no": attempt + 1,
+                "approval_id": (
+                    getattr(self.cfg, "execution_approval_id", "")
+                    or f"user-start:{self.log.run_id}"
+                ),
+            },
+            projection.to_dict(),
+        )
+        self.log.save_json(
+            "manifests",
+            f"work_order_{contract}_{path}_attempt_{attempt}",
+            {**work_order.to_dict(), "order_hash": work_order.order_hash},
+            step_id=self._delivery_step_id,
+        )
         self.log.save_json(
             "requests",
             f"{contract}_{path}_attempt_{attempt}_{ts_code()}",
-            {"payload": working, "ui_state": self.cfg.__dict__},
+            {
+                "payload": working,
+                "ui_state": self.cfg.__dict__,
+                "work_order_hash": work_order.order_hash,
+            },
             step_id=self._delivery_step_id,
         )
         self._log_api_action(
             f"{contract}:{path}", "send",
-            {"attempt": attempt + 1, "contract": contract, "path": path},
+            {
+                "attempt": attempt + 1,
+                "contract": "FILE_CONTENT_V1",
+                "path": path,
+                "work_order_hash": work_order.order_hash,
+            },
         )
+        self._active_work_order = work_order
         try:
-            response = self._create_response(
-                client, working, attempt=attempt, measurement=report
-            )
+            try:
+                response = self._create_response(
+                    client, working, attempt=attempt, measurement=report
+                )
+            finally:
+                self._active_work_order = None
         except RemoteResponseError as exc:
             last_err = exc
             if exc.code != "max_output_tokens":
@@ -144,7 +209,7 @@ def _gen_file_chunks(
                 step_id=self._delivery_step_id,
                 target_type="file_contract",
                 target_id=path,
-                validator=contract,
+                validator="FILE_CONTENT_V1",
                 status="failed",
                 errors=[str(exc)],
                 evidence={
@@ -220,32 +285,9 @@ def _gen_file_chunks(
             },
         )
         try:
-            candidate = parse_json_strict(extract_text_from_response(response))
-            if candidate.get("contract") != contract:
-                raise ContractError(
-                    f"{contract}: nesouhlasí contract {candidate.get('contract')!r}."
-                )
-            if candidate.get("path") != path:
-                raise ContractError(
-                    f"{contract}: odpověď obsahuje jinou cestu než {path}."
-                )
-            if action is not None and candidate.get("action") != action:
-                raise ContractError(
-                    f"{contract}: odpověď obsahuje jinou akci než {action}."
-                )
+            candidate = validate_output(response, working)
             if not isinstance(candidate.get("content"), str):
-                raise ContractError(f"{contract}: obsah souboru musí být text.")
-            chunk = candidate.get("chunking")
-            validate_chunk_metadata(chunk)
-            if chunk != {
-                "chunk_index": 0,
-                "chunk_count": 1,
-                "has_more": False,
-                "next_chunk_index": None,
-            }:
-                raise ContractError(
-                    f"{contract}: soubor musí být dodán v jediné úplné části."
-                )
+                raise ContractError("FILE_CONTENT_V1: content musí být text.")
             if (
                 not candidate["content"].strip()
                 and not compiled["working_context"]["implementation_contract"]["allow_empty"]
@@ -314,23 +356,34 @@ def _gen_file_chunks(
         validator=contract,
         status="passed",
         evidence={
-            "chunks": 1,
             "sha256": digest,
             "response_id": latest_response_id,
             "written": False,
+            "wire_contract": "FILE_CONTENT_V1",
+            "work_order_hash": work_order.order_hash,
             "resolves": rejected,
         },
     )
     from ..recoverable_artifacts import save_artifact
-    save_artifact(self.log.paths.run_dir, "generated/" + path, {
+    artifact = {
         "path": path,
         "content": content,
         "output_hash": digest,
         "file_context_hash": compiled["file_context_hash"],
         "contract_hash": compiled["contract_hash"],
+        "work_order_hash": work_order.order_hash,
         "dependency_hashes": compiled["dependency_hashes"],
         "response_id": latest_response_id,
-        "validation_status": "file_contract_validated_integration_unverified",
+        "validation_status": "verified",
+        "verification_level": "wire_and_artifact",
         "chunks": [{"index": 0, "sha256": digest}],
-    })
+    }
+    save_artifact(
+        self.log.paths.run_dir,
+        "generated/" + path,
+        artifact,
+    )
+    verified = dict(getattr(self, "_delivery_verified_artifacts", {}) or {})
+    verified[path] = artifact
+    self._delivery_verified_artifacts = verified
     return content, latest_response_id

@@ -16,6 +16,11 @@ from ..delivery_preparation import (
 )
 from ..openai_client import OpenAIClient
 from ..openai_transport import SubmissionOutcomeUnknown
+from ..orchestration.authorization import create_execution_authorization
+from ..orchestration.contracts import canonical_sha256
+from ..orchestration.repository import repository_for_logger
+from ..orchestration.run_config import build_run_config_v2, run_scope_hash
+from ..orchestration.source_pack import freeze_run_sources, source_context
 from ..progress import ProgressEvent
 from ..request_rules import validate_run_options
 from ..response_journal import (
@@ -68,15 +73,10 @@ class RunExecutor(RunContext):
             if saved_state.get("status") == "submission_unknown" or saved_state.get("submission_unknown"):
                 raise SubmissionUnknown("Nejasné předchozí odeslání blokuje nové operace.")
             self.transition(RunStatus.PREPARING)
-            # Každý nový běh ukládá přesný rekonstruovatelný vstup ještě před
-            # prvním síťovým požadavkem. RunLogger z něj vytvoří kanonický
-            # input_ready checkpoint; u legacy záznamů se nic nedopočítává.
-            self.log.update_state({"ui_state": self.cfg.__dict__})
-            if self.cfg.mode in ("GENERATE", "MODIFY"):
-                self._response_journal = ResponseJournal(self.log, self.settings.response_poll_timeout_s)
-                saved_state = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
-                self._response_file_ids = saved_state.get("response_file_ids", {})
-                self.log.update_state({"response_transport": "background"})
+            # Schválený run config je sestaven lokálně; input_ready checkpoint se
+            # vytvoří až po zmrazení SourcePacku a autorizace.
+            run_config_v2 = build_run_config_v2(self.cfg)
+            base_scope_hash = run_scope_hash(self.cfg)
 
             if not self.api_key or not self.cfg.model or not self.cfg.prompt.strip():
                 raise ValueError("Běh vyžaduje API klíč, model a neprázdné zadání.")
@@ -90,10 +90,40 @@ class RunExecutor(RunContext):
             if self.cfg.mode in ("GENERATE", "MODIFY"):
                 self._verify_completed_files()
                 if self.cfg.preparation_snapshot:
-                    validate_preparation_snapshot(self.cfg.preparation_snapshot, self.cfg.mode, self.cfg.maximum_quality)
+                    if self.cfg.preparation_snapshot.get("version") == 1:
+                        validate_preparation_snapshot(
+                            self.cfg.preparation_snapshot,
+                            self.cfg.mode,
+                            self.cfg.maximum_quality,
+                        )
+                    elif self.cfg.preparation_snapshot.get("version") != 2:
+                        raise ContractError("Neznámá verze preparation checkpointu.")
+            source_pack = freeze_run_sources(self.cfg, self.settings, self.log)
+            self.source_pack = source_pack
+            self.source_context = source_context(self.log, source_pack)
+            scope_hash = canonical_sha256({
+                "run_scope_hash": base_scope_hash,
+                "source_pack_hash": source_pack.hash,
+            })
+            authorization = create_execution_authorization(
+                self.log.run_id, run_config_v2, scope_hash
+            )
+            self.cfg.execution_approval_id = authorization.approval_id
+            self.log.save_json(
+                "manifests", "execution_authorization_v1", authorization.to_dict()
+            )
             self.log.update_state(
                 {
-                    "status": "running", "error": None, "failure_detail": None, "failed_at": None,
+                    "ui_state": self.cfg.__dict__,
+                    "run_config_v2": run_config_v2,
+                    "run_scope_hash": scope_hash,
+                    "source_pack_hash": source_pack.hash,
+                    "source_pack_id": source_pack.pack_id,
+                    "execution_authorization": authorization.to_dict(),
+                    "status": "running",
+                    "error": None,
+                    "failure_detail": None,
+                    "failed_at": None,
                     "started_at": time.time(),
                     "mode": self.cfg.mode,
                     "send_as_c": self.cfg.send_as_c,
@@ -101,6 +131,23 @@ class RunExecutor(RunContext):
                     "out_dir": self.cfg.out_dir,
                 }
             )
+            repository_for_logger(self.log).register_run(
+                self.log.run_id,
+                lineage_id=self.log.run_id,
+                scope_hash=scope_hash,
+                policy_hash=authorization.policy_hash,
+                config=run_config_v2,
+                approval_id=authorization.approval_id,
+                status="running",
+            )
+            if self.cfg.mode in ("GENERATE", "MODIFY"):
+                self._response_journal = ResponseJournal(
+                    self.log, self.settings.response_poll_timeout_s
+                )
+                saved_state = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
+                self._response_file_ids = saved_state.get("response_file_ids", {})
+                self.log.update_state({"response_transport": "background"})
+
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
             client.configure_validation(self.settings)
             client.stopped = lambda: self._stop
@@ -115,9 +162,16 @@ class RunExecutor(RunContext):
             if self.cfg.mode == "QFILE" and self.cfg.send_as_c:
                 raise RuntimeError("QFILE nepodporuje SEND AS BATCH.")
 
-            # GENERATE a MODIFY vyžadují návaznost; výslovné odmítnutí ji zablokuje.
-            if self.cfg.mode == "MODIFY" and self.cfg.model_caps.get("supports_previous_response_id") is False:
-                raise RuntimeError("Selected model explicitly rejects previous_response_id (required for cascades).")
+            # Explicitní provider historii vyžadujeme pouze tehdy, když ji uživatel
+            # skutečně zvolil. Datové kroky A0/A1/A2/A3 a B0/B1/B2/B3 používají
+            # validované artefakty a nesmějí na previous_response_id spoléhat.
+            if (
+                self.cfg.response_id
+                and self.cfg.model_caps.get("supports_previous_response_id") is False
+            ):
+                raise RuntimeError(
+                    "Vybraný model nepodporuje explicitně zadané previous_response_id."
+                )
 
             self.transition(RunStatus.REMOTE_WORK)
             diag_file_ids, base_prev_id = prepare_runtime(self, client)
@@ -135,8 +189,11 @@ class RunExecutor(RunContext):
                     result["response_id"] = self._final_response_id
 
             final_status = "batch_pending" if result.get("batch_id") else str(result.get("status") or "completed")
-            if final_status not in ("completed", "partial", "batch_pending", "dry_run", "files_complete_unverified"):
-                raise ContractError(f"Neplatný terminální stav běhu: {final_status}")
+            if final_status not in (
+                "completed", "partial", "batch_pending", "dry_run",
+                "files_complete_unverified", "plan_ready", "qfile_plan_ready",
+            ):
+                raise ContractError(f"Neplatný stav běhu: {final_status}")
             if final_status in ("completed", "partial", "dry_run", "files_complete_unverified"):
                 self.log.update_state({"status": final_status, "completed_at": time.time()})
             else:

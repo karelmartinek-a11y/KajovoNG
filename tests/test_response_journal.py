@@ -1,15 +1,13 @@
 """Výpadky a obnova bez skutečných síťových nebo placených požadavků."""
 
-import copy
-import hashlib
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-from delivery_fixtures import delivery_payloads
 from PySide6.QtCore import QLockFile
-from test_workflows import make_worker, response
+from change_v2_fixtures import make_client, run, scenario, staged_path
+from test_workflows import make_worker
 
 from kajovo.core.openai_client import OpenAIClient, OpenAIError
 from kajovo.core.recovery import recover_run
@@ -177,51 +175,81 @@ def test_background_not_allowed_inside_batch():
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("pending_index", [0, 2, 3])
-def test_worker_recovers_preparation_and_file_without_reposting(tmp_path, mode, pending_index):
-    worker = make_worker(tmp_path, mode)
-    if mode == "MODIFY":
-        source = tmp_path / "in"
-        source.mkdir()
-        worker.cfg.in_dir = str(source)
-    file = {"contract": "A3_FILE" if mode == "GENERATE" else "B3_FILE", "path": "hello.txt", "content": "hello\n",
-            "chunking": {"chunk_index": 0, "chunk_count": 1, "has_more": False, "next_chunk_index": None}}
-    if mode == "MODIFY":
-        file["action"] = "add"
-    results = [response(i, item) for i, item in enumerate([*delivery_payloads(mode), file])]
-    expected = "hello\n"
-    client = Mock()
-    from kajovo.core.context_compiler import content_hash
-    client.count_input_tokens.side_effect = lambda payload: {
-        "input_tokens": 1000, "request_hash": content_hash(payload)}
-    client.upload_file.return_value = {"id": "file_test"}
-    client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 1}
-    client.create_response.side_effect = [*results[:pending_index], {"id": results[pending_index]["id"], "status": "queued"}]
+@pytest.mark.parametrize(
+    "pending_contract",
+    ["A0R_REQUIREMENTS_V2", "A2_SPINE_V1", "FILE_CONTENT_V1"],
+)
+def test_worker_recovers_v2_stage_without_reposting(
+    tmp_path, mode, pending_contract
+):
+    worker, client, responder = scenario(tmp_path, mode)
+    original_create = responder
+    pending = {}
+
+    def create(payload):
+        name = ((payload.get("text") or {}).get("format") or {}).get("name")
+        completed = original_create(payload)
+        if name == pending_contract and "response" not in pending:
+            pending["response"] = completed
+            pending["id"] = completed["id"]
+            return {
+                "id": completed["id"],
+                "object": "response",
+                "model": completed["model"],
+                "status": "queued",
+            }
+        return completed
+
+    client.create_response.side_effect = create
+    client.retrieve_response.side_effect = OpenAIError(
+        "offline", status_code=404
+    )
     worker.settings.response_poll_timeout_s = 0.001
-    # Přerušení ihned po přijetí ID bez čekání v reálném čase.
-    def stop_get(*args):
-        raise OpenAIError("offline", status_code=404)
-    client.retrieve_response.side_effect = stop_get
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(ResponseJournal, "_wait"):
-        worker.run()
+    with patch.object(ResponseJournal, "_wait"):
+        results, errors = run(worker, client)
+    assert results == []
+    assert errors
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert state["status"] == "response_pending"
-    upload_count = client.upload_file.call_count
-    ui, _, _ = recover_run(worker.settings.log_dir, worker.log.run_id)
-    assert ui["prompt"] == worker.cfg.prompt
-    resumed = RunWorker(worker.cfg, worker.settings, "test", RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True))
+    create_count_before_resume = client.create_response.call_count
+
+    resumed = RunWorker(
+        worker.cfg,
+        worker.settings,
+        "test",
+        RunLogger(
+            worker.settings.log_dir,
+            worker.log.run_id,
+            "test",
+            resume=True,
+        ),
+    )
     resumed.settings.response_poll_timeout_s = 3600
-    client.retrieve_response.side_effect = None
-    client.retrieve_response.return_value = results[pending_index]
-    client.create_response.side_effect = results[pending_index + 1:]
-    errors = []
-    resumed.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(ResponseJournal, "_wait"):
+    resumed_client, _responder2 = make_client(mode)
+    resumed_client.retrieve_response.return_value = pending["response"]
+    resumed_results, resumed_errors = [], []
+    resumed.finished_ok.connect(resumed_results.append)
+    resumed.finished_err.connect(resumed_errors.append)
+    with patch(
+        "kajovo.core.runs.executor.OpenAIClient",
+        return_value=resumed_client,
+    ), patch.object(ResponseJournal, "_wait"):
         resumed.run()
-    assert errors == []
-    assert (tmp_path / "out" / "hello.txt").read_text() == expected
-    assert client.create_response.call_count == len(results)
-    assert client.upload_file.call_count == upload_count
+
+    assert resumed_errors == []
+    assert resumed_results
+    resumed_client.retrieve_response.assert_called_with(pending["id"])
+    # The pending paid mutation is retrieved, never submitted a second time.
+    assert all(
+        call.args[0].get("metadata", {}).get("kajovo_repair_attempt") != "duplicate"
+        for call in resumed_client.create_response.call_args_list
+    )
+    if pending_contract == "FILE_CONTENT_V1":
+        assert resumed_results[0]["status"] == "files_complete_unverified"
+        assert staged_path(resumed, "hello.txt").read_text(encoding="utf-8") == (
+            "content:hello.txt\n"
+        )
+    assert create_count_before_resume >= 1
 
 
 def test_second_instance_does_not_change_run_state(tmp_path):
@@ -262,80 +290,101 @@ def test_missing_remote_id_is_not_recreated(journal):
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-def test_restart_after_first_output_write_keeps_files_and_response_chain(tmp_path, mode):
-    worker = make_worker(tmp_path, mode)
-    if mode == "MODIFY":
-        source = tmp_path / "out"
-        source.mkdir()
-        worker.cfg.in_dir = worker.cfg.out_dir
-        worker.cfg.in_equals_out = True
-    preparation = delivery_payloads(mode)
-    structure = preparation[-1]
-    key = "files" if mode == "GENERATE" else "touched_files"
-    second = copy.deepcopy(structure[key][0])
-    second["path"] = "world.txt"
-    structure[key].append(second)
-    from delivery_fixtures import implementation_fixture
-    implementation_fixture(structure, preparation[0], preparation[1])
-    files = [{"contract": "A3_FILE" if mode == "GENERATE" else "B3_FILE", "path": path, "content": path + "\n",
-              "chunking": {"chunk_index": 0, "chunk_count": 1, "has_more": False, "next_chunk_index": None}}
-             for path in ("hello.txt", "world.txt")]
-    if mode == "MODIFY":
-        for file in files:
-            file["action"] = "add"
-    client = Mock()
-    from kajovo.core.context_compiler import content_hash
-    client.count_input_tokens.side_effect = lambda payload: {
-        "input_tokens": 1000, "request_hash": content_hash(payload)}
-    client.upload_file.return_value = {"id": "file_test"}
-    client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 1}
-    client.create_response.side_effect = [response(i, item) for i, item in enumerate([*preparation, *files])]
-    save = worker._save_out_files
+def test_plan_ready_checkpoint_resumes_without_repaying_preparation(tmp_path, mode):
+    worker, client, responder = scenario(
+        tmp_path,
+        mode,
+        stop_after_plan=True,
+        maximum_quality=True,
+    )
+    results, errors = run(worker, client)
+    assert errors == [] and results[0]["status"] == "plan_ready"
+    paid_preparation_calls = client.create_response.call_count
+    snapshot = worker.cfg.preparation_snapshot
+    assert snapshot["canonical_stage"] in {"A2Q", "B2Q"}
 
-    def partial_save(rows):
-        save(rows[:1])
-        raise OSError("Pád po prvním zápisu")
-
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(worker, "_save_out_files", side_effect=partial_save):
-        worker.run()
-    assert (tmp_path / "out" / "hello.txt").is_file()
-    assert not (tmp_path / "out" / "world.txt").exists()
-    worker.cfg.skip_paths = ["hello.txt"]
-    worker.cfg.completed_hashes = {"hello.txt": hashlib.sha256((tmp_path / "out" / "hello.txt").read_bytes()).hexdigest()}
-    resumed = RunWorker(worker.cfg, worker.settings, "test", RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True))
-    errors = []
-    resumed.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
+    # Production choice changes after the durable plan checkpoint. The
+    # preparation snapshot itself remains immutable and is reused.
+    worker.cfg.stop_after_plan = False
+    worker.cfg.preparation_snapshot = snapshot
+    resumed_client, resumed_responder = make_client(mode)
+    resumed = RunWorker(
+        worker.cfg,
+        worker.settings,
+        "test",
+        RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True),
+    )
+    resumed_results, resumed_errors = [], []
+    resumed.finished_ok.connect(resumed_results.append)
+    resumed.finished_err.connect(resumed_errors.append)
+    with patch(
+        "kajovo.core.runs.executor.OpenAIClient",
+        return_value=resumed_client,
+    ):
         resumed.run()
-    assert errors == []
-    assert client.create_response.call_count == 5
-    for path in ("hello.txt", "world.txt"):
-        assert (tmp_path / "out" / path).read_text() == path + "\n"
+
+    assert resumed_errors == []
+    assert resumed_results[0]["status"] == "files_complete_unverified"
+    names = [
+        ((payload.get("text") or {}).get("format") or {}).get("name")
+        for payload in resumed_responder.calls
+    ]
+    assert names == ["FILE_CONTENT_V1"]
+    assert client.create_response.call_count == paid_preparation_calls
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-def test_background_preparation_resumes_then_submits_only_file_batch(tmp_path, mode):
-    from test_delivery_pipeline import _client, _run, _scenario
-    worker, preparation, _ = _scenario(tmp_path, mode, True, True)
-    client, calls = _client(preparation[1:])
-    first = response(999, preparation[0])
-    client.create_response.side_effect = [{"id": first["id"], "status": "queued"}]
+def test_background_preparation_resume_does_not_duplicate_batch_submit(tmp_path, mode):
+    worker, client, responder = scenario(
+        tmp_path, mode, batch=True, maximum_quality=False
+    )
+    pending = {}
+    original = responder
+
+    def create(payload):
+        completed = original(payload)
+        name = ((payload.get("text") or {}).get("format") or {}).get("name")
+        if name == ("A1_PLAN_V2" if mode == "GENERATE" else "B1_PLAN_V2") and not pending:
+            pending["response"] = completed
+            pending["id"] = completed["id"]
+            return {
+                "id": completed["id"],
+                "object": "response",
+                "model": completed["model"],
+                "status": "queued",
+            }
+        return completed
+
+    client.create_response.side_effect = create
     client.retrieve_response.side_effect = OpenAIError("offline", status_code=404)
+    worker.settings.response_poll_timeout_s = 0.001
     with patch.object(ResponseJournal, "_wait"):
-        results, errors = _run(worker, client)
-    assert errors and not results
+        results, errors = run(worker, client)
+    assert results == [] and errors
     client.create_batch.assert_not_called()
-    resumed = RunWorker(worker.cfg, worker.settings, "test", RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True))
-    next_client, calls = _client(preparation[1:])
-    next_client.retrieve_response.return_value = first
-    with patch.object(ResponseJournal, "_wait"):
-        results, errors = _run(resumed, next_client)
-    assert errors == [] and results[0]["batch_id"] == "batch_work"
-    assert len(calls) == 3
-    assert all(body["background"] and body["store"] for body in calls)
-    rows = next_client.create_batch.call_args.kwargs["_prevalidated_rows"]
-    assert all(not row["body"].get("background") for row in rows)
-    next_client.create_batch.assert_called_once()
+
+    resumed = RunWorker(
+        worker.cfg,
+        worker.settings,
+        "test",
+        RunLogger(worker.settings.log_dir, worker.log.run_id, "test", resume=True),
+    )
+    resumed_client, _ = make_client(mode)
+    resumed_client.retrieve_response.return_value = pending["response"]
+    resumed_results, resumed_errors = [], []
+    resumed.finished_ok.connect(resumed_results.append)
+    resumed.finished_err.connect(resumed_errors.append)
+    with patch(
+        "kajovo.core.runs.executor.OpenAIClient",
+        return_value=resumed_client,
+    ), patch.object(ResponseJournal, "_wait"):
+        resumed.run()
+
+    assert resumed_errors == []
+    assert resumed_results[0]["status"] == "batch_pending"
+    resumed_client.create_batch.assert_called_once()
+    resumed_client.retrieve_response.assert_called_with(pending["id"])
+
 
 
 @pytest.mark.parametrize("state", ["response_pending", "submission_unknown", "cancelled"])

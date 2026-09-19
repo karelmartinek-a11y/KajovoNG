@@ -31,11 +31,29 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         self, client, "MODIFY", base_prev_id, b_text, b_input_files, b_input_images,
         tools if supports_fs else None)
 
-    touched_raw = struct.get("touched_files", []) or []
-    validate_paths(touched_raw)
+    if self.cfg.stop_after_plan:
+        self.progress_event.emit(
+            ProgressEvent("B2Q" if self.cfg.maximum_quality else "B2", detail="Ověřená příprava je hotová; B3 nebylo spuštěno.")
+        )
+        return {
+            "mode": "MODIFY", "plan": plan, "structure": struct,
+            "status": "plan_ready", "checkpoint": "plan_ready",
+            "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
+            "dry_run": bool(self.cfg.dry_run),
+        }
+
+    spine_files = list((struct.get("spine") or {}).get("files") or [])
+    touched_raw = [
+        row for row in spine_files if row.get("action") in {"add", "modify"}
+    ]
+    preserved_raw = [
+        row for row in spine_files if row.get("action") == "preserve"
+    ]
+    del preserved_raw
+    validate_paths(spine_files)
     validate_modify_sources(struct, root, items, self.cfg.skip_paths or [])
     if any(item.get("action") not in ("add", "modify") for item in touched_raw):
-        raise ContractError("B2: action musí být add nebo modify.")
+        raise ContractError("B2: výrobní action musí být add nebo modify.")
     if not touched_raw:
         self._verify_completed_files()
         self.log.update_state({"no_changes": True, "written_files": []})
@@ -43,8 +61,8 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         return {
             "mode": "MODIFY", "plan": plan, "structure": struct,
             "saved": {"saved": []}, "written_files": [], "no_changes": True,
-            "status": "dry_run" if self.settings.dry_run_modify else "completed",
-            "dry_run": bool(self.settings.dry_run_modify),
+            "status": "dry_run" if self.cfg.dry_run else "completed",
+            "dry_run": bool(self.cfg.dry_run),
             "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
         }
     touched = []
@@ -56,7 +74,7 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         if path in (self.cfg.skip_paths or []):
             continue
         ext = os.path.splitext(path)[1].lower()
-        if tf.get("kind") == "binary" or ext in (self.cfg.skip_exts or []):
+        if tf.get("kind") != "text" or ext in (self.cfg.skip_exts or []):
             self._log_debug(f"B3: skipping due to extension {ext} ({path})")
             omitted.append(path)
             continue
@@ -105,16 +123,31 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
             self.cfg.temperature, [file["path"] for file in touched],
             requirements=self._delivery_snapshot["requirements"],
             maximum_quality=self.cfg.maximum_quality, mode="MODIFY", originals=originals,
-            recovery_instruction=self.cfg.recovery_instruction)
+            recovery_instruction=self.cfg.recovery_instruction,
+            run_config=self.cfg, expected_target_hashes=overwrite_hashes)
         manifest["overwrite_hashes"] = overwrite_hashes
-        manifest["dry_run"] = bool(self.settings.dry_run_modify)
+        manifest["dry_run"] = bool(self.cfg.dry_run)
         manifest["versing"] = bool(self.cfg.versing)
         return self._submit_generate_batch(client, manifest)
 
+    from ..context_compiler import ContextCompiler
+    compiler = ContextCompiler(self._delivery_snapshot)
+    wave_rank = {
+        path: wave_index
+        for wave_index, wave in enumerate(compiler.graph.get("waves") or [])
+        for path in wave
+    }
     total_files = len(touched)
-    chain_prev_id = str(resp2_id or "")
+    chain_prev_id = ""
     out_files: list[dict[str, Any]] = []
-    generation_order = [row for row in touched_raw if row in touched or row["path"] in (self.cfg.skip_paths or [])]
+    self._delivery_verified_artifacts = {}
+    generation_order = sorted(
+        [
+            row for row in touched_raw
+            if row in touched or row["path"] in (self.cfg.skip_paths or [])
+        ],
+        key=lambda row: (wave_rank.get(row["path"], 10**9), row["path"]),
+    )
     for i, tf in enumerate(generation_order, start=1):
         self._check_stop()
         path = tf.get("path", "")
@@ -137,7 +170,7 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         )
         if last_resp_id:
             chain_prev_id = last_resp_id
-        out_files.append({"path": path, "content": content})
+        out_files.append({"path": path, "content": content, "action": action})
         self.subprogress.emit(int(i * 100 / max(1, total_files)))
         self.progress_event.emit(ProgressEvent("B3", completed=i, total=total_files, unit="souborů", detail=str(path)))
 
