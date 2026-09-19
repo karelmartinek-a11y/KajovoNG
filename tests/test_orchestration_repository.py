@@ -1,5 +1,25 @@
 from kajovo.core.orchestration.repository import OrchestrationRepository
 from kajovo.core.orchestration.work_order import WorkOrder
+import sqlite3
+
+import pytest
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_connection_closes_and_transaction_rolls_back_on_failure(tmp_path, fail):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    try:
+        with repo.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("INSERT INTO schema_version VALUES (2, 'test')")
+            if fail:
+                raise RuntimeError("Přerušená transakce")
+    except RuntimeError:
+        assert fail
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        db.execute("SELECT 1")
+    with repo.connect() as check:
+        assert bool(check.execute("SELECT 1 FROM schema_version WHERE version=2").fetchone()) is not fail
 
 
 def _order(run_id, task_id, reservation_id):

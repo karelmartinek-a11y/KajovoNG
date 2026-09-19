@@ -27,7 +27,10 @@ def _work_orders(manifest: dict[str, Any]) -> dict[str, WorkOrder]:
             raise ContractError(f"BATCH {custom_id}: neplatný WORK_ORDER_V2.")
         value = {key: item for key, item in raw.items() if key != "order_hash"}
         try:
-            result[str(custom_id)] = WorkOrder(**value)
+            order = WorkOrder(**value)
+            if str(raw.get("order_hash") or "") != order.order_hash:
+                raise ContractError(f"BATCH {custom_id}: WorkOrder hash nesouhlasí.")
+            result[str(custom_id)] = order
         except (TypeError, ValueError) as exc:
             raise ContractError(f"BATCH {custom_id}: neplatný WORK_ORDER_V2.") from exc
     if set(result) != {str(row["custom_id"]) for row in manifest.get("requests", [])}:
@@ -60,6 +63,7 @@ def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
 
 def _submit_generate_batch(self: RunContext, client, manifest):
     from ..cost_context_report import CostContextReport
+    from ..orchestration.repository import repository_for_logger
     from ..recoverable_artifacts import load_run_state
 
     current_state = load_run_state(self.log.paths.run_dir)
@@ -76,9 +80,29 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             "je nutná explicitní příprava FileContext."
         )
 
+    encode_requests(manifest)
     work_orders = _work_orders(manifest)
     manifest_v4 = from_file_manifest(self.log.run_id, manifest)
     _save_v4(self.log, manifest_v4)
+
+    # Obnovený checkpoint může pocházet z odděleného procesu importu a jeho
+    # WorkOrder proto nemusí mít parent run už zapsaný v lokální databázi.
+    # WorkOrder zůstává immutable; pouze doplníme důvěryhodný parent z jeho
+    # vlastní identity, aby následná FK vazba nebyla nahrazena nečitelnou
+    # chybou při rezervaci.
+    repo = repository_for_logger(self.log)
+    for order in work_orders.values():
+        if repo.has_run(order.run_id):
+            continue
+        repo.register_run(
+            order.run_id,
+            lineage_id=order.run_id,
+            scope_hash=str(manifest.get("snapshot_hash") or order.source_snapshot_hash),
+            policy_hash=order.policy_hash,
+            config=dict(current_state.get("run_config_v2") or {}),
+            approval_id=order.approval_id,
+            status="running",
+        )
 
     report = CostContextReport(self.log.paths.run_dir)
     reserve_batch(

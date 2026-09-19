@@ -1,10 +1,9 @@
 import threading
 import time
-from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import QTimer
-from test_workflows import make_worker
+from change_v2_fixtures import run, scenario
 
 from kajovo.core.progress import ProgressClock, ProgressEvent
 from kajovo.core.progress_display import build_steps, event_sentence, source_title
@@ -96,9 +95,7 @@ def test_io_runs_outside_gui_while_timer_remains_responsive(qtbot):
 
 @pytest.mark.parametrize("fail", [False, True])
 def test_file_is_counted_only_after_generation(tmp_path, monkeypatch, fail):
-    worker = make_worker(tmp_path, "GENERATE")
-    worker.cfg.resume_files = [{"path": "hello.py", "purpose": "test"}]
-    worker.cfg.resume_prev_id = "resp_previous"
+    worker, client, _ = scenario(tmp_path, "GENERATE")
     events = []
     worker.progress_event.connect(events.append)
 
@@ -109,11 +106,11 @@ def test_file_is_counted_only_after_generation(tmp_path, monkeypatch, fail):
         return "print('hello')\n", "resp_test"
 
     monkeypatch.setattr(worker, "_gen_file_chunks", generate)
+    results, errors = run(worker, client)
     if fail:
-        with pytest.raises(ValueError, match="fixture"):
-            worker._run_a_generate(Mock(), [], None)
+        assert not results and errors and "fixture" in errors[0]
     else:
-        worker._run_a_generate(Mock(), [], None)
+        assert results and not errors
     assert [e.completed for e in events if e.stage == "A3" and e.completed is not None] == (
         [0] if fail else [0, 1]
     )

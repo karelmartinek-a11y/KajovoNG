@@ -63,8 +63,8 @@ def test_exact_instructions():
         if stage in ("A3_FILE", "B3_FILE"):
             actual = subject.stage_instructions(stage)
             assert actual.startswith(expected + "\n\n")
-            assert "jediné úplné" in actual
-            assert "chunk_index=0" in actual
+            assert "FILE_CONTENT_V1" in actual
+            assert "jediným polem content" in actual
             assert "500 řádků" not in actual
         else:
             assert subject.stage_instructions(stage) == expected
@@ -253,11 +253,11 @@ def test_live_and_batch_require_single_complete_file_without_line_chunking(stage
     batch = subject.stage_instructions(stage, batch=True)
     for instructions in (live, batch):
         assert "500 řádků" not in instructions
-        assert "v jediné úplné části" in instructions
-        assert "chunk_index=0" in instructions
-        assert "chunk_count=1" in instructions
-        assert "has_more=false" in instructions
-        assert "next_chunk_index=null" in instructions
+        assert "FILE_CONTENT_V1" in instructions
+        assert "jediným polem content" in instructions
+        assert "chunk_index" not in instructions
+        assert "chunk_count" not in instructions
+        assert "has_more" not in instructions
         assert instructions.startswith(subject.CORE_INSTRUCTIONS + "\n\n")
 
 

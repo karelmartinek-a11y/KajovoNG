@@ -8,8 +8,11 @@ import pytest
 from kajovo.core.contracts import ContractError
 from kajovo.core.delivery_preparation import prepare_delivery, validate_preparation_snapshot
 from kajovo.core.generate_batch import digest
+from kajovo.core.orchestration.contracts import canonical_sha256
+from kajovo.core.orchestration.preparation import validate_graph
+from change_v2_fixtures import format_names, run, scenario
 from delivery_fixtures import delivery_payloads
-from test_workflows import make_worker, response
+from test_workflows import make_worker
 
 
 def snapshot(mode="GENERATE", quality=False, stage=None):
@@ -52,47 +55,69 @@ def test_snapshot_rejects_tampering_or_wrong_run(fault):
 
 
 def test_resume_after_a2_runs_only_gate_and_persists_canonical_output(tmp_path):
-    worker = make_worker(tmp_path, "GENERATE")
-    worker.cfg.maximum_quality = True
-    checkpoint = snapshot(quality=True, stage="A2")
-    checkpoint["prompt_hash"] = digest(worker.cfg.prompt)
+    worker, client, responder = scenario(tmp_path, "GENERATE", stop_after_plan=True)
+    results, errors = run(worker, client)
+    assert results and not errors
+    checkpoint = deepcopy(worker.cfg.preparation_snapshot)
+    worker, client, responder = scenario(
+        tmp_path / "resume", "GENERATE", stop_after_plan=True, maximum_quality=True,
+    )
+    checkpoint["maximum_quality"] = True
     checkpoint.pop("snapshot_hash")
-    checkpoint["snapshot_hash"] = digest(checkpoint)
+    checkpoint["snapshot_hash"] = canonical_sha256(checkpoint)
     worker.cfg.preparation_snapshot = deepcopy(checkpoint)
-    fixed = deepcopy(checkpoint["structure"])
-    fixed["files"][0]["behavior"] = "Úplné chování po kontrole."
-    client = Mock()
-    client.create_response.return_value = response(7, fixed)
-    _, structure, _ = prepare_delivery(worker, client, "GENERATE", None, "test", [], [], None)
+    fixed = deepcopy(checkpoint["graph"])
+    fixed["file_specs"][0]["spec"]["behavior"] = "Úplné chování po kontrole."
+
+    def correct_gate(name, value, data):
+        assert name == "A2Q_QUALITY_GATE_V2"
+        assert data["implementation_graph"] == checkpoint["graph"]
+        value["result"]["data"]["corrected_file_specs"] = deepcopy(fixed["file_specs"])
+        return value
+
+    responder.mutate = correct_gate
+    responder.calls.clear()
+    client.create_response.reset_mock()
+    results, errors = run(worker, client)
+    assert results and not errors
+    structure = results[0]["structure"]
     assert client.create_response.call_count == 1
     assert structure == fixed
     assert worker.cfg.preparation_snapshot["canonical_stage"] == "A2Q"
-    assert checkpoint["structure"] != fixed
-    validate_preparation_snapshot(worker.cfg.preparation_snapshot, "GENERATE", True)
+    assert format_names(responder) == ["A2Q_QUALITY_GATE_V2"]
+    assert checkpoint["graph"] != fixed
+    validate_graph(worker, worker.cfg.preparation_snapshot["graph"])
+    stored = worker.cfg.preparation_snapshot
+    assert stored["snapshot_hash"] == canonical_sha256(
+        {key: value for key, value in stored.items() if key != "snapshot_hash"}
+    )
 
 
 def test_completed_checkpoint_does_not_generate_again(tmp_path):
-    worker = make_worker(tmp_path, "GENERATE")
-    checkpoint = snapshot()
-    checkpoint["prompt_hash"] = digest(worker.cfg.prompt)
-    checkpoint.pop("snapshot_hash")
-    checkpoint["snapshot_hash"] = digest(checkpoint)
-    worker.cfg.preparation_snapshot = checkpoint
+    worker, initial_client, _ = scenario(tmp_path, "GENERATE", stop_after_plan=True)
+    results, errors = run(worker, initial_client)
+    assert results and not errors
+    checkpoint = deepcopy(worker.cfg.preparation_snapshot)
     client = Mock()
     plan, structure, rid = prepare_delivery(worker, client, "GENERATE", None, "test", [], [], None)
     client.create_response.assert_not_called()
-    assert (plan, structure, rid) == (checkpoint["plan"], checkpoint["structure"], "resp_checkpoint")
+    assert (plan, structure, rid) == (checkpoint["plan"], checkpoint["graph"], checkpoint["response_id"])
+    assert worker.cfg.preparation_snapshot == checkpoint
 
 
 def test_modify_dry_run_keeps_out_unchanged(tmp_path):
     worker = make_worker(tmp_path, "MODIFY")
-    worker.settings.dry_run_modify = True
+    worker.cfg.dry_run = True
     target = tmp_path / "out"
     target.mkdir(exist_ok=True)
     original = target / "hello.txt"
     original.write_text("původní", encoding="utf-8")
     saved = worker._save_out_files([{"path": "hello.txt", "content": "nový"}])
-    assert saved == {"saved": [], "dry_run": True}
+    assert saved["saved"] == []
+    assert saved["dry_run"] is True
+    assert saved["published"] is False
+    assert saved["publication_state"] == "blocked_dry_run"
+    assert [row["path"] for row in saved["staged"]] == ["hello.txt"]
     assert original.read_text(encoding="utf-8") == "původní"
 
 

@@ -118,6 +118,7 @@ def test_workflow_combination_matrix(mode, batch, previous, vector, diagnostics)
     from types import SimpleNamespace
     from kajovo.core.request_rules import validate_run_options
     cfg = SimpleNamespace(mode=mode, model="gpt-4.1-nano", prompt="test", send_as_c=batch,
+                          model_a1="", model_a2="", model_a3="",
                           response_id="resp_test" if previous else "", attached_vector_store_ids=["vs_test"] if vector else [],
                           diag_windows_in=diagnostics, diag_ssh_in=False, diag_windows_out=False, diag_ssh_out=False,
                           model_caps={"ok_basic": True, "supports_file_search": True}, available_models=["gpt-4.1-nano"])

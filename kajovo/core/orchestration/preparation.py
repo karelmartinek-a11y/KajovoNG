@@ -12,7 +12,7 @@ import jsonschema
 from .contracts import canonical_sha256
 from .waves import build_execution_dag
 from ..context_budget import preparation_measurement
-from ..contracts import ContractError, validate_paths
+from ..contracts import ContractError, extract_text_from_response, validate_paths
 from ..structured_output import array, obj, prepare_payload, response_format, validate_output
 
 
@@ -403,6 +403,8 @@ def validate_plan_v2(requirements: dict[str, Any], plan: dict[str, Any]) -> None
     _unique(plan["verification_intents"], "id", "verification_intents")
     covered: set[str] = set()
     for row in components:
+        if not row["responsibility"].strip():
+            raise ContractError(f"{row['id']}: responsibility komponenty nesmí být prázdná.")
         if not set(row["requirement_ids"]) <= req_ids:
             raise ContractError(f"{row['id']}: neznámý requirement.")
         if not set(row["flow_ids"]) <= flow_ids:
@@ -432,6 +434,7 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
     interface_ids = _unique(interfaces, "id", "interfaces")
     covered_requirements: set[str] = set()
     used_components: set[str] = set()
+    relationship_errors: list[str] = []
     for row in files:
         if row["component_id"] not in component_ids:
             raise ContractError(f"{row['path']}: neznámá component.")
@@ -441,7 +444,10 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
             raise ContractError(f"{row['path']}: neznámý requirement.")
         covered_requirements.update(row_requirements)
         if not set(row["dependencies"]) <= paths - {row["path"]}:
-            raise ContractError(f"{row['path']}: neznámá/self dependency.")
+            relationship_errors.append(
+                f"{row['path']}: neznámá/self dependency: "
+                f"{sorted(set(row['dependencies']) - (paths - {row['path']}))}"
+            )
         if not set(row["content_dependencies"]) <= set(row["dependencies"]):
             raise ContractError(f"{row['path']}: content dependency není obecná dependency.")
         if (row["dependency_content_mode"] == "verified_content") != bool(row["content_dependencies"]):
@@ -455,9 +461,9 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
         if interface["version"] < 1:
             raise ContractError(f"{interface['id']}: interface version musí být >=1.")
         if not set(interface["providers"]) <= paths or not set(interface["consumers"]) <= paths:
-            raise ContractError(f"{interface['id']}: interface odkazuje na neznámou cestu.")
+            relationship_errors.append(f"{interface['id']}: interface odkazuje na neznámou cestu.")
         if not interface["providers"]:
-            raise ContractError(f"{interface['id']}: interface nemá providera.")
+            relationship_errors.append(f"{interface['id']}: interface nemá providera.")
         if not set(interface["requirement_ids"]) <= req_ids:
             raise ContractError(f"{interface['id']}: neznámý requirement.")
     mandatory_requirements = {
@@ -483,25 +489,37 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
 
     interfaces_by_id = {row["id"]: row for row in interfaces}
     for row in files:
-        if not set(row["provides"] + row["requires"]) <= interface_ids:
-            raise ContractError(f"{row['path']}: neznámé interface binding.")
+        unknown = set(row["provides"] + row["requires"]) - interface_ids
+        if unknown:
+            relationship_errors.append(
+                f"{row['path']}: neznámé interface binding. {sorted(unknown)}"
+            )
         available = set(row["dependencies"]) | {row["path"]}
         for interface_id in row["requires"]:
+            if interface_id not in interfaces_by_id:
+                continue
             providers = set(interfaces_by_id[interface_id]["providers"])
             if not providers & available:
-                raise ContractError(
-                    f"{row['path']}: requires {interface_id} nemá providera v dependencies."
+                relationship_errors.append(
+                    f"{row['path']}: requires {interface_id} nemá providera v dependencies. "
+                    f"Deklarovaní provideři: {sorted(providers)}"
                 )
         for interface_id in row["provides"]:
+            if interface_id not in interfaces_by_id:
+                continue
             if row["path"] not in interfaces_by_id[interface_id]["providers"]:
-                raise ContractError(
+                relationship_errors.append(
                     f"{row['path']}: provides {interface_id} není potvrzeno interface kontraktem."
                 )
         for interface_id in row["requires"]:
+            if interface_id not in interfaces_by_id:
+                continue
             if row["path"] not in interfaces_by_id[interface_id]["consumers"]:
-                raise ContractError(
+                relationship_errors.append(
                     f"{row['path']}: requires {interface_id} není potvrzeno jako consumer."
                 )
+    if relationship_errors:
+        raise ContractError("\n".join(relationship_errors))
     owned: set[str] = set()
     for owner in spine["obligation_owners"]:
         if not owner["reason"].strip() or not set(owner["paths"]) <= paths or not owner["paths"]:
@@ -644,6 +662,35 @@ def _validate_json(value: Any, schema: dict[str, Any], label: str) -> None:
         raise ContractError(f"{label}: {exc.message}") from exc
 
 
+def _prepare_spine(spine: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Doplní jen jednoznačné kontraktní vazby; výrobní content hrany neodvozuje."""
+    prepared = copy.deepcopy(spine)
+    files = prepared["files"]
+    validate_paths(files)
+    _unique(files, "path", "files")
+    _unique(prepared["interfaces"], "id", "interfaces")
+    interfaces = {row["id"]: row for row in prepared["interfaces"]}
+    additions = []
+    for row in files:
+        for interface_id in row["requires"]:
+            interface = interfaces.get(interface_id)
+            if interface is None:
+                continue
+            providers = [
+                item["path"] for item in files
+                if interface_id in item["provides"]
+                and item["path"] in interface["providers"]
+            ]
+            available = set(row["dependencies"]) | {row["path"]}
+            if len(providers) == 1 and not available.intersection(providers):
+                row["dependencies"].append(providers[0])
+                additions.append({
+                    "path": row["path"], "dependency": providers[0],
+                    "interface": interface_id,
+                })
+    return prepared, additions
+
+
 def _request(worker, client, stage: str, input_value: dict[str, Any], model: str,
              semantic, *, tools=None) -> tuple[dict[str, Any], str]:
     fmt = FORMATS[stage]
@@ -664,15 +711,19 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
     prepare_payload(payload)
     step_id = worker.log.begin_validated_step(stage, kind="preparation", model=model)
     last_error: Exception | None = None
+    failed_candidates: set[tuple[str, str]] = set()
+    failed_candidate: dict[str, Any] | str | None = None
     for attempt in range(3):
         worker._check_stop()
         working = copy.deepcopy(payload)
         if attempt and last_error is not None:
+            working.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
             working["input"] = worker._input_parts(
                 json.dumps({
                     "input": input_value,
                     "repair": {
                         "error": str(last_error),
+                        "candidate": failed_candidate,
                         "instruction": "Oprav pouze uvedené porušení kontraktu; nevymýšlej chybějící data.",
                     },
                 }, ensure_ascii=False),
@@ -684,6 +735,7 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
             "requests", f"{stage}_v2_request_{attempt}",
             {"payload": working, "ui_state": worker.cfg.__dict__}, step_id=step_id,
         )
+        candidate_hash: str | None = None
         try:
             response = worker._create_response(client, working, attempt=attempt, measurement=measurement)
             worker.log.save_json(
@@ -691,21 +743,51 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
                 response, step_id=step_id,
             )
             parsed = validate_output(response, working)
+            candidate_hash = canonical_sha256(parsed)
             data = _ready(stage, parsed)
+            failed_candidate = copy.deepcopy(data)
+            if stage in {"A2_SPINE", "B2_SPINE"}:
+                data, additions = _prepare_spine(data)
+                failed_candidate = copy.deepcopy(data)
+                worker.log.save_json(
+                    "manifests", f"{stage}_prepared_candidate_{attempt}",
+                    {"spine": data, "added_dependencies": additions}, step_id=step_id,
+                )
             semantic(data)
         except PreparationBlocked:
             raise
         except ContractError as exc:
             last_error = exc
+            rejected_response = getattr(exc, "response", None)
+            if candidate_hash is None and isinstance(rejected_response, dict):
+                if rejected_response.get("status") == "completed":
+                    rejected_text = extract_text_from_response(rejected_response)
+                    failed_candidate = rejected_text
+                    candidate_hash = canonical_sha256(rejected_text)
+            signature = (candidate_hash, canonical_sha256(str(exc))) if candidate_hash else None
+            no_progress = signature is not None and signature in failed_candidates
+            if signature is not None:
+                failed_candidates.add(signature)
             record = worker.log.record_validation(
                 step_id=step_id, target_type="preparation_v2", target_id=stage,
                 validator=stage, status="failed", errors=[str(exc)],
-                evidence={"attempt": attempt + 1},
+                evidence={
+                    "attempt": attempt + 1,
+                    "candidate_hash": candidate_hash,
+                    "error_signature": signature[1] if signature else None,
+                    "no_progress": no_progress,
+                },
             )
-            if attempt == 2:
+            if no_progress or attempt == 2:
                 worker.log.bundle.update_step(
                     step_id, status="failed", finished_at=record["timestamp"]
                 )
+                if no_progress:
+                    failure = ContractError(
+                        f"NO_PROGRESS: {stage}: shodný kandidát opakuje stejnou chybu: {exc}"
+                    )
+                    failure.code = "NO_PROGRESS"
+                    raise failure from exc
                 raise
             continue
         record = worker.log.record_validation(

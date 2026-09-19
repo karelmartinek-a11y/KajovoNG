@@ -40,7 +40,7 @@ def _source(tmp_path, *, mode="QA", status="failed", batch=False):
     ("completed", "Dokončeno"), ("partial", "Částečně dokončeno"),
     ("failed", "Chyba"), ("cancelled", "Zrušeno"), ("running", "Běží"),
     ("response_pending", "Čeká na odpověď"), ("batch_pending", "BATCH běží"),
-    ("files_complete_unverified", "Neověřeno"), ("dry_run", "Dry-run"),
+    ("files_complete_unverified", "Neověřeno · čeká na převzetí"), ("dry_run", "Dry-run"),
     ("submission_unknown", "Neznámý výsledek"), ("blocked", "Blokováno"),
 ])
 def test_central_state_mapping_has_text_icon_and_color(key, label):
@@ -190,7 +190,7 @@ def test_repair_instruction_is_present_in_actual_new_qa_request(tmp_path, monkey
     checkpoint = adapter.checkpoints()[0]
     preview = launcher.preview(adapter, checkpoint["checkpoint_id"], "repair", "QA")
     worker = launcher.launch(adapter, preview, "Oprav pouze citaci.").worker
-    worker._executor._create_response = Mock(return_value={"id": "resp_new", "status": "completed", "output_text": '{"text":"ok"}'})
+    worker._executor._create_response = Mock(return_value={"id": "resp_new", "status": "completed", "output_text": '{"result":{"status":"ready","data":{"answer":"ok","claims":[],"limitations":[]}}}'})
     worker._executor._run_qa(Mock(), [], None)
     requests = LegacyRunAdapter(Path(settings.log_dir) / "RUN_TARGET").requests()
     payload = next(row["full_payload"]["payload"] for row in requests if row.get("request_record_id"))
@@ -208,7 +208,7 @@ def test_edited_qa_rerun_instruction_is_present_in_actual_new_request(tmp_path, 
     checkpoint = adapter.checkpoints()[0]
     preview = launcher.preview(adapter, checkpoint["checkpoint_id"], "rerun", "QA")
     worker = launcher.launch(adapter, preview, "Zaměř odpověď na klávesovou navigaci.").worker
-    worker._executor._create_response = Mock(return_value={"id": "resp_new", "status": "completed", "output_text": '{"text":"ok"}'})
+    worker._executor._create_response = Mock(return_value={"id": "resp_new", "status": "completed", "output_text": '{"result":{"status":"ready","data":{"answer":"ok","claims":[],"limitations":[]}}}'})
     worker._executor._run_qa(Mock(), [], None)
     requests = LegacyRunAdapter(Path(settings.log_dir) / "RUN_QA_EDITED").requests()
     payload = next(row["full_payload"]["payload"] for row in requests if row.get("request_record_id"))

@@ -22,6 +22,7 @@ def matrix_rows():
         )
         cfg = SimpleNamespace(
             mode=mode, model="gpt-4.1-nano", prompt="test", send_as_c=batch,
+            model_a1="", model_a2="", model_a3="",
             response_id="resp_test" if previous else "",
             attached_vector_store_ids=["vs_test"] if vector else [],
             model_caps={"ok_basic": True, "supports_file_search": file_search},
