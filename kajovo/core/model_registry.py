@@ -45,7 +45,7 @@ _USAGE_PREFERENCES = {
     "qa": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
     "qfile": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
     "cascade": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6"),
-    "photo_prompt": ("gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-5.6"),
+    "photo_prompt": ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra", "gpt-5.6"),
     "photo_edit_batch": (
         "gpt-image-2.5-sunburst",
         "gpt-image-2.5-sunburst-2026-09-08",
