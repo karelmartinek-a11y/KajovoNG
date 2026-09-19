@@ -102,168 +102,18 @@ def validate_delivery_structure(requirements, plan, structure, mode):
     return prepared, additions
 
 
-def prepare_delivery(worker, client, mode, previous_id, input_text, input_files, input_images, tools):
-    """Provede pouze chybějící analytické fáze a vrátí kanonickou specifikaci."""
-    prefix = "A" if mode == "GENERATE" else "B"
-    quality = bool(worker.cfg.maximum_quality)
-    stages = [prefix + "0R", prefix + "1", prefix + "2"]
-    if quality:
-        stages.append(prefix + "2Q")
-    formats = [requirements_format(mode), enriched_plan_format(mode), enriched_structure_format(mode, implementation=True)]
-    labels = (["Profesionální requirements", "Architektonický plán", "Implementační struktura"]
-              if mode == "GENERATE" else ["Change requirements", "Plán změny", "Implementační struktura změny"])
-    if quality:
-        formats.append(enriched_structure_format(mode, implementation=True))
-        labels.append("Quality gate")
-    checkpoint = worker.cfg.preparation_snapshot
-    if checkpoint:
-        snapshot = validate_preparation_snapshot(checkpoint, mode, quality)
-        if snapshot.get("prompt_hash") != digest(worker.cfg.prompt):
-            raise ContractError("Zadání se liší od uložené přípravy; spusťte nový běh.")
-        start = stages.index(snapshot["canonical_stage"]) + 1
-        previous_id = snapshot["response_id"]
-    else:
-        start = 0
-        snapshot = {"version": 1, "mode": mode, "maximum_quality": quality,
-                    "prompt_hash": digest(worker.cfg.prompt), "requirements": None,
-                    "plan": None, "structure": None}
-    for index in range(start, len(stages)):
-        stage, fmt = stages[index], formats[index]
-        worker._check_stop()
-        worker._set(10 + index * 8, 0, labels[index] + "…", stage=stage)
-        model = worker._generate_model("A1" if index < 2 else "A2") if mode == "GENERATE" else worker.cfg.model
-        context = {"source": input_text, "requirements": snapshot["requirements"],
-                   "plan": snapshot["plan"], "structure": snapshot["structure"]}
-        if worker.cfg.send_as_c:
-            context["delivery"] = "Samostatné souborové úlohy bez historie; specifikace obsahuje všechny závěry příloh a diagnostiky."
-        payload = worker._payload_base(
-            model=model, instructions=stage_instructions(stage),
-            input_parts=worker._input_parts(json.dumps(context, ensure_ascii=False),
-                                            input_files, input_images),
-            # Pouze první syntéza může mít explicitní vnější historii.
-            # Další fáze dostávají úplný kanonický kontext právě jednou.
-            prev_id=previous_id if index == 0 else None,
-            supports_temperature=worker._model_caps(model).get("supports_temperature", False),
-        )
-        if index:
-            fmt = bound_reference_format(fmt, snapshot["requirements"], snapshot["plan"], mode)
-            payload["instructions"] += (
-                "\nrequirement_ids odkazují pouze na ID explicitních a implicitních požadavků. "
-                "Akceptační kritéria, invarianty a předpoklady zachovej přes zdrojové odkazy "
-                "implementation.scopes; jejich textové značky nejsou requirement_ids."
-            )
-        payload["text"] = fmt
-        if index >= 2:
-            payload["instructions"] += (
-                "\nImplementační kontrakt v1 je povinný. implementation.scopes určuje pro každou "
-                "atomickou globální povinnost přesné cesty a důvod působnosti. Zdroj je JSON pointer "
-                "/requirements/<pole>/<index>, /plan/<pole>/<index> nebo /structure/<pole>/<index>; "
-                "u neprázdného objektu či skaláru bez indexu. Vynech contract, version, files, "
-                "touched_files, preserved_files, interfaces, implementation, architecture_items "
-                "a seznamy requirement objektů s id, které se vážou pomocí requirement_ids. "
-                "Objekt plan.requirements je samostatná globální povinnost. "
-                "Žádná povinnost nesmí zůstat bez vlastníka. U každého rozhraní definuj přesnou "
-                "signaturu včetně typů/nullability, verzi, chybovou sémantiku a lifecycle. "
-                "Consumer/provider používají stejný verzovaný kontrakt. U každého souboru "
-                "vyjmenuj required_facets podle skutečných rizik a vyplň příslušné facets včetně "
-                "zdrojových odkazů. Zachyť persistence, transakce, konkurenci, security a globální "
-                "invarianty tam, kde platí. Akceptace a testovací scénáře musí být konkrétní. "
-                "Neznámé kritické detaily označ jako critical unresolved_questions; nevymýšlej je. "
-                "expected_output_tokens je odhad viditelného úplného souboru bez reasoning. "
-                "Cykly implementuj proti přesným společným rozhraním, nikoli domnělému kódu."
-            )
-        apply_quality(payload, quality)
-        if tools:
-            payload["tools"] = tools
-        step_id = worker.log.begin_validated_step(stage, kind="preparation", model=model)
-        fingerprints = set()
-        rejected = []
-        for attempt in range(3):
-            worker._check_stop()
-            payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
-            worker._set(10 + index * 8, 0, labels[index] + ": ověřuji kapacitu vstupu…", stage=stage)
-            prepare_payload(payload)
-            measurement = preparation_measurement(payload, client)
-            worker._set(10 + index * 8, 0,
-                        f"{labels[index]} · vstup {'=' if measurement['input_tokens_exact'] else '~'}"
-                        f"{measurement['input_tokens']:,} tokenů · výstupní rezerva {measurement['output_budget']:,}",
-                        stage=stage)
-            worker.log.save_json("requests", f"{stage}_request_{attempt}",
-                                 {"payload": payload, "ui_state": worker.cfg.__dict__}, step_id=step_id)
-            worker._log_api_action(stage, "send", {"contract": fmt["format"]["name"], "model": model})
-            value, response, raw = None, {}, ""
-            try:
-                response = worker._create_response(client, payload, measurement=measurement)
-                worker.log.save_json("responses", f"{stage}_response_{attempt}_{response.get('id', 'NOID')}",
-                                     response, step_id=step_id)
-                previous_id = str(response.get("id") or "")
-                if not previous_id:
-                    raise ContractError(f"{stage}: odpověď nemá ID.")
-                raw = extract_text_from_response(response)
-                value = parse_json_strict(raw)
-                validate_stage_schema(value, fmt, stage)
-                worker._log_api_action(stage, "receive", {"response_id": previous_id, "contract": value.get("contract")})
-                if index == 0:
-                    validate_requirements(value, mode)
-                elif index == 1:
-                    validate_plan(snapshot["requirements"], value, mode)
-                else:
-                    value, additions = validate_delivery_structure(snapshot["requirements"], snapshot["plan"], value, mode)
-                    from .context_compiler import validate_implementation
-                    validate_implementation({"requirements": snapshot["requirements"],
-                                             "plan": snapshot["plan"], "structure": value})
-                    worker.log.save_json("manifests", f"{stage}_prepared_candidate_{attempt}", {
-                        "response_id": previous_id, "structure": value, "added_dependencies": additions})
-            except ContractError as exc:
-                response = getattr(exc, "response", None) or response
-                if response and not raw:
-                    try:
-                        raw = extract_text_from_response(response)
-                    except ContractError:
-                        raw = json.dumps(response.get("output", response), ensure_ascii=False)
-                if value is None and raw:
-                    try:
-                        value = parse_json_strict(raw)
-                        validate_stage_schema(value, fmt, stage)
-                    except ContractError as schema_error:
-                        if schema_error.issues:
-                            exc = schema_error
-                issues = exc.evidence() or [{"code": exc.code, "stage": stage, "pointer": "/",
-                                            "message": str(exc), "expected": None, "actual": None}]
-                record = worker.log.record_validation(
-                    step_id=step_id, target_type="preparation", target_id=str(response.get("id") or stage),
-                    validator=stage, status="failed", errors=[str(exc)],
-                    evidence={"attempt": attempt, "issues": issues, "candidate_hash": digest(value if value is not None else raw)},
-                )
-                rejected.append(record["validation_id"])
-                fingerprint = digest({"candidate": value if value is not None else raw, "issues": issues})
-                terminal = attempt == 2 or fingerprint in fingerprints
-                worker.log.bundle.update_step(step_id, status="failed" if terminal else "repairing",
-                                              finished_at=record["timestamp"] if terminal else "")
-                if terminal:
-                    raise exc
-                fingerprints.add(fingerprint)
-                repair_context = {**context, "validation_errors": str(exc), "validation_issues": issues}
-                repair_context[("requirements", "plan", "structure", "structure")[index]] = value if value is not None else raw
-                payload["input"] = worker._input_parts(json.dumps(repair_context, ensure_ascii=False), input_files, input_images)
-                continue
-            record = worker.log.record_validation(
-                step_id=step_id, target_type="preparation", target_id=previous_id, validator=stage, status="passed",
-                evidence={"attempt": attempt, "candidate_hash": digest(value), "resolves": rejected},
-            )
-            worker.log.bundle.update_step(step_id, status="completed", progress=100, finished_at=record["timestamp"],
-                                          human_summary=f"Validace úspěšná; opravné pokusy: {attempt}.")
-            if rejected:
-                worker.log.event("validation.recovered", {"stage": stage, "step_id": step_id,
-                                 "validation_ids": rejected, "response_id": previous_id,
-                                 "message": "Opravený kandidát prošel validací."})
-            break
-        snapshot[("requirements", "plan", "structure", "structure")[index]] = value
-        snapshot.update(canonical_stage=stage, response_id=previous_id)
-        snapshot.pop("snapshot_hash", None)
-        snapshot["snapshot_hash"] = digest(snapshot)
-        worker.cfg.preparation_snapshot = copy.deepcopy(snapshot)
-        worker.log.update_state({"preparation_snapshot": snapshot, "maximum_quality": quality})
-        worker.log.save_json("manifests", "preparation_snapshot", snapshot)
-    worker._delivery_snapshot = copy.deepcopy(snapshot)
-    return snapshot["plan"], snapshot["structure"], previous_id
+def prepare_delivery(
+    worker,
+    client,
+    mode,
+    previous_id,
+    input_text,
+    input_files,
+    input_images,
+    tools,
+):
+    """New runs use CHANGE V2 preparation; old readers stay for legacy evidence."""
+    del previous_id, input_text, input_files, input_images
+    from .orchestration.preparation import prepare_delivery_v2
+
+    return prepare_delivery_v2(worker, client, mode, tools=tools)
