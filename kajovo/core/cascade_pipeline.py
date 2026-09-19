@@ -29,6 +29,7 @@ from .cascade_log import CascadeLogger
 from .cascade_types import CascadeDefinition, CascadeOutput, CascadeStep
 from .contracts import ContractError, validate_paths
 from .openai_client import OpenAIClient
+from .model_registry import model_spec
 from .openai_transport import SubmissionOutcomeUnknown
 from .orchestration.contracts import canonical_sha256
 from .orchestration.ledger import (
@@ -768,11 +769,19 @@ class CascadeRunExecutor:
                     content_parts.append({"type": "input_file", "file_id": file_id})
                     existing_file_ids.add(file_id)
             schema = self._schema_for_step(step)
+            spec = model_spec(step.model)
+            output_limit = spec.get("max_output_tokens")
+            if type(output_limit) is not int or output_limit <= 0:
+                raise ContractError(
+                    f"Krok {idx}: pro model {step.model} chybí doložený max_output_tokens."
+                )
             payload: dict[str, Any] = {
                 "model": step.model,
                 "instructions": self._deterministic_instructions(step),
                 "input": [{"type": "message", "role": "user", "content": content_parts}],
                 "text": response_format(f"cascade_step_{idx:02d}_det", schema),
+                "max_output_tokens": output_limit,
+                "truncation": "disabled",
             }
             previous_id = (
                 context_response_ids.get(step.context_id, "")
@@ -825,11 +834,19 @@ class CascadeRunExecutor:
                 preflight_existing.add(file_id)
         if step.files_local_paths and "file_local_validation" not in preflight_existing:
             preflight_parts.append({"type": "input_file", "file_id": "file_local_validation"})
+        spec = model_spec(step.model)
+        output_limit = spec.get("max_output_tokens")
+        if type(output_limit) is not int or output_limit <= 0:
+            raise ContractError(
+                f"Krok {idx}: pro model {step.model} chybí doložený max_output_tokens."
+            )
         preflight_payload = {
             "model": step.model,
             "instructions": resolved_instructions,
             "input": [{"type": "message", "role": "user", "content": preflight_parts}],
             "text": text_format(),
+            "max_output_tokens": output_limit,
+            "truncation": "disabled",
         }
         if step.temperature is not None:
             preflight_payload["temperature"] = float(step.temperature)
@@ -871,6 +888,8 @@ class CascadeRunExecutor:
             "instructions": resolved_instructions,
             "input": [{"type": "message", "role": "user", "content": content_parts}],
             "text": wire_format,
+            "max_output_tokens": output_limit,
+            "truncation": "disabled",
         }
         if step.temperature is not None:
             payload["temperature"] = float(step.temperature)
