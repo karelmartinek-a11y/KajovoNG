@@ -91,6 +91,10 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
     if measurement is not None:
         from ..context_compiler import content_hash
         measurement = {**measurement, "request_hash": content_hash(cost_payload)}
+    from ..orchestration.ledger import reserve_paid_request
+    measurement = reserve_paid_request(
+        self.log, self.cfg, client, cost_payload, measurement=measurement
+    )
     cost_report.record(cost_payload, measurement=measurement, status="submitting")
     self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
     self.progress_event.emit(ProgressEvent(self._progress_stage, "waiting", detail="Čekám na dokončení odpovědi v OpenAI Responses API.", source="api"))
