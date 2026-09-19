@@ -13,21 +13,40 @@ permissions:
 jobs:
   export:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
           persist-credentials: false
-      - name: Pack source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Export Git objects without credentials
         shell: bash
         run: |
           set -euo pipefail
-          git lfs pull
-          git archive --format=zip --output=kajovong-source.zip HEAD
+          git bundle create kajovong-source.bundle --all
+      - name: Download canonical offline test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          import sys
+          import tomllib
+          from pathlib import Path
+          project = tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))['project']
+          requirements = [*project['dependencies'], *project['optional-dependencies']['dev'], *project['optional-dependencies']['build']]
+          subprocess.run([sys.executable, '-m', 'pip', 'download', '--only-binary=:all:', '-c', 'requirements/constraints.txt', '--dest', 'wheelhouse', *requirements], check=True)
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: kajovong-source
-          path: kajovong-source.zip
+          name: kajovong-offline-environment
+          path: |
+            kajovong-source.bundle
+            wheelhouse/*
           if-no-files-found: error
           retention-days: 1
+          compression-level: 0
