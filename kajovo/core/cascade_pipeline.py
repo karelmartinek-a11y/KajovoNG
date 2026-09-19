@@ -656,7 +656,11 @@ class CascadeRunExecutor:
                 "input": [{"type": "message", "role": "user", "content": content_parts}],
                 "text": response_format(f"cascade_step_{idx:02d}_det", schema),
             }
-            previous_id = context_response_ids.get(step.context_id, "")
+            previous_id = (
+                context_response_ids.get(step.context_id, "")
+                if step.use_conversation_context
+                else ""
+            )
             if previous_id:
                 payload["previous_response_id"] = previous_id
             if step.temperature is not None:
