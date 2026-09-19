@@ -14,6 +14,7 @@ from kajovo.core.cascade_pipeline import CascadeRunConfig
 from kajovo.core.cascade_types import CascadeDefinition
 from kajovo.core.delivery_preparation import validate_preparation_snapshot
 from kajovo.core.model_capabilities import ModelCapabilitiesCache
+from kajovo.core.orchestration.run_config import require_resumable_run_config_v2
 from kajovo.core.runlog import RunLogger, verified_output_evidence
 from kajovo.core.runs.config import UiRunConfig
 from kajovo.core.utils import new_run_id
@@ -94,6 +95,7 @@ class HistoryBranchLauncher:
         mode = str(ui.get("mode") or state.get("mode") or adapter.run_record().get("mode") or "")
         if mode not in SUPPORTED_DIRECT_MODES:
             raise ValueError("Tento typ běhu nemá bezpečný přímý launcher; použijte jeho doménovou obrazovku.")
+        require_resumable_run_config_v2(ui, mode)
         snapshot = state.get("preparation_snapshot") if isinstance(state.get("preparation_snapshot"), dict) else {}
         inherited = []
         if snapshot.get("canonical_stage"):
@@ -119,7 +121,11 @@ class HistoryBranchLauncher:
     @staticmethod
     def _output_dir(mode, state, ui):
         value = state.get("out_dir") if mode == "KASKADA" else (
-            ui.get("out_dir") if mode != "QA" and not ui.get("send_as_c") else None)
+            ui.get("out_dir")
+            if mode != "QA" and not ui.get("send_as_c")
+            and not ui.get("dry_run") and not ui.get("stop_after_plan")
+            else None
+        )
         return Path(str(value)).resolve() if value else None
 
     def launch_async(self, adapter, preview, repair_instruction="", receive=None):
@@ -206,6 +212,8 @@ class HistoryBranchLauncher:
     def _standard_worker(self, run_id, adapter, ui, state, preview, repair_instruction):
         from .workbench import default_state
 
+        source_mode = str(ui.get("mode") or state.get("mode") or "")
+        require_resumable_run_config_v2(ui, source_mode)
         merged = {**default_state(self.context.settings), **ui}
         if merged.get("in_dir"):
             from kajovo.core.utils import safe_join_under_root
@@ -256,7 +264,12 @@ class HistoryBranchLauncher:
         logger.record_lineage(
             preview.source_run_id, preview.relation,
             source_checkpoint_id=preview.checkpoint_id,
-            inherited_configuration={"mode": config.mode, "maximum_quality": config.maximum_quality},
+            inherited_configuration={
+                "mode": config.mode,
+                "maximum_quality": config.maximum_quality,
+                "stop_after_plan": config.stop_after_plan,
+                "dry_run": config.dry_run,
+            },
             notes=merged["recovery_instruction"],
         )
         output = Path(config.out_dir).resolve() if config.out_dir and not config.send_as_c and config.mode != "QA" else None
