@@ -34,7 +34,7 @@ def default_state(settings):
     )
     flags = (
         "send_as_c", "in_equals_out", "versing", "maximum_quality",
-        "stop_after_plan", "dry_run", "qfile_suggest_path",
+        "stop_after_plan", "dry_run", "qfile_suggest_path", "qa_continue_conversation",
         "diag_windows_in", "diag_windows_out", "diag_ssh_in", "diag_ssh_out",
     )
     state = dict.fromkeys(text, "")
@@ -107,6 +107,7 @@ class Workbench(QWidget):
             )
         ])
         self.options.check("qfile_suggest_path", "QFILE · Navrhnout název samostatným plánovacím krokem")
+        self.options.check("qa_continue_conversation", "QA · Pokračovat v rozhovoru přes previous_response_id")
         for key, title in (("model_a1", "Model plánování"), ("model_a2", "Model struktury"), ("model_a3", "Model souborů")):
             self.options.choice(key, title, [("Použít hlavní model", "")])
         layout.addWidget(self.options)
@@ -273,6 +274,12 @@ class Workbench(QWidget):
         qfile = mode == "QFILE"
         for key in ("qfile_output_path", "qfile_output_format", "qfile_suggest_path"):
             self.widgets[key].setEnabled(qfile)
+        qa_continue = self.widgets["qa_continue_conversation"]
+        qa_continue.setEnabled(mode == "QA")
+        if mode != "QA":
+            qa_continue.blockSignals(True)
+            qa_continue.setChecked(False)
+            qa_continue.blockSignals(False)
         linked = self.widgets["in_equals_out"].isChecked()
         self.widgets["out_dir"].setReadOnly(linked)
         if linked:
@@ -357,6 +364,9 @@ class Workbench(QWidget):
             previous = value.get("last_response_id") or value.get("response_id")
             if previous:
                 self.widgets["response_id"].setText(previous)
+            if cfg.mode == "QA":
+                # Provider historii nikdy nezapínáme automaticky; ID pouze zpřístupníme.
+                self.widgets["qa_continue_conversation"].setChecked(False)
             if value.get("status") == "qfile_plan_ready":
                 plan = value.get("qfile_plan") or {}
                 self.saved_extras["qfile_plan"] = copy.deepcopy(plan)
