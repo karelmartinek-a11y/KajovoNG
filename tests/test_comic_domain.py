@@ -376,3 +376,195 @@ def test_change_normalized_reference_keeps_original_metadata_bytes(comic):
         assert 'private-note' not in result.info
         assert result.getpixel((0, 0)) == (10, 20, 30, 200)
     assert (len(client.responses), client.image_calls, client.submits) == before_calls
+
+
+
+def test_story_script_storyboard_continuity_materializes_once(comic, monkeypatch):
+    service, _client, project = comic
+
+    values = {
+        "story": {
+            "title": "Hotelový den",
+            "premise": "Jedna událost propojí celý hotel.",
+            "synopsis": "Postavy projdou jedním uzavřeným dějovým obloukem.",
+            "beats": [
+                {"id": "BEAT-1", "summary": "Začátek.", "purpose": "Expozice"},
+                {"id": "BEAT-2", "summary": "Rozuzlení.", "purpose": "Závěr"},
+            ],
+        },
+        "script": {
+            "scenes": [
+                {
+                    "id": "SCENE-1",
+                    "beat_id": "BEAT-1",
+                    "location": "Lobby",
+                    "time": "Ráno",
+                    "action": "Událost začne.",
+                    "dialogue": [],
+                    "entity_ids": [],
+                },
+                {
+                    "id": "SCENE-2",
+                    "beat_id": "BEAT-2",
+                    "location": "Lobby",
+                    "time": "Večer",
+                    "action": "Událost se uzavře.",
+                    "dialogue": [],
+                    "entity_ids": [],
+                },
+            ]
+        },
+        "storyboard": {
+            "panels": [
+                {
+                    "id": "PANEL-1",
+                    "scene_id": "SCENE-1",
+                    "position": 1,
+                    "shot": "Wide",
+                    "visual": "Lobby ráno.",
+                    "entity_ids": [],
+                    "dialogue": [],
+                    "caption": "Ráno.",
+                },
+                {
+                    "id": "PANEL-2",
+                    "scene_id": "SCENE-2",
+                    "position": 2,
+                    "shot": "Wide",
+                    "visual": "Lobby večer.",
+                    "entity_ids": [],
+                    "dialogue": [],
+                    "caption": "Večer.",
+                },
+            ]
+        },
+        "continuity": {
+            "status": "pass",
+            "issues": [],
+            "approved_panel_ids": ["PANEL-1", "PANEL-2"],
+        },
+    }
+
+    def fake_text_request(operation, instructions, schema, inputs, assets):
+        del instructions, schema, inputs, assets
+        return values[operation["kind"]], {
+            "model": "fixture",
+            "response_id": "fixture-" + operation["kind"],
+            "usage": {},
+            "run_id": operation["run_id"],
+        }
+
+    monkeypatch.setattr(service, "text_request", fake_text_request)
+
+    for kind, starter in (
+        ("story", service.start_story),
+        ("script", service.start_script),
+        ("storyboard", service.start_storyboard),
+        ("continuity", service.start_continuity),
+    ):
+        operation = starter(project)
+        assert service.run(operation)["status"] == "completed"
+        assert service.latest_document(project, kind)["result"] == values[kind]
+
+    docs = {
+        row["kind"]: row
+        for row in service.store.rows(
+            "comic_documents", "project_id=?", (project,), order="created_at"
+        )
+    }
+    assert docs["script"]["source_id"] == docs["story"]["id"]
+    assert docs["storyboard"]["source_id"] == docs["script"]["id"]
+    assert docs["continuity"]["source_id"] == docs["storyboard"]["id"]
+
+    first = service.materialize_storyboard(project)
+    second = service.materialize_storyboard(project)
+    assert first == second
+    assert len(first) == 2
+    assert len(
+        service.store.rows(
+            "panels", "project_id=? AND deleted=0", (project,)
+        )
+    ) == 2
+    assert all(
+        service.store.get("prompts", service.store.get("panels", panel)["prompt_id"])[
+            "document"
+        ]["nodes"][0]["type"]
+        == "text"
+        for panel in first
+    )
+
+
+def test_storyboard_materialization_requires_continuity_pass(comic, monkeypatch):
+    service, _client, project = comic
+    storyboard = {
+        "panels": [
+            {
+                "id": "PANEL-1",
+                "scene_id": "SCENE-1",
+                "position": 1,
+                "shot": "Wide",
+                "visual": "Scéna.",
+                "entity_ids": [],
+                "dialogue": [],
+                "caption": "",
+            }
+        ]
+    }
+    with service.store.transaction() as db:
+        story_id, script_id, storyboard_id, continuity_id = (
+            "a" * 32,
+            "b" * 32,
+            "c" * 32,
+            "d" * 32,
+        )
+        stamp = service.store.get("projects", project)["created_at"]
+        db.execute(
+            "INSERT INTO comic_documents VALUES(?,?,?,?,?,?,?,?)",
+            (story_id, project, "story", None, "{}", "{}", "{}", stamp),
+        )
+        db.execute(
+            "INSERT INTO comic_documents VALUES(?,?,?,?,?,?,?,?)",
+            (script_id, project, "script", story_id, "{}", "{}", "{}", stamp),
+        )
+        db.execute(
+            "INSERT INTO comic_documents VALUES(?,?,?,?,?,?,?,?)",
+            (
+                storyboard_id,
+                project,
+                "storyboard",
+                script_id,
+                "{}",
+                json.dumps(storyboard),
+                "{}",
+                stamp,
+            ),
+        )
+        db.execute(
+            "INSERT INTO comic_documents VALUES(?,?,?,?,?,?,?,?)",
+            (
+                continuity_id,
+                project,
+                "continuity",
+                storyboard_id,
+                "{}",
+                json.dumps(
+                    {
+                        "status": "needs_changes",
+                        "issues": [
+                            {
+                                "id": "ISSUE-1",
+                                "severity": "blocking",
+                                "scope": "PANEL-1",
+                                "description": "Chybí návaznost.",
+                                "resolution": "Opravit návaznost.",
+                            }
+                        ],
+                        "approved_panel_ids": [],
+                    }
+                ),
+                "{}",
+                stamp,
+            ),
+        )
+    with pytest.raises(ComicError, match="PASS"):
+        service.materialize_storyboard(project)
