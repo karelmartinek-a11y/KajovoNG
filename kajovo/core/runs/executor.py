@@ -121,9 +121,16 @@ class RunExecutor(RunContext):
             if self.cfg.mode == "QFILE" and self.cfg.send_as_c:
                 raise RuntimeError("QFILE nepodporuje SEND AS BATCH.")
 
-            # GENERATE a MODIFY vyžadují návaznost; výslovné odmítnutí ji zablokuje.
-            if self.cfg.mode == "MODIFY" and self.cfg.model_caps.get("supports_previous_response_id") is False:
-                raise RuntimeError("Selected model explicitly rejects previous_response_id (required for cascades).")
+            # Explicitní provider historii vyžadujeme pouze tehdy, když ji uživatel
+            # skutečně zvolil. Datové kroky A0/A1/A2/A3 a B0/B1/B2/B3 používají
+            # validované artefakty a nesmějí na previous_response_id spoléhat.
+            if (
+                self.cfg.response_id
+                and self.cfg.model_caps.get("supports_previous_response_id") is False
+            ):
+                raise RuntimeError(
+                    "Vybraný model nepodporuje explicitně zadané previous_response_id."
+                )
 
             self.transition(RunStatus.REMOTE_WORK)
             diag_file_ids, base_prev_id = prepare_runtime(self, client)
@@ -143,7 +150,7 @@ class RunExecutor(RunContext):
             final_status = "batch_pending" if result.get("batch_id") else str(result.get("status") or "completed")
             if final_status not in (
                 "completed", "partial", "batch_pending", "dry_run",
-                "files_complete_unverified", "plan_ready",
+                "files_complete_unverified", "plan_ready", "qfile_plan_ready",
             ):
                 raise ContractError(f"Neplatný stav běhu: {final_status}")
             if final_status in ("completed", "partial", "dry_run", "files_complete_unverified"):
