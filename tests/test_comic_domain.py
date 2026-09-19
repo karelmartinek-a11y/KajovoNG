@@ -37,6 +37,20 @@ class WorkingClient:
     def _validate_resource_id(self, value):
         assert isinstance(value, str) and value
 
+    def list_models(self):
+        return [
+            {"id": "gpt-5.6-luna"},
+            {"id": "gpt-image-2.5-sunburst"},
+        ]
+
+    def count_input_tokens(self, payload):
+        from kajovo.core.context_compiler import content_hash
+
+        return {
+            "input_tokens": 100,
+            "request_hash": content_hash(payload),
+        }
+
     def upload_file(self, path, purpose):
         identifier = "file_" + str(len(self.files))
         self.files[identifier] = Path(path).read_bytes()
@@ -154,7 +168,8 @@ def test_bible_real_request_contract_and_saved_revision(comic):
     bible = service.store.get("bibles", service.store.get("projects", project)["bible_id"])
     assert client.responses[0]["text"]["format"]["strict"] is True
     assert client.responses[0]["background"] is True
-    assert bible["provenance"]["model"] == "gpt-6-astra"
+    assert bible["provenance"]["model"] == "gpt-5.6-luna"
+    assert bible["provenance"]["work_order_hash"]
     service.run(service.start_bible(project))
     assert len(service.store.rows("bibles")) == 2
 
