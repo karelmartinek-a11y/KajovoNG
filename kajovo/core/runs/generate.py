@@ -14,7 +14,7 @@ from ..delivery_preparation import (
 from ..generate_batch import build_manifest as build_batch_manifest
 from ..openai_client import OpenAIClient
 from ..progress import ProgressEvent
-from ..utils import ts_code
+from ..utils import safe_join_under_root, sha256_file, ts_code
 
 if TYPE_CHECKING:
     from .context import RunContext
@@ -121,13 +121,30 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
                 and f["path"] not in (self.cfg.skip_paths or [])
             ]
             if selected:
+                expected_target_hashes = {}
+                for path in selected:
+                    target = safe_join_under_root(self.cfg.out_dir, path)
+                    expected_target_hashes[path] = (
+                        sha256_file(target) if os.path.isfile(target) else None
+                    )
                 manifest = build_batch_manifest(
-                    self.log.run_id, self.cfg.prompt, plan, struct, a3_model,
-                    self.cfg.temperature if self._model_caps(a3_model).get("supports_temperature", False) else None,
-                    selected, requirements=self._delivery_snapshot["requirements"],
+                    self.log.run_id,
+                    self.cfg.prompt,
+                    plan,
+                    struct,
+                    a3_model,
+                    (
+                        self.cfg.temperature
+                        if self._model_caps(a3_model).get("supports_temperature", False)
+                        else None
+                    ),
+                    selected,
+                    requirements=self._delivery_snapshot["requirements"],
                     maximum_quality=self.cfg.maximum_quality,
                     recovery_instruction=self.cfg.recovery_instruction,
-                    run_config=self.cfg)
+                    run_config=self.cfg,
+                    expected_target_hashes=expected_target_hashes,
+                )
                 return self._submit_generate_batch(client, manifest)
 
         try:
