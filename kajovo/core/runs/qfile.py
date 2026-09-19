@@ -13,7 +13,7 @@ from ..structured_output import (
     qfile_plan_format,
     validate_output,
 )
-from ..utils import sha256_file, ts_code, validate_relative_path
+from ..utils import safe_join_under_root, sha256_file, ts_code, validate_relative_path
 
 if TYPE_CHECKING:
     from .context import RunContext
@@ -208,9 +208,9 @@ def _run_qfile(
     self._log_request_attachments("QFILE", qfile_ref_files, input_files, input_images, [], None)
 
     expected_target_hash = None
-    target = Path(self.cfg.out_dir) / target_path
-    if target.is_file():
-        expected_target_hash = sha256_file(str(target))
+    target = safe_join_under_root(self.cfg.out_dir, target_path)
+    if Path(target).is_file():
+        expected_target_hash = sha256_file(target)
     projection = {
         "plan": plan,
         "request": prompt,
