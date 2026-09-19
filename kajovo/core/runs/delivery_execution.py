@@ -59,18 +59,38 @@ def _save_out_files(self: RunContext, files: list[dict[str, Any]]) -> dict[str, 
     return save_out_files(context, files)
 
 
-def _finish_file_delivery(self: RunContext, files, *, saved=(), dry_run=False):
+def _finish_file_delivery(
+    self: RunContext,
+    files,
+    *,
+    saved=(),
+    staged=(),
+    dry_run=False,
+):
     step_id = getattr(self, "_delivery_step_id", "")
     if not step_id:
         return
     record = self.log.record_validation(
-        step_id=step_id, target_type="delivery", target_id=self.log.run_id,
-        validator="output_writes", status="passed",
-        evidence={"expected": [f["path"] for f in files], "written": list(saved),
-                  "dry_run": dry_run, "functionality_verified": False},
+        step_id=step_id,
+        target_type="delivery",
+        target_id=self.log.run_id,
+        validator="staging_and_publication_boundary",
+        status="passed",
+        evidence={
+            "expected": [f["path"] for f in files],
+            "written_to_out": list(saved),
+            "staged": list(staged),
+            "dry_run": dry_run,
+            "functionality_verified": False,
+            "publication_requires_explicit_boundary": not dry_run,
+        },
     )
-    self.log.bundle.update_step(step_id, status="dry_run" if dry_run else "completed",
-                                finished_at=record["timestamp"], progress=100)
+    self.log.bundle.update_step(
+        step_id,
+        status="dry_run" if dry_run else "completed",
+        finished_at=record["timestamp"],
+        progress=100,
+    )
 
 
 def _write_missing_files_report(self: RunContext, skipped_files: list[dict[str, Any]]) -> str | None:
