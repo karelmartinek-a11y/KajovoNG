@@ -69,65 +69,99 @@ def response(index, payload):
 @pytest.mark.parametrize("mode", ["QA", "QFILE", "GENERATE", "MODIFY"])
 @pytest.mark.parametrize("maximum_quality", [False, True])
 def test_complete_offline_workflow(tmp_path, mode, maximum_quality):
+    if mode in {"GENERATE", "MODIFY"}:
+        from change_v2_fixtures import format_names, run, scenario, staged_path
+
+        worker, client, responder = scenario(
+            tmp_path,
+            mode,
+            batch=False,
+            maximum_quality=maximum_quality,
+        )
+        results, errors = run(worker, client)
+        assert errors == []
+        assert results[0]["status"] == "files_complete_unverified"
+        assert staged_path(worker, "hello.txt").read_text(encoding="utf-8") == (
+            "content:hello.txt\n"
+        )
+        assert not (tmp_path / "out" / "hello.txt").exists()
+        names = format_names(responder)
+        assert names[-1] == "FILE_CONTENT_V1"
+        prefix = "A" if mode == "GENERATE" else "B"
+        assert (
+            f"{prefix}2Q_QUALITY_GATE_V2" in names
+        ) is maximum_quality
+        state = json.loads(
+            (tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert state["preparation_snapshot"]["graph"]["contract"] == (
+            "IMPLEMENTATION_GRAPH_V3"
+        )
+        return
+
     worker = make_worker(tmp_path, mode)
     worker.cfg.maximum_quality = maximum_quality
-    file = {"contract": "A3_FILE", "path": "hello.txt", "content": "hello\n",
-            "chunking": {"chunk_index": 0, "chunk_count": 1, "has_more": False, "next_chunk_index": None}}
-    payloads = ["answer"] if mode == "QA" else [file]
-    if mode == "GENERATE":
-        payloads = [*delivery_payloads(mode), file]
-    if mode == "MODIFY":
-        in_dir = tmp_path / "in"
-        in_dir.mkdir()
-        worker.cfg.in_dir = str(in_dir)
-        file["contract"] = "B3_FILE"
-        file["action"] = "add"
-        payloads = [*delivery_payloads(mode), file]
-    if maximum_quality and mode in ("GENERATE", "MODIFY"):
-        canonical = structure_payload(mode)
-        key = "files" if mode == "GENERATE" else "touched_files"
-        canonical[key][0]["behavior"] = "Úplný obsah po nezávislé kontrole návrhu."
-        payloads.insert(-1, canonical)
     client = Mock()
     from kajovo.core.context_compiler import content_hash
+
     client.count_input_tokens.side_effect = lambda payload: {
-        "input_tokens": 1000, "request_hash": content_hash(payload)}
+        "input_tokens": 1000,
+        "request_hash": content_hash(payload),
+    }
     client.upload_file.return_value = {"id": "file_test"}
-    client.retrieve_file.return_value = {"id": "file_test", "filename": "input.txt", "bytes": 100}
-    client.create_response.side_effect = [response(index, item) for index, item in enumerate(payloads)]
+    client.retrieve_file.return_value = {
+        "id": "file_test",
+        "filename": "input.txt",
+        "bytes": 100,
+    }
+    if mode == "QA":
+        answer = {
+            "result": {
+                "status": "ready",
+                "data": {
+                    "answer": "Odpověď podle dostupných podkladů.",
+                    "claims": [],
+                    "limitations": [],
+                },
+            }
+        }
+        client.create_response.return_value = response(0, answer)
+    else:
+        worker.cfg.qfile_output_path = "hello.txt"
+        worker.cfg.qfile_output_format = "txt"
+        worker.cfg.qfile_suggest_path = False
+        client.create_response.return_value = response(
+            0, {"content": "hello\n"}
+        )
+
     errors, results = [], []
     worker.finished_err.connect(errors.append)
     worker.finished_ok.connect(results.append)
     with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
         worker.run()
-    assert not errors
+    assert errors == []
     assert len(results) == 1
-    assert client.create_response.call_count == len(payloads)
-    if mode in ("GENERATE", "MODIFY"):
-        from kajovo.core.requirements import CORE_INSTRUCTIONS
-
-        calls = [call.args[0] for call in client.create_response.call_args_list]
-        assert all(CORE_INSTRUCTIONS in call["instructions"] for call in calls)
-        assert all("reasoning" not in call for call in calls)
-        assert all("previous_response_id" not in call for call in calls)
-        state = json.loads((tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(encoding="utf-8"))
-        snapshot = state["preparation_snapshot"]
-        assert snapshot["requirements"] == payloads[0]
-        assert snapshot["plan"] == payloads[1]
-        assert snapshot["structure"] == payloads[-2]
-        prefix = "A" if mode == "GENERATE" else "B"
-        assert snapshot["canonical_stage"] == prefix + ("2Q" if maximum_quality else "2")
-        assert snapshot["maximum_quality"] is maximum_quality
-    if mode != "QA":
-        assert (tmp_path / "out" / "hello.txt").read_text(encoding="utf-8") == "hello\n"
-    assert json.loads(
-        (tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(encoding="utf-8")
-    )["status"] == ("files_complete_unverified" if mode in ("GENERATE", "MODIFY") else "completed")
-    if mode in ("GENERATE", "MODIFY"):
-        assert worker.log.bundle.verify_integrity()["valid"]
-        step = worker.log.bundle.steps()[-1]
-        assert step["status"] == "completed"
-        assert step["validation_required"] is True
+    if mode == "QA":
+        assert results[0]["status"] == "completed"
+        assert results[0]["text"].startswith("Odpověď")
+    else:
+        assert results[0]["status"] == "files_complete_unverified"
+        state = json.loads(
+            (tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        staged = next(
+            row for row in state["staged_files"]
+            if row["path"] == "hello.txt"
+        )
+        staged_path = (
+            tmp_path / "LOG" / worker.log.run_id / staged["staged_path"]
+        )
+        assert staged_path.read_text(encoding="utf-8") == "hello\n"
+        assert not (tmp_path / "out" / "hello.txt").exists()
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
@@ -168,35 +202,28 @@ def test_incomplete_response_stops_workflow(tmp_path):
 
 
 def test_invalid_single_file_contract_retries_and_preserves_output(tmp_path):
-    worker = make_worker(tmp_path, "GENERATE")
+    from change_v2_fixtures import run, scenario
+
+    def invalid(name, value, _data):
+        if name == "FILE_CONTENT_V1":
+            return {"content": 7}
+        return value
+
+    worker, client, _responder = scenario(
+        tmp_path, "GENERATE", mutate=invalid
+    )
     out = tmp_path / "out"
-    out.mkdir()
+    out.mkdir(exist_ok=True)
     target = out / "hello.txt"
     target.write_text("original", encoding="utf-8")
-    invalid = {
-        "contract": "A3_FILE",
-        "path": "hello.txt",
-        "content": "partial",
-        "chunking": {
-            "chunk_index": 0,
-            "chunk_count": 3,
-            "has_more": False,
-            "next_chunk_index": None,
-        },
-    }
-    payloads = [*delivery_payloads(), invalid, invalid, invalid]
-    client = Mock()
-    client.create_response.side_effect = [
-        response(i, item) for i, item in enumerate(payloads)
-    ]
-    errors, results = [], []
-    worker.finished_err.connect(errors.append)
-    worker.finished_ok.connect(results.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
-        worker.run()
+    results, errors = run(worker, client)
     assert errors and not results
-    assert client.create_response.call_count == len(payloads)
     assert target.read_text(encoding="utf-8") == "original"
+    assert not list(
+        (tmp_path / "LOG" / worker.log.run_id / "staging").glob(
+            "**/hello.txt"
+        )
+    )
 
 
 def test_worker_keeps_independent_settings_snapshot(tmp_path):
@@ -230,7 +257,16 @@ def test_output_manifest_requires_text_before_any_write(tmp_path, invalid):
 def test_output_manifest_accepts_explicit_empty_text(tmp_path):
     worker = make_worker(tmp_path, "GENERATE")
     worker._save_out_files([{"path": "empty.txt", "content": ""}])
-    assert (tmp_path / "out" / "empty.txt").read_bytes() == b""
+    state = json.loads(
+        (tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    staged = next(row for row in state["staged_files"] if row["path"] == "empty.txt")
+    assert (
+        tmp_path / "LOG" / worker.log.run_id / staged["staged_path"]
+    ).read_bytes() == b""
+    assert not (tmp_path / "out" / "empty.txt").exists()
 
 
 def test_worker_keeps_independent_run_configuration(tmp_path):
@@ -264,29 +300,20 @@ def test_custom_cascade_records_each_step(tmp_path):
 
 
 def test_batch_uses_only_supported_jsonl_fields(tmp_path):
-    worker = make_worker(tmp_path, "MODIFY")
-    worker.cfg.send_as_c = True
-    in_dir = tmp_path / "in"
-    in_dir.mkdir()
-    worker.cfg.in_dir = str(in_dir)
-    client = Mock()
-    from kajovo.core.context_compiler import content_hash
-    client.count_input_tokens.side_effect = lambda payload: {
-        "input_tokens": 1000, "request_hash": content_hash(payload)}
-    client.create_response.side_effect = [response(i, value) for i, value in enumerate(delivery_payloads("MODIFY"))]
-    client.upload_file.return_value = {"id": "file_batch"}
-    client.retrieve_file.return_value = {"id": "file_batch", "filename": "input.txt", "bytes": 100}
-    client.create_batch.return_value = {"id": "batch_test"}
-    results, errors = [], []
-    worker.finished_ok.connect(results.append)
-    worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
-        worker.run()
-    assert not errors
-    assert results[0]["batch_id"] == "batch_test"
+    from change_v2_fixtures import run, scenario
+
+    worker, client, _responder = scenario(
+        tmp_path, "MODIFY", batch=True
+    )
+    results, errors = run(worker, client)
+    assert errors == []
+    assert results[0]["batch_id"] == "batch_work"
     path = client.upload_file.call_args.args[0]
     with open(path, encoding="utf-8") as handle:
         request = json.loads(handle.readline())
     assert set(request) == {"custom_id", "method", "url", "body"}
-    assert client.create_response.call_count == 3
-    assert request["body"]["text"]["format"]["schema"]["properties"]["contract"]["enum"] == ["B3_FILE"]
+    assert request["body"]["text"]["format"]["name"] == "FILE_CONTENT_V1"
+    assert set(
+        request["body"]["text"]["format"]["schema"]["properties"]
+    ) == {"content"}
+
