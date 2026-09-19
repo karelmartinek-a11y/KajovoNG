@@ -33,8 +33,23 @@ from .comic_types import (
     validate_story,
     validate_storyboard,
 )
+from .context_pricing import PRICES
 from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, source_bytes, validate_image_request
+from .model_registry import model_spec, models_for_usage
 from .orchestration.errors import OrchestrationError
+from .orchestration.ledger import (
+    mark_submission,
+    release_reservation,
+    reserve_paid_request,
+    settle_usage,
+)
+from .orchestration.run_config import (
+    DEFAULT_MAX_COST_MICROUSD,
+    DEFAULT_MAX_INPUT_TOKENS,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_PAID_REQUESTS,
+)
+from .orchestration.work_order import freeze_order
 from .orchestration.image_slots import (
     FrozenAssetIndex, FrozenImageAsset, ImageRole, compile_slots, normalization_policy_hash,
 )
@@ -131,17 +146,183 @@ class ComicService:
         log.bundle.archive_artifact(path, role="input", kind="image", metadata={"file_id": file_id})
         return file_id
 
+    def _text_model(self):
+        if self.client is None:
+            raise ComicError("api_unavailable", "Komiksová textová operace vyžaduje API klienta.")
+        cached = getattr(self, "_text_model_cache", "")
+        if cached:
+            return cached
+        try:
+            available = [
+                str(row.get("id") or "")
+                for row in self.client.list_models()
+                if isinstance(row, dict) and row.get("id")
+            ]
+        except Exception as exc:
+            raise ComicError(
+                "model_catalog_unavailable",
+                "Nelze bezpečně načíst katalog textových modelů účtu.",
+            ) from exc
+        candidates = [
+            model
+            for model in models_for_usage(available, "responses")
+            if model in PRICES
+        ]
+        if not candidates:
+            raise ComicError(
+                "model_pricing_unknown",
+                "Účet nemá pro COMIC dostupný Responses model s doloženou lokální cenou.",
+            )
+        self._text_model_cache = candidates[0]
+        return candidates[0]
+
+    def _comic_text_cfg(self, operation, model):
+        return SimpleNamespace(
+            mode="COMIC",
+            model=model,
+            send_as_c=False,
+            maximum_quality=False,
+            max_cost_microusd=DEFAULT_MAX_COST_MICROUSD,
+            max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
+            max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+            max_paid_requests=DEFAULT_MAX_PAID_REQUESTS,
+            unknown_pricing="block",
+            auto_repair="off",
+            verification_profile_ids=[],
+            stop_after_plan=False,
+            dry_run=False,
+            execution_approval_id=f"user-start:{operation['run_id']}",
+            project=operation["project_id"],
+            prompt=operation["kind"],
+            in_dir="",
+            out_dir="",
+            attached_file_ids=[],
+            input_file_ids=[],
+            attached_vector_store_ids=[],
+            qfile_output_path="",
+            qfile_output_format="",
+            qfile_suggest_path=False,
+            qa_continue_conversation=False,
+            response_id="",
+        )
+
     def text_request(self, operation, instructions, schema, inputs, assets):
         log = self.logger(operation)
+        model = self._text_model()
         file_ids = [self.upload(asset, log) for asset in assets]
-        body = {"model": TEXT_MODEL, "instructions": instructions,
-                "input": [{"role": "user", "content": [{"type": "input_text", "text": canonical(inputs)},
-                           *[{"type": "input_image", "file_id": value} for value in file_ids]]}],
-                "text": response_format("COMIC_" + operation["kind"].upper(), schema), "max_output_tokens": 12000}
-        response = ResponseJournal(log, self.settings.response_poll_timeout_s).execute(
-            self.client, body, stopped=self.stopped, cancelled=lambda: False,
-            progress=lambda state, seconds: self.progress("COMIC_RESPONSES", detail=f"{state}, {seconds} s"))
-        return validate_output(response, body), {"model": TEXT_MODEL, "parameters": body, "response_id": response.get("id"), "usage": response.get("usage"), "run_id": operation["run_id"]}
+        body = {
+            "model": model,
+            "instructions": instructions,
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": canonical(inputs)},
+                    *[
+                        {"type": "input_image", "file_id": value}
+                        for value in file_ids
+                    ],
+                ],
+            }],
+            "text": response_format(
+                "COMIC_" + operation["kind"].upper(), schema
+            ),
+            "max_output_tokens": 12000,
+        }
+        cfg = self._comic_text_cfg(operation, model)
+        projection = {
+            "operation_id": operation["id"],
+            "kind": operation["kind"],
+            "snapshot": operation["snapshot"],
+            "input": inputs,
+            "asset_hashes": [
+                self.store.get("assets", asset)["sha256"]
+                for asset in assets
+            ],
+        }
+        order = freeze_order(
+            cfg,
+            {
+                "run_id": operation["run_id"],
+                "step_id": "COMIC_" + operation["kind"].upper(),
+                "task_id": operation["id"],
+                "stage": "COMIC",
+                "route": "responses_live",
+                "target_id": str(
+                    operation.get("target_id")
+                    or operation["project_id"]
+                ),
+                "target_path": None,
+                "expected_target_hash": None,
+                "contract_name": (
+                    "COMIC_" + operation["kind"].upper()
+                ),
+                "schema": schema,
+                "prompt": instructions,
+                "model": model,
+                "model_capability": model_spec(model),
+                "source_snapshot": projection,
+                "attempt_no": 1,
+                "approval_id": cfg.execution_approval_id,
+            },
+            projection,
+        )
+        reserve_paid_request(
+            log, cfg, self.client, body, work_order=order
+        )
+        try:
+            response = ResponseJournal(
+                log, self.settings.response_poll_timeout_s
+            ).execute(
+                self.client,
+                body,
+                stopped=self.stopped,
+                cancelled=lambda: False,
+                progress=lambda state, seconds: self.progress(
+                    "COMIC_RESPONSES",
+                    detail=f"{state}, {seconds} s",
+                ),
+            )
+        except ResponsePending as exc:
+            response_id = str(getattr(exc, "response_id", "") or "")
+            mark_submission(
+                log,
+                order,
+                response_id or None,
+                unknown=not bool(response_id),
+            )
+            raise
+        except SubmissionUnknown:
+            mark_submission(log, order, None, unknown=True)
+            raise
+        except Exception as exc:
+            definite_reject = (
+                getattr(exc, "request_sent", None) is False
+                or getattr(exc, "status_code", None)
+                in {400, 401, 403, 404, 422, 429}
+            )
+            if definite_reject:
+                release_reservation(log, order)
+            else:
+                mark_submission(log, order, None, unknown=True)
+            raise
+        provider_id = str(response.get("id") or "")
+        if not provider_id:
+            mark_submission(log, order, None, unknown=True)
+            raise ComicError(
+                "submission_unknown",
+                "COMIC Responses operace nemá potvrzené response ID; nový submit je zablokován.",
+                True,
+            )
+        mark_submission(log, order, provider_id, unknown=False)
+        settle_usage(log, order, response)
+        return validate_output(response, body), {
+            "model": model,
+            "parameters": body,
+            "response_id": provider_id,
+            "usage": response.get("usage"),
+            "run_id": operation["run_id"],
+            "work_order_hash": order.order_hash,
+        }
 
     def start_bible(self, project):
         p = self.store.get("projects", project)
