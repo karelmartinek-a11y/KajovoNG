@@ -343,12 +343,13 @@ class OrchestrationRepository:
             try:
                 db.execute("BEGIN IMMEDIATE")
                 reservation = db.execute(
-                    "SELECT work_order_hash,state FROM reservations WHERE reservation_id=?",
+                    "SELECT work_order_hash,state,cost_microusd,input_limit,output_limit "
+                    "FROM reservations WHERE reservation_id=?",
                     (reservation_id,),
                 ).fetchone()
                 if not reservation:
                     raise OrchestrationError("RESERVATION_UNKNOWN", reservation_id)
-                work_order_hash, state = reservation
+                work_order_hash, state, reserved_cost, reserved_input, reserved_output = reservation
                 if state == "released":
                     raise OrchestrationError("SETTLE_RELEASED", reservation_id)
                 attempt_id = "ATTEMPT-" + work_order_hash[:24]
@@ -370,9 +371,27 @@ class OrchestrationRepository:
                     "INSERT INTO usage_records(provider,provider_item_id,attempt_id,usage_json,price_snapshot_hash,actual_cost_microusd) VALUES(?,?,?,?,?,?)",
                     (provider, provider_item_id, attempt_id, usage_json, price_snapshot_hash, actual_cost_microusd),
                 )
+                actual_input = usage.get("input_tokens") if isinstance(usage, dict) else None
+                actual_output = usage.get("output_tokens") if isinstance(usage, dict) else None
+                if type(actual_input) is not int or actual_input < 0:
+                    actual_input = reserved_input
+                if type(actual_output) is not int or actual_output < 0:
+                    actual_output = reserved_output
+                settled_cost = (
+                    actual_cost_microusd
+                    if actual_cost_microusd is not None
+                    else reserved_cost
+                )
                 db.execute(
-                    "UPDATE reservations SET state='settled',provider_id=? WHERE reservation_id=?",
-                    (provider_item_id, reservation_id),
+                    "UPDATE reservations SET state='settled',provider_id=?,"
+                    "cost_microusd=?,input_limit=?,output_limit=? WHERE reservation_id=?",
+                    (
+                        provider_item_id,
+                        settled_cost,
+                        actual_input,
+                        actual_output,
+                        reservation_id,
+                    ),
                 )
                 db.commit()
                 return True
