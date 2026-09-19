@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 import copy
-import json
 import os
 
 import jsonschema
 
-from .contracts import ContractError, extract_text_from_response, parse_json_strict
+from .contracts import ContractError
 from .generate_batch import digest, prepare_structure, validate_structure
 from .requirements import (
-    apply_quality, enriched_plan_format, enriched_structure_format,
-    requirements_format, stage_instructions, validate_traceability,
-    validate_requirements, validate_plan, validate_stage_schema, bound_reference_format,
+    enriched_plan_format,
+    enriched_structure_format,
+    requirements_format,
+    validate_plan,
+    validate_requirements,
+    validate_stage_schema,
+    validate_traceability,
 )
 from .utils import safe_join_under_root, sha256_file
-from .context_budget import preparation_measurement
-from .structured_output import prepare_payload
 
 
 def validate_modify_sources(structure, root, items, completed_paths=()):
