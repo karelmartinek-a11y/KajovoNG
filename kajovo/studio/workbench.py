@@ -40,6 +40,8 @@ def default_state(settings):
     state = dict.fromkeys(text, "")
     state.update(dict.fromkeys(flags, False))
     state.update(model=settings.default_model, mode="GENERATE", temperature=settings.default_temperature,
+                 unknown_pricing="block", auto_repair="off",
+                 verification_profile_ids=[],
                  qfile_output_format="txt", qfile_plan=None,
                  attached_file_ids=[], input_file_ids=[], attached_vector_store_ids=[],
                  use_file_search=True, skip_paths=[], skip_exts=[], model_caps={},
@@ -98,6 +100,17 @@ class Workbench(QWidget):
         temperature.setRange(0, 2)
         temperature.setSingleStep(0.1)
         self.options.add("temperature", "Teplota modelu", temperature)
+        self.options.choice(
+            "unknown_pricing",
+            "Neznámá cena modelu",
+            [
+                ("Blokovat placený request bez ověřené ceny", "block"),
+                (
+                    "Výslovně povolit token-only limit · cena zůstává neznámá",
+                    "explicit_token_budget",
+                ),
+            ],
+        )
         self.options.text("response_id", "Identifikátor předchozí odpovědi")
         self.options.text("qfile_output_path", "QFILE · Výstupní cesta")
         self.options.choice("qfile_output_format", "QFILE · Výstupní formát", [
@@ -324,7 +337,15 @@ class Workbench(QWidget):
             self.validation.setText(str(error))
             self.start_button.setEnabled(False)
             return False
-        self.validation.setText("Zadání splňuje místní kontrolu; spuštění odešle placenou pracovní operaci.")
+        if cfg.unknown_pricing == "explicit_token_budget":
+            self.validation.setText(
+                "Cena modelu není lokálně doložena. Spuštěním výslovně schvalujete "
+                "token-only rozpočet; cena zůstává neznámá a není vydávána za nulu."
+            )
+        else:
+            self.validation.setText(
+                "Zadání splňuje místní kontrolu; model bez ověřené ceny bude před placeným requestem zablokován."
+            )
         self.start_button.setEnabled(True)
         return True
 
