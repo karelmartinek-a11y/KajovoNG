@@ -10,6 +10,7 @@ TERMINAL_RUN_STATES = {
     "completed",
     "closed",
     "dry_run",
+    "plan_ready",
     "partial",
     "files_complete_unverified",
     "unfinished_record",
