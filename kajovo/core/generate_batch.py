@@ -788,6 +788,334 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
                       "dry_run" if dry_run else "files_complete_unverified"}
 
 
+
+def _v3_verified_artifacts(run_dir, manifest, staged_files):
+    """Reconstruct dependency artifacts only from immutable staged bytes."""
+    compiler = ContextCompiler(manifest["snapshot"])
+    root = Path(run_dir).resolve()
+    artifacts = {}
+    for row in staged_files:
+        if not isinstance(row, dict):
+            continue
+        path = str(row.get("path") or "")
+        staged_path = str(row.get("staged_path") or "")
+        if path not in compiler.files or not staged_path:
+            continue
+        source = (root / staged_path).resolve()
+        try:
+            source.relative_to(root)
+        except ValueError as exc:
+            raise ContractError(f"Staged dependency escapes Run Bundle: {path}") from exc
+        if not source.is_file():
+            continue
+        data = source.read_bytes()
+        digest_value = hashlib.sha256(data).hexdigest()
+        if digest_value != row.get("sha256"):
+            raise ContractError(f"Staged dependency hash mismatch: {path}")
+        try:
+            content = data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            continue
+        artifacts[path] = {
+            "validation_status": "verified",
+            "verification_level": "wire_and_artifact",
+            "contract_hash": compiler.provider_hash(path),
+            "output_hash": digest_value,
+            "content": content,
+        }
+    return artifacts
+
+
+def _v3_cfg_namespace(state):
+    from types import SimpleNamespace
+
+    cfg = dict(state.get("run_config_v2") or {})
+    ui = dict(state.get("ui_state") or {})
+    return SimpleNamespace(
+        maximum_quality=bool(cfg.get("quality") == "maximum" or ui.get("maximum_quality")),
+        auto_repair=str(cfg.get("auto_repair") or ui.get("auto_repair") or "off"),
+        unknown_pricing=str(cfg.get("unknown_pricing") or ui.get("unknown_pricing") or "block"),
+        max_cost_microusd=cfg.get("max_cost_microusd", ui.get("max_cost_microusd")),
+        max_input_tokens=int(cfg.get("max_input_tokens") or ui.get("max_input_tokens") or 0),
+        max_output_tokens=int(cfg.get("max_output_tokens") or ui.get("max_output_tokens") or 0),
+        max_paid_requests=int(cfg.get("max_paid_requests") or ui.get("max_paid_requests") or 0),
+        execution_approval_id=str(
+            (state.get("execution_authorization") or {}).get("approval_id")
+            or ui.get("execution_approval_id")
+            or ""
+        ),
+    )
+
+
+def _reserve_v3_followup(run_dir, state, manifest):
+    """Reserve the whole follow-up wave in one SQLite transaction."""
+    from .orchestration.repository import OrchestrationRepository
+    from .orchestration.work_order import WorkOrder
+
+    repo = OrchestrationRepository(
+        Path(run_dir).resolve().parent / "orchestration.sqlite3"
+    )
+    cfg = _v3_cfg_namespace(state)
+    reports = {
+        str(row.get("custom_id")): row
+        for row in manifest.get("cost_context_reports", [])
+    }
+    sql_rows = []
+    orders = {}
+    for request in manifest["requests"]:
+        custom_id = str(request["custom_id"])
+        raw_order = (manifest.get("work_orders") or {}).get(custom_id)
+        if not isinstance(raw_order, dict):
+            raise ContractError(f"{custom_id}: chybí WORK_ORDER_V2.")
+        order = WorkOrder(**{
+            key: value for key, value in raw_order.items() if key != "order_hash"
+        })
+        orders[custom_id] = order
+        report = reports.get(custom_id)
+        if not isinstance(report, dict):
+            raise ContractError(f"{custom_id}: chybí cost/context report.")
+        projected = report.get("projected_cost")
+        usd = projected.get("usd") if isinstance(projected, dict) else None
+        cost = (
+            round(float(usd) * 1_000_000)
+            if isinstance(usd, (int, float))
+            else None
+        )
+        if cost is None and cfg.unknown_pricing == "block":
+            raise ContractError(
+                f"{custom_id}: cena modelu není lokálně ověřena a unknown_pricing=block."
+            )
+        repo.register_work_order(
+            order,
+            body_ref=hashlib.sha256(
+                json.dumps(
+                    request["body"],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            input_hash=order.input_projection_hash,
+        )
+        sql_rows.append({
+            "reservation_id": order.budget_reservation_id,
+            "work_order_hash": order.order_hash,
+            "cost_microusd": cost,
+            "input_limit": int(report.get("input_tokens") or 0),
+            "output_limit": int(
+                report.get("output_budget")
+                or request["body"].get("max_output_tokens")
+                or 0
+            ),
+        })
+    repo.reserve_many(
+        sql_rows,
+        max_cost_microusd=cfg.max_cost_microusd,
+        max_input_tokens=cfg.max_input_tokens,
+        max_output_tokens=cfg.max_output_tokens,
+        max_paid_requests=cfg.max_paid_requests,
+    )
+    return repo, orders
+
+
+def _submit_v3_followup_wave(
+    client,
+    run_dir,
+    state,
+    source_manifest,
+    verified_artifacts,
+    progress=None,
+):
+    """Build and submit exactly one next dependency wave under existing approval."""
+    deferred = list(source_manifest.get("deferred_paths") or [])
+    if not deferred:
+        return None
+
+    ui = dict(state.get("ui_state") or {})
+    cfg = _v3_cfg_namespace(state)
+    originals = {}
+    bundle = RunBundle(Path(run_dir))
+    root = Path(run_dir).resolve()
+    for artifact in bundle.artifacts():
+        if artifact.get("role") != "in_project_file":
+            continue
+        metadata = artifact.get("metadata") or {}
+        rel = str(metadata.get("relative_path") or artifact.get("reconstruction_role") or "")
+        path_in_bundle = artifact.get("path_in_bundle")
+        if not rel or not isinstance(path_in_bundle, str):
+            continue
+        source = (root / path_in_bundle).resolve()
+        try:
+            source.relative_to(root)
+        except ValueError:
+            continue
+        if not source.is_file():
+            continue
+        try:
+            originals[rel] = source.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+
+    model = str(source_manifest["requests"][0]["body"]["model"])
+    temperature = source_manifest["requests"][0]["body"].get("temperature")
+    expected_target_hashes = {
+        row["path"]: row.get("expected_target_hash")
+        for row in state.get("staged_files", [])
+        if isinstance(row, dict) and row.get("path")
+    }
+    # Deferred targets that have not been staged yet retain the WorkOrder-time
+    # OUT hash from the first user-authorized run snapshot.
+    out_dir = str(state.get("out_dir") or "")
+    for path in deferred:
+        if path in expected_target_hashes:
+            continue
+        target = safe_join_under_root(out_dir, path)
+        expected_target_hashes[path] = (
+            hashlib.sha256(Path(target).read_bytes()).hexdigest()
+            if os.path.isfile(target)
+            else None
+        )
+
+    next_manifest = build_manifest(
+        Path(run_dir).name,
+        str(ui.get("prompt") or source_manifest["snapshot"].get("prompt") or ""),
+        source_manifest["snapshot"]["plan"],
+        source_manifest["snapshot"]["structure"],
+        model,
+        temperature,
+        deferred,
+        requirements=source_manifest["snapshot"]["requirements"],
+        maximum_quality=bool(source_manifest["snapshot"].get("maximum_quality")),
+        mode=source_manifest["mode"],
+        originals=originals,
+        recovery_instruction=str(source_manifest.get("recovery_instruction") or ""),
+        run_config=cfg,
+        expected_target_hashes=expected_target_hashes,
+        verified_artifacts=verified_artifacts,
+    )
+    repo, orders = _reserve_v3_followup(run_dir, state, next_manifest)
+    data = encode_requests(next_manifest)
+    requests_dir = Path(run_dir) / "requests"
+    requests_dir.mkdir(parents=True, exist_ok=True)
+    request_path = requests_dir / (
+        f"wave_{len(state.get('generate_batches') or {}) + 1}_{uuid.uuid4().hex[:8]}.jsonl"
+    )
+    request_path.write_bytes(data)
+    for row in next_manifest["requests"]:
+        client.validate_access(row["body"], batch=True)
+    if progress:
+        progress(
+            ProgressEvent(
+                "Příprava další dependency-wave",
+                detail=f"Připravuji {len(next_manifest['requests'])} souborových úloh.",
+            )
+        )
+    uploaded = client.upload_file(str(request_path), purpose="batch")
+    input_file_id = str(uploaded.get("id") or "")
+    if not input_file_id:
+        raise ContractError("Upload další BATCH wave nemá Files ID.")
+
+    from .orchestration.batch_manifest import (
+        from_file_manifest,
+        transition as transition_batch_manifest,
+    )
+    v4 = from_file_manifest(
+        Path(run_dir).name,
+        next_manifest,
+        wave_no=int(source_manifest.get("wave_no") or 0) + 1,
+    )
+    v4 = transition_batch_manifest(
+        v4, "input_uploaded", input_file_id=input_file_id
+    )
+    v4 = transition_batch_manifest(v4, "submitting")
+    state.setdefault("batch_manifests_v4", {})[v4["manifest_id"]] = v4
+    state["pending_batch_submission"] = {
+        "input_file_id": input_file_id,
+        "manifest": next_manifest,
+        "manifest_v4_id": v4["manifest_id"],
+    }
+    state["submission_input_file_id"] = input_file_id
+    state["submission_endpoint"] = "/v1/responses"
+    state["submission_jsonl_sha256"] = hashlib.sha256(data).hexdigest()
+    state["submission_unknown"] = True
+    atomic_write_text(
+        str(Path(run_dir) / "run_state.json"),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+
+    try:
+        batch = submit_verified_batch(
+            client, input_file_id, next_manifest["requests"]
+        )
+    except Exception as exc:
+        definite_reject = (
+            getattr(exc, "request_sent", None) is False
+            or getattr(exc, "status_code", None)
+            in {400, 401, 403, 404, 422, 429}
+        )
+        if definite_reject:
+            for order in orders.values():
+                repo.release(order.budget_reservation_id)
+            v4 = transition_batch_manifest(v4, "failed")
+            state["submission_unknown"] = False
+        else:
+            for order in orders.values():
+                repo.mark_submitted(
+                    order.budget_reservation_id, None, unknown=True
+                )
+            v4 = transition_batch_manifest(v4, "submission_unknown")
+            state["status"] = "submission_unknown"
+        state["batch_manifests_v4"][v4["manifest_id"]] = v4
+        atomic_write_text(
+            str(Path(run_dir) / "run_state.json"),
+            json.dumps(state, ensure_ascii=False, indent=2),
+        )
+        raise
+
+    batch_id = str(batch.get("id") or "")
+    if not batch_id:
+        for order in orders.values():
+            repo.mark_submitted(
+                order.budget_reservation_id, None, unknown=True
+            )
+        v4 = transition_batch_manifest(v4, "submission_unknown")
+        state["batch_manifests_v4"][v4["manifest_id"]] = v4
+        state["status"] = "submission_unknown"
+        atomic_write_text(
+            str(Path(run_dir) / "run_state.json"),
+            json.dumps(state, ensure_ascii=False, indent=2),
+        )
+        raise ContractError(
+            "Další BATCH wave nemá potvrzené provider ID; resubmit je zablokován."
+        )
+
+    for order in orders.values():
+        repo.mark_submitted(
+            order.budget_reservation_id, batch_id, unknown=False
+        )
+    v4 = transition_batch_manifest(
+        v4, "submitted", provider_batch_id=batch_id
+    )
+    state["batch_manifests_v4"][v4["manifest_id"]] = v4
+    state.setdefault("generate_batches", {})[batch_id] = next_manifest
+    state.setdefault("batch_records", {})[batch_id] = batch
+    state.pop("pending_batch_submission", None)
+    state["submission_unknown"] = False
+    state["status"] = "batch_pending"
+    atomic_write_text(
+        str(Path(run_dir) / "run_state.json"),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+    if progress:
+        progress(
+            ProgressEvent(
+                "Další dependency-wave odeslána",
+                detail=f"Batch {batch_id} · {len(next_manifest['requests'])} úloh.",
+            )
+        )
+    return {"batch_id": batch_id, "manifest": next_manifest}
+
+
 def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, progress=None):
     """Stáhne a vyhodnotí vlastní dávku; neprovádí žádný vygenerovaný kód."""
     state_path = Path(run_dir) / "run_state.json"
