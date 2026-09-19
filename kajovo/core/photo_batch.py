@@ -19,6 +19,7 @@ from .image_runtime import inspect_image
 from .orchestration.errors import OrchestrationError
 from .orchestration.image_slots import image_policy
 from .model_registry import model_spec, models_for_usage
+from .photo_prompt import manual_photo_plan
 from .utils import atomic_write_text
 
 IMAGE_EDIT_ENDPOINT = "/v1/images/edits"
@@ -65,6 +66,8 @@ class PhotoBatchJob:
     size: str
     output_format: str
     output_dir: str
+    photo_plan: dict = field(default_factory=dict)
+    photo_plan_sha256: str = ""
     input_file_id: str = ""
     batch_id: str = ""
     output_file_id: str = ""
@@ -316,6 +319,33 @@ class ImageEditBatchAdapter:
         )
 
 
+def copy_photo_plan(value, final_prompt: str) -> dict:
+    if not isinstance(value, dict) or value.get("version") != 1:
+        raise ValueError("PHOTO_PLAN_V1 má neplatnou verzi.")
+    required = {
+        "version",
+        "professional_prompt",
+        "edit_actions",
+        "preserve_invariants",
+        "acceptance_criteria",
+    }
+    if set(value) != required:
+        raise ValueError("PHOTO_PLAN_V1 má neplatná pole.")
+    if str(value["professional_prompt"]).strip() != final_prompt.strip():
+        raise ValueError("PHOTO_PLAN_V1 neodpovídá finálnímu promptu.")
+    for key in ("edit_actions", "preserve_invariants", "acceptance_criteria"):
+        rows = value[key]
+        if not isinstance(rows, list) or any(
+            not isinstance(item, str) or not item.strip() for item in rows
+        ):
+            raise ValueError(f"PHOTO_PLAN_V1.{key} musí být seznam neprázdných textů.")
+    if not value["edit_actions"] or not value["acceptance_criteria"]:
+        raise ValueError("PHOTO_PLAN_V1 vyžaduje edit_actions a acceptance_criteria.")
+    return json.loads(
+        json.dumps(value, ensure_ascii=False, sort_keys=True)
+    )
+
+
 def new_job(
     *,
     source_paths,
@@ -331,6 +361,7 @@ def new_job(
     size,
     output_format,
     output_dir,
+    photo_plan=None,
 ):
     prompt = final_prompt.strip()
     if not prompt:
@@ -340,10 +371,19 @@ def new_job(
     validate_image_edit_parameters(image_model, quality, size, output_format)
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
+    plan = copy_photo_plan(photo_plan or manual_photo_plan(prompt), prompt)
+    plan_hash = hashlib.sha256(
+        json.dumps(
+            plan,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     stamp = _now()
     items = make_items(source_paths)
     return PhotoBatchJob(
-        1,
+        2,
         "photojob_" + uuid.uuid4().hex,
         stamp,
         stamp,
@@ -361,6 +401,8 @@ def new_job(
         size,
         output_format,
         str(output),
+        photo_plan=plan,
+        photo_plan_sha256=plan_hash,
         request_total=len(items),
         items=items,
     )
@@ -390,6 +432,17 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             data["items"] = [PhotoBatchItem(**item) for item in data.get("items", [])]
+            if not data.get("photo_plan"):
+                data["photo_plan"] = manual_photo_plan(data.get("final_prompt", ""))
+            if not data.get("photo_plan_sha256"):
+                data["photo_plan_sha256"] = hashlib.sha256(
+                    json.dumps(
+                        data["photo_plan"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
             jobs.append(PhotoBatchJob(**data))
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             continue
