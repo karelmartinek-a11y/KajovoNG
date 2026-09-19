@@ -10,8 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 
 from change_v2_fixtures import (
@@ -27,9 +25,6 @@ from change_v2_fixtures import (
 from kajovo.core.contracts import ContractError
 from kajovo.core.generate_batch import process_saved_batch
 from kajovo.core.orchestration.publish import publish_staged_run
-from kajovo.core.response_journal import ResponseJournal
-from kajovo.core.runlog import RunLogger
-from kajovo.core.runs.executor import RunExecutor
 
 
 # Compatibility helpers imported by a few older non-contract test modules.
