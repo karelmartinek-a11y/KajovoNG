@@ -53,6 +53,7 @@ STATE_TITLES = {
     "closed": "Dokončeno / uzavřeno",
     "dry_run": "Dry-run / návrh bez zápisu",
     "plan_ready": "Ověřený plán připraven / výroba zastavena",
+    "qfile_plan_ready": "Návrh QFILE připraven / čeká na potvrzení",
     "partial": "Částečně dokončeno",
     "files_complete_unverified": "Soubory převzaty, funkčnost neověřena",
     "unfinished_record": "Konec fáze nezapsán",
