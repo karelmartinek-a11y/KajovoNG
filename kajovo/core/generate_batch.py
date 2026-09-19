@@ -1116,6 +1116,310 @@ def _submit_v3_followup_wave(
     return {"batch_id": batch_id, "manifest": next_manifest}
 
 
+
+def _process_saved_batch_v3(
+    client,
+    run_dir,
+    batch_id,
+    state,
+    manifest,
+    batch,
+    raw_files,
+    batch_usage,
+    progress=None,
+):
+    """Import one V3 wave into immutable staging and advance the DAG."""
+    from .context_pricing import PRICES, VERSION, projected_cost
+    from .orchestration.batch_manifest import transition as transition_batch_manifest
+    from .orchestration.repository import OrchestrationRepository
+    from .orchestration.verification import technical_staging_report
+    from .orchestration.work_order import WorkOrder
+
+    run_root = Path(run_dir).resolve()
+    repo = OrchestrationRepository(run_root.parent / "orchestration.sqlite3")
+
+    # Settle per-response usage idempotently. Polling or repeated import cannot
+    # charge the same provider item twice.
+    orders = {}
+    for custom_id, raw_order in (manifest.get("work_orders") or {}).items():
+        if isinstance(raw_order, dict):
+            orders[str(custom_id)] = WorkOrder(**{
+                key: value
+                for key, value in raw_order.items()
+                if key != "order_hash"
+            })
+    for raw in raw_files:
+        for line in raw.decode("utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = parse_json_strict(line)
+            custom_id = str(row.get("custom_id") or "")
+            order = orders.get(custom_id)
+            response = row.get("response")
+            response = response if isinstance(response, dict) else {}
+            body = response.get("body")
+            body = body if isinstance(body, dict) else {}
+            provider_id = str(body.get("id") or "")
+            usage = body.get("usage")
+            if order is None or not provider_id or not isinstance(usage, dict):
+                continue
+            model = str(body.get("model") or order.model)
+            input_tokens = int(usage.get("input_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or 0)
+            priced = projected_cost(
+                model, input_tokens, output_tokens, batch=True
+            )
+            actual_cost = (
+                round(float(priced["usd"]) * 1_000_000)
+                if isinstance(priced, dict)
+                and isinstance(priced.get("usd"), (int, float))
+                else None
+            )
+            price_hash = (
+                digest({
+                    "version": VERSION,
+                    "model": model,
+                    "price": PRICES.get(model),
+                    "batch": True,
+                })
+                if model in PRICES
+                else None
+            )
+            repo.settle(
+                order.budget_reservation_id,
+                provider="openai",
+                provider_item_id=provider_id,
+                usage=usage,
+                actual_cost_microusd=actual_cost,
+                price_snapshot_hash=price_hash,
+            )
+
+    staging_root = run_root / "staging" / "batch" / str(batch_id)
+    generated_root = staging_root / "generated"
+    generated_root.mkdir(parents=True, exist_ok=True)
+
+    previous_import = (state.get("batch_imports") or {}).get(batch_id, {})
+    import_manifest = copy.deepcopy(manifest)
+    # Even MODIFY dry-run must materialize immutable staged bytes; only publish
+    # is forbidden.
+    import_manifest["dry_run"] = False
+    result = import_results(
+        import_manifest,
+        raw_files,
+        str(generated_root),
+        previous_import.get("hashes"),
+        previous_import.get("hashes"),
+        progress=progress,
+    )
+
+    files_by_path = {
+        row["path"]: row
+        for row in manifest["snapshot"]["structure"]["spine"]["files"]
+    }
+    order_by_path = {
+        order.target_path: order
+        for order in orders.values()
+        if order.target_path
+    }
+    staged = []
+    for path in result.get("written") or []:
+        source = Path(safe_join_under_root(str(generated_root), path))
+        if not source.is_file():
+            continue
+        digest_value = hashlib.sha256(source.read_bytes()).hexdigest()
+        staged.append({
+            "path": path,
+            "staged_path": source.relative_to(run_root).as_posix(),
+            "bytes": source.stat().st_size,
+            "sha256": digest_value,
+            "expected_target_hash": (
+                order_by_path[path].expected_target_hash
+                if path in order_by_path
+                else None
+            ),
+            "action": files_by_path.get(path, {}).get("action"),
+            "purpose": files_by_path.get(path, {}).get("purpose", ""),
+            "batch_id": batch_id,
+        })
+
+    verification = technical_staging_report(
+        generated_root,
+        target_id=f"{Path(run_dir).name}:batch:{batch_id}",
+    )
+    manifest_record = {
+        "version": 2,
+        "run_id": Path(run_dir).name,
+        "mode": manifest["mode"],
+        "batch_id": batch_id,
+        "publication": (
+            "blocked_dry_run"
+            if manifest.get("dry_run")
+            else "awaiting_verification_or_explicit_take"
+        ),
+        "staging_root": staging_root.relative_to(run_root).as_posix(),
+        "files": staged,
+    }
+    atomic_write_text(
+        str(staging_root / "manifest.json"),
+        json.dumps(manifest_record, ensure_ascii=False, indent=2) + "\n",
+    )
+    atomic_write_text(
+        str(staging_root / "verification.json"),
+        json.dumps(verification, ensure_ascii=False, indent=2) + "\n",
+    )
+
+    merged = {
+        str(row["path"]): row
+        for row in state.get("staged_files", [])
+        if isinstance(row, dict) and row.get("path")
+    }
+    merged.update({str(row["path"]): row for row in staged})
+    state["staged_files"] = [merged[path] for path in sorted(merged)]
+    state["generated_hashes"] = {
+        path: row["sha256"] for path, row in merged.items()
+    }
+    state.setdefault("verification_reports", {})[batch_id] = verification
+    state["verification_evidence"] = verification
+    state["written_files"] = []
+    if manifest.get("dry_run"):
+        state["dry_run"] = True
+
+    result["published"] = False
+    result["written"] = []
+    result["staged_files"] = staged
+    result["verification"] = verification
+    result["dry_run"] = bool(manifest.get("dry_run"))
+    result["usage"] = batch_usage
+
+    import_errors = bool(
+        result.get("errors")
+        or result.get("completed_errors")
+        or result.get("omitted")
+    )
+    result["import_status"] = (
+        "partial" if import_errors else "files_complete_unverified"
+    )
+    state.setdefault("batch_records", {})[batch_id] = batch
+    state.setdefault("batch_imports", {})[batch_id] = copy.deepcopy(result)
+
+    # Advance canonical BATCH_MANIFEST_V4 evidence for this provider batch.
+    candidates = []
+    if isinstance(state.get("batch_manifest_v4"), dict):
+        candidates.append(state["batch_manifest_v4"])
+    candidates.extend(
+        row
+        for row in (state.get("batch_manifests_v4") or {}).values()
+        if isinstance(row, dict)
+    )
+    current_v4 = next(
+        (
+            row
+            for row in candidates
+            if row.get("provider_batch_id") == batch_id
+        ),
+        None,
+    )
+    if current_v4 is not None:
+        if current_v4.get("state") in {"submitted", "submission_unknown"}:
+            current_v4 = transition_batch_manifest(
+                current_v4, "remote_terminal"
+            )
+        final_v4_state = "partial" if import_errors else "imported"
+        current_v4 = transition_batch_manifest(
+            current_v4, final_v4_state
+        )
+        state.setdefault("batch_manifests_v4", {})[
+            current_v4["manifest_id"]
+        ] = current_v4
+        if (
+            isinstance(state.get("batch_manifest_v4"), dict)
+            and state["batch_manifest_v4"].get("manifest_id")
+            == current_v4["manifest_id"]
+        ):
+            state["batch_manifest_v4"] = current_v4
+
+    if import_errors:
+        state["status"] = "partial"
+        result["status"] = "partial"
+        atomic_write_text(
+            str(run_root / "run_state.json"),
+            json.dumps(state, ensure_ascii=False, indent=2),
+        )
+        return result
+
+    verified_artifacts = _v3_verified_artifacts(
+        run_dir, manifest, state["staged_files"]
+    )
+    followup = None
+    if manifest.get("deferred_paths") and not manifest.get("dry_run"):
+        atomic_write_text(
+            str(run_root / "run_state.json"),
+            json.dumps(state, ensure_ascii=False, indent=2),
+        )
+        followup = _submit_v3_followup_wave(
+            client,
+            run_dir,
+            state,
+            manifest,
+            verified_artifacts,
+            progress=progress,
+        )
+    if followup is not None:
+        result["next_batch_id"] = followup["batch_id"]
+        result["status"] = "batch_pending"
+        result["import_status"] = "files_complete_unverified"
+        return result
+
+    root_manifest = state.get("generate_batch") or manifest
+    graph = root_manifest["snapshot"]["structure"]
+    production_actions = (
+        {"generate"} if graph["mode"] == "GENERATE" else {"add", "modify"}
+    )
+    expected_paths = {
+        row["path"]
+        for row in graph["spine"]["files"]
+        if row["kind"] == "text" and row["action"] in production_actions
+    }
+    staged_paths = set(merged)
+    missing = sorted(expected_paths - staged_paths)
+    result["missing"] = missing
+
+    pending = {
+        identifier
+        for identifier in {
+            state.get("batch_id"),
+            *(state.get("generate_batches") or {}).keys(),
+        }
+        if identifier
+        and (state.get("batch_imports") or {}).get(identifier, {}).get(
+            "import_status"
+        )
+        not in {"files_complete_unverified", "partial", "dry_run"}
+    }
+    if pending:
+        state["status"] = "batch_pending"
+    elif missing:
+        state["status"] = "partial"
+    elif manifest.get("dry_run"):
+        state["status"] = "dry_run"
+    else:
+        state["status"] = "files_complete_unverified"
+    result["status"] = state["status"]
+    result["import_status"] = (
+        "dry_run"
+        if state["status"] == "dry_run"
+        else "files_complete_unverified"
+        if state["status"] == "files_complete_unverified"
+        else state["status"]
+    )
+    state["batch_imports"][batch_id] = copy.deepcopy(result)
+    atomic_write_text(
+        str(run_root / "run_state.json"),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+    return result
+
+
 def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, progress=None):
     """Stáhne a vyhodnotí vlastní dávku; neprovádí žádný vygenerovaný kód."""
     state_path = Path(run_dir) / "run_state.json"
@@ -1161,6 +1465,21 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
     if progress:
         progress(ProgressEvent("Spotřeba BATCH", detail=f"Vstup {batch_usage['input_tokens']:,} · "
             f"výstup {batch_usage['output_tokens']:,} · reasoning {batch_usage['reasoning_tokens']:,} tokenů"))
+    if (
+        (manifest.get("snapshot") or {}).get("structure", {}).get("contract")
+        == "IMPLEMENTATION_GRAPH_V3"
+    ):
+        return _process_saved_batch_v3(
+            client,
+            run_dir,
+            batch_id,
+            state,
+            manifest,
+            batch,
+            raw_files,
+            batch_usage,
+            progress=progress,
+        )
     target = state.get("out_dir")
     if not target:
         raise ContractError("Běh nemá cílový adresář OUT.")
