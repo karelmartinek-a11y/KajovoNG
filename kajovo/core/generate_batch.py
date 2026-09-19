@@ -399,7 +399,7 @@ def _build_manifest_v3(
         "omitted": sorted(
             row["path"]
             for row in structure["spine"]["files"]
-            if row["path"] not in production
+            if row["action"] in production_actions and row["kind"] != "text"
         ),
     }
     if recovery_instruction:
