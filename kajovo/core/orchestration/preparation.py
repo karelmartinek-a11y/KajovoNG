@@ -826,173 +826,66 @@ def _quality_gate(
     return corrected, data["findings"], response_id
 
 
-def prepare_delivery_v2(worker, client, mode: str, tools=None):
-    if mode not in {"GENERATE", "MODIFY"}:
-        raise ContractError("Preparation V2 podporuje pouze GENERATE/MODIFY.")
-    checkpoint = worker.cfg.preparation_snapshot
-    if isinstance(checkpoint, dict) and checkpoint.get("version") == 2:
-        data = {key: value for key, value in checkpoint.items() if key != "snapshot_hash"}
-        if checkpoint.get("snapshot_hash") != canonical_sha256(data):
-            raise ContractError("Preparation V2 checkpoint má neplatný hash.")
-        if checkpoint.get("mode") != mode:
-            raise ContractError("Preparation V2 checkpoint má jiný workflow.")
-        graph = checkpoint.get("graph")
-        if isinstance(graph, dict):
-            worker._delivery_snapshot = copy.deepcopy(checkpoint)
-            validate_graph(worker, graph)
-            return checkpoint["plan"], graph, str(checkpoint.get("response_id") or "")
+def _validate_modify_requirement_wrapper(worker, wrapper: dict[str, Any]) -> None:
+    requirements = wrapper.get("change_requirements")
+    if not isinstance(requirements, dict):
+        raise ContractError("B0R: chybí change_requirements.")
+    validate_requirements_v2(worker, requirements)
+    req_ids = {row["id"] for row in requirements["requirements"]}
+    preserve_ids = _unique(wrapper["preserve"], "id", "preserve")
+    del preserve_ids
+    for row in wrapper["preserve"]:
+        if not set(row["requirement_ids"]) <= req_ids:
+            raise ContractError(f"{row['id']}: PRESERVE odkazuje mimo requirements.")
+        _source_refs_ok(worker, row["source_refs"])
+        if not row["statement"].strip():
+            raise ContractError(f"{row['id']}: PRESERVE statement nesmí být prázdný.")
+    if any(not value.strip() for value in wrapper["migration_requirements"]):
+        raise ContractError("B0R migration requirement nesmí být prázdný.")
 
-    source = _source_subset(worker)
-    snapshot: dict[str, Any] = {
-        "version": 2,
-        "mode": mode,
-        "maximum_quality": bool(worker.cfg.maximum_quality),
-        "source_snapshot_hash": worker.source_pack.hash,
-        "requirements": None,
-        "plan": None,
-        "spine": None,
-        "graph": None,
-        "response_id": "",
-    }
-    inventory, originals = _inventory(worker)
 
-    if mode == "GENERATE":
-        req_input = {"source": source, "facts": []}
-        requirements, rid = _request(
-            worker, client, "A0R", req_input, worker._generate_model("A1"),
-            lambda data: validate_requirements_v2(worker, data),
+def _validate_modify_plan_wrapper(
+    requirements: dict[str, Any],
+    wrapper: dict[str, Any],
+    inventory: list[dict[str, Any]],
+) -> None:
+    plan = wrapper.get("plan")
+    if not isinstance(plan, dict):
+        raise ContractError("B1: chybí plan.")
+    validate_plan_v2(requirements, plan)
+    existing = {row["path"] for row in inventory}
+    add = set(wrapper["files_to_add"])
+    modify = set(wrapper["files_to_modify"])
+    preserve = set(wrapper["preserved_files"])
+    validate_paths(
+        [{"path": path} for path in sorted(add | modify | preserve)]
+    )
+    if add & existing:
+        raise ContractError(
+            f"B1: files_to_add již existují v projektu: {sorted(add & existing)}"
         )
-        snapshot.update(requirements=requirements, response_id=rid)
-        _save(worker, snapshot, "A0R")
-        plan_input = {"requirements": requirements, "source": source}
-        plan, rid = _request(
-            worker, client, "A1", plan_input, worker._generate_model("A1"),
-            lambda data: validate_plan_v2(requirements, data),
+    if not modify <= existing:
+        raise ContractError(
+            f"B1: files_to_modify neexistují: {sorted(modify - existing)}"
         )
-        snapshot.update(plan=plan, response_id=rid)
-        _save(worker, snapshot, "A1")
-        spine_input = {"requirements": requirements, "plan": plan, "source": source}
-        spine, rid = _request(
-            worker, client, "A2_SPINE", spine_input, worker._generate_model("A2"),
-            lambda data: validate_spine_v1(mode, requirements, plan, data),
+    if not preserve <= existing:
+        raise ContractError(
+            f"B1: preserved_files neexistují: {sorted(preserve - existing)}"
         )
-        detail_stage = "A2_DETAIL"
-    else:
-        req_input = {
-            "change_source": {
-                "segments": [row for row in source["segments"] if row["source_id"] == "SRC-USER-TEXT"],
-                "image_slots": source.get("image_slots", []),
-            },
-            "project_inventory": inventory,
-            "selected_originals": originals,
-            "baseline_report": None,
-        }
-        wrapper, rid = _request(
-            worker, client, "B0R", req_input, worker.cfg.model,
-            lambda data: validate_requirements_v2(worker, data["change_requirements"]),
-            tools=tools,
-        )
-        requirements = wrapper["change_requirements"]
-        snapshot.update(requirements=wrapper, response_id=rid)
-        _save(worker, snapshot, "B0R")
-        plan_input = {
-            "change_requirements": wrapper,
-            "project_inventory": inventory,
-            "selected_originals": originals,
-        }
-        plan_wrapper, rid = _request(
-            worker, client, "B1", plan_input, worker.cfg.model,
-            lambda data: validate_plan_v2(requirements, data["plan"]),
-            tools=tools,
-        )
-        plan = plan_wrapper["plan"]
-        snapshot.update(plan=plan_wrapper, response_id=rid)
-        _save(worker, snapshot, "B1")
-        provider_interfaces: list[dict[str, Any]] = []
-        spine_input = {
-            "change_requirements": wrapper,
-            "change_plan": plan_wrapper,
-            "provider_interfaces": provider_interfaces,
-        }
-        spine, rid = _request(
-            worker, client, "B2_SPINE", spine_input, worker.cfg.model,
-            lambda data: validate_spine_v1(mode, requirements, plan, data),
-            tools=tools,
-        )
-        detail_stage = "B2_DETAIL"
+    if add & modify or add & preserve or modify & preserve:
+        raise ContractError("B1: add/modify/preserve množiny musí být disjunktní.")
+    if any(not value.strip() for value in wrapper["baseline_findings"]):
+        raise ContractError("B1 baseline finding nesmí být prázdný.")
 
-    snapshot.update(spine=spine, response_id=rid)
-    _save(worker, snapshot, "A2_SPINE" if mode == "GENERATE" else "B2_SPINE")
 
-    original_map = {row["path"]: row for row in originals}
-    specs: list[dict[str, Any]] = []
-    requirement_map = {row["id"]: row for row in requirements["requirements"]}
-    acceptance_map = {row["id"]: row for row in requirements["acceptance"]}
-    for index, target in enumerate(spine["files"]):
-        if target["kind"] != "text" or target["action"] not in {"generate", "add", "modify"}:
-            continue
-        worker._check_stop()
-        selected_requirements = [
-            requirement_map[key] for key in target["requirement_ids"]
-            if key in requirement_map
-        ]
-        selected_acceptance_ids = {
-            aid for row in selected_requirements for aid in row["acceptance_ids"]
-        }
-        selected_acceptance = [
-            acceptance_map[key] for key in selected_acceptance_ids
-            if key in acceptance_map
-        ]
-        interfaces = [
-            row for row in spine["interfaces"]
-            if row["id"] in set(target["provides"] + target["requires"])
-        ]
-        if mode == "GENERATE":
-            detail_input = {
-                "target": target,
-                "interfaces": interfaces,
-                "requirements": selected_requirements,
-                "acceptance": selected_acceptance,
-                "source": _source_subset(worker, selected_requirements),
-            }
-        else:
-            detail_input = {
-                "target": target,
-                "original_target": original_map.get(target["path"]),
-                "interfaces": interfaces,
-                "requirements": selected_requirements,
-                "acceptance": selected_acceptance,
-            }
-            if target["action"] == "modify" and detail_input["original_target"] is None:
-                raise ContractError(f"{target['path']}: MODIFY detail nemá immutable originál.")
-            if target["action"] == "add" and detail_input["original_target"] is not None:
-                raise ContractError(f"{target['path']}: ADD cíl již existuje.")
-        model = worker._generate_model("A2") if mode == "GENERATE" else worker.cfg.model
-        spec, rid = _request(
-            worker, client, detail_stage, detail_input, model,
-            lambda data, t=target: validate_file_spec_v1(
-                worker, t, spine, requirements, data
-            ),
-        )
-        specs.append({"path": target["path"], "spec": spec})
-        snapshot["response_id"] = rid
-        snapshot["file_specs"] = copy.deepcopy(specs)
-        _save(
-            worker, snapshot,
-            f"{'A2' if mode == 'GENERATE' else 'B2'}_DETAIL_{index + 1}",
-        )
-
-    graph = {
-        "contract": "IMPLEMENTATION_GRAPH_V3",
-        "mode": mode,
-        "source_snapshot_hash": worker.source_pack.hash,
-        "requirements_hash": canonical_sha256(requirements),
-        "plan_hash": canonical_sha256(plan),
-        "spine": spine,
-        "file_specs": specs,
-        "verification_profile_ids": list(worker.cfg.verification_profile_ids or []),
-    }
-    _validate_json(graph, GRAPH_SCHEMA, "IMPLEMENTATION_GRAPH_V3")
+def _finalize_delivery_snapshot(
+    worker,
+    snapshot: dict[str, Any],
+    mode: str,
+    requirements: dict[str, Any],
+    plan: dict[str, Any],
+    graph: dict[str, Any],
+) -> None:
     worker._delivery_snapshot = {
         "version": 2,
         "mode": mode,
@@ -1006,15 +899,379 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
         "structure": graph,
         "graph": graph,
     }
-    validate_graph(worker, graph)
-    snapshot.update(
-        graph=graph,
-        requirements=(
-            snapshot["requirements"] if mode == "MODIFY" else requirements
-        ),
-        plan=snapshot["plan"],
-        response_id=snapshot.get("response_id", ""),
+
+
+def prepare_delivery_v2(worker, client, mode: str, tools=None):
+    if mode not in {"GENERATE", "MODIFY"}:
+        raise ContractError("Preparation V2 podporuje pouze GENERATE/MODIFY.")
+
+    quality = bool(worker.cfg.maximum_quality)
+    checkpoint = worker.cfg.preparation_snapshot
+    if checkpoint is None:
+        snapshot: dict[str, Any] = {
+            "version": 2,
+            "mode": mode,
+            "maximum_quality": quality,
+            "source_snapshot_hash": worker.source_pack.hash,
+            "requirements": None,
+            "plan": None,
+            "spine": None,
+            "file_specs": [],
+            "graph": None,
+            "quality_gate_findings": [],
+            "response_id": "",
+        }
+    else:
+        if not isinstance(checkpoint, dict) or checkpoint.get("version") != 2:
+            raise ContractError("Preparation V2 vyžaduje checkpoint verze 2.")
+        data = {
+            key: value
+            for key, value in checkpoint.items()
+            if key != "snapshot_hash"
+        }
+        if checkpoint.get("snapshot_hash") != canonical_sha256(data):
+            raise ContractError("Preparation V2 checkpoint má neplatný hash.")
+        if checkpoint.get("mode") != mode:
+            raise ContractError("Preparation V2 checkpoint má jiný workflow.")
+        if bool(checkpoint.get("maximum_quality")) is not quality:
+            raise ContractError(
+                "Preparation V2 checkpoint má jinou hodnotu Maximum Quality."
+            )
+        if checkpoint.get("source_snapshot_hash") != worker.source_pack.hash:
+            raise ContractError(
+                "Zmrazené vstupy se od preparation checkpointu změnily."
+            )
+        snapshot = copy.deepcopy(checkpoint)
+        snapshot.setdefault("file_specs", [])
+        snapshot.setdefault("quality_gate_findings", [])
+
+    source = _source_subset(worker)
+    inventory, originals = _inventory(worker)
+    original_map = {row["path"]: row for row in originals}
+
+    # A0R / B0R: do not repay if the canonical checkpoint already exists.
+    if snapshot.get("requirements") is None:
+        if mode == "GENERATE":
+            requirements, rid = _request(
+                worker,
+                client,
+                "A0R",
+                {"source": source, "facts": []},
+                worker._generate_model("A1"),
+                lambda data: validate_requirements_v2(worker, data),
+            )
+            snapshot["requirements"] = requirements
+            snapshot["response_id"] = rid
+            _save(worker, snapshot, "A0R")
+        else:
+            req_input = {
+                "change_source": {
+                    "segments": [
+                        row
+                        for row in source["segments"]
+                        if row["source_id"] == "SRC-USER-TEXT"
+                    ],
+                    "image_slots": source.get("image_slots", []),
+                },
+                "project_inventory": inventory,
+                "selected_originals": originals,
+                "baseline_report": None,
+            }
+            wrapper, rid = _request(
+                worker,
+                client,
+                "B0R",
+                req_input,
+                worker.cfg.model,
+                lambda data: _validate_modify_requirement_wrapper(
+                    worker, data
+                ),
+                tools=tools,
+            )
+            snapshot["requirements"] = wrapper
+            snapshot["response_id"] = rid
+            _save(worker, snapshot, "B0R")
+
+    requirements, plan = _core_snapshot_values(snapshot, mode)
+    if not isinstance(requirements, dict):
+        raise ContractError("Preparation V2 checkpoint nemá validní requirements.")
+    if mode == "GENERATE":
+        validate_requirements_v2(worker, requirements)
+    else:
+        _validate_modify_requirement_wrapper(
+            worker, snapshot["requirements"]
+        )
+
+    # A1 / B1
+    if snapshot.get("plan") is None:
+        if mode == "GENERATE":
+            plan, rid = _request(
+                worker,
+                client,
+                "A1",
+                {"requirements": requirements, "source": source},
+                worker._generate_model("A1"),
+                lambda data: validate_plan_v2(requirements, data),
+            )
+            snapshot["plan"] = plan
+            snapshot["response_id"] = rid
+            _save(worker, snapshot, "A1")
+        else:
+            plan_input = {
+                "change_requirements": snapshot["requirements"],
+                "project_inventory": inventory,
+                "selected_originals": originals,
+            }
+            plan_wrapper, rid = _request(
+                worker,
+                client,
+                "B1",
+                plan_input,
+                worker.cfg.model,
+                lambda data: _validate_modify_plan_wrapper(
+                    requirements, data, inventory
+                ),
+                tools=tools,
+            )
+            snapshot["plan"] = plan_wrapper
+            snapshot["response_id"] = rid
+            _save(worker, snapshot, "B1")
+
+    requirements, plan = _core_snapshot_values(snapshot, mode)
+    if not isinstance(requirements, dict) or not isinstance(plan, dict):
+        raise ContractError("Preparation V2 checkpoint nemá validní plan.")
+    if mode == "GENERATE":
+        validate_plan_v2(requirements, plan)
+    else:
+        _validate_modify_plan_wrapper(
+            requirements, snapshot["plan"], inventory
+        )
+
+    # SPINE
+    if snapshot.get("spine") is None:
+        if mode == "GENERATE":
+            spine_input = {
+                "requirements": requirements,
+                "plan": plan,
+                "source": source,
+            }
+            spine, rid = _request(
+                worker,
+                client,
+                "A2_SPINE",
+                spine_input,
+                worker._generate_model("A2"),
+                lambda data: validate_spine_v1(
+                    mode, requirements, plan, data
+                ),
+            )
+            detail_stage = "A2_DETAIL"
+        else:
+            spine_input = {
+                "change_requirements": snapshot["requirements"],
+                "change_plan": snapshot["plan"],
+                "provider_interfaces": [],
+            }
+            spine, rid = _request(
+                worker,
+                client,
+                "B2_SPINE",
+                spine_input,
+                worker.cfg.model,
+                lambda data: validate_spine_v1(
+                    mode, requirements, plan, data
+                ),
+                tools=tools,
+            )
+            detail_stage = "B2_DETAIL"
+        snapshot["spine"] = spine
+        snapshot["response_id"] = rid
+        _save(
+            worker,
+            snapshot,
+            "A2_SPINE" if mode == "GENERATE" else "B2_SPINE",
+        )
+    else:
+        spine = snapshot["spine"]
+        validate_spine_v1(mode, requirements, plan, spine)
+        detail_stage = "A2_DETAIL" if mode == "GENERATE" else "B2_DETAIL"
+
+    # Per-file DETAIL is independently checkpointable.
+    file_specs = list(snapshot.get("file_specs") or [])
+    spec_by_path: dict[str, dict[str, Any]] = {}
+    for row in file_specs:
+        if not isinstance(row, dict):
+            raise ContractError("Preparation V2 file_specs obsahují neplatný záznam.")
+        path = str(row.get("path") or "")
+        if not path or path in spec_by_path or not isinstance(row.get("spec"), dict):
+            raise ContractError("Preparation V2 file_specs mají duplicitní nebo prázdnou cestu.")
+        spec_by_path[path] = row["spec"]
+
+    requirement_map = {
+        row["id"]: row for row in requirements["requirements"]
+    }
+    acceptance_map = {
+        row["id"]: row for row in requirements["acceptance"]
+    }
+    production_targets = [
+        target
+        for target in spine["files"]
+        if target["kind"] == "text"
+        and target["action"] in {"generate", "add", "modify"}
+    ]
+    target_paths = {row["path"] for row in production_targets}
+    if not set(spec_by_path) <= target_paths:
+        raise ContractError(
+            "Preparation V2 checkpoint obsahuje DETAIL pro neznámý cíl."
+        )
+
+    for index, target in enumerate(production_targets):
+        path = target["path"]
+        if path in spec_by_path:
+            validate_file_spec_v1(
+                worker,
+                target,
+                spine,
+                requirements,
+                spec_by_path[path],
+            )
+            continue
+
+        worker._check_stop()
+        selected_requirements = [
+            requirement_map[key]
+            for key in target["requirement_ids"]
+            if key in requirement_map
+        ]
+        selected_acceptance_ids = {
+            acceptance_id
+            for requirement in selected_requirements
+            for acceptance_id in requirement["acceptance_ids"]
+        }
+        selected_acceptance = [
+            acceptance_map[key]
+            for key in sorted(selected_acceptance_ids)
+            if key in acceptance_map
+        ]
+        interfaces = [
+            row
+            for row in spine["interfaces"]
+            if row["id"] in set(target["provides"] + target["requires"])
+        ]
+        if mode == "GENERATE":
+            detail_input = {
+                "target": target,
+                "interfaces": interfaces,
+                "requirements": selected_requirements,
+                "acceptance": selected_acceptance,
+                "source": _source_subset(
+                    worker, selected_requirements
+                ),
+            }
+            model = worker._generate_model("A2")
+        else:
+            detail_input = {
+                "target": target,
+                "original_target": original_map.get(path),
+                "interfaces": interfaces,
+                "requirements": selected_requirements,
+                "acceptance": selected_acceptance,
+            }
+            if (
+                target["action"] == "modify"
+                and detail_input["original_target"] is None
+            ):
+                raise ContractError(
+                    f"{path}: MODIFY detail nemá immutable originál."
+                )
+            if (
+                target["action"] == "add"
+                and detail_input["original_target"] is not None
+            ):
+                raise ContractError(
+                    f"{path}: ADD cíl již existuje."
+                )
+            model = worker.cfg.model
+
+        spec, rid = _request(
+            worker,
+            client,
+            detail_stage,
+            detail_input,
+            model,
+            lambda data, target=target: validate_file_spec_v1(
+                worker, target, spine, requirements, data
+            ),
+        )
+        spec_by_path[path] = spec
+        snapshot["file_specs"] = [
+            {"path": row["path"], "spec": spec_by_path[row["path"]]}
+            for row in production_targets
+            if row["path"] in spec_by_path
+        ]
+        snapshot["response_id"] = rid
+        _save(
+            worker,
+            snapshot,
+            f"{'A2' if mode == 'GENERATE' else 'B2'}_DETAIL_{index + 1}",
+        )
+
+    graph = snapshot.get("graph")
+    if graph is None:
+        graph = {
+            "contract": "IMPLEMENTATION_GRAPH_V3",
+            "mode": mode,
+            "source_snapshot_hash": worker.source_pack.hash,
+            "requirements_hash": canonical_sha256(requirements),
+            "plan_hash": canonical_sha256(plan),
+            "spine": spine,
+            "file_specs": [
+                {
+                    "path": target["path"],
+                    "spec": spec_by_path[target["path"]],
+                }
+                for target in production_targets
+            ],
+            "verification_profile_ids": list(
+                worker.cfg.verification_profile_ids or []
+            ),
+        }
+        validate_graph(worker, graph, requirements, plan)
+        snapshot["graph"] = copy.deepcopy(graph)
+        snapshot["response_id"] = str(snapshot.get("response_id") or "")
+        _save(worker, snapshot, "A2" if mode == "GENERATE" else "B2")
+    else:
+        validate_graph(worker, graph, requirements, plan)
+
+    _finalize_delivery_snapshot(
+        worker, snapshot, mode, requirements, plan, graph
     )
-    _save(worker, snapshot, "A2" if mode == "GENERATE" else "B2")
-    worker.log.save_json("manifests", "implementation_graph_v3", graph)
+
+    # Maximum Quality adds a real independent LIVE gate. If the gate was
+    # interrupted, the canonical pre-gate graph is durable and can be reviewed
+    # without repaying the earlier preparation.
+    quality_stage = "A2Q" if mode == "GENERATE" else "B2Q"
+    if quality and snapshot.get("canonical_stage") != quality_stage:
+        graph, findings, rid = _quality_gate(
+            worker, client, mode, requirements, plan, graph
+        )
+        snapshot["graph"] = copy.deepcopy(graph)
+        snapshot["spine"] = copy.deepcopy(graph["spine"])
+        snapshot["file_specs"] = copy.deepcopy(graph["file_specs"])
+        snapshot["quality_gate_findings"] = copy.deepcopy(findings)
+        snapshot["response_id"] = rid
+        _finalize_delivery_snapshot(
+            worker, snapshot, mode, requirements, plan, graph
+        )
+        _save(worker, snapshot, quality_stage)
+    elif quality:
+        validate_graph(worker, graph, requirements, plan)
+    elif snapshot.get("canonical_stage") in {"A2Q", "B2Q"}:
+        raise ContractError(
+            "Standard run nesmí obnovit Maximum Quality checkpoint."
+        )
+
+    worker.log.save_json(
+        "manifests", "implementation_graph_v3", graph
+    )
     return plan, graph, str(snapshot.get("response_id") or "")
