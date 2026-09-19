@@ -639,6 +639,10 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
     payload["text"] = copy.deepcopy(fmt)
     if tools:
         payload["tools"] = tools
+    if worker.cfg.maximum_quality:
+        from ..requirements import apply_quality
+
+        apply_quality(payload, True)
     prepare_payload(payload)
     step_id = worker.log.begin_validated_step(stage, kind="preparation", model=model)
     last_error: Exception | None = None
@@ -708,24 +712,118 @@ def _save(worker, snapshot: dict[str, Any], stage: str) -> None:
     worker.log.save_json("manifests", "preparation_snapshot_v2", snapshot)
 
 
-def validate_graph(worker, graph: dict[str, Any]) -> None:
+def validate_graph(
+    worker,
+    graph: dict[str, Any],
+    requirements: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
+) -> None:
     _validate_json(graph, GRAPH_SCHEMA, "IMPLEMENTATION_GRAPH_V3")
-    requirements = worker._delivery_snapshot["requirements"] if getattr(worker, "_delivery_snapshot", None) else None
-    if requirements:
-        validate_spine_v1(graph["mode"], requirements, worker._delivery_snapshot["plan"], graph["spine"])
+    if requirements is None or plan is None:
+        snapshot = getattr(worker, "_delivery_snapshot", None) or {}
+        requirements = requirements or snapshot.get("requirements")
+        plan = plan or snapshot.get("plan")
+    if not isinstance(requirements, dict) or not isinstance(plan, dict):
+        raise ContractError(
+            "IMPLEMENTATION_GRAPH_V3 nelze ověřit bez kanonických requirements a plan."
+        )
+    validate_spine_v1(graph["mode"], requirements, plan, graph["spine"])
     specs = {row["path"]: row["spec"] for row in graph["file_specs"]}
     if len(specs) != len(graph["file_specs"]):
         raise ContractError("IMPLEMENTATION_GRAPH_V3 má duplicitní file_specs.")
     files = {row["path"]: row for row in graph["spine"]["files"]}
     required_specs = {
-        path for path, row in files.items()
+        path
+        for path, row in files.items()
         if row["kind"] == "text" and row["action"] in {"generate", "add", "modify"}
     }
     if set(specs) != required_specs:
         raise ContractError(
             "IMPLEMENTATION_GRAPH_V3 file_specs musí přesně pokrýt vyráběné textové soubory."
         )
+    for path in sorted(required_specs):
+        validate_file_spec_v1(
+            worker,
+            files[path],
+            graph["spine"],
+            requirements,
+            specs[path],
+        )
     build_execution_dag(graph)
+
+
+def _core_snapshot_values(snapshot: dict[str, Any], mode: str):
+    if mode == "GENERATE":
+        requirements = snapshot.get("requirements")
+        plan = snapshot.get("plan")
+    else:
+        wrapper = snapshot.get("requirements")
+        plan_wrapper = snapshot.get("plan")
+        requirements = (
+            wrapper.get("change_requirements")
+            if isinstance(wrapper, dict)
+            else None
+        )
+        plan = (
+            plan_wrapper.get("plan")
+            if isinstance(plan_wrapper, dict)
+            else None
+        )
+    return requirements, plan
+
+
+def _quality_gate(
+    worker,
+    client,
+    mode: str,
+    requirements: dict[str, Any],
+    plan: dict[str, Any],
+    graph: dict[str, Any],
+):
+    stage = "A2Q" if mode == "GENERATE" else "B2Q"
+    model = worker._generate_model("A2") if mode == "GENERATE" else worker.cfg.model
+    quality_input = {
+        "requirements": requirements,
+        "plan": plan,
+        "implementation_graph": graph,
+    }
+
+    def semantic(data):
+        corrected = {
+            **graph,
+            "spine": data["corrected_spine"],
+            "file_specs": data["corrected_file_specs"],
+        }
+        validate_graph(worker, corrected, requirements, plan)
+        affected = {
+            path
+            for finding in data["findings"]
+            for path in finding["affected_paths"]
+        }
+        known = {row["path"] for row in corrected["spine"]["files"]}
+        if not affected <= known:
+            raise ContractError(
+                f"{stage}: finding odkazuje na neznámé cesty {sorted(affected - known)}."
+            )
+        for finding in data["findings"]:
+            if not finding["issue"].strip() or not finding["resolution"].strip():
+                raise ContractError(f"{stage}: finding musí mít issue i resolution.")
+
+    data, response_id = _request(
+        worker,
+        client,
+        stage,
+        quality_input,
+        model,
+        semantic,
+    )
+    corrected = {
+        **graph,
+        "spine": data["corrected_spine"],
+        "file_specs": data["corrected_file_specs"],
+    }
+    validate_graph(worker, corrected, requirements, plan)
+    return corrected, data["findings"], response_id
 
 
 def prepare_delivery_v2(worker, client, mode: str, tools=None):
