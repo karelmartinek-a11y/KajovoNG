@@ -36,8 +36,8 @@ def _work_orders(manifest: dict[str, Any]) -> dict[str, WorkOrder]:
 
 
 def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
-    from pathlib import Path
     import json
+    from pathlib import Path
 
     log.save_json(
         "manifests",
