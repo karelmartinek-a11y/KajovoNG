@@ -114,6 +114,15 @@ def run_scope_hash(cfg: Any) -> str:
         "attached_file_ids": list(getattr(cfg, "attached_file_ids", []) or []),
         "input_file_ids": list(getattr(cfg, "input_file_ids", []) or []),
         "attached_vector_store_ids": list(getattr(cfg, "attached_vector_store_ids", []) or []),
+        "qfile_output_path": str(getattr(cfg, "qfile_output_path", "")),
+        "qfile_output_format": str(getattr(cfg, "qfile_output_format", "")),
+        "qfile_suggest_path": bool(getattr(cfg, "qfile_suggest_path", False)),
+        "qa_continue_conversation": bool(getattr(cfg, "qa_continue_conversation", False)),
+        "response_id": (
+            str(getattr(cfg, "response_id", ""))
+            if bool(getattr(cfg, "qa_continue_conversation", False))
+            else ""
+        ),
     }
     raw = json.dumps(scope, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
