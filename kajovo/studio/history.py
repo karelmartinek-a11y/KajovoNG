@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QFormL
 
 from kajovo.core.batch_completion import complete_saved_batch, pending_batch_ids, read_state
 from kajovo.core.run_bundle import HistoryIndex
+from kajovo.core.orchestration.publish import publish_staged_run
 from kajovo.core.utils import safe_join_under_root
 
 from .components import action, actions, caption, panel, vertical
@@ -78,6 +79,12 @@ class HistoryPage(QWidget):
                                   lambda: self.branch("rerun", edit_input=True)),
             "clone": action("history.clone", "Klonovat jako nové zadání", self.clone),
             "complete_batch": action("history.batch.complete", "Převzít soubory", self.complete_batch, "primary"),
+            "publish_staged": action(
+                "history.publish.staged",
+                "Převzít neověřené",
+                self.publish_staged,
+                "primary",
+            ),
             "open_batch": action("history.batch.open", "Otevřít v Dávkách", self.open_batch),
             "clone_artifact": action("history.clone.artifact", "Nové zadání s vybraným souborem", self.choose_reusable_clone),
             "detail": action("history.detail", "Detail běhu", self.open_detail),
@@ -95,8 +102,15 @@ class HistoryPage(QWidget):
         for button in self.secondary.values():
             button.setParent(self)
             button.hide()
-        body.addWidget(actions(self.buttons["detail"], self.buttons["continue"], self.buttons["rerun"],
-                               self.buttons["repair"], self.buttons["complete_batch"], self.more))
+        body.addWidget(actions(
+            self.buttons["detail"],
+            self.buttons["continue"],
+            self.buttons["rerun"],
+            self.buttons["repair"],
+            self.buttons["complete_batch"],
+            self.buttons["publish_staged"],
+            self.more,
+        ))
         root.addWidget(inspector)
         for name, button in self.buttons.items():
             button.setEnabled(False)
@@ -413,6 +427,28 @@ class HistoryPage(QWidget):
         self.workbench.widgets["response_id"].clear()
         self.workbench.pending_lineage = {"source_run_id": adapter.run_id, "relation_type": "clone"}
         self.activate_workbench.emit()
+
+    def publish_staged(self):
+        if not self.adapter:
+            return
+        state = getattr(self, "_state", {}) or {}
+        output = Path(str(state.get("out_dir") or "")).resolve() if state.get("out_dir") else None
+        if output is None:
+            self.notice.setText("Běh nemá cílový adresář OUT.")
+            return
+        try:
+            self.context.operations.assert_output_available(output)
+        except (ValueError, OSError) as error:
+            self.notice.setText(str(error))
+            return
+        root = str(self.adapter.root)
+        self.context.operations.start(
+            "Převzetí neověřených staged artefaktů",
+            lambda task: publish_staged_run(root),
+            lambda _value: self.refresh(),
+            output_dir=output,
+            identifier=f"publish.staged:{self.adapter.run_id}",
+        )
 
     def complete_batch(self):
         if not self.adapter:
