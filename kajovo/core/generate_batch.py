@@ -210,7 +210,6 @@ def _build_manifest_v3(
             for path, content in originals.items()
         },
     })
-    compiler = ContextCompiler(snapshot)
     dag = build_execution_dag(structure)
     verified_targets = {
         path
@@ -226,6 +225,10 @@ def _build_manifest_v3(
         for row in structure["spine"]["files"]
         if row["kind"] == "text" and row["action"] in production_actions
     }
+    snapshot["expected_target_hashes"] = {
+        path: expected_target_hashes.get(path) for path in sorted(production)
+    }
+    compiler = ContextCompiler(snapshot)
     requested = set(paths) if paths is not None else production
     if not requested <= production:
         raise ContractError(
@@ -273,7 +276,9 @@ def _build_manifest_v3(
 
     stage = "B3_FILE" if mode == "MODIFY" else "A3_FILE"
     rows, reports, work_orders = [], [], []
-    for index, file in enumerate(selected):
+    task_indices = {path: index for index, path in enumerate(sorted(production))}
+    for file in selected:
+        index = task_indices[file["path"]]
         if mode == "MODIFY" and file["action"] == "modify":
             if not isinstance(originals.get(file["path"]), str):
                 raise ContractError(
@@ -377,6 +382,7 @@ def _build_manifest_v3(
     manifest = {
         "version": 3,
         "graph_version": 3,
+        "wave_no": first_wave,
         "mode": mode,
         "snapshot": snapshot,
         "snapshot_hash": digest(snapshot),
@@ -1026,6 +1032,8 @@ def _submit_v3_followup_wave(
     deferred = list(source_manifest.get("deferred_paths") or [])
     if not deferred:
         return None
+    if state.get("submission_unknown") or state.get("pending_batch_submission"):
+        raise ContractError("Neznámý submit musí být dohledán před novým odesláním.")
 
     ui = dict(state.get("ui_state") or {})
     cfg = _v3_cfg_namespace(state)
@@ -1054,23 +1062,9 @@ def _submit_v3_followup_wave(
 
     model = str(source_manifest["requests"][0]["body"]["model"])
     temperature = source_manifest["requests"][0]["body"].get("temperature")
-    expected_target_hashes = {
-        row["path"]: row.get("expected_target_hash")
-        for row in state.get("staged_files", [])
-        if isinstance(row, dict) and row.get("path")
-    }
-    # Deferred targets that have not been staged yet retain the WorkOrder-time
-    # OUT hash from the first user-authorized run snapshot.
-    out_dir = str(state.get("out_dir") or "")
-    for path in deferred:
-        if path in expected_target_hashes:
-            continue
-        target = safe_join_under_root(out_dir, path)
-        expected_target_hashes[path] = (
-            hashlib.sha256(Path(target).read_bytes()).hexdigest()
-            if os.path.isfile(target)
-            else None
-        )
+    expected_target_hashes = dict(source_manifest["snapshot"].get("expected_target_hashes") or {})
+    if not set(deferred) <= expected_target_hashes.keys():
+        raise ContractError("Další wave nemá zmrazené původní hashe cílových souborů.")
 
     next_manifest = build_manifest(
         Path(run_dir).name,
@@ -1089,6 +1083,7 @@ def _submit_v3_followup_wave(
         expected_target_hashes=expected_target_hashes,
         verified_artifacts=verified_artifacts,
     )
+    next_manifest["source_manifest_hash"] = digest(source_manifest)
     repo, orders = _reserve_v3_followup(run_dir, state, next_manifest)
     data = encode_requests(next_manifest)
     requests_dir = Path(run_dir) / "requests"
@@ -1447,7 +1442,12 @@ def _process_saved_batch_v3(
         run_dir, manifest, state["staged_files"]
     )
     followup = None
-    if manifest.get("deferred_paths") and not manifest.get("dry_run"):
+    submitted_followup = any(
+        row.get("source_manifest_hash") == digest(manifest)
+        for row in (state.get("generate_batches") or {}).values()
+        if isinstance(row, dict)
+    )
+    if manifest.get("deferred_paths") and not manifest.get("dry_run") and not submitted_followup:
         atomic_write_text(
             str(run_root / "run_state.json"),
             json.dumps(state, ensure_ascii=False, indent=2),
@@ -1740,16 +1740,9 @@ def _repeat_v3_batch(
         except UnicodeDecodeError:
             continue
 
-    current_by_path = {
-        str(row.get("path")): row
-        for row in staged_files
-        if isinstance(row, dict) and row.get("path")
-    }
-    expected_target_hashes = {
-        path: current_by_path[path].get("expected_target_hash")
-        for path in selected
-        if path in current_by_path
-    }
+    expected_target_hashes = dict(source["snapshot"].get("expected_target_hashes") or {})
+    if not selected <= expected_target_hashes.keys():
+        raise ContractError("Oprava nemá zmrazené původní hashe cílových souborů.")
     ui = dict(state.get("ui_state") or {})
     cfg = _v3_cfg_namespace(state)
     model = str(source["requests"][0]["body"]["model"])
