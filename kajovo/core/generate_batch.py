@@ -12,13 +12,20 @@ import time
 import uuid
 from pathlib import Path
 
-from .contracts import ContractError, RemoteResponseError, parse_json_strict, validate_paths
+from .contracts import (
+    ContractError,
+    RemoteResponseError,
+    file_response_format,
+    parse_json_strict,
+    validate_paths,
+)
 from .request_rules import uses_reasoning_defaults, validate_response_payload
 from .structured_output import file_content_format, validate_output
 from .orchestration.work_order import freeze_order, validate_work_order_v2
 from .utils import atomic_write_text, is_versing_snapshot_dir, safe_join_under_root
 from .batch_submit import submit_verified_batch
 from .progress import ProgressEvent
+from .run_bundle import RunBundle
 from .context_compiler import ContextCompiler, canonical
 from .context_budget import configure_file_request, measure_request, enforce_budget
 
