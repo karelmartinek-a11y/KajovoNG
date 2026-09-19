@@ -116,7 +116,8 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
             self.cfg.temperature, [file["path"] for file in touched],
             requirements=self._delivery_snapshot["requirements"],
             maximum_quality=self.cfg.maximum_quality, mode="MODIFY", originals=originals,
-            recovery_instruction=self.cfg.recovery_instruction)
+            recovery_instruction=self.cfg.recovery_instruction,
+            run_config=self.cfg, expected_target_hashes=overwrite_hashes)
         manifest["overwrite_hashes"] = overwrite_hashes
         manifest["dry_run"] = bool(self.cfg.dry_run)
         manifest["versing"] = bool(self.cfg.versing)
