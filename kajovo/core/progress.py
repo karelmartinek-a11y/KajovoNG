@@ -11,6 +11,7 @@ TERMINAL_RUN_STATES = {
     "closed",
     "dry_run",
     "plan_ready",
+    "qfile_plan_ready",
     "partial",
     "files_complete_unverified",
     "unfinished_record",
