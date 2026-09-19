@@ -40,6 +40,39 @@ def file_content_format():
     return response_format("FILE_CONTENT_V1", obj({"content": {"type": "string"}}))
 
 
+def qa_answer_format():
+    """QA_ANSWER_V2 keeps human answer separate from evidence and uncertainty."""
+    text = {"type": "string"}
+    strings = array(text)
+    claim = obj({
+        "id": text,
+        "text": text,
+        "evidence_ids": strings,
+        "certainty": {"type": "string", "enum": ["supported", "inference", "unknown"]},
+    })
+    ready = obj({
+        "status": {"type": "string", "enum": ["ready"]},
+        "data": obj({
+            "answer": text,
+            "claims": array(claim),
+            "limitations": strings,
+        }),
+    })
+    question = obj({
+        "code": {"type": "string", "enum": [
+            "missing_input", "scope_conflict", "unsupported_requirement", "infeasible"
+        ]},
+        "source_refs": strings,
+        "question": text,
+        "blocking": {"type": "boolean"},
+    })
+    blocked = obj({
+        "status": {"type": "string", "enum": ["blocked"]},
+        "questions": array(question),
+    })
+    return response_format("QA_ANSWER_V2", obj({"result": {"anyOf": [ready, blocked]}}))
+
+
 def qfile_plan_format():
     """Strict QFILE planning result; target path remains untrusted until user confirmation."""
     text = {"type": "string"}
