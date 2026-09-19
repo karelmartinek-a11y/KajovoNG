@@ -355,3 +355,37 @@ def test_resume_is_blocked_when_a_previous_step_changed(tmp_path):
 
     assert errors
     blocked_client.create_response.assert_not_called()
+
+
+
+def test_cascade_paid_step_is_reserved_and_settled_in_shared_ledger(tmp_path):
+    step = _text_step("Ledger")
+    definition = CascadeDefinition("ledger", steps=[step])
+    client = Mock()
+    client.create_response.return_value = {
+        **_response("resp_ledger", step.outputs[0], "hotovo"),
+        "model": MODEL,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    worker = _worker(definition, tmp_path)
+    results, errors = [], []
+    worker.finished_ok.connect(results.append)
+    worker.finished_err.connect(errors.append)
+
+    with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
+        worker.execute()
+
+    assert errors == []
+    assert results
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(tmp_path / "LOG" / "orchestration.sqlite3")
+    with repo.connect() as db:
+        work = db.execute(
+            "SELECT task_id,route,attempt_no FROM work_orders"
+        ).fetchall()
+        reservations = db.execute(
+            "SELECT state,provider_id FROM reservations"
+        ).fetchall()
+    assert work == [(step.id, "responses_live", 1)]
+    assert reservations == [("settled", "resp_ledger")]
