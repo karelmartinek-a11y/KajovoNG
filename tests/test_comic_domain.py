@@ -37,6 +37,20 @@ class WorkingClient:
     def _validate_resource_id(self, value):
         assert isinstance(value, str) and value
 
+    def list_models(self):
+        return [
+            {"id": "gpt-5.6-luna"},
+            {"id": "gpt-image-2.5-sunburst"},
+        ]
+
+    def count_input_tokens(self, payload):
+        from kajovo.core.context_compiler import content_hash
+
+        return {
+            "input_tokens": 100,
+            "request_hash": content_hash(payload),
+        }
+
     def upload_file(self, path, purpose):
         identifier = "file_" + str(len(self.files))
         self.files[identifier] = Path(path).read_bytes()
@@ -154,9 +168,22 @@ def test_bible_real_request_contract_and_saved_revision(comic):
     bible = service.store.get("bibles", service.store.get("projects", project)["bible_id"])
     assert client.responses[0]["text"]["format"]["strict"] is True
     assert client.responses[0]["background"] is True
-    assert bible["provenance"]["model"] == "gpt-6-astra"
+    assert bible["provenance"]["model"] == "gpt-5.6-luna"
+    assert bible["provenance"]["work_order_hash"]
     service.run(service.start_bible(project))
     assert len(service.store.rows("bibles")) == 2
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(Path(service.settings.log_dir) / "orchestration.sqlite3")
+    with repo.connect() as db:
+        routes = db.execute(
+            "SELECT route FROM work_orders ORDER BY rowid"
+        ).fetchall()
+        states = db.execute(
+            "SELECT state FROM reservations ORDER BY rowid"
+        ).fetchall()
+    assert ("responses_live",) in routes
+    assert ("settled",) in states
 
 
 @pytest.mark.parametrize("kind,count", [("character", 1), ("character", 3), ("environment", 1)])
@@ -168,6 +195,24 @@ def test_entity_generated_from_references(comic, tmp_path, kind, count):
     assert inspect_image(service.store.asset_path(revision["asset_id"]).read_bytes())["width"] == 1536
     assert len(service.store.references(project, entity)) == count * 2
     assert client.image_calls == 1
+    operation = service.store.rows(
+        "operations",
+        "project_id=? AND kind='entity'",
+        (project,),
+        order="created_at DESC",
+    )[0]
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(Path(service.settings.log_dir) / "orchestration.sqlite3")
+    with repo.connect() as db:
+        rows = db.execute(
+            "SELECT w.route,r.state FROM work_orders w "
+            "JOIN reservations r ON r.work_order_hash=w.work_order_hash "
+            "WHERE w.run_id=? ORDER BY w.rowid",
+            (operation["run_id"],),
+        ).fetchall()
+    assert ("responses_live", "settled") in rows
+    assert ("image_live", "settled") in rows
 
 
 @pytest.mark.parametrize("kinds", [[], ["character"], ["character", "character"], ["environment"], ["character", "environment"], ["character", "character", "environment"]])
@@ -222,6 +267,18 @@ def test_batch_partial_retry_and_resume(comic):
     operation = service.start_panels(project, panels)
     assert service.run(operation)["status"] == "batch_pending"
     assert client.submits == 1
+    operation_row = service.store.get("operations", operation)
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(Path(service.settings.log_dir) / "orchestration.sqlite3")
+    with repo.connect() as db:
+        rows = db.execute(
+            "SELECT w.route,r.state,r.provider_id FROM work_orders w "
+            "JOIN reservations r ON r.work_order_hash=w.work_order_hash "
+            "WHERE w.run_id=?",
+            (operation_row["run_id"],),
+        ).fetchall()
+    assert rows == [("image_batch", "submitted", "batch_1")]
     batch = next(iter(client.batches))
     client.fail_ids.add(client.batch_rows[batch][1]["custom_id"])
     client.complete(batch)
@@ -376,3 +433,195 @@ def test_change_normalized_reference_keeps_original_metadata_bytes(comic):
         assert 'private-note' not in result.info
         assert result.getpixel((0, 0)) == (10, 20, 30, 200)
     assert (len(client.responses), client.image_calls, client.submits) == before_calls
+
+
+
+def test_story_script_storyboard_continuity_materializes_once(comic, monkeypatch):
+    service, _client, project = comic
+
+    values = {
+        "story": {
+            "title": "Hotelový den",
+            "premise": "Jedna událost propojí celý hotel.",
+            "synopsis": "Postavy projdou jedním uzavřeným dějovým obloukem.",
+            "beats": [
+                {"id": "BEAT-1", "summary": "Začátek.", "purpose": "Expozice"},
+                {"id": "BEAT-2", "summary": "Rozuzlení.", "purpose": "Závěr"},
+            ],
+        },
+        "script": {
+            "scenes": [
+                {
+                    "id": "SCENE-1",
+                    "beat_id": "BEAT-1",
+                    "location": "Lobby",
+                    "time": "Ráno",
+                    "action": "Událost začne.",
+                    "dialogue": [],
+                    "entity_ids": [],
+                },
+                {
+                    "id": "SCENE-2",
+                    "beat_id": "BEAT-2",
+                    "location": "Lobby",
+                    "time": "Večer",
+                    "action": "Událost se uzavře.",
+                    "dialogue": [],
+                    "entity_ids": [],
+                },
+            ]
+        },
+        "storyboard": {
+            "panels": [
+                {
+                    "id": "PANEL-1",
+                    "scene_id": "SCENE-1",
+                    "position": 1,
+                    "shot": "Wide",
+                    "visual": "Lobby ráno.",
+                    "entity_ids": [],
+                    "dialogue": [],
+                    "caption": "Ráno.",
+                },
+                {
+                    "id": "PANEL-2",
+                    "scene_id": "SCENE-2",
+                    "position": 2,
+                    "shot": "Wide",
+                    "visual": "Lobby večer.",
+                    "entity_ids": [],
+                    "dialogue": [],
+                    "caption": "Večer.",
+                },
+            ]
+        },
+        "continuity": {
+            "status": "pass",
+            "issues": [],
+            "approved_panel_ids": ["PANEL-1", "PANEL-2"],
+        },
+    }
+
+    def fake_text_request(operation, instructions, schema, inputs, assets):
+        del instructions, schema, inputs, assets
+        return values[operation["kind"]], {
+            "model": "fixture",
+            "response_id": "fixture-" + operation["kind"],
+            "usage": {},
+            "run_id": operation["run_id"],
+        }
+
+    monkeypatch.setattr(service, "text_request", fake_text_request)
+
+    for kind, starter in (
+        ("story", service.start_story),
+        ("script", service.start_script),
+        ("storyboard", service.start_storyboard),
+        ("continuity", service.start_continuity),
+    ):
+        operation = starter(project)
+        assert service.run(operation)["status"] == "completed"
+        assert service.latest_document(project, kind)["result"] == values[kind]
+
+    docs = {
+        row["kind"]: row
+        for row in service.store.rows(
+            "comic_documents", "project_id=?", (project,), order="created_at"
+        )
+    }
+    assert docs["script"]["source_id"] == docs["story"]["id"]
+    assert docs["storyboard"]["source_id"] == docs["script"]["id"]
+    assert docs["continuity"]["source_id"] == docs["storyboard"]["id"]
+
+    first = service.materialize_storyboard(project)
+    second = service.materialize_storyboard(project)
+    assert first == second
+    assert len(first) == 2
+    assert len(
+        service.store.rows(
+            "panels", "project_id=? AND deleted=0", (project,)
+        )
+    ) == 2
+    assert all(
+        service.store.get("prompts", service.store.get("panels", panel)["prompt_id"])[
+            "document"
+        ]["nodes"][0]["type"]
+        == "text"
+        for panel in first
+    )
+
+
+def test_storyboard_materialization_requires_continuity_pass(comic, monkeypatch):
+    service, _client, project = comic
+    storyboard = {
+        "panels": [
+            {
+                "id": "PANEL-1",
+                "scene_id": "SCENE-1",
+                "position": 1,
+                "shot": "Wide",
+                "visual": "Scéna.",
+                "entity_ids": [],
+                "dialogue": [],
+                "caption": "",
+            }
+        ]
+    }
+    with service.store.transaction() as db:
+        story_id, script_id, storyboard_id, continuity_id = (
+            "a" * 32,
+            "b" * 32,
+            "c" * 32,
+            "d" * 32,
+        )
+        stamp = service.store.get("projects", project)["created_at"]
+        db.execute(
+            "INSERT INTO comic_documents VALUES(?,?,?,?,?,?,?,?)",
+            (story_id, project, "story", None, "{}", "{}", "{}", stamp),
+        )
+        db.execute(
+            "INSERT INTO comic_documents VALUES(?,?,?,?,?,?,?,?)",
+            (script_id, project, "script", story_id, "{}", "{}", "{}", stamp),
+        )
+        db.execute(
+            "INSERT INTO comic_documents VALUES(?,?,?,?,?,?,?,?)",
+            (
+                storyboard_id,
+                project,
+                "storyboard",
+                script_id,
+                "{}",
+                json.dumps(storyboard),
+                "{}",
+                stamp,
+            ),
+        )
+        db.execute(
+            "INSERT INTO comic_documents VALUES(?,?,?,?,?,?,?,?)",
+            (
+                continuity_id,
+                project,
+                "continuity",
+                storyboard_id,
+                "{}",
+                json.dumps(
+                    {
+                        "status": "needs_changes",
+                        "issues": [
+                            {
+                                "id": "ISSUE-1",
+                                "severity": "blocking",
+                                "scope": "PANEL-1",
+                                "description": "Chybí návaznost.",
+                                "resolution": "Opravit návaznost.",
+                            }
+                        ],
+                        "approved_panel_ids": [],
+                    }
+                ),
+                "{}",
+                stamp,
+            ),
+        )
+    with pytest.raises(ComicError, match="PASS"):
+        service.materialize_storyboard(project)

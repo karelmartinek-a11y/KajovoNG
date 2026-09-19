@@ -14,7 +14,7 @@ from ..delivery_preparation import (
 from ..generate_batch import build_manifest as build_batch_manifest
 from ..openai_client import OpenAIClient
 from ..progress import ProgressEvent
-from ..utils import ts_code
+from ..utils import safe_join_under_root, sha256_file, ts_code
 
 if TYPE_CHECKING:
     from .context import RunContext
@@ -44,6 +44,13 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
                 "Zápis pomocné evidence selhal: %s", evidence_error
             )
 
+        if self.cfg.stop_after_plan:
+            return {
+                "mode": "GENERATE", "plan": plan, "structure": struct,
+                "status": "plan_ready", "checkpoint": "plan_ready",
+                "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
+            }
+
         files_raw = struct.get("files", []) or []
         if not files_raw:
             raise ContractError("GENERATE ReRun: uložená struktura neobsahuje žádný výstupní soubor.")
@@ -56,13 +63,17 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
             if path in (self.cfg.skip_paths or []):
                 continue
             ext = os.path.splitext(path)[1].lower()
-            if f.get("kind") == "binary" or ext in auto_skip_image_exts:
+            if f.get("kind") != "text" or ext in auto_skip_image_exts:
                 skipped_a3_deliverables.append(
                     {
                         "path": path,
                         "purpose": f.get("purpose", ""),
                         "language": f.get("language", ""),
-                        "reason": "binární nebo automaticky negenerovaný typ výstupu",
+                        "reason": (
+                            "binární prostředek vyžaduje deklarovaný resource producer"
+                            if f.get("kind") == "binary_required"
+                            else "lokálně odvozený nebo automaticky negenerovaný typ výstupu"
+                        ),
                     }
                 )
                 self._log_debug(f"A3: skipping generated image extension {ext} ({path})")
@@ -91,32 +102,68 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
         input_files, input_images = self._build_input_attachments(client, self._input_file_ids())
         plan, struct, resp2_id = prepare_delivery(
             self, client, "GENERATE", base_prev_id, a1_text, input_files, input_images, self._fs_tools)
+        if self.cfg.stop_after_plan:
+            self.progress_event.emit(
+                ProgressEvent("A2Q" if self.cfg.maximum_quality else "A2", detail="Ověřená příprava je hotová; A3 nebylo spuštěno.")
+            )
+            return {
+                "mode": "GENERATE", "plan": plan, "structure": struct,
+                "status": "plan_ready", "checkpoint": "plan_ready",
+                "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
+            }
         if self.cfg.send_as_c:
-            selected = [f["path"] for f in struct["files"]
-                        if f["kind"] == "text" and os.path.splitext(f["path"])[1].lower() not in (self.cfg.skip_exts or [])
-                        and f["path"] not in (self.cfg.skip_paths or [])]
+            selected = [
+                f["path"]
+                for f in struct["spine"]["files"]
+                if f["kind"] == "text"
+                and f["action"] == "generate"
+                and os.path.splitext(f["path"])[1].lower() not in (self.cfg.skip_exts or [])
+                and f["path"] not in (self.cfg.skip_paths or [])
+            ]
             if selected:
+                expected_target_hashes = {}
+                for path in selected:
+                    target = safe_join_under_root(self.cfg.out_dir, path)
+                    expected_target_hashes[path] = (
+                        sha256_file(target) if os.path.isfile(target) else None
+                    )
                 manifest = build_batch_manifest(
-                    self.log.run_id, self.cfg.prompt, plan, struct, a3_model,
-                    self.cfg.temperature if self._model_caps(a3_model).get("supports_temperature", False) else None,
-                    selected, requirements=self._delivery_snapshot["requirements"],
-                    maximum_quality=self.cfg.maximum_quality, recovery_instruction=self.cfg.recovery_instruction)
+                    self.log.run_id,
+                    self.cfg.prompt,
+                    plan,
+                    struct,
+                    a3_model,
+                    (
+                        self.cfg.temperature
+                        if self._model_caps(a3_model).get("supports_temperature", False)
+                        else None
+                    ),
+                    selected,
+                    requirements=self._delivery_snapshot["requirements"],
+                    maximum_quality=self.cfg.maximum_quality,
+                    recovery_instruction=self.cfg.recovery_instruction,
+                    run_config=self.cfg,
+                    expected_target_hashes=expected_target_hashes,
+                )
                 return self._submit_generate_batch(client, manifest)
 
         try:
             self.log.save_json(
                 "manifests",
                 f"resume_structure_{ts_code()}",
-                {"resume_files": struct.get("files", []) or [], "resume_prev_id": resp2_id},
+                {
+                    "resume_files": list((struct.get("spine") or {}).get("files") or []),
+                    "resume_prev_id": resp2_id,
+                },
             )
         except Exception as evidence_error:
             logging.getLogger(__name__).warning(
                 "Zápis pomocné evidence selhal: %s", evidence_error
             )
 
-        files_raw = struct.get("files", []) or []
+        files_raw = list((struct.get("spine") or {}).get("files") or [])
         if not files_raw:
-            raise ContractError("GENERATE: A2_STRUCTURE neobsahuje žádný výstupní soubor.")
+            raise ContractError("GENERATE: IMPLEMENTATION_GRAPH_V3 neobsahuje žádný výstupní soubor.")
         for f in files_raw:
             self._check_stop()
             path = f.get("path")
@@ -125,7 +172,7 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
             if path in (self.cfg.skip_paths or []):
                 continue
             ext = os.path.splitext(path)[1].lower()
-            if f.get("kind") == "binary" or ext in auto_skip_image_exts:
+            if f.get("kind") != "text" or ext in auto_skip_image_exts:
                 skipped_a3_deliverables.append(
                     {
                         "path": path,
@@ -149,8 +196,18 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
                 continue
             files.append(f)
 
+    from ..context_compiler import ContextCompiler
+    compiler = ContextCompiler(self._delivery_snapshot)
+    wave_rank = {
+        path: wave_index
+        for wave_index, wave in enumerate(compiler.graph.get("waves") or [])
+        for path in wave
+    }
+    files.sort(key=lambda row: (wave_rank.get(row["path"], 10**9), row["path"]))
+    self._delivery_verified_artifacts = {}
+
     total_files = len(files)
-    base_a3_prev_id = str(resp2_id or "")
+    base_a3_prev_id = ""
     out_files: list[dict[str, Any]] = []
     for idx, f in enumerate(files, start=1):
         self._check_stop()

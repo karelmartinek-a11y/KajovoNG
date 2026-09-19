@@ -20,7 +20,7 @@ from kajovo.core.openai_transport import (
 
 def make_executor(tmp_path, count=1):
     definition = CascadeDefinition("unknown", steps=[
-        CascadeStep(model="gpt-5.2", input_text=f"Krok {index}")
+        CascadeStep(model="gpt-5.6-luna", input_text=f"Krok {index}")
         for index in range(count)
     ])
     return CascadeRunExecutor(

@@ -78,8 +78,15 @@ jobs:
             tests/test_attachments.py \
             tests/test_run_polling.py \
             tests/test_response_journal.py \
+            tests/test_context_compiler.py \
+            tests/test_model_catalog.py \
+            tests/test_workflows.py \
+            tests/test_contracts.py \
+            tests/test_orchestration_repository.py \
             tests/test_delivery_pipeline.py \
             tests/test_batch_completion.py \
+            tests/test_photo_studio.py \
+            tests/test_comic_domain.py \
             tests/test_cascade.py \
             tests/test_cascade_v2.py \
             tests/test_cascade_worker_adapter.py

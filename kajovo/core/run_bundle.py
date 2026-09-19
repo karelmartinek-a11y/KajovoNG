@@ -38,12 +38,15 @@ RUN_STATUSES = {
     "dry_run",
     "submission_unknown",
     "files_complete_unverified",
+    "completed_unverified",
+    "plan_ready",
+    "qfile_plan_ready",
     "closed",
     "corrupt_state",
     "unknown",
 }
 TERMINAL_STATUSES = {"completed", "partial", "failed", "cancelled", "stopped", "closed",
-                     "files_complete_unverified", "dry_run"}
+                     "files_complete_unverified", "completed_unverified", "dry_run", "plan_ready", "qfile_plan_ready"}
 ARTIFACT_BUCKETS = {"inputs", "intermediate", "outputs", "external"}
 
 
@@ -194,6 +197,7 @@ class RunRecord:
     output_summary: str = ""
     artifact_bundle_id: str = ""
     configuration_snapshot_hash: str = ""
+    run_scope_hash: str = ""
     run_bundle_hash: str = ""
     kind: str = "run"
     legacy: bool = False

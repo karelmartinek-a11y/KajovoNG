@@ -475,6 +475,12 @@ class RunDetailDialog(QDialog):
             "edit_branch": action("history.detail.edit", "Upravit zadání nové větve", lambda: self.branch("rerun", True)),
             "clone": action("history.detail.clone", "Klonovat jako nové zadání", self.clone),
             "complete_batch": action("history.detail.batch", "Převzít soubory", self.complete_batch, "primary"),
+            "publish_staged": action(
+                "history.detail.publish",
+                "Převzít neověřené",
+                self.publish_staged,
+                "primary",
+            ),
         }
         root.addWidget(actions(*self.branch_buttons.values()))
 
@@ -484,7 +490,7 @@ class RunDetailDialog(QDialog):
                                                             legacy=adapter.legacy)
             for name, button in self.branch_buttons.items():
                 apply_decision(button, decisions[name])
-                if name in {"clone", "complete_batch"} and not self.page:
+                if name in {"clone", "complete_batch", "publish_staged"} and not self.page:
                     button.setEnabled(False)
                     button.setToolTip("Tato akce vyžaduje otevření detailu z Historie aplikace.")
 
@@ -516,3 +522,9 @@ class RunDetailDialog(QDialog):
     def complete_batch(self):
         if self.page:
             self.page.complete_batch_source(self.adapter, self.state)
+
+    def publish_staged(self):
+        if self.page:
+            self.page.adapter = self.adapter
+            self.page._state = self.state
+            self.page.publish_staged()

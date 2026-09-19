@@ -1,154 +1,255 @@
-"""Převzetí BATCH bez opakování generování a bez ztráty místních změn."""
+"""BATCH V3 completion: no duplicate submit, no direct OUT mutation."""
+from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
-from unittest.mock import Mock
-
 import pytest
 
-from kajovo.core.batch_completion import (
-    complete_saved_batch, pending_batch_ids, read_state, local_batches, import_bundle,
+from change_v2_fixtures import (
+    batch_output_rows,
+    raw_jsonl,
+    run,
+    scenario,
 )
-from kajovo.core.config import AppSettings
+from kajovo.core.batch_completion import (
+    complete_saved_batch,
+    import_bundle,
+    local_batches,
+    pending_batch_ids,
+    read_state,
+)
 from kajovo.core.contracts import ContractError
-from test_generate_batch import manifest, outputs, raw
 
 
-def saved_run(tmp_path, generate=False):
-    run_dir = tmp_path / "LOG" / "RUN_110920261200_abcd"
-    run_dir.mkdir(parents=True)
-    state = {"run_id": run_dir.name, "project": "Můj projekt", "batch_id": "batch_work",
-             "status": "batch_pending", "out_dir": str(tmp_path / "out")}
-    if generate:
-        state["generate_batch"] = manifest()
-    save_state(run_dir, state)
-    return run_dir, state
+def prepared_run(tmp_path, mode="GENERATE"):
+    worker, client, _responder = scenario(
+        tmp_path, mode, batch=True, maximum_quality=False
+    )
+    results, errors = run(worker, client)
+    assert errors == []
+    assert results[0]["status"] == "batch_pending"
+    state = read_state(worker.log.paths.run_dir)
+    assert state["generate_batch"]["version"] == 3
+    return worker, client, state
 
 
-def save_state(run_dir, state):
-    (run_dir / "run_state.json").write_text(json.dumps(state), encoding="utf-8")
+def terminal_batch(state, *, status="completed", output=True):
+    value = {
+        "id": "batch_work",
+        "status": status,
+        "input_file_id": state.get("batch_input_file_id"),
+        "endpoint": "/v1/responses",
+        "created_at": 123,
+    }
+    if output:
+        value["output_file_id"] = "file_out"
+    return value
 
 
-def modify_output(run_dir, content="obsah"):
-    return raw([{"custom_id": run_dir.name + "_C1", "response": {"status_code": 200,
-                 "body": {"status": "completed", "output_text": json.dumps({
-                     "contract": "C_FILES_ALL", "root": "projekt",
-                     "files": [{"path": "hello.txt", "content": content}],
-                 })}}}])
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_completion_survives_restart_without_new_paid_calls(tmp_path, mode):
+    worker, client, state = prepared_run(tmp_path, mode)
+    manifest = state["generate_batch"]
+    client.retrieve_batch.return_value = terminal_batch(state)
+    client.file_content.return_value = raw_jsonl(batch_output_rows(manifest))
+    client.create_response.reset_mock()
+    client.create_batch.reset_mock()
+    client.upload_file.reset_mock()
 
-
-@pytest.mark.parametrize("generate", [False, True])
-def test_completion_survives_restart_without_paid_calls(tmp_path, generate):
-    run_dir, state = saved_run(tmp_path, generate)
-    client = Mock()
-    client.retrieve_batch.return_value = {"id": "batch_work", "status": "completed",
-                                           "created_at": 123, "output_file_id": "file_out"}
-    client.file_content.return_value = raw(outputs(state["generate_batch"])) if generate else modify_output(run_dir)
-    result = complete_saved_batch(client, run_dir, "batch_work", AppSettings())
+    result = complete_saved_batch(
+        client,
+        worker.log.paths.run_dir,
+        "batch_work",
+        worker.settings,
+    )
     assert result["status"] == "files_complete_unverified"
-    restored = read_state(run_dir)
+    assert result["written"] == []
+    restored = read_state(worker.log.paths.run_dir)
     assert pending_batch_ids(restored) == []
     assert restored["batch_records"]["batch_work"]["created_at"] == 123
-    again = complete_saved_batch(client, run_dir, "batch_work", AppSettings())
-    assert again["status"] == "files_complete_unverified"
-    target = Path(state["out_dir"]) / ("maths.py" if generate else "projekt/hello.txt")
-    target.write_text("ruční změna", encoding="utf-8")
-    failed = complete_saved_batch(client, run_dir, "batch_work", AppSettings())
-    assert failed["status"] == "partial"
-    assert target.read_text(encoding="utf-8") == "ruční změna"
-    assert pending_batch_ids(read_state(run_dir)) == ["batch_work"]
+    assert not (Path(worker.cfg.out_dir) / "hello.txt").exists()
+    staged = (
+        Path(worker.log.paths.run_dir)
+        / result["staged_files"][0]["staged_path"]
+    )
+    assert staged.read_text(encoding="utf-8") == "content:hello.txt\n"
     client.create_response.assert_not_called()
     client.create_batch.assert_not_called()
     client.upload_file.assert_not_called()
 
 
-def test_import_archives_from_out_and_seals_after_evidence(tmp_path):
-    from kajovo.core.run_bundle import RunBundle
-    run_dir, state = saved_run(tmp_path, True)
-    bundle = RunBundle(run_dir, run_dir.name, create=True)
-    client = Mock()
-    client.retrieve_batch.return_value = {"id": "batch_work", "status": "completed", "output_file_id": "file_out"}
-    client.file_content.return_value = raw(outputs(state["generate_batch"]))
-    result = complete_saved_batch(client, run_dir, "batch_work", AppSettings())
-    artifacts = [r for r in bundle.artifacts() if r["role"] == "batch_output"]
-    assert len(artifacts) == len(result["written"])
-    assert all(Path(r["original_path"]).is_relative_to(Path(state["out_dir"])) for r in artifacts)
-    assert bundle.verify_integrity()["valid"]
+def test_import_archives_staging_not_out_and_keeps_bundle_open_for_publish(tmp_path):
+    worker, client, state = prepared_run(tmp_path)
+    client.retrieve_batch.return_value = terminal_batch(state)
+    client.file_content.return_value = raw_jsonl(
+        batch_output_rows(state["generate_batch"])
+    )
+    result = complete_saved_batch(
+        client,
+        worker.log.paths.run_dir,
+        "batch_work",
+        worker.settings,
+    )
+    bundle = worker.log.bundle
+    staged_artifacts = [
+        row for row in bundle.artifacts() if row["role"] == "staged_output"
+    ]
+    assert len(staged_artifacts) == len(result["staged_files"])
+    assert all(
+        Path(row["original_path"]).is_relative_to(
+            Path(worker.log.paths.run_dir)
+        )
+        for row in staged_artifacts
+    )
+    assert not list(Path(worker.cfg.out_dir).glob("**/*")) if Path(worker.cfg.out_dir).exists() else True
+    integrity = bundle.verify_integrity()
+    assert integrity["status"] == "unsealed"
+    assert not integrity["valid"]
+    assert bundle.run_record()["status"] == "files_complete_unverified"
 
 
-@pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
+@pytest.mark.parametrize(
+    "status", ["validating", "in_progress", "finalizing", "cancelling"]
+)
 def test_running_batch_is_normal_wait_without_writes(tmp_path, status):
-    run_dir, state = saved_run(tmp_path, True)
-    before = (run_dir / "run_state.json").read_bytes()
-    client = Mock()
-    client.retrieve_batch.return_value = {"status": status}
-    result = complete_saved_batch(client, run_dir, "batch_work", AppSettings())
+    worker, client, _state = prepared_run(tmp_path)
+    before = Path(worker.log.state_path).read_bytes()
+    client.retrieve_batch.return_value = {
+        "id": "batch_work",
+        "status": status,
+    }
+    result = complete_saved_batch(
+        client,
+        worker.log.paths.run_dir,
+        "batch_work",
+        worker.settings,
+    )
     assert result["status"] == "batch_pending"
     assert "později" in result["detail"]
-    assert (run_dir / "run_state.json").read_bytes() == before
-    assert not Path(state["out_dir"]).exists()
+    # Remote polling may update Run Bundle evidence but not workflow run_state.
+    assert Path(worker.log.state_path).read_bytes() == before
     client.file_content.assert_not_called()
 
 
-@pytest.mark.parametrize("generate", [False, True])
 @pytest.mark.parametrize("status", ["completed", "failed", "expired", "cancelled"])
-def test_terminal_batch_without_files_is_partial(tmp_path, generate, status):
-    run_dir, _ = saved_run(tmp_path, generate)
-    client = Mock()
-    client.retrieve_batch.return_value = {"status": status}
-    result = complete_saved_batch(client, run_dir, "batch_work", AppSettings())
+def test_terminal_batch_without_result_files_is_partial(tmp_path, status):
+    worker, client, state = prepared_run(tmp_path)
+    client.retrieve_batch.return_value = terminal_batch(
+        state, status=status, output=False
+    )
+    result = complete_saved_batch(
+        client,
+        worker.log.paths.run_dir,
+        "batch_work",
+        worker.settings,
+    )
     assert result["status"] == "partial"
-    assert pending_batch_ids(read_state(run_dir)) == ["batch_work"]
+    assert pending_batch_ids(read_state(worker.log.paths.run_dir)) == [
+        "batch_work"
+    ]
 
 
-def test_completion_preserves_state_when_download_fails(tmp_path):
-    run_dir, _ = saved_run(tmp_path)
-    before = (run_dir / "run_state.json").read_bytes()
-    client = Mock()
-    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "expired_file"}
+def test_completion_preserves_workflow_state_when_download_fails(tmp_path):
+    worker, client, state = prepared_run(tmp_path)
+    before = Path(worker.log.state_path).read_bytes()
+    client.retrieve_batch.return_value = terminal_batch(state)
     client.file_content.side_effect = RuntimeError("Výstup již není dostupný")
     with pytest.raises(RuntimeError):
-        complete_saved_batch(client, run_dir, "batch_work", AppSettings())
-    assert (run_dir / "run_state.json").read_bytes() == before
+        complete_saved_batch(
+            client,
+            worker.log.paths.run_dir,
+            "batch_work",
+            worker.settings,
+        )
+    assert Path(worker.log.state_path).read_bytes() == before
     with pytest.raises(ContractError):
-        complete_saved_batch(client, run_dir, "batch_other", AppSettings())
+        complete_saved_batch(
+            client,
+            worker.log.paths.run_dir,
+            "batch_other",
+            worker.settings,
+        )
 
 
-def test_generate_repair_remains_pending_after_original_import(tmp_path):
-    run_dir, state = saved_run(tmp_path, True)
-    state["generate_batches"] = {"batch_repair": manifest()}
-    save_state(run_dir, state)
-    client = Mock()
-    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_out"}
-    client.file_content.return_value = raw(outputs(manifest()))
-    result = complete_saved_batch(client, run_dir, "batch_work", AppSettings())
+def test_second_known_batch_remains_pending_after_first_import(tmp_path):
+    worker, client, state = prepared_run(tmp_path)
+    second = copy.deepcopy(state["generate_batch"])
+    state["generate_batches"] = {"batch_second": second}
+    Path(worker.log.state_path).write_text(
+        json.dumps(state, ensure_ascii=False), encoding="utf-8"
+    )
+
+    client.retrieve_batch.return_value = terminal_batch(state)
+    client.file_content.return_value = raw_jsonl(
+        batch_output_rows(state["generate_batch"])
+    )
+    result = complete_saved_batch(
+        client,
+        worker.log.paths.run_dir,
+        "batch_work",
+        worker.settings,
+    )
     assert result["status"] == "batch_pending"
-    assert pending_batch_ids(read_state(run_dir)) == ["batch_repair"]
-    complete_saved_batch(client, run_dir, "batch_repair", AppSettings())
-    assert pending_batch_ids(read_state(run_dir)) == []
-    assert local_batches(tmp_path / "LOG")["batch_repair"]["run_id"] == run_dir.name
+    assert pending_batch_ids(read_state(worker.log.paths.run_dir)) == [
+        "batch_second"
+    ]
+
+    client.retrieve_batch.return_value = {
+        **terminal_batch(state),
+        "id": "batch_second",
+    }
+    complete_saved_batch(
+        client,
+        worker.log.paths.run_dir,
+        "batch_second",
+        worker.settings,
+    )
+    assert pending_batch_ids(read_state(worker.log.paths.run_dir)) == []
+    assert (
+        local_batches(Path(worker.settings.log_dir))["batch_second"]["run_id"]
+        == worker.log.run_id
+    )
+
+
+def test_duplicate_or_unrelated_v3_result_ids_block_before_staging(tmp_path):
+    worker, client, state = prepared_run(tmp_path)
+    rows = batch_output_rows(state["generate_batch"])
+    for bad_rows in (
+        [rows[0], copy.deepcopy(rows[0])],
+        [{**rows[0], "custom_id": "foreign"}],
+    ):
+        client.retrieve_batch.return_value = terminal_batch(state)
+        client.file_content.return_value = raw_jsonl(bad_rows)
+        with pytest.raises(ContractError):
+            complete_saved_batch(
+                client,
+                worker.log.paths.run_dir,
+                "batch_work",
+                worker.settings,
+            )
+        staging = Path(worker.log.paths.run_dir) / "staging" / "batch"
+        assert not staging.exists() or not any(staging.glob("**/*.txt"))
 
 
 @pytest.mark.parametrize("bad", [b"[]", b"invalid", b"", b"null"])
-def test_malformed_bundle_never_reports_success(tmp_path, bad):
+def test_malformed_legacy_bundle_never_reports_success(tmp_path, bad):
     result = import_bundle(bad, str(tmp_path))
     assert result["status"] == "partial"
     assert not result["written"]
 
 
-def test_modify_rejects_duplicate_and_unrelated_ids_before_writing(tmp_path):
-    run_dir, state = saved_run(tmp_path)
-    valid = json.loads(modify_output(run_dir))
-    for rows in ([valid, valid], [dict(valid, custom_id="other")]):
-        client = Mock()
-        client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_out"}
-        client.file_content.return_value = raw(rows)
-        with pytest.raises(ContractError):
-            complete_saved_batch(client, run_dir, "batch_work", AppSettings())
-        assert not Path(state["out_dir"]).exists()
-
-
 def test_corrupt_history_record_is_skipped(tmp_path):
-    run_dir, _ = saved_run(tmp_path)
-    save_state(run_dir, {"batch_id": "batch_work", "generate_batches": []})
-    assert local_batches(tmp_path / "LOG") == {}
+    root = tmp_path / "LOG"
+    run_dir = root / "RUN_110920261200_abcd"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_state.json").write_text(
+        json.dumps(
+            {
+                "batch_id": "batch_work",
+                "generate_batches": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert local_batches(root) == {}

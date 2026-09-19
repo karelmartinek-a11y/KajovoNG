@@ -54,6 +54,14 @@ class ActionAvailabilityPolicy:
         nonterminal = status in {
             "created", "preparing", "running", "response_pending", "stopped", "cancelled"
         }
+        staged = state.get("staged_files") if isinstance(state.get("staged_files"), list) else []
+        publishable_staged = bool(
+            staged
+            and not state.get("dry_run")
+            and not state.get("published_files")
+            and status in {"files_complete_unverified", "partial"}
+            and status != "submission_unknown"
+        )
 
         if mode not in DIRECT_MODES:
             direct_reason = "Tento typ běhu používá vlastní doménovou akci a nemá přímý Run Studio launcher."
@@ -90,6 +98,19 @@ class ActionAvailabilityPolicy:
                 ("Běh nemá přesně uložený ui_state." if not exact_ui
                  else "Běh nemá reusable ArtifactRecord." if not any(row.get("reusable") for row in artifacts or [])
                  else "Ověří hash a otevře explicitní clone variantu."),
+            ),
+            "publish_staged": ActionDecision(
+                publishable_staged,
+                (
+                    "Dry-run nesmí publikovat OUT."
+                    if state.get("dry_run")
+                    else "Běh nemá nepřevzaté staged artefakty."
+                    if not staged or state.get("published_files")
+                    else "Výstup není ve stavu, který lze explicitně převzít."
+                    if status not in {"files_complete_unverified", "partial"}
+                    else "Výslovně převezme neověřené staged artefakty po nové kontrole target hashů."
+                ),
+                bool(staged) and not state.get("dry_run"),
             ),
             "complete_batch": ActionDecision(
                 bool(remote_completed),

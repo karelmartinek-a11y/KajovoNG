@@ -11,14 +11,27 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable
 
 from .batch_submit import exact_batch_matches
 from .comic_types import IMAGE_MODEL, ComicError
 from .image_runtime import inspect_image
+from .orchestration.contracts import canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.image_slots import image_policy
+from .orchestration.repository import OrchestrationRepository
+from .orchestration.run_config import (
+    DEFAULT_MAX_COST_MICROUSD,
+    DEFAULT_MAX_INPUT_TOKENS,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_PAID_REQUESTS,
+    build_run_config_v2,
+)
+from .orchestration.work_order import freeze_order
 from .model_registry import model_spec, models_for_usage
+from .photo_prompt import manual_photo_plan
+from .context_pricing import VERSION as PRICING_VERSION, observed_image_cost
 from .utils import atomic_write_text
 
 IMAGE_EDIT_ENDPOINT = "/v1/images/edits"
@@ -39,6 +52,9 @@ class PhotoBatchItem:
     output_width: int = 0
     output_height: int = 0
     output_format_detected: str = ""
+    technical_validation: str = "pending"
+    content_acceptance: str = "unverified"
+    content_acceptance_note: str = ""
     error_message: str = ""
 
 
@@ -62,6 +78,8 @@ class PhotoBatchJob:
     size: str
     output_format: str
     output_dir: str
+    photo_plan: dict = field(default_factory=dict)
+    photo_plan_sha256: str = ""
     input_file_id: str = ""
     batch_id: str = ""
     output_file_id: str = ""
@@ -313,6 +331,33 @@ class ImageEditBatchAdapter:
         )
 
 
+def copy_photo_plan(value, final_prompt: str) -> dict:
+    if not isinstance(value, dict) or value.get("version") != 1:
+        raise ValueError("PHOTO_PLAN_V1 má neplatnou verzi.")
+    required = {
+        "version",
+        "professional_prompt",
+        "edit_actions",
+        "preserve_invariants",
+        "acceptance_criteria",
+    }
+    if set(value) != required:
+        raise ValueError("PHOTO_PLAN_V1 má neplatná pole.")
+    if str(value["professional_prompt"]).strip() != final_prompt.strip():
+        raise ValueError("PHOTO_PLAN_V1 neodpovídá finálnímu promptu.")
+    for key in ("edit_actions", "preserve_invariants", "acceptance_criteria"):
+        rows = value[key]
+        if not isinstance(rows, list) or any(
+            not isinstance(item, str) or not item.strip() for item in rows
+        ):
+            raise ValueError(f"PHOTO_PLAN_V1.{key} musí být seznam neprázdných textů.")
+    if not value["edit_actions"] or not value["acceptance_criteria"]:
+        raise ValueError("PHOTO_PLAN_V1 vyžaduje edit_actions a acceptance_criteria.")
+    return json.loads(
+        json.dumps(value, ensure_ascii=False, sort_keys=True)
+    )
+
+
 def new_job(
     *,
     source_paths,
@@ -328,6 +373,7 @@ def new_job(
     size,
     output_format,
     output_dir,
+    photo_plan=None,
 ):
     prompt = final_prompt.strip()
     if not prompt:
@@ -337,10 +383,19 @@ def new_job(
     validate_image_edit_parameters(image_model, quality, size, output_format)
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
+    plan = copy_photo_plan(photo_plan or manual_photo_plan(prompt), prompt)
+    plan_hash = hashlib.sha256(
+        json.dumps(
+            plan,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     stamp = _now()
     items = make_items(source_paths)
     return PhotoBatchJob(
-        1,
+        2,
         "photojob_" + uuid.uuid4().hex,
         stamp,
         stamp,
@@ -358,6 +413,8 @@ def new_job(
         size,
         output_format,
         str(output),
+        photo_plan=plan,
+        photo_plan_sha256=plan_hash,
         request_total=len(items),
         items=items,
     )
@@ -387,10 +444,223 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             data["items"] = [PhotoBatchItem(**item) for item in data.get("items", [])]
+            if not data.get("photo_plan"):
+                data["photo_plan"] = manual_photo_plan(data.get("final_prompt", ""))
+            if not data.get("photo_plan_sha256"):
+                data["photo_plan_sha256"] = hashlib.sha256(
+                    json.dumps(
+                        data["photo_plan"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
             jobs.append(PhotoBatchJob(**data))
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             continue
     return jobs
+
+
+def _photo_cfg(job):
+    return SimpleNamespace(
+        mode="PHOTO",
+        model=job.image_model,
+        send_as_c=True,
+        maximum_quality=job.quality in {"xhigh", "max"},
+        max_cost_microusd=DEFAULT_MAX_COST_MICROUSD,
+        max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+        max_paid_requests=DEFAULT_MAX_PAID_REQUESTS,
+        unknown_pricing="explicit_token_budget",
+        auto_repair="off",
+        verification_profile_ids=[],
+        stop_after_plan=False,
+        dry_run=False,
+        execution_approval_id=f"user-start:{job.job_id}",
+        project="Photo Studio",
+        prompt=job.final_prompt,
+        in_dir="",
+        out_dir=job.output_dir,
+        attached_file_ids=[],
+        input_file_ids=[],
+        attached_vector_store_ids=[],
+        qfile_output_path="",
+        qfile_output_format="",
+        qfile_suggest_path=False,
+        qa_continue_conversation=False,
+        response_id="",
+    )
+
+
+def _photo_repo(log_dir):
+    return OrchestrationRepository(Path(log_dir) / "orchestration.sqlite3")
+
+
+def _photo_work_order(job, rows):
+    cfg = _photo_cfg(job)
+    projection = {
+        "photo_plan_sha256": job.photo_plan_sha256,
+        "items": [
+            {
+                "custom_id": row["custom_id"],
+                "body_sha256": canonical_sha256(row["body"]),
+            }
+            for row in rows
+        ],
+        "source_sha256": [
+            item.source_sha256 for item in job.items
+        ],
+    }
+    order = freeze_order(
+        cfg,
+        {
+            "run_id": job.job_id,
+            "step_id": "PHOTO_BATCH_SUBMIT",
+            "task_id": "PHOTO_BATCH_SUBMIT",
+            "stage": "PHOTO",
+            "route": "image_batch",
+            "target_id": job.job_id,
+            "target_path": None,
+            "expected_target_hash": None,
+            "contract_name": "PHOTO_BATCH_V1",
+            "schema": {
+                "endpoint": IMAGE_EDIT_ENDPOINT,
+                "row_count": len(rows),
+                "photo_plan_sha256": job.photo_plan_sha256,
+            },
+            "prompt": job.final_prompt,
+            "model": job.image_model,
+            "model_capability": model_spec(job.image_model),
+            "source_snapshot": projection,
+            "attempt_no": 1,
+            "approval_id": cfg.execution_approval_id,
+        },
+        projection,
+    )
+    return cfg, order, projection
+
+
+def _reserve_photo_submit(job, rows, log_dir):
+    cfg, order, projection = _photo_work_order(job, rows)
+    repo = _photo_repo(log_dir)
+    run_config = build_run_config_v2(cfg)
+    repo.register_run(
+        job.job_id,
+        lineage_id=job.job_id,
+        scope_hash=canonical_sha256(
+            {
+                "run_config_v2": run_config,
+                "photo_plan_sha256": job.photo_plan_sha256,
+                "sources": [item.source_sha256 for item in job.items],
+                "output_dir": job.output_dir,
+            }
+        ),
+        policy_hash=canonical_sha256(run_config),
+        config=run_config,
+        approval_id=order.approval_id,
+        status="running",
+    )
+    repo.register_work_order(
+        order,
+        body_ref=canonical_sha256(rows),
+        input_hash=order.input_projection_hash,
+    )
+    repo.reserve(
+        reservation_id=order.budget_reservation_id,
+        work_order_hash=order.order_hash,
+        cost_microusd=None,
+        input_limit=0,
+        output_limit=0,
+        max_cost_microusd=cfg.max_cost_microusd,
+        max_input_tokens=cfg.max_input_tokens,
+        max_output_tokens=cfg.max_output_tokens,
+        max_paid_requests=cfg.max_paid_requests,
+    )
+    root = save_job(job, log_dir)
+    atomic_write_text(
+        str(root / "work_order_v2.json"),
+        json.dumps(
+            {**order.to_dict(), "order_hash": order.order_hash},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+    )
+    return repo, order
+
+
+def _photo_ledger_present(job, log_dir):
+    return (
+        Path(log_dir)
+        / "PHOTO"
+        / job.job_id
+        / "work_order_v2.json"
+    ).is_file()
+
+
+def _mark_photo_submission(job, rows, log_dir, provider_id=None, *, unknown):
+    if not _photo_ledger_present(job, log_dir):
+        return
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    _photo_repo(log_dir).mark_submitted(
+        order.budget_reservation_id,
+        provider_id,
+        unknown=unknown,
+    )
+
+
+def _release_photo_reservation(job, rows, log_dir):
+    if not _photo_ledger_present(job, log_dir):
+        return
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    _photo_repo(log_dir).release(order.budget_reservation_id)
+
+
+def _settle_photo_usage(job, custom_id, usage, log_dir):
+    if (
+        not job.batch_id
+        or not isinstance(usage, dict)
+        or not usage
+        or not _photo_ledger_present(job, log_dir)
+    ):
+        return
+    rows = [
+        image_edit_row(
+            item,
+            model=job.image_model,
+            prompt=job.final_prompt,
+            quality=job.quality,
+            size=job.size,
+            output_format=job.output_format,
+        )
+        for item in job.items
+    ]
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    observed = observed_image_cost(job.image_model, usage, batch=True)
+    actual = (
+        round(float(observed["usd"]) * 1_000_000)
+        if isinstance(observed, dict)
+        and isinstance(observed.get("usd"), (int, float))
+        else None
+    )
+    _photo_repo(log_dir).settle(
+        order.budget_reservation_id,
+        provider="openai-image",
+        provider_item_id=f"{job.batch_id}:{custom_id}",
+        usage=usage,
+        actual_cost_microusd=actual,
+        price_snapshot_hash=canonical_sha256(
+            {
+                "pricing_version": (
+                    observed.get("pricing_version")
+                    if isinstance(observed, dict)
+                    else PRICING_VERSION
+                ),
+                "model": job.image_model,
+                "batch": True,
+            }
+        ),
+    )
 
 
 def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
@@ -440,12 +710,40 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
     client._validate_resource_id(job.input_file_id)
     save_job(job, log_dir)
 
+    _reserve_photo_submit(job, rows, log_dir)
     report("Odesílám pracovní Image Edit BATCH.", 92)
     job.status = "submission_unknown"
     save_job(job, log_dir)
-    submitted = ImageEditBatchAdapter(client).submit(job.input_file_id, rows)
+    try:
+        submitted = ImageEditBatchAdapter(client).submit(job.input_file_id, rows)
+    except Exception as exc:
+        definite_reject = (
+            getattr(exc, "request_sent", None) is False
+            or getattr(exc, "status_code", None)
+            in {400, 401, 403, 404, 422, 429}
+        )
+        if definite_reject:
+            _release_photo_reservation(job, rows, log_dir)
+            job.status = "failed"
+        else:
+            _mark_photo_submission(
+                job, rows, log_dir, None, unknown=True
+            )
+            job.status = "submission_unknown"
+        save_job(job, log_dir)
+        raise
     apply_batch_status(job, submitted)
+    if not job.batch_id:
+        _mark_photo_submission(job, rows, log_dir, None, unknown=True)
+        job.status = "submission_unknown"
+        save_job(job, log_dir)
+        raise ValueError(
+            "Image Edit BATCH nemá potvrzené provider ID; nový submit je zablokován."
+        )
     client._validate_resource_id(job.batch_id)
+    _mark_photo_submission(
+        job, rows, log_dir, job.batch_id, unknown=False
+    )
     save_job(job, log_dir)
     report(f"BATCH vytvořen: {job.batch_id}", 100)
     return job
@@ -485,6 +783,21 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
         apply_batch_status(job, matches[0])
         if not job.batch_id:
             raise ValueError("Dohledaná dávka nemá platné batch_id.")
+        if job.schema_version >= 2 and _photo_ledger_present(job, log_dir):
+            rows = [
+                image_edit_row(
+                    item,
+                    model=job.image_model,
+                    prompt=job.final_prompt,
+                    quality=job.quality,
+                    size=job.size,
+                    output_format=job.output_format,
+                )
+                for item in job.items
+            ]
+            _mark_photo_submission(
+                job, rows, log_dir, job.batch_id, unknown=False
+            )
     apply_batch_status(job, client.retrieve_batch(job.batch_id))
     save_job(job, log_dir)
     return job
@@ -523,6 +836,28 @@ def _jsonl(data: bytes, name: str) -> list[dict]:
     return rows
 
 
+
+def mark_content_acceptance(
+    job: PhotoBatchJob,
+    item_id: str,
+    acceptance: str,
+    log_dir: str | Path,
+    note: str = "",
+) -> PhotoBatchJob:
+    """Explicit human/model acceptance; never inferred from valid image bytes."""
+    if acceptance not in {"accepted", "rejected", "unverified"}:
+        raise ValueError("Content acceptance musí být accepted, rejected nebo unverified.")
+    item = next((row for row in job.items if row.item_id == item_id), None)
+    if item is None:
+        raise ValueError("Fotografie nepatří do tohoto Photo Jobu.")
+    if item.technical_validation != "passed" or not item.output_path:
+        raise ValueError("Obsah lze posoudit až po úspěšné technické validaci výsledku.")
+    item.content_acceptance = acceptance
+    item.content_acceptance_note = str(note or "").strip()
+    save_job(job, log_dir)
+    return job
+
+
 def download_results(client, job, log_dir, reporter=None, progress=None):
     refresh_job(client, job, log_dir)
     if job.status != "completed" or not (job.output_file_id or job.error_file_id):
@@ -545,6 +880,13 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             item = by_id[cid]
             response = row.get("response") or {}
             body = response.get("body") or {}
+            if job.schema_version >= 2 and isinstance(body, dict):
+                _settle_photo_usage(
+                    job,
+                    cid,
+                    body.get("usage") or {},
+                    log_dir,
+                )
             if row.get("error") or int(response.get("status_code") or 200) >= 400:
                 item.status = "failed"
                 item.error_message = json.dumps(
@@ -561,6 +903,7 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
                 image_info = inspect_photo_bytes(binary, job.output_format, model=job.image_model)
             except (ValueError, TypeError) as exc:
                 item.status = "failed"
+                item.technical_validation = "failed"
                 item.error_message = str(exc)
                 continue
             ext = "jpg" if job.output_format == "jpeg" else job.output_format
@@ -581,6 +924,9 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             item.output_width = int(image_info["width"])
             item.output_height = int(image_info["height"])
             item.output_format_detected = str(image_info["format"])
+            item.technical_validation = "passed"
+            item.content_acceptance = "unverified"
+            item.content_acceptance_note = ""
             item.status = "downloaded"
             item.error_message = ""
             if reporter:

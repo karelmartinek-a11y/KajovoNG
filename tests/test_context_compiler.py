@@ -259,6 +259,7 @@ def test_manifest_versions_and_file_context_integrity():
 def test_legacy_is_read_only_not_reinterpreted(tmp_path, version):
     from unittest.mock import Mock
     from test_generate_batch import manifest
+    from kajovo.core.contracts import file_response_format
     from kajovo.core.generate_batch import digest, encode_requests, repeat_saved_batch
     old = manifest()
     old["version"] = version
@@ -266,7 +267,13 @@ def test_legacy_is_read_only_not_reinterpreted(tmp_path, version):
     old["snapshot_hash"] = digest(old["snapshot"])
     for row in old["requests"]:
         context = json.loads(row["body"]["input"])
-        row["body"]["input"] = json.dumps({"specification": old["snapshot"], "file": context["file"]})
+        target = context["file"]
+        row["body"]["input"] = json.dumps(
+            {"specification": old["snapshot"], "file": target}
+        )
+        row["body"]["text"] = file_response_format(
+            "A3_FILE", target["path"], 0
+        )
     before = deepcopy(old)
     assert encode_requests(old)
     assert old == before
@@ -282,10 +289,12 @@ def test_empty_file_is_rejected_without_losing_other_output(tmp_path):
     from kajovo.core.generate_batch import import_results
     source = manifest()
     rows = outputs(source)
+    for row in rows:
+        row["response"]["body"]["output_text"] = json.dumps(
+            {"content": "content\n"}
+        )
     output = rows[0]["response"]["body"]
-    value = json.loads(output["output_text"])
-    value["content"] = ""
-    output["output_text"] = json.dumps(value)
+    output["output_text"] = json.dumps({"content": ""})
     result = import_results(source, [raw(rows)], str(tmp_path))
     assert result["errors"] and result["status"] == "partial"
     assert not (tmp_path / "maths.py").exists()

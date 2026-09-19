@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {"type": "integer", "enum": [2]},
+    "target_id": {"type": "string"},
+    "target_hash": {"type": "string"},
+    "profile_id": {"type": "string"},
+    "profile_hash": {"type": "string"},
+    "result": {"type": "string", "enum": ["passed", "failed", "unsupported", "needs_human"]},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "criterion_id": {"type": "string"},
+          "kind": {"type": "string", "enum": ["deterministic", "model_review", "human"]},
+          "status": {"type": "string", "enum": ["passed", "failed", "skipped", "unsupported", "uncertain"]},
+          "evidence_hashes": {"type": "array", "items": {"type": "string"}},
+          "detail": {"type": "string"}
+        },
+        "required": ["id", "criterion_id", "kind", "status", "evidence_hashes", "detail"],
+        "additionalProperties": false
+      }
+    },
+    "runner": {
+      "type": "object",
+      "properties": {
+        "image_digest": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "platform": {"type": "string"},
+        "started_at": {"type": "string"},
+        "finished_at": {"type": "string"}
+      },
+      "required": ["image_digest", "platform", "started_at", "finished_at"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["version", "target_id", "target_hash", "profile_id", "profile_hash", "result", "checks", "runner"],
+  "additionalProperties": false
+}

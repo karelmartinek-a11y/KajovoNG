@@ -19,7 +19,18 @@ from kajovo.core.cascade_types import (
 from kajovo.core.config import AppSettings
 from kajovo.core.run_bundle import LegacyRunAdapter
 
-MODEL = "gpt-5.2"
+MODEL = "gpt-5.6-luna"
+
+
+def _client():
+    client = Mock()
+    from kajovo.core.context_compiler import content_hash
+
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 128,
+        "request_hash": content_hash(payload),
+    }
+    return client
 
 
 def _text_step(title, *, context="Kontext 1", output_id=None):
@@ -40,10 +51,12 @@ def _response(response_id, output, value):
     return {
         "id": response_id,
         "status": "completed",
+        "model": MODEL,
         "output_text": json.dumps(
             {output_machine_key(output): value},
             ensure_ascii=False,
         ),
+        "usage": {"input_tokens": 128, "output_tokens": 32},
     }
 
 
@@ -54,6 +67,10 @@ def _worker(definition, tmp_path):
         settings,
         "test",
     )
+
+
+def _run_dir(tmp_path):
+    return next(path for path in (tmp_path / "LOG").iterdir() if path.is_dir())
 
 
 def test_forward_decision_target_is_allowed_in_draft_but_not_at_run():
@@ -84,11 +101,11 @@ def test_forward_decision_target_is_allowed_in_draft_but_not_at_run():
         validate_cascade_definition(definition, strict=True)
 
 
-def test_same_context_uses_previous_response_id_automatically(tmp_path):
+def test_same_context_does_not_imply_conversation_dependency(tmp_path):
     first = _text_step("První", context="Společný")
     second = _text_step("Druhý", context="Společný")
     definition = CascadeDefinition("test", steps=[first, second])
-    client = Mock()
+    client = _client()
     client.create_response.side_effect = [
         _response("resp_1", first.outputs[0], "A"),
         _response("resp_2", second.outputs[0], "B"),
@@ -106,6 +123,30 @@ def test_same_context_uses_previous_response_id_automatically(tmp_path):
     first_payload = client.create_response.call_args_list[0].args[0]
     second_payload = client.create_response.call_args_list[1].args[0]
     assert "previous_response_id" not in first_payload
+    assert "previous_response_id" not in second_payload
+
+
+def test_explicit_conversation_dependency_uses_previous_response_id(tmp_path):
+    first = _text_step("První", context="Společný")
+    second = _text_step("Druhý", context="Společný")
+    second.use_conversation_context = True
+    definition = CascadeDefinition("test", steps=[first, second])
+    client = _client()
+    client.create_response.side_effect = [
+        _response("resp_1", first.outputs[0], "A"),
+        _response("resp_2", second.outputs[0], "B"),
+    ]
+    worker = _worker(definition, tmp_path)
+    results, errors = [], []
+    worker.finished_ok.connect(results.append)
+    worker.finished_err.connect(errors.append)
+
+    with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
+        worker.execute()
+
+    assert not errors
+    assert results
+    second_payload = client.create_response.call_args_list[1].args[0]
     assert second_payload["previous_response_id"] == "resp_1"
 
 
@@ -113,7 +154,7 @@ def test_new_cascade_records_steps_and_explicit_safe_checkpoints(tmp_path):
     first = _text_step("První", context="Společný")
     second = _text_step("Druhý", context="Společný")
     definition = CascadeDefinition("evidence", steps=[first, second])
-    client = Mock()
+    client = _client()
     client.create_response.side_effect = [
         _response("resp_1", first.outputs[0], "A"),
         _response("resp_2", second.outputs[0], "B"),
@@ -121,7 +162,7 @@ def test_new_cascade_records_steps_and_explicit_safe_checkpoints(tmp_path):
     worker = _worker(definition, tmp_path)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
         worker.execute()
-    run_dir = next((tmp_path / "LOG").iterdir())
+    run_dir = _run_dir(tmp_path)
     adapter = LegacyRunAdapter(run_dir)
     assert [(row["stage"], row["status"]) for row in adapter.steps()] == [
         (first.id, "completed"), (second.id, "completed")
@@ -140,13 +181,13 @@ def test_cascade_safe_checkpoint_archives_required_local_input(tmp_path):
     step = _text_step("Lokální vstup")
     step.inputs.append(CascadeInput(name="Zdroj", source="local_file", value=str(local_input)))
     definition = CascadeDefinition("evidence", steps=[step])
-    client = Mock()
+    client = _client()
     client.upload_file.return_value = {"id": "file_uploaded"}
     client.create_response.return_value = _response("resp_1", step.outputs[0], "A")
     worker = _worker(definition, tmp_path)
     with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
         worker.execute()
-    adapter = LegacyRunAdapter(next((tmp_path / "LOG").iterdir()))
+    adapter = LegacyRunAdapter(_run_dir(tmp_path))
     inputs = [row for row in adapter.artifacts() if row.get("kind") == "cascade_input"]
     assert len(inputs) == 1
     checkpoint = adapter.checkpoints()[0]
@@ -158,7 +199,7 @@ def test_cascade_safe_checkpoint_archives_required_local_input(tmp_path):
 def test_cascade_repair_instruction_is_only_in_new_step_request(tmp_path):
     step = _text_step("Oprava")
     definition = CascadeDefinition("repair", steps=[step])
-    client = Mock()
+    client = _client()
     client.create_response.return_value = _response("resp_new", step.outputs[0], "hotovo")
     settings = AppSettings(log_dir=str(tmp_path / "LOG"))
     worker = CascadeRunExecutor(
@@ -176,7 +217,7 @@ def test_new_context_does_not_inherit_previous_response_id(tmp_path):
     first = _text_step("První", context="A")
     second = _text_step("Druhý", context="B")
     definition = CascadeDefinition("test", steps=[first, second])
-    client = Mock()
+    client = _client()
     client.create_response.side_effect = [
         _response("resp_1", first.outputs[0], "A"),
         _response("resp_2", second.outputs[0], "B"),
@@ -214,7 +255,7 @@ def test_decision_routes_to_future_step_and_skips_other_branch(tmp_path):
     definition = CascadeDefinition("test", steps=[first, second, third])
     validate_cascade_definition(definition, strict=True)
 
-    client = Mock()
+    client = _client()
     client.create_response.side_effect = [
         _response("resp_1", decision, "dobrý"),
         _response("resp_3", third.outputs[0], "hotovo"),
@@ -236,7 +277,7 @@ def test_decision_routes_to_future_step_and_skips_other_branch(tmp_path):
 def test_step_contract_failure_retries_exactly_three_times(tmp_path):
     step = _text_step("Retry")
     definition = CascadeDefinition("test", steps=[step])
-    client = Mock()
+    client = _client()
     client.create_response.side_effect = [
         {"id": f"resp_{index}", "status": "completed", "output_text": '{"wrong":"value"}'}
         for index in range(1, 4)
@@ -271,9 +312,10 @@ def test_output_input_reference_must_exist_and_be_previous():
 def test_resume_from_step_reuses_only_previous_context_lineage(tmp_path):
     first = _text_step("První", context="Společný")
     second = _text_step("Druhý", context="Společný")
+    second.use_conversation_context = True
     definition = CascadeDefinition("resume-test", steps=[first, second])
 
-    first_client = Mock()
+    first_client = _client()
     first_client.create_response.side_effect = [
         _response("resp_old_1", first.outputs[0], "A"),
         _response("resp_old_2", second.outputs[0], "B"),
@@ -287,7 +329,7 @@ def test_resume_from_step_reuses_only_previous_context_lineage(tmp_path):
 
     resumed = CascadeDefinition.from_dict(definition.to_dict())
     resumed.run_from_step_id = second.id
-    second_client = Mock()
+    second_client = _client()
     second_client.create_response.return_value = _response(
         "resp_new_2", resumed.steps[1].outputs[0], "B2"
     )
@@ -306,9 +348,10 @@ def test_resume_from_step_reuses_only_previous_context_lineage(tmp_path):
 def test_resume_is_blocked_when_a_previous_step_changed(tmp_path):
     first = _text_step("První", context="Společný")
     second = _text_step("Druhý", context="Společný")
+    second.use_conversation_context = True
     definition = CascadeDefinition("resume-signature", steps=[first, second])
 
-    client = Mock()
+    client = _client()
     client.create_response.side_effect = [
         _response("resp_1", first.outputs[0], "A"),
         _response("resp_2", second.outputs[0], "B"),
@@ -320,7 +363,7 @@ def test_resume_is_blocked_when_a_previous_step_changed(tmp_path):
     changed = CascadeDefinition.from_dict(definition.to_dict())
     changed.steps[0].input_text = "Změněné zadání prvního kroku"
     changed.run_from_step_id = changed.steps[1].id
-    blocked_client = Mock()
+    blocked_client = _client()
     blocked_worker = _worker(changed, tmp_path)
     errors = []
     blocked_worker.finished_err.connect(errors.append)
@@ -329,3 +372,37 @@ def test_resume_is_blocked_when_a_previous_step_changed(tmp_path):
 
     assert errors
     blocked_client.create_response.assert_not_called()
+
+
+
+def test_cascade_paid_step_is_reserved_and_settled_in_shared_ledger(tmp_path):
+    step = _text_step("Ledger")
+    definition = CascadeDefinition("ledger", steps=[step])
+    client = _client()
+    client.create_response.return_value = {
+        **_response("resp_ledger", step.outputs[0], "hotovo"),
+        "model": MODEL,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    worker = _worker(definition, tmp_path)
+    results, errors = [], []
+    worker.finished_ok.connect(results.append)
+    worker.finished_err.connect(errors.append)
+
+    with patch("kajovo.core.cascade_pipeline.OpenAIClient", return_value=client):
+        worker.execute()
+
+    assert errors == []
+    assert results
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(tmp_path / "LOG" / "orchestration.sqlite3")
+    with repo.connect() as db:
+        work = db.execute(
+            "SELECT task_id,route,attempt_no FROM work_orders"
+        ).fetchall()
+        reservations = db.execute(
+            "SELECT state,provider_id FROM reservations"
+        ).fetchall()
+    assert work == [(step.id, "responses_live", 1)]
+    assert reservations == [("settled", "resp_ledger")]

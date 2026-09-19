@@ -50,6 +50,10 @@ CREATE TABLE prompts(id TEXT PRIMARY KEY, panel_id TEXT NOT NULL REFERENCES pane
  document TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE bindings(prompt_id TEXT NOT NULL REFERENCES prompts(id), entity_id TEXT NOT NULL REFERENCES entities(id),
  PRIMARY KEY(prompt_id,entity_id));
+CREATE TABLE comic_documents(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+ kind TEXT NOT NULL CHECK(kind IN ('story','script','storyboard','continuity')),
+ source_id TEXT REFERENCES comic_documents(id), input TEXT NOT NULL, result TEXT NOT NULL,
+ provenance TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE operations(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
  kind TEXT NOT NULL, target_id TEXT, status TEXT NOT NULL, snapshot TEXT NOT NULL, error TEXT NOT NULL DEFAULT '{}',
  run_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -69,6 +73,7 @@ CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT REFERE
  operation TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX panels_order ON panels(project_id,deleted,position);
 CREATE INDEX operations_pending ON operations(status);
+CREATE INDEX comic_documents_project_kind ON comic_documents(project_id,kind,created_at);
 CREATE INDEX entities_project ON entities(project_id,kind,archived);
 CREATE INDEX batch_items_panel ON batch_items(panel_id,status);
 CREATE INDEX batch_items_batch ON batch_items(batch_id,status);
@@ -88,7 +93,15 @@ THEN RAISE(ABORT,'Neplatna verze panelu') END; END;
 """
 
 JSON_FIELDS = {"style", "metadata", "input", "result", "provenance", "document", "format", "overlays", "snapshot", "error", "payload", "data"}
-TABLES = {"projects", "assets", "bibles", "entities", "entity_revisions", "panels", "prompts", "operations", "batches", "batch_items", "panel_versions", "events"}
+TABLES = {"projects", "assets", "bibles", "entities", "entity_revisions", "panels", "prompts", "comic_documents", "operations", "batches", "batch_items", "panel_versions", "events"}
+
+MIGRATION_V2 = """
+CREATE TABLE comic_documents(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+ kind TEXT NOT NULL CHECK(kind IN ('story','script','storyboard','continuity')),
+ source_id TEXT REFERENCES comic_documents(id), input TEXT NOT NULL, result TEXT NOT NULL,
+ provenance TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX comic_documents_project_kind ON comic_documents(project_id,kind,created_at);
+"""
 
 
 def decoded(row):
@@ -107,13 +120,28 @@ class ComicStore:
         self.root.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise ComicError("unsupported_database", "Knihovna vyžaduje jinou verzi aplikace.")
             if version == 0:
                 existing = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
                 if existing:
                     raise ComicError("unsupported_database", "Existující neznámou databázi nelze přepsat.")
-                db.executescript("BEGIN IMMEDIATE;" + SCHEMA + "PRAGMA user_version=1; INSERT INTO migrations VALUES(1,datetime('now')); COMMIT;")
+                db.executescript(
+                    "BEGIN IMMEDIATE;"
+                    + SCHEMA
+                    + "PRAGMA user_version=2;"
+                    + "INSERT INTO migrations VALUES(1,datetime('now'));"
+                    + "INSERT INTO migrations VALUES(2,datetime('now'));"
+                    + "COMMIT;"
+                )
+            elif version == 1:
+                db.executescript(
+                    "BEGIN IMMEDIATE;"
+                    + MIGRATION_V2
+                    + "PRAGMA user_version=2;"
+                    + "INSERT INTO migrations VALUES(2,datetime('now'));"
+                    + "COMMIT;"
+                )
 
     @contextmanager
     def connect(self):

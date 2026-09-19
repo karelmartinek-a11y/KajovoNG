@@ -54,6 +54,30 @@ class UiRunConfig:
     # Aktuální katalog modelů z API; při jeho předání se vyžaduje povolení v pevné matici.
     available_models: list[str] | None = None
     maximum_quality: bool = False
+
+    # Kanonický per-run RUN_CONFIG_V2. Tyto hodnoty nejsou globální
+    # nastavení a musí být součástí persistence, checkpointů a run-scope hash.
+    stop_after_plan: bool = False
+    dry_run: bool = False
+    max_cost_microusd: int | None = 25_000_000
+    max_input_tokens: int = 2_000_000
+    max_output_tokens: int = 500_000
+    max_paid_requests: int = 200
+    unknown_pricing: str = "block"
+    auto_repair: str = "off"
+    verification_profile_ids: list[str] | None = None
+    # Runtime autorizace vzniká až po zmrazení SourcePacku; není uživatelským
+    # vstupem, ale musí mít stabilní typované místo pro WorkOrdery.
+    execution_approval_id: str = ""
+
+    # QFILE: cesta je důvěryhodný lokální vstup. Pokud chybí, plánovací
+    # request je povolen pouze při explicitním qfile_suggest_path=True.
+    qfile_output_path: str = ""
+    qfile_output_format: str = "txt"
+    qfile_suggest_path: bool = False
+    qfile_plan: dict[str, Any] | None = None
+    qa_continue_conversation: bool = False
+
     preparation_snapshot: dict[str, Any] | None = None
     completed_hashes: dict[str, str] | None = None
     # Explicitní pokyn opravné větve. Používá se výhradně v nově

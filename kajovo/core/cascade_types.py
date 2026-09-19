@@ -184,6 +184,7 @@ class CascadeStep:
     instructions: str = ""
     input_text: str = ""
     context_id: str = "Kontext 1"
+    use_conversation_context: bool = False
     deterministic: bool = False
     inputs: List[CascadeInput] = field(default_factory=list)
     outputs: List[CascadeOutput] = field(default_factory=list)
@@ -240,6 +241,7 @@ class CascadeStep:
             "instructions": self.instructions,
             "input_text": self.input_text,
             "context_id": self.context_id,
+            "use_conversation_context": self.use_conversation_context,
             "deterministic": self.deterministic,
             "inputs": [item.to_dict() for item in self.inputs],
             "outputs": [item.to_dict() for item in self.outputs],
@@ -278,8 +280,9 @@ class CascadeStep:
                 not isinstance(item, str) or not item.strip() for item in value
             ):
                 raise ValueError(f"{key} musí být seznam neprázdných textů.")
-        if "deterministic" in data and not isinstance(data["deterministic"], bool):
-            raise ValueError("deterministic musí být boolean.")
+        for flag in ("deterministic", "use_conversation_context"):
+            if flag in data and not isinstance(data[flag], bool):
+                raise ValueError(f"{flag} musí být boolean.")
         inputs_raw = data.get("inputs", [])
         outputs_raw = data.get("outputs", [])
         if not isinstance(inputs_raw, list) or any(not isinstance(row, dict) for row in inputs_raw):
@@ -318,6 +321,7 @@ class CascadeStep:
             instructions=str(data.get("instructions") or ""),
             input_text=str(data.get("input_text") or ""),
             context_id=str(data.get("context_id") or "Kontext 1").strip(),
+            use_conversation_context=bool(data.get("use_conversation_context", False)),
             deterministic=bool(data.get("deterministic", bool("outputs" in data or "inputs" in data))),
             inputs=[CascadeInput.from_dict(row) for row in inputs_raw],
             outputs=[CascadeOutput.from_dict(row) for row in outputs_raw],

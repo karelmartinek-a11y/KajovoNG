@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from kajovo.core import photo_batch
-from kajovo.core.photo_prompt import professionalize_prompt
+from kajovo.core.photo_prompt import manual_photo_plan, professionalize_prompt
 from kajovo.core.photo_templates import PhotoTemplateStore
 from .components import DetailDialog, Form, PathInput, action, actions, caption, confirm, scroll, vertical
 from .resources import ValueDialog
@@ -298,7 +298,17 @@ class PhotosPage(QWidget):
             self.professional = value
             self.prompt.setPlainText(value.professional_prompt)
 
-        self.execute("Vylepšení zadání fotografie", lambda client, task: professionalize_prompt(client, model, prompt, task.logline.emit), receive)
+        self.execute(
+            "Vylepšení zadání fotografie",
+            lambda client, task: professionalize_prompt(
+                client,
+                model,
+                prompt,
+                self.context.settings.log_dir,
+                task.logline.emit,
+            ),
+            receive,
+        )
 
     def restore_prompt(self):
         if self.professional:
@@ -322,7 +332,9 @@ class PhotosPage(QWidget):
                        template_id=self.template.currentData() or "", prompt_model=self.professional.model if self.professional else "",
                        prompt_response_id=self.professional.response_id if self.professional else "",
                        image_model=model, quality=self.quality.currentData(), size=self.size.currentData() or self.size.currentText().strip(),
-                       output_format=self.format.currentData(), output_dir=output)
+                       output_format=self.format.currentData(), output_dir=output,
+                       photo_plan=(self.professional.photo_plan if self.professional
+                                   else manual_photo_plan(prompt)))
 
         def submit(client, task):
             job = photo_batch.new_job(**options)

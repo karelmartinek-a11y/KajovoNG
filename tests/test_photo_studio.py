@@ -17,6 +17,7 @@ from kajovo.core.photo_batch import (
     image_edit_model_ids,
     image_edit_row,
     new_job,
+    prepare_and_submit,
     refresh_job,
     validate_image_edit_rows,
 )
@@ -57,21 +58,50 @@ def test_professionalize_payload_is_real_responses_work_not_preflight():
     assert payload["model"] == "gpt-5.6-luna"
     assert payload["store"] is False
     assert "instructions" in payload
-    assert "professional_prompt" in payload["text"]["format"]["schema"]["properties"]
+    assert payload["text"]["format"]["name"] == "PHOTO_PLAN_V1"
+    assert set(payload["text"]["format"]["schema"]["properties"]) == {
+        "professional_prompt",
+        "edit_actions",
+        "preserve_invariants",
+        "acceptance_criteria",
+    }
     assert "USER_PROMPT" in payload["input"]
 
 
-def test_professionalize_replaces_only_after_valid_response():
+def test_professionalize_replaces_only_after_valid_response(tmp_path):
     client = Mock()
+    from kajovo.core.context_compiler import content_hash
+
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 100,
+        "request_hash": content_hash(payload),
+    }
     client.create_response.return_value = {
         "id": "resp_photo",
         "status": "completed",
-        "output_text": json.dumps({"professional_prompt": "Correct verticals and preserve the real room."}),
+        "model": "gpt-5.6-luna",
+        "output_text": json.dumps(
+            {
+                "professional_prompt": "Correct verticals and preserve the real room.",
+                "edit_actions": ["Correct verticals."],
+                "preserve_invariants": ["Preserve the real room."],
+                "acceptance_criteria": ["Verticals are corrected without unrelated changes."],
+            }
+        ),
+        "usage": {"input_tokens": 100, "output_tokens": 30},
     }
-    result = professionalize_prompt(client, "gpt-5.6-luna", "srovnej stěny")
+    result = professionalize_prompt(
+        client,
+        "gpt-5.6-luna",
+        "srovnej stěny",
+        tmp_path / "LOG",
+    )
     assert result.original_prompt == "srovnej stěny"
     assert result.professional_prompt.startswith("Correct verticals")
+    assert result.photo_plan["version"] == 1
+    assert result.photo_plan["acceptance_criteria"]
     client.create_response.assert_called_once()
+    assert list((tmp_path / "LOG").glob("RUN_PHOTO_PROMPT_*/bundle.json"))
 
 
 def _image_model():
@@ -301,3 +331,102 @@ def test_photo_studio_is_real_main_navigation_page(qtbot, tmp_path):
     assert isinstance(window.pages["photos"], PhotosPage)
     window.select_page("photos")
     assert window.stack.widget(window.stack.currentIndex()).widget() is window.pages["photos"]
+
+
+
+def test_photo_batch_submit_creates_shared_work_order_and_reservation(tmp_path):
+    source = tmp_path / "room.jpg"
+    source.write_bytes(_image_bytes("JPEG"))
+    log_dir = tmp_path / "LOG"
+    job = new_job(
+        source_paths=[str(source)],
+        human_prompt="Preserve reality.",
+        professional_prompt="",
+        final_prompt="Preserve reality.",
+        prompt_source="manual",
+        template_id="",
+        prompt_model="",
+        prompt_response_id="",
+        image_model=_image_model(),
+        quality="high",
+        size="auto",
+        output_format="png",
+        output_dir=str(tmp_path / "out"),
+    )
+    client = Mock()
+    uploads = iter([{"id": "file_source"}, {"id": "file_batch"}])
+    client.upload_file.side_effect = lambda *args, **kwargs: next(uploads)
+    client._validate_resource_id.return_value = None
+    client._req.return_value = {
+        "id": "batch_photo",
+        "status": "validating",
+        "input_file_id": "file_batch",
+        "endpoint": "/v1/images/edits",
+        "request_counts": {"total": 1, "completed": 0, "failed": 0},
+    }
+
+    prepare_and_submit(client, job, log_dir)
+
+    root = log_dir / "PHOTO" / job.job_id
+    assert (root / "work_order_v2.json").is_file()
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(log_dir / "orchestration.sqlite3")
+    with repo.connect() as db:
+        work = db.execute(
+            "SELECT route,task_id FROM work_orders WHERE run_id=?",
+            (job.job_id,),
+        ).fetchall()
+        reservation = db.execute(
+            "SELECT state,provider_id FROM reservations"
+        ).fetchall()
+    assert work == [("image_batch", "PHOTO_BATCH_SUBMIT")]
+    assert reservation == [("submitted", "batch_photo")]
+    assert client._req.call_count == 1
+
+
+def test_photo_batch_uncertain_submit_is_not_reposted(tmp_path):
+    source = tmp_path / "room.jpg"
+    source.write_bytes(_image_bytes("JPEG"))
+    log_dir = tmp_path / "LOG"
+    job = new_job(
+        source_paths=[str(source)],
+        human_prompt="Preserve reality.",
+        professional_prompt="",
+        final_prompt="Preserve reality.",
+        prompt_source="manual",
+        template_id="",
+        prompt_model="",
+        prompt_response_id="",
+        image_model=_image_model(),
+        quality="high",
+        size="auto",
+        output_format="png",
+        output_dir=str(tmp_path / "out"),
+    )
+    client = Mock()
+    uploads = iter([{"id": "file_source"}, {"id": "file_batch"}])
+    client.upload_file.side_effect = lambda *args, **kwargs: next(uploads)
+    client._validate_resource_id.return_value = None
+    client._req.side_effect = TimeoutError("lost response")
+
+    with pytest.raises(TimeoutError):
+        prepare_and_submit(client, job, log_dir)
+    assert job.status == "submission_unknown"
+    assert client._req.call_count == 1
+
+    # Recovery checks the exact Files input + endpoint and never POSTs again.
+    client._req.side_effect = None
+    client.list_batches.return_value = [
+        {
+            "id": "batch_recovered",
+            "input_file_id": job.input_file_id,
+            "endpoint": "/v1/images/edits",
+            "status": "in_progress",
+            "request_counts": {"total": 1, "completed": 0, "failed": 0},
+        }
+    ]
+    client.retrieve_batch.return_value = client.list_batches.return_value[0]
+    refresh_job(client, job, log_dir)
+    assert job.batch_id == "batch_recovered"
+    assert client._req.call_count == 1

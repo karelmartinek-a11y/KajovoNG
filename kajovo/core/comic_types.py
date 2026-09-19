@@ -7,7 +7,7 @@ import math
 import re
 from dataclasses import dataclass
 
-from .structured_output import obj
+from .structured_output import array, obj
 
 IMAGE_MODEL = "gpt-image-2.5-sunburst-2026-09-08"
 TEXT_MODEL = "gpt-6-astra"
@@ -19,6 +19,58 @@ BIBLE_FIELDS = (
 )
 BIBLE_SCHEMA = obj({name: {"type": "string"} for name in BIBLE_FIELDS})
 DESCRIPTOR_SCHEMA = obj({"descriptor": {"type": "string"}})
+
+_COMIC_TEXT = {"type": "string"}
+_COMIC_STRINGS = array(_COMIC_TEXT)
+_DIALOGUE_SCHEMA = obj({
+    "speaker": _COMIC_TEXT,
+    "text": _COMIC_TEXT,
+})
+STORY_SCHEMA = obj({
+    "title": _COMIC_TEXT,
+    "premise": _COMIC_TEXT,
+    "synopsis": _COMIC_TEXT,
+    "beats": array(obj({
+        "id": _COMIC_TEXT,
+        "summary": _COMIC_TEXT,
+        "purpose": _COMIC_TEXT,
+    })),
+})
+SCRIPT_SCHEMA = obj({
+    "scenes": array(obj({
+        "id": _COMIC_TEXT,
+        "beat_id": _COMIC_TEXT,
+        "location": _COMIC_TEXT,
+        "time": _COMIC_TEXT,
+        "action": _COMIC_TEXT,
+        "dialogue": array(_DIALOGUE_SCHEMA),
+        "entity_ids": _COMIC_STRINGS,
+    })),
+})
+STORYBOARD_SCHEMA = obj({
+    "panels": array(obj({
+        "id": _COMIC_TEXT,
+        "scene_id": _COMIC_TEXT,
+        "position": {"type": "integer"},
+        "shot": _COMIC_TEXT,
+        "visual": _COMIC_TEXT,
+        "entity_ids": _COMIC_STRINGS,
+        "dialogue": array(_DIALOGUE_SCHEMA),
+        "caption": _COMIC_TEXT,
+    })),
+})
+CONTINUITY_SCHEMA = obj({
+    "status": {"type": "string", "enum": ["pass", "needs_changes"]},
+    "issues": array(obj({
+        "id": _COMIC_TEXT,
+        "severity": {"type": "string", "enum": ["blocking", "major", "minor"]},
+        "scope": _COMIC_TEXT,
+        "description": _COMIC_TEXT,
+        "resolution": _COMIC_TEXT,
+    })),
+    "approved_panel_ids": _COMIC_STRINGS,
+})
+
 DEFAULT_STYLE = {
     "description": "", "line": "standardní", "color": "barevná", "palette": [],
     "palette_description": "", "balloon": "dialogová", "sfx": False,
@@ -159,4 +211,118 @@ def validate_overlays(value, sfx=True):
                 raise ComicError("invalid_overlay", "Pozice a velikosti musí ležet uvnitř panelu.")
         if layer["w"] <= 0 or layer["h"] <= 0 or layer["font_size"] <= 0 or layer["x"] + layer["w"] > 1.001 or layer["y"] + layer["h"] > 1.001:
             raise ComicError("invalid_overlay", "Textový prvek přesahuje panel.")
+    return copy.deepcopy(value)
+
+
+
+def validate_story(value):
+    from jsonschema import validate
+
+    validate(value, STORY_SCHEMA)
+    for key in ("title", "premise", "synopsis"):
+        checked_text(value[key], key, 30000, True)
+    beats = value["beats"]
+    if not beats:
+        raise ComicError("invalid_output", "Příběh musí obsahovat alespoň jeden beat.")
+    ids = [row["id"] for row in beats]
+    if any(not item.strip() for item in ids) or len(ids) != len(set(ids)):
+        raise ComicError("invalid_output", "Story beat ID musí být jedinečná a neprázdná.")
+    for row in beats:
+        checked_text(row["summary"], "Story beat", 12000, True)
+        checked_text(row["purpose"], "Účel beatu", 4000, True)
+    return copy.deepcopy(value)
+
+
+def validate_script(value, story):
+    from jsonschema import validate
+
+    validate(value, SCRIPT_SCHEMA)
+    beat_ids = {row["id"] for row in story["beats"]}
+    scenes = value["scenes"]
+    if not scenes:
+        raise ComicError("invalid_output", "Scénář musí obsahovat alespoň jednu scénu.")
+    scene_ids = [row["id"] for row in scenes]
+    if any(not item.strip() for item in scene_ids) or len(scene_ids) != len(set(scene_ids)):
+        raise ComicError("invalid_output", "Scene ID musí být jedinečná a neprázdná.")
+    used_beats = set()
+    for scene in scenes:
+        if scene["beat_id"] not in beat_ids:
+            raise ComicError("invalid_output", "Scéna odkazuje na neznámý story beat.")
+        used_beats.add(scene["beat_id"])
+        for key in ("location", "time", "action"):
+            checked_text(scene[key], f"Scéna {key}", 20000, True)
+        for line in scene["dialogue"]:
+            checked_text(line["speaker"], "Mluvčí", 200, True)
+            checked_text(line["text"], "Dialog", 5000, True)
+    if used_beats != beat_ids:
+        raise ComicError(
+            "invalid_output",
+            "Scénář musí pokrýt všechny story beaty alespoň jednou.",
+        )
+    return copy.deepcopy(value)
+
+
+def validate_storyboard(value, script, entity_ids):
+    from jsonschema import validate
+
+    validate(value, STORYBOARD_SCHEMA)
+    scene_ids = {row["id"] for row in script["scenes"]}
+    panels = value["panels"]
+    if not panels:
+        raise ComicError("invalid_output", "Storyboard musí obsahovat alespoň jeden panel.")
+    ids = [row["id"] for row in panels]
+    if any(not item.strip() for item in ids) or len(ids) != len(set(ids)):
+        raise ComicError("invalid_output", "Storyboard panel ID musí být jedinečná a neprázdná.")
+    positions = sorted(row["position"] for row in panels)
+    if positions != list(range(1, len(panels) + 1)):
+        raise ComicError(
+            "invalid_output",
+            "Storyboard pozice musí tvořit souvislou řadu od 1.",
+        )
+    used_scenes = set()
+    known_entities = set(entity_ids)
+    for panel in panels:
+        if panel["scene_id"] not in scene_ids:
+            raise ComicError("invalid_output", "Storyboard panel odkazuje na neznámou scénu.")
+        used_scenes.add(panel["scene_id"])
+        if not set(panel["entity_ids"]) <= known_entities:
+            raise ComicError("invalid_output", "Storyboard panel odkazuje na neznámou entitu.")
+        checked_text(panel["shot"], "Typ záběru", 2000, True)
+        checked_text(panel["visual"], "Vizuální obsah panelu", 12000, True)
+        checked_text(panel["caption"], "Titulek", 5000)
+        for line in panel["dialogue"]:
+            checked_text(line["speaker"], "Mluvčí", 200, True)
+            checked_text(line["text"], "Dialog", 5000, True)
+    if used_scenes != scene_ids:
+        raise ComicError(
+            "invalid_output",
+            "Storyboard musí pokrýt všechny scénáře alespoň jedním panelem.",
+        )
+    return copy.deepcopy(value)
+
+
+def validate_continuity(value, storyboard):
+    from jsonschema import validate
+
+    validate(value, CONTINUITY_SCHEMA)
+    panel_ids = {row["id"] for row in storyboard["panels"]}
+    if not set(value["approved_panel_ids"]) <= panel_ids:
+        raise ComicError("invalid_output", "Continuity odkazuje na neznámý storyboard panel.")
+    blocking = [row for row in value["issues"] if row["severity"] == "blocking"]
+    if value["status"] == "pass":
+        if blocking or set(value["approved_panel_ids"]) != panel_ids:
+            raise ComicError(
+                "invalid_output",
+                "Continuity PASS vyžaduje všechny panely schválené a bez blocking nálezu.",
+            )
+    elif not value["issues"]:
+        raise ComicError(
+            "invalid_output",
+            "Continuity needs_changes musí obsahovat alespoň jeden konkrétní nález.",
+        )
+    for issue in value["issues"]:
+        checked_text(issue["id"], "Continuity issue ID", 200, True)
+        checked_text(issue["scope"], "Continuity scope", 1000, True)
+        checked_text(issue["description"], "Continuity popis", 8000, True)
+        checked_text(issue["resolution"], "Continuity oprava", 8000, True)
     return copy.deepcopy(value)

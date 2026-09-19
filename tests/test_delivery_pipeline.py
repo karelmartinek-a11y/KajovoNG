@@ -1,440 +1,360 @@
-"""Offline průchody dodání souborů a obnovy analytických checkpointů."""
+"""CHANGE/V2 production workflow regression tests.
 
-from copy import deepcopy
-import json
+These tests intentionally verify the current product contract:
+strict typed preparation -> V3 graph -> FILE_CONTENT_V1 -> immutable staging
+-> explicit publication. Legacy A2/A3 chunk payloads are tested only by legacy
+adapters elsewhere and must not define new-run behavior.
+"""
+from __future__ import annotations
+
 import hashlib
+import json
 from pathlib import Path
-from unittest.mock import Mock, patch
-
 import pytest
 
-from delivery_fixtures import delivery_payloads, implementation_fixture
-from kajovo.core.requirements import CORE_INSTRUCTIONS, validate_traceability
-from kajovo.core.generate_batch import import_results
-from test_workflows import make_worker, response
+from change_v2_fixtures import (
+    _file_input_json,
+    batch_output_rows,
+    default_files,
+    format_names,
+    make_client,
+    raw_jsonl,
+    run,
+    scenario,
+    staged_path,
+)
+from kajovo.core.generate_batch import process_saved_batch
+from kajovo.core.orchestration.errors import OrchestrationError
+from kajovo.core.orchestration.publish import publish_staged_run
 
 
-def _scenario(tmp_path, mode, batch, maximum_quality):
-    worker = make_worker(tmp_path, mode)
-    worker.cfg.send_as_c = batch
-    worker.cfg.maximum_quality = maximum_quality
-    files = [{"path": "hello.txt", "action": "modify"}] if mode == "MODIFY" else None
-    if mode == "MODIFY":
-        source = tmp_path / "in"
-        source.mkdir(parents=True)
-        (source / "hello.txt").write_text("Původní obsah.\n", encoding="utf-8")
-        (source / "keep.txt").write_text("Zachovaný obsah.\n", encoding="utf-8")
-        worker.cfg.in_dir = str(source)
-    requirements, plan, structure = delivery_payloads(mode, files)
-    canonical = deepcopy(structure)
-    key = "files" if mode == "GENERATE" else "touched_files"
-    if maximum_quality:
-        canonical[key][0]["behavior"] = "KANONICKÁ OPRAVA MQ: úplný výstup včetně zotavení."
-    preparation = [requirements, plan, structure]
-    if maximum_quality:
-        preparation.append(canonical)
-    prefix = "A" if mode == "GENERATE" else "B"
-    file = {
-        "contract": prefix + "3_FILE", "path": "hello.txt", "content": "Nový úplný obsah.\n",
-        "chunking": {"chunk_index": 0, "chunk_count": 1, "has_more": False, "next_chunk_index": None},
-    }
-    if mode == "MODIFY":
-        file["action"] = "modify"
-    return worker, preparation, file
-
-
-def _client(payloads):
-    client = Mock()
-    from kajovo.core.context_compiler import content_hash
-    client.count_input_tokens.side_effect = lambda payload: {
-        "input_tokens": 1000, "request_hash": content_hash(payload)}
-    client.upload_file.return_value = {"id": "file_input"}
-    client.retrieve_file.return_value = {"id": "file_input", "filename": "input.txt", "bytes": 100}
-    client.create_batch.return_value = {"id": "batch_work"}
-    replies = iter(payloads)
-    calls = []
-
-    def create(payload):
-        calls.append(deepcopy(payload))
-        value = next(replies)
-        if isinstance(value, Exception):
-            raise value
-        return response(len(calls) - 1, value)
-
-    client.create_response.side_effect = create
-    return client, calls
+# Compatibility helpers imported by a few older non-contract test modules.
+def _client(_values=None, mode="GENERATE"):
+    client, responder = make_client(mode)
+    return client, responder.calls
 
 
 def _run(worker, client):
-    results, errors = [], []
-    worker.finished_ok.connect(results.append)
-    worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
-        worker.run()
-    return results, errors
+    return run(worker, client)
 
 
-def _input(payload):
-    value = payload["input"]
-    if isinstance(value, str):
-        return json.loads(value)
-    return json.loads("".join(part["text"] for message in value for part in message["content"]
-                             if part["type"] == "input_text"))
+def _scenario(tmp_path, mode, batch, maximum_quality):
+    worker, client, responder = scenario(
+        tmp_path, mode, batch, maximum_quality
+    )
+    return worker, client, responder
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 @pytest.mark.parametrize("batch", [False, True])
 @pytest.mark.parametrize("maximum_quality", [False, True])
-def test_delivery_eight_variants_use_canonical_preparation(tmp_path, mode, batch, maximum_quality):
-    worker, preparation, file = _scenario(tmp_path, mode, batch, maximum_quality)
-    client, calls = _client(preparation + ([] if batch else [file]))
-    results, errors = _run(worker, client)
-    assert not errors
+def test_delivery_eight_variants_use_v2_preparation_and_truthful_boundary(
+    tmp_path, mode, batch, maximum_quality
+):
+    worker, client, responder = scenario(
+        tmp_path, mode, batch, maximum_quality
+    )
+    results, errors = run(worker, client)
+
+    assert errors == []
     assert len(results) == 1
-    assert len(calls) == 3 + int(maximum_quality) + int(not batch)
-    assert all(CORE_INSTRUCTIONS in call["instructions"] for call in calls)
-    assert all("reasoning" not in call for call in calls)
-    for index in range(1, len(preparation)):
-        assert "previous_response_id" not in calls[index]
-        context = _input(calls[index])
-        assert context["requirements"] == preparation[0]
-        if index >= 2:
-            assert context["plan"] == preparation[1]
-        if index == 3:
-            assert context["structure"] == preparation[2]
-    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-    checkpoint = state["preparation_snapshot"]
-    assert checkpoint["structure"] == preparation[-1]
-    assert checkpoint["maximum_quality"] is maximum_quality
+    names = format_names(responder)
     prefix = "A" if mode == "GENERATE" else "B"
-    assert checkpoint["canonical_stage"] == prefix + ("2Q" if maximum_quality else "2")
-    validate_traceability(checkpoint["requirements"], checkpoint["plan"], checkpoint["structure"])
+    assert names[:4] == [
+        f"{prefix}0R_REQUIREMENTS_V2",
+        f"{prefix}1_PLAN_V2",
+        f"{prefix}2_SPINE_V1",
+        f"{prefix}2_FILE_SPEC_V1",
+    ]
+    quality_name = f"{prefix}2Q_QUALITY_GATE_V2"
+    assert (quality_name in names) is maximum_quality
+    assert all("previous_response_id" not in call for call in responder.calls)
+
+    snapshot = worker.cfg.preparation_snapshot
+    assert snapshot["version"] == 2
+    assert snapshot["graph"]["contract"] == "IMPLEMENTATION_GRAPH_V3"
+    assert snapshot["graph"]["mode"] == mode
+    assert snapshot["source_snapshot_hash"]
+    assert snapshot["snapshot_hash"]
+
+    out = Path(worker.cfg.out_dir) / "hello.txt"
     if batch:
+        assert results[0]["status"] == "batch_pending"
         client.create_batch.assert_called_once()
-        rows = [json.loads(line) for line in Path(client.upload_file.call_args.args[0]).read_text(encoding="utf-8").splitlines()]
+        rows = client.create_batch.call_args.kwargs["_prevalidated_rows"]
         assert len(rows) == 1
-        final = rows[0]["body"]
-        assert set(rows[0]) == {"custom_id", "method", "url", "body"}
-        assert "previous_response_id" not in final
-        working = _input(final)["file_context"]["working_context"]
-        assert working["target_file"] == preparation[-1]["files" if mode == "GENERATE" else "touched_files"][0]
-        assert len(working["relevant_requirements"]) == 2
-        assert "specification" not in _input(final)
-        assert not (tmp_path / "out" / "hello.txt").exists()
+        body = rows[0]["body"]
+        assert body["text"]["format"]["name"] == "FILE_CONTENT_V1"
+        assert set(body["text"]["format"]["schema"]["properties"]) == {"content"}
+        for forbidden in (
+            "previous_response_id",
+            "conversation",
+            "background",
+            "tools",
+            "service_tier",
+        ):
+            assert forbidden not in body
+        assert not out.exists()
     else:
-        client.create_batch.assert_not_called()
-        final = calls[-1]
-        assert "previous_response_id" not in final
-        assert (tmp_path / "out" / "hello.txt").read_text(encoding="utf-8") == file["content"]
-    assert CORE_INSTRUCTIONS in final["instructions"]
-    assert final["text"]["format"]["schema"]["properties"]["contract"]["enum"] == [prefix + "3_FILE"]
-    if maximum_quality:
-        assert preparation[-1] != preparation[2]
-        assert "KANONICKÁ OPRAVA MQ" in json.dumps(final, ensure_ascii=False)
-    if mode == "MODIFY":
-        assert (tmp_path / "in" / "hello.txt").read_text(encoding="utf-8") == "Původní obsah.\n"
-        assert (tmp_path / "in" / "keep.txt").read_text(encoding="utf-8") == "Zachovaný obsah.\n"
+        assert results[0]["status"] == "files_complete_unverified"
+        assert names[-1] == "FILE_CONTENT_V1"
+        assert not out.exists()
+        staged = staged_path(worker, "hello.txt")
+        assert staged.read_text(encoding="utf-8") == "content:hello.txt\n"
+        state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+        assert state["publication_state"] == "awaiting_verification_or_explicit_take"
+        assert state["verification_evidence"]["result"] == "needs_human"
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 @pytest.mark.parametrize("maximum_quality", [False, True])
-@pytest.mark.parametrize("completed_stages", [1, 2])
-def test_partial_checkpoint_resumes_only_missing_stages(tmp_path, mode, maximum_quality, completed_stages):
-    worker, preparation, file = _scenario(tmp_path, mode, False, maximum_quality)
-    interruption = RuntimeError("Přerušená pracovní odpověď.")
-    interruption.request_sent = False
-    client, calls = _client(preparation[:completed_stages] + [interruption])
-    results, errors = _run(worker, client)
-    assert not results and errors
-    assert "Přerušená pracovní odpověď" in errors[0]
-    assert len(calls) == completed_stages + 1
-    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-    checkpoint = state["preparation_snapshot"]
-    assert checkpoint["response_id"] == f"resp_{completed_stages - 1}"
-    assert checkpoint["structure"] is None
-    assert not (tmp_path / "out" / "hello.txt").exists()
-    resumed = make_worker(tmp_path / "resumed", mode)
-    resumed.cfg.in_dir = worker.cfg.in_dir
-    resumed.cfg.maximum_quality = maximum_quality
-    resumed.cfg.preparation_snapshot = deepcopy(checkpoint)
-    next_client, next_calls = _client(preparation[completed_stages:] + [file])
-    results, errors = _run(resumed, next_client)
-    assert not errors and len(results) == 1
-    assert len(next_calls) == len(preparation) - completed_stages + 1
-    assert "previous_response_id" not in next_calls[0]
-    expected = preparation[completed_stages]["contract"]
-    assert next_calls[0]["text"]["format"]["schema"]["properties"]["contract"]["enum"] == [expected]
-    assert (tmp_path / "resumed" / "out" / "hello.txt").read_text(encoding="utf-8") == file["content"]
-    assert checkpoint == state["preparation_snapshot"]
-
-
-@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("maximum_quality", [False, True])
-def test_invalid_canonical_structure_blocks_batch_submission(tmp_path, mode, maximum_quality):
-    worker, preparation, _file = _scenario(tmp_path, mode, True, maximum_quality)
-    invalid = deepcopy(preparation[-1])
-    key = "files" if mode == "GENERATE" else "touched_files"
-    invalid[key][0]["requirement_ids"] = ["NEZNÁMÝ-POŽADAVEK"]
-    before = preparation[:3] if maximum_quality else preparation[:2]
-    client, calls = _client(before + [invalid, invalid, invalid])
-    results, errors = _run(worker, client)
-    assert not results and errors
-    assert "NEZNÁMÝ-POŽADAVEK" in errors[0]
-    assert len(calls) == len(before) + 2
+def test_stop_after_plan_finishes_after_optional_quality_gate_without_production(
+    tmp_path, mode, maximum_quality
+):
+    worker, client, responder = scenario(
+        tmp_path,
+        mode,
+        batch=True,
+        maximum_quality=maximum_quality,
+        stop_after_plan=True,
+    )
+    results, errors = run(worker, client)
+    assert errors == []
+    assert results[0]["status"] == "plan_ready"
+    names = format_names(responder)
+    assert "FILE_CONTENT_V1" not in names
+    assert (("A2Q_QUALITY_GATE_V2" if mode == "GENERATE" else "B2Q_QUALITY_GATE_V2") in names) is maximum_quality
     client.create_batch.assert_not_called()
-    assert all(call.kwargs.get("purpose") != "batch" for call in client.upload_file.call_args_list)
-    assert not (tmp_path / "out" / "hello.txt").exists()
-    for call in calls[len(before) + 1:]:
-        context = _input(call)
-        assert "NEZNÁMÝ-POŽADAVEK" in context["validation_errors"]
-        assert context["validation_issues"][0]["code"] == "schema_invalid"
-        assert context["structure"] == invalid
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-    prefix = "A" if mode == "GENERATE" else "B"
-    assert state["preparation_snapshot"]["canonical_stage"] == prefix + ("2" if maximum_quality else "1")
+    assert state["status"] == "plan_ready"
+    assert state["preparation_snapshot"]["graph"]["contract"] == "IMPLEMENTATION_GRAPH_V3"
+
+
+def test_modify_dry_run_stages_diff_and_never_changes_out(tmp_path):
+    files = [
+        {
+            **default_files("MODIFY")[0],
+            "path": "hello.txt",
+            "action": "modify",
+        }
+    ]
+    worker, client, _responder = scenario(
+        tmp_path,
+        "MODIFY",
+        batch=False,
+        maximum_quality=False,
+        files=files,
+        content_by_path={"hello.txt": "original\n"},
+        dry_run=True,
+    )
+    out = Path(worker.cfg.out_dir)
+    out.mkdir(exist_ok=True)
+    target = out / "hello.txt"
+    target.write_text("user-out\n", encoding="utf-8")
+
+    results, errors = run(worker, client)
+    assert errors == []
+    assert results[0]["status"] == "dry_run"
+    assert target.read_text(encoding="utf-8") == "user-out\n"
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    assert state["dry_run"] is True
+    assert state["published_files"] == []
+    staging_root = Path(worker.log.paths.run_dir) / state["staging_root"]
+    assert (staging_root / "changes.diff").is_file()
+    with pytest.raises(OrchestrationError, match="PUBLISH_DRY_RUN"):
+        publish_staged_run(worker.log.paths.run_dir)
+
+
+def test_explicit_unverified_take_publishes_only_if_expected_hash_still_matches(tmp_path):
+    worker, client, _responder = scenario(tmp_path, "GENERATE")
+    results, errors = run(worker, client)
+    assert errors == [] and results[0]["status"] == "files_complete_unverified"
+    target = Path(worker.cfg.out_dir) / "hello.txt"
+    assert not target.exists()
+
+    report = publish_staged_run(worker.log.paths.run_dir)
+    assert report["status"] == "committed"
+    assert target.read_text(encoding="utf-8") == "content:hello.txt\n"
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    assert state["status"] == "completed_unverified"
+    assert state["unverified_publish_approved"] is True
+
+
+def test_publish_conflict_preserves_user_change(tmp_path):
+    worker, client, _responder = scenario(tmp_path, "GENERATE")
+    results, errors = run(worker, client)
+    assert errors == [] and results
+    target = Path(worker.cfg.out_dir) / "hello.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("new user work\n", encoding="utf-8")
+
+    with pytest.raises(Exception, match="PUBLISH_CONFLICT|expected"):
+        publish_staged_run(worker.log.paths.run_dir)
+    assert target.read_text(encoding="utf-8") == "new user work\n"
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("quality", [False, True])
-def test_real_batch_payload_and_import_deliver_more_than_500_lines(tmp_path, mode, quality):
-    worker, preparation, file = _scenario(tmp_path, mode, True, quality)
-    client, calls = _client(preparation)
-    results, errors = _run(worker, client)
-    assert not errors and results[0]["status"] == "batch_pending"
+def test_invalid_spine_dependency_blocks_before_a3_b3_or_batch(tmp_path, mode):
+    worker, client, responder = scenario(tmp_path, mode, batch=True)
+
+    original = client.create_response.side_effect
+
+    def invalid(payload):
+        value = original(payload)
+        name = ((payload.get("text") or {}).get("format") or {}).get("name")
+        if name in {"A2_SPINE_V1", "B2_SPINE_V1"}:
+            decoded = json.loads(value["output_text"])
+            decoded["result"]["data"]["files"][0]["dependencies"] = ["missing.py"]
+            value["output_text"] = json.dumps(decoded)
+        return value
+
+    client.create_response.side_effect = invalid
+    results, errors = run(worker, client)
+    assert results == []
+    assert errors
+    assert "dependency" in errors[0].lower() or "závis" in errors[0].lower()
+    assert "FILE_CONTENT_V1" not in format_names(responder)
+    client.create_batch.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_live_verified_content_dependency_runs_provider_before_consumer(tmp_path, mode):
+    action = "generate" if mode == "GENERATE" else "add"
+    files = [
+        {
+            **default_files(mode)[0],
+            "path": "provider.txt",
+            "action": action,
+        },
+        {
+            **default_files(mode)[0],
+            "path": "consumer.txt",
+            "action": action,
+            "dependencies": ["provider.txt"],
+            "content_dependencies": ["provider.txt"],
+        },
+    ]
+    worker, client, responder = scenario(
+        tmp_path,
+        mode,
+        batch=False,
+        files=files,
+    )
+    results, errors = run(worker, client)
+    assert errors == []
+    assert results[0]["status"] == "files_complete_unverified"
+    file_calls = [
+        call
+        for call in responder.calls
+        if ((call.get("text") or {}).get("format") or {}).get("name")
+        == "FILE_CONTENT_V1"
+    ]
+    paths = [
+        _file_input_json(call)["file_context"]["working_context"]["target_file"]["path"]
+        for call in file_calls
+    ]
+    assert paths == ["provider.txt", "consumer.txt"]
+    consumer = _file_input_json(file_calls[1])
+    deps = consumer["file_context"]["working_context"]["verified_dependency_artifacts"]
+    assert [row["path"] for row in deps] == ["provider.txt"]
+    assert deps[0]["validation_status"] == "verified"
+
+
+def test_batch_first_wave_excludes_verified_content_consumer(tmp_path):
+    files = [
+        {
+            **default_files("GENERATE")[0],
+            "path": "provider.txt",
+        },
+        {
+            **default_files("GENERATE")[0],
+            "path": "consumer.txt",
+            "dependencies": ["provider.txt"],
+            "content_dependencies": ["provider.txt"],
+        },
+    ]
+    worker, client, _responder = scenario(
+        tmp_path,
+        "GENERATE",
+        batch=True,
+        files=files,
+    )
+    results, errors = run(worker, client)
+    assert errors == []
+    assert results[0]["status"] == "batch_pending"
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     manifest = state["generate_batch"]
-    row = manifest["requests"][0]
-    assert "500 řádků" not in row["body"]["instructions"]
-    assert "v jediné úplné části" in row["body"]["instructions"]
-    assert len(calls) == 3 + int(quality)
-    file["content"] = "".join(f"Řádek {index}\n" for index in range(750))
-    raw = json.dumps({"custom_id": row["custom_id"], "response": {
-        "status_code": 200, "body": response(10, file)}, "error": None}).encode()
-    result = import_results(manifest, [raw], worker.cfg.out_dir)
+    assert set(manifest["expected"].values()) == {"provider.txt"}
+    assert manifest["deferred_paths"] == ["consumer.txt"]
+
+
+def test_long_prompt_is_frozen_byte_exactly_without_paid_acknowledgement(tmp_path):
+    worker, client, responder = scenario(tmp_path, "GENERATE", stop_after_plan=True)
+    worker.cfg.prompt = "žluťoučký kůň\n" * 12000
+    results, errors = run(worker, client)
+    assert errors == [] and results[0]["status"] == "plan_ready"
+    source = Path(worker.log.paths.misc_dir) / "source_pack_user_text.txt"
+    assert source.read_bytes() == worker.cfg.prompt.encode("utf-8")
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    assert state["source_pack_hash"]
+    # Preparation starts directly with A0R; there is no paid "acknowledgement".
+    assert format_names(responder)[0] == "A0R_REQUIREMENTS_V2"
+
+
+def test_file_content_wire_has_only_content_property(tmp_path):
+    worker, client, responder = scenario(tmp_path, "GENERATE")
+    results, errors = run(worker, client)
+    assert errors == [] and results
+    call = next(
+        payload
+        for payload in responder.calls
+        if ((payload.get("text") or {}).get("format") or {}).get("name")
+        == "FILE_CONTENT_V1"
+    )
+    schema = call["text"]["format"]["schema"]
+    assert set(schema["properties"]) == {"content"}
+    assert schema["required"] == ["content"]
+
+
+def test_batch_import_stages_result_and_never_writes_out(tmp_path):
+    worker, client, _responder = scenario(tmp_path, "GENERATE", batch=True)
+    results, errors = run(worker, client)
+    assert errors == [] and results[0]["status"] == "batch_pending"
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    manifest = state["generate_batch"]
+    completed = {
+        "id": "batch_work",
+        "status": "completed",
+        "input_file_id": state["batch_input_file_id"],
+        "endpoint": "/v1/responses",
+        "output_file_id": "file_results",
+    }
+    client.file_content.return_value = raw_jsonl(batch_output_rows(manifest))
+    result = process_saved_batch(
+        client,
+        worker.log.paths.run_dir,
+        "batch_work",
+        worker.settings,
+        batch=completed,
+    )
     assert result["status"] == "files_complete_unverified"
-    assert Path(worker.cfg.out_dir, file["path"]).read_text(encoding="utf-8") == file["content"]
+    assert result["written"] == []
+    assert not (Path(worker.cfg.out_dir) / "hello.txt").exists()
+    staged = Path(worker.log.paths.run_dir) / result["staged_files"][0]["staged_path"]
+    assert staged.read_text(encoding="utf-8") == "content:hello.txt\n"
 
 
-@pytest.mark.parametrize("batch", [False, True])
-@pytest.mark.parametrize("missing", ["", "missing"])
-def test_modify_requires_project_before_any_client_operation(tmp_path, batch, missing):
-    worker = make_worker(tmp_path, "MODIFY")
-    worker.cfg.send_as_c = batch
-    worker.cfg.in_dir = str(tmp_path / missing) if missing else ""
-    client = Mock()
-    results, errors = _run(worker, client)
-    assert not results and "existující vstupní adresář IN" in errors[0]
-    assert client.mock_calls == []
-
-
-@pytest.mark.parametrize("batch", [False, True])
-@pytest.mark.parametrize("no_changes", [False, True])
-def test_nonexistent_preserved_file_blocks_delivery_and_no_changes(tmp_path, batch, no_changes):
-    worker, preparation, _file = _scenario(tmp_path, "MODIFY", batch, False)
-    structure = preparation[2]
-    changed = structure["touched_files"][0]
-    structure["preserved_files"] = [{
-        "path": "neexistuje.py", "provides": [], "behavior": "Zachované chování.",
-        "requirement_ids": changed["requirement_ids"],
-        "architecture_item_ids": changed["architecture_item_ids"],
-    }]
-    if no_changes:
-        structure["touched_files"] = []
-        preparation[1]["change_plan"]["files_to_modify"] = []
-    implementation_fixture(structure, preparation[0], preparation[1])
-    validate_traceability(*preparation)
-    client, calls = _client(preparation)
-    results, errors = _run(worker, client)
-    assert not results and "Zachovaný soubor" in errors[0]
-    assert len(calls) == 3
-    client.create_batch.assert_not_called()
-    assert not Path(worker.cfg.out_dir, "hello.txt").exists()
-
-
-@pytest.mark.parametrize("batch", [False, True])
-def test_modify_binary_deliverable_stays_partial_without_file_generation(tmp_path, batch):
-    worker, preparation, _file = _scenario(tmp_path, "MODIFY", batch, False)
-    preparation[2]["touched_files"][0]["kind"] = "binary"
-    client, calls = _client(preparation)
-    results, errors = _run(worker, client)
-    assert not errors and results[0]["status"] == "partial"
-    assert results[0]["missing_deliverables"] == ["hello.txt"]
-    assert len(calls) == 3
-    client.create_batch.assert_not_called()
-
-
-def test_modify_live_dry_run_reports_no_output_and_keeps_evidence(tmp_path):
-    worker, preparation, file = _scenario(tmp_path, "MODIFY", False, False)
-    worker.settings.dry_run_modify = True
-    worker.cfg.versing = True
-    client, _ = _client([*preparation, file])
-    results, errors = _run(worker, client)
-    assert not errors and results[0]["status"] == "dry_run"
-    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-    assert state["status"] == "dry_run" and state["written_files"] == []
-    records = [json.loads(path.read_text(encoding="utf-8"))
-               for path in Path(worker.log.paths.manifests_dir).glob("*modify_dry_run*.json")]
-    assert records[0]["files"][0]["content"] == file["content"]
-    assert not Path(worker.cfg.out_dir).exists()
-
-
-@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("batch", [False, True])
-def test_completed_file_rerun_uses_hash_and_does_not_generate(tmp_path, mode, batch):
-    worker, preparation, _ = _scenario(tmp_path, mode, batch, False)
+def test_completed_hash_blocks_changed_rerun_before_network(tmp_path):
+    worker, client, _responder = scenario(tmp_path, "GENERATE")
     out = Path(worker.cfg.out_dir)
-    out.mkdir()
-    (out / "hello.txt").write_bytes(b"done")
-    worker.cfg.skip_paths = ["hello.txt"]
-    worker.cfg.completed_hashes = {"hello.txt": hashlib.sha256(b"done").hexdigest()}
-    client, calls = _client(preparation)
-    results, errors = _run(worker, client)
-    assert not errors and results[0]["status"] == "files_complete_unverified"
-    assert len(calls) == 3
-    client.create_batch.assert_not_called()
-    assert (out / "hello.txt").read_bytes() == b"done"
-    from kajovo.core.runlog import verified_output_evidence
-    assert verified_output_evidence(worker.log.paths.run_dir, str(out))[0]["sha256"] == worker.cfg.completed_hashes["hello.txt"]
-
-
-@pytest.mark.parametrize("fault", ["missing", "changed", "no_hash"])
-def test_rerun_rejects_missing_or_changed_output_before_api(tmp_path, fault):
-    worker, _, _ = _scenario(tmp_path, "GENERATE", True, False)
-    worker.cfg.skip_paths = ["hello.txt"]
-    worker.cfg.completed_hashes = {"hello.txt": hashlib.sha256(b"done").hexdigest()}
-    if fault != "missing":
-        Path(worker.cfg.out_dir).mkdir()
-        Path(worker.cfg.out_dir, "hello.txt").write_bytes(b"edit" if fault == "changed" else b"done")
-    if fault == "no_hash":
-        worker.cfg.completed_hashes = {}
-    client = Mock()
-    results, errors = _run(worker, client)
-    assert not results and "platný důkaz zápisu" in errors[0]
-    assert client.mock_calls == []
-
-
-@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("batch", [False, True])
-@pytest.mark.parametrize("quality", [False, True])
-def test_reasoning_and_progress_follow_actual_delivery_stages(tmp_path, mode, batch, quality):
-    worker, preparation, file = _scenario(tmp_path, mode, batch, quality)
-    worker.cfg.model = "gpt-5.2"
-    worker.cfg.available_models = ["gpt-5.2"]
-    worker.cfg.model_a1 = worker.cfg.model_a2 = worker.cfg.model_a3 = "gpt-5.2"
-    events = []
-    worker.progress_event.connect(events.append)
-    client, calls = _client(preparation + ([] if batch else [file]))
-    results, errors = _run(worker, client)
-    assert not errors and results
-    prefix = "A" if mode == "GENERATE" else "B"
-    stages = [prefix + suffix for suffix in ("0R", "1", "2")]
-    if quality:
-        stages.append(prefix + "2Q")
-    if not batch:
-        stages.append(prefix + "3")
-    assert [event.stage for event in events if event.state == "waiting"] == stages
-    if batch:
-        state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-        calls += [row["body"] for row in state["generate_batch"]["requests"]]
-    if quality:
-        assert all(call["reasoning"]["effort"] == "xhigh" for call in calls)
-    else:
-        assert all("reasoning" not in call for call in calls[:-1])
-        assert calls[-1]["reasoning"]["effort"] == "medium"
-    assert all("temperature" not in call for call in calls)
-
-
-@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("batch", [False, True])
-@pytest.mark.parametrize("size", [150_000, 150_001])
-def test_long_prompt_ingestion_preserves_source_without_paid_acknowledgements(tmp_path, mode, batch, size):
-    worker, preparation, file = _scenario(tmp_path, mode, batch, False)
-    worker.cfg.prompt = ("Obsah zadání bez zkrácení.\n" * 10_000)[:size]
-    count = 0
-    client, calls = _client(["Přijato"] * count + preparation + ([] if batch else [file]))
-    results, errors = _run(worker, client)
-    assert not errors and results
-    assert len(calls) == count + 3 + int(not batch)
-    assert worker.cfg.prompt in _input(calls[0])["source"]
-    assert all(worker.cfg.prompt not in call["instructions"] for call in calls)
-
-
-@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("batch", [False, True])
-def test_quality_gate_added_file_is_really_delivered(tmp_path, mode, batch):
-    worker, preparation, file = _scenario(tmp_path, mode, batch, True)
-    key = "files" if mode == "GENERATE" else "touched_files"
-    added = deepcopy(preparation[-1][key][0])
-    added["path"] = "added.txt"
-    if mode == "MODIFY":
-        added["action"] = "add"
-    preparation[-1][key].append(added)
-    implementation_fixture(preparation[-1], preparation[0], preparation[1])
-    additional = {**file, "path": "added.txt"}
-    if mode == "MODIFY":
-        additional["action"] = "add"
-    client, _calls = _client(preparation + ([] if batch else [file, additional]))
-    results, errors = _run(worker, client)
-    assert not errors and results
-    if batch:
-        state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-        assert set(state["generate_batch"]["expected"].values()) == {"hello.txt", "added.txt"}
-    else:
-        assert Path(worker.cfg.out_dir, "added.txt").read_text(encoding="utf-8") == additional["content"]
-
-
-@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("quality", [False, True])
-def test_live_file_delivery_returns_one_complete_file_without_model_chunking(tmp_path, mode, quality):
-    worker, preparation, file = _scenario(tmp_path, mode, False, quality)
-    file["content"] = "".join(f"Řádek {index}\n" for index in range(750))
-    client, calls = _client([*preparation, file])
-    results, errors = _run(worker, client)
-    assert not errors and results[0]["status"] == "files_complete_unverified"
-    assert Path(worker.cfg.out_dir, file["path"]).read_text(encoding="utf-8") == file["content"]
-    assert len(calls) == len(preparation) + 1
-    final = calls[-1]
-    assert "jediné úplné" in final["instructions"]
-    assert "500 řádků" not in final["instructions"]
-    chunk = final["text"]["format"]["schema"]["properties"]["chunking"]["properties"]
-    assert chunk["chunk_index"]["enum"] == [0]
-    assert chunk["chunk_count"]["enum"] == [1]
-    assert chunk["has_more"]["enum"] == [False]
-    assert chunk["next_chunk_index"]["type"] == "null"
-    assert "previous_response_id" not in final
-
-
-@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-@pytest.mark.parametrize("changed_after_submit", [False, True])
-def test_batch_completion_distinguishes_missing_from_previously_completed(tmp_path, mode, changed_after_submit):
-    worker, preparation, file = _scenario(tmp_path, mode, True, False)
-    key = "files" if mode == "GENERATE" else "touched_files"
-    existing = deepcopy(preparation[-1][key][0])
-    existing["path"] = "done.txt"
-    preparation[-1][key].append(existing)
-    implementation_fixture(preparation[-1], preparation[0], preparation[1])
-    out = Path(worker.cfg.out_dir)
-    out.mkdir()
-    (out / "done.txt").write_bytes(b"done")
+    out.mkdir(exist_ok=True)
+    target = out / "done.txt"
+    target.write_text("changed", encoding="utf-8")
     worker.cfg.skip_paths = ["done.txt"]
-    worker.cfg.completed_hashes = {"done.txt": hashlib.sha256(b"done").hexdigest()}
-    client, _calls = _client(preparation)
-    results, errors = _run(worker, client)
-    assert not errors and results
-    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-    manifest = state["generate_batch"]
-    assert manifest["omitted"] == []
-    assert manifest["completed_hashes"] == worker.cfg.completed_hashes
-    if changed_after_submit:
-        (out / "done.txt").write_bytes(b"user edit")
-    row = manifest["requests"][0]
-    raw = json.dumps({"custom_id": row["custom_id"], "response": {
-        "status_code": 200, "body": response(12, file)}}).encode()
-    client.file_content.return_value = raw
-    from kajovo.core.generate_batch import process_saved_batch
-    result = process_saved_batch(client, worker.log.paths.run_dir, results[0]["batch_id"], worker.settings,
-                                 batch={"id": results[0]["batch_id"], "status": "completed", "output_file_id": "file_result"})
-    assert result["status"] == ("partial" if changed_after_submit else "files_complete_unverified")
-    assert (out / "done.txt").read_bytes() == (b"user edit" if changed_after_submit else b"done")
-    if changed_after_submit:
-        assert "done.txt" in result["missing"]
+    worker.cfg.completed_hashes = {
+        "done.txt": hashlib.sha256(b"old").hexdigest()
+    }
+    results, errors = run(worker, client)
+    assert results == []
+    assert errors
+    assert client.create_response.call_count == 0

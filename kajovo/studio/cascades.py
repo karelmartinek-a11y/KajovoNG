@@ -70,6 +70,10 @@ class CascadesPage(QWidget):
         self.title = self.step_form.text("cascade.step.title", "Název kroku")
         self.model = self.step_form.choice("cascade.step.model", "Model kroku", [])
         self.context_id = self.step_form.text("cascade.step.context", "Sdílený kontext")
+        self.use_conversation_context = self.step_form.check(
+            "cascade.step.conversation",
+            "Navázat konverzačně na předchozí Response stejného kontextu",
+        )
         self.deterministic = self.step_form.check("cascade.step.deterministic", "Deterministický krok")
         self.inherit_temperature = self.step_form.check("cascade.step.default_temperature", "Použít výchozí teplotu modelu", True)
         self.temperature = QDoubleSpinBox()
@@ -151,6 +155,7 @@ class CascadesPage(QWidget):
             index = self.model.findData(step.model)
             self.model.setCurrentIndex(index if index >= 0 else -1)
             self.context_id.setText(step.context_id)
+            self.use_conversation_context.setChecked(step.use_conversation_context)
             self.deterministic.setChecked(step.deterministic)
             self.inherit_temperature.setChecked(step.temperature is None)
             self.temperature.setValue(step.temperature or 0)
@@ -209,6 +214,7 @@ class CascadesPage(QWidget):
             if selected_model:
                 step.model = selected_model
             step.context_id = self.context_id.text()
+            step.use_conversation_context = self.use_conversation_context.isChecked()
             step.deterministic = self.deterministic.isChecked()
             step.temperature = None if self.inherit_temperature.isChecked() else self.temperature.value()
             step.instructions = self.instructions.toPlainText()
