@@ -8,7 +8,7 @@ from kajovo.core.config import AppSettings
 
 
 def _client():
-    client = _client()
+    client = Mock()
     from kajovo.core.context_compiler import content_hash
 
     client.count_input_tokens.side_effect = lambda payload: {
