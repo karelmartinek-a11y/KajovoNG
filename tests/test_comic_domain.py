@@ -195,6 +195,24 @@ def test_entity_generated_from_references(comic, tmp_path, kind, count):
     assert inspect_image(service.store.asset_path(revision["asset_id"]).read_bytes())["width"] == 1536
     assert len(service.store.references(project, entity)) == count * 2
     assert client.image_calls == 1
+    operation = service.store.rows(
+        "operations",
+        "project_id=? AND kind='entity'",
+        (project,),
+        order="created_at DESC",
+    )[0]
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(Path(service.settings.log_dir) / "orchestration.sqlite3")
+    with repo.connect() as db:
+        rows = db.execute(
+            "SELECT w.route,r.state FROM work_orders w "
+            "JOIN reservations r ON r.work_order_hash=w.work_order_hash "
+            "WHERE w.run_id=? ORDER BY w.rowid",
+            (operation["run_id"],),
+        ).fetchall()
+    assert ("responses_live", "settled") in rows
+    assert ("image_live", "settled") in rows
 
 
 @pytest.mark.parametrize("kinds", [[], ["character"], ["character", "character"], ["environment"], ["character", "environment"], ["character", "character", "environment"]])
@@ -249,6 +267,18 @@ def test_batch_partial_retry_and_resume(comic):
     operation = service.start_panels(project, panels)
     assert service.run(operation)["status"] == "batch_pending"
     assert client.submits == 1
+    operation_row = service.store.get("operations", operation)
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+
+    repo = OrchestrationRepository(Path(service.settings.log_dir) / "orchestration.sqlite3")
+    with repo.connect() as db:
+        rows = db.execute(
+            "SELECT w.route,r.state,r.provider_id FROM work_orders w "
+            "JOIN reservations r ON r.work_order_hash=w.work_order_hash "
+            "WHERE w.run_id=?",
+            (operation_row["run_id"],),
+        ).fetchall()
+    assert rows == [("image_batch", "submitted", "batch_1")]
     batch = next(iter(client.batches))
     client.fail_ids.add(client.batch_rows[batch][1]["custom_id"])
     client.complete(batch)
