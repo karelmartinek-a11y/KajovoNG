@@ -21,7 +21,7 @@
     "source_snapshot_hash": {"type": "string"},
     "budget_reservation_id": {"type": "string"},
     "approval_id": {"type": "string"},
-    "attempt_no": {"type": "integer"}
+    "attempt_no": {"type": "integer", "minimum": 1, "maximum": 3}
   },
   "required": [
     "version", "run_id", "step_id", "task_id", "stage", "route", "target_id",
