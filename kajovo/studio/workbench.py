@@ -359,6 +359,7 @@ class Workbench(QWidget):
                 self.widgets["response_id"].setText(previous)
             if value.get("status") == "qfile_plan_ready":
                 plan = value.get("qfile_plan") or {}
+                self.saved_extras["qfile_plan"] = copy.deepcopy(plan)
                 proposed = plan.get("proposed_path")
                 fmt = plan.get("format")
                 if proposed:
