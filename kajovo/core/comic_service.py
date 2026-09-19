@@ -9,6 +9,7 @@ import gzip
 import sqlite3
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 
 from .batch_submit import exact_batch_matches
 from .comic_store import ComicStore, now, uid
@@ -32,9 +33,10 @@ from .comic_types import (
     validate_story,
     validate_storyboard,
 )
-from .context_pricing import PRICES
+from .context_pricing import PRICES, observed_image_cost
 from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, source_bytes, validate_image_request
 from .model_registry import model_spec, models_for_usage
+from .orchestration.contracts import canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.ledger import (
     mark_submission,
@@ -42,6 +44,7 @@ from .orchestration.ledger import (
     reserve_paid_request,
     settle_usage,
 )
+from .orchestration.repository import repository_for_logger
 from .orchestration.run_config import (
     DEFAULT_MAX_COST_MICROUSD,
     DEFAULT_MAX_INPUT_TOKENS,
@@ -144,6 +147,205 @@ class ComicService:
             db.execute("INSERT OR REPLACE INTO uploads VALUES(?,?,?)", (asset, account, file_id))
         log.bundle.archive_artifact(path, role="input", kind="image", metadata={"file_id": file_id})
         return file_id
+
+    def _image_cfg(self, operation):
+        return SimpleNamespace(
+            mode="COMIC",
+            model=IMAGE_MODEL,
+            send_as_c=operation["kind"] in ("panels", "edit"),
+            maximum_quality=True,
+            max_cost_microusd=DEFAULT_MAX_COST_MICROUSD,
+            max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
+            max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+            max_paid_requests=DEFAULT_MAX_PAID_REQUESTS,
+            # Images API has no Responses input-token preflight equivalent.
+            # The paid effect is therefore explicit token-only and actual usage
+            # is reconciled after provider evidence arrives.
+            unknown_pricing="explicit_token_budget",
+            auto_repair="off",
+            verification_profile_ids=[],
+            stop_after_plan=False,
+            dry_run=False,
+            execution_approval_id=f"user-start:{operation['run_id']}",
+            project=operation["project_id"],
+            prompt=operation["kind"],
+            in_dir="",
+            out_dir="",
+            attached_file_ids=[],
+            input_file_ids=[],
+            attached_vector_store_ids=[],
+            qfile_output_path="",
+            qfile_output_format="",
+            qfile_suggest_path=False,
+            qa_continue_conversation=False,
+            response_id="",
+        )
+
+    def _ensure_image_run(self, operation, log, *, execution):
+        repo = repository_for_logger(log)
+        if repo.has_run(operation["run_id"]):
+            return repo
+        cfg = self._image_cfg(operation)
+        run_config = {
+            "version": 2,
+            "workflow": "COMIC",
+            "execution": execution,
+            "quality": "maximum",
+            "model_bindings": [
+                {"stage": "COMIC_IMAGE", "model": IMAGE_MODEL}
+            ],
+            "max_cost_microusd": cfg.max_cost_microusd,
+            "max_input_tokens": cfg.max_input_tokens,
+            "max_output_tokens": cfg.max_output_tokens,
+            "max_paid_requests": cfg.max_paid_requests,
+            "unknown_pricing": cfg.unknown_pricing,
+            "auto_repair": cfg.auto_repair,
+            "verification_profile_ids": [],
+            "stop_after_plan": False,
+            "dry_run": False,
+        }
+        repo.register_run(
+            operation["run_id"],
+            lineage_id=operation["run_id"],
+            scope_hash=canonical_sha256(
+                {
+                    "run_config_v2": run_config,
+                    "operation_id": operation["id"],
+                    "snapshot": operation["snapshot"],
+                }
+            ),
+            policy_hash=canonical_sha256(run_config),
+            config=run_config,
+            approval_id=cfg.execution_approval_id,
+            status="running",
+        )
+        log.update_state({"run_config_v2": run_config})
+        return repo
+
+    def _reserve_image_effect(
+        self,
+        operation,
+        log,
+        *,
+        task_id,
+        route,
+        target_id,
+        body,
+        projection,
+    ):
+        execution = "batch" if route == "image_batch" else "live"
+        repo = self._ensure_image_run(
+            operation, log, execution=execution
+        )
+        cfg = self._image_cfg(operation)
+        order = freeze_order(
+            cfg,
+            {
+                "run_id": operation["run_id"],
+                "step_id": task_id,
+                "task_id": task_id,
+                "stage": "COMIC_IMAGE",
+                "route": route,
+                "target_id": target_id,
+                "target_path": None,
+                "expected_target_hash": None,
+                "contract_name": (
+                    "COMIC_IMAGE_BATCH_V1"
+                    if route == "image_batch"
+                    else "COMIC_IMAGE_V1"
+                ),
+                "schema": {
+                    "endpoint": body.get("endpoint")
+                    or body.get("url")
+                    or "/v1/images",
+                    "model": IMAGE_MODEL,
+                },
+                "prompt": str(
+                    body.get("prompt")
+                    or body.get("body", {}).get("prompt")
+                    or ""
+                ),
+                "model": IMAGE_MODEL,
+                "model_capability": model_spec(IMAGE_MODEL),
+                "source_snapshot": projection,
+                "attempt_no": 1,
+                "approval_id": cfg.execution_approval_id,
+            },
+            projection,
+        )
+        repo.register_work_order(
+            order,
+            body_ref=canonical_sha256(body),
+            input_hash=order.input_projection_hash,
+        )
+        repo.reserve(
+            reservation_id=order.budget_reservation_id,
+            work_order_hash=order.order_hash,
+            cost_microusd=None,
+            input_limit=0,
+            output_limit=0,
+            max_cost_microusd=cfg.max_cost_microusd,
+            max_input_tokens=cfg.max_input_tokens,
+            max_output_tokens=cfg.max_output_tokens,
+            max_paid_requests=cfg.max_paid_requests,
+        )
+        log.save_json(
+            "manifests",
+            "comic_work_order_" + task_id,
+            {**order.to_dict(), "order_hash": order.order_hash},
+        )
+        return repo, order
+
+    def _image_reservation_for_task(self, log, task_id):
+        repo = repository_for_logger(log)
+        with repo.connect() as db:
+            row = db.execute(
+                "SELECT r.reservation_id "
+                "FROM reservations r JOIN work_orders w "
+                "ON w.work_order_hash=r.work_order_hash "
+                "WHERE w.run_id=? AND w.task_id=? AND w.attempt_no=1",
+                (log.run_id, task_id),
+            ).fetchone()
+        return repo, (str(row[0]) if row else "")
+
+    def _settle_image_usage(
+        self,
+        log,
+        reservation_id,
+        *,
+        provider_item_id,
+        usage,
+        batch,
+    ):
+        if not reservation_id or not isinstance(usage, dict) or not usage:
+            return
+        cost = observed_image_cost(
+            IMAGE_MODEL, usage, batch=batch
+        )
+        actual = (
+            round(float(cost["usd"]) * 1_000_000)
+            if isinstance(cost, dict)
+            and isinstance(cost.get("usd"), (int, float))
+            else None
+        )
+        repository_for_logger(log).settle(
+            reservation_id,
+            provider="openai-image",
+            provider_item_id=provider_item_id,
+            usage=usage,
+            actual_cost_microusd=actual,
+            price_snapshot_hash=canonical_sha256(
+                {
+                    "model": IMAGE_MODEL,
+                    "batch": batch,
+                    "pricing": (
+                        cost.get("pricing_version")
+                        if isinstance(cost, dict)
+                        else None
+                    ),
+                }
+            ),
+        )
 
     def _text_model(self):
         if self.client is None:
