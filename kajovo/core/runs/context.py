@@ -78,6 +78,11 @@ class RunContext:
         self._diag_zip_path: str = ""
         self._input_kind_cache: dict[str, str] = {}
         self._file_name_cache: dict[str, str] = {}
+        self.source_pack: Any = None
+        self.source_context: dict[str, Any] = {}
+        self._delivery_verified_artifacts: dict[str, dict[str, Any]] = {}
+        self._active_work_order: Any = None
+        self._progress_stage: str = ""
 
 
     def transition(self, target: RunStatus) -> None:
