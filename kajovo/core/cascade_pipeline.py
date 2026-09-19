@@ -28,8 +28,8 @@ from .cascade_contract import (
 from .cascade_log import CascadeLogger
 from .cascade_types import CascadeDefinition, CascadeOutput, CascadeStep
 from .contracts import ContractError, validate_paths
-from .openai_client import OpenAIClient
 from .model_registry import model_spec
+from .openai_client import OpenAIClient
 from .openai_transport import SubmissionOutcomeUnknown
 from .orchestration.contracts import canonical_sha256
 from .orchestration.ledger import (
