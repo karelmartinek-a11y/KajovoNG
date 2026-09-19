@@ -48,8 +48,11 @@ def _gen_file_chunks(
     self._delivery_step_id = self.log.begin_validated_step(
         contract.split("_")[0], kind="file_delivery"
     )
-    compiled = ContextCompiler(self._delivery_snapshot).compile(
-        path, originals=getattr(self, "_delivery_originals", None)
+    compiler = ContextCompiler(self._delivery_snapshot)
+    compiled = compiler.compile(
+        path,
+        originals=getattr(self, "_delivery_originals", None),
+        verified_artifacts=getattr(self, "_delivery_verified_artifacts", None),
     )
     projection = projection_from_file_context(contract.split("_", 1)[0], path, compiled)
     self.log.save_json(
@@ -60,10 +63,10 @@ def _gen_file_chunks(
     step_model = str(model_override or self.cfg.model or "").strip()
     instructions = stage_instructions("A3" if contract == "A3_FILE" else "B3")
     prompt = (
-        f"Vrať celé znění souboru PATH={path} v jediném A3_FILE artefaktu."
+        f"Vrať celé znění cílového souboru PATH={path} v jediném FILE_CONTENT_V1 objektu."
         if contract == "A3_FILE"
-        else f"Vrať celé výsledné znění souboru PATH={path} ACTION={action} "
-             "v jediném B3_FILE artefaktu."
+        else f"Vrať celé výsledné znění cílového souboru PATH={path} ACTION={action} "
+             "v jediném FILE_CONTENT_V1 objektu."
     )
     if self.cfg.recovery_instruction:
         prompt += self._recovery_suffix()
@@ -158,7 +161,10 @@ def _gen_file_chunks(
                 "model_capability": self._model_caps(step_model),
                 "source_snapshot": self._delivery_snapshot,
                 "attempt_no": attempt + 1,
-                "approval_id": f"user-start:{self.log.run_id}",
+                "approval_id": (
+                    getattr(self.cfg, "execution_approval_id", "")
+                    or f"user-start:{self.log.run_id}"
+                ),
             },
             projection.to_dict(),
         )
@@ -359,7 +365,7 @@ def _gen_file_chunks(
         },
     )
     from ..recoverable_artifacts import save_artifact
-    save_artifact(self.log.paths.run_dir, "generated/" + path, {
+    artifact = {
         "path": path,
         "content": content,
         "output_hash": digest,
@@ -368,7 +374,16 @@ def _gen_file_chunks(
         "work_order_hash": work_order.order_hash,
         "dependency_hashes": compiled["dependency_hashes"],
         "response_id": latest_response_id,
-        "validation_status": "file_contract_validated_integration_unverified",
+        "validation_status": "verified",
+        "verification_level": "wire_and_artifact",
         "chunks": [{"index": 0, "sha256": digest}],
-    })
+    }
+    save_artifact(
+        self.log.paths.run_dir,
+        "generated/" + path,
+        artifact,
+    )
+    verified = dict(getattr(self, "_delivery_verified_artifacts", {}) or {})
+    verified[path] = artifact
+    self._delivery_verified_artifacts = verified
     return content, latest_response_id
