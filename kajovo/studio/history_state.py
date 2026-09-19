@@ -34,6 +34,7 @@ _STATES = {
     "cancelled": ("Zrušeno", "×", "muted", True),
     "stopped": ("Zrušeno", "×", "muted", True),
     "dry_run": ("Dry-run", "◇", "muted", True),
+    "plan_ready": ("Plán připraven", "◆", "success", True),
     "submission_unknown": ("Neznámý výsledek", "?", "warning", False),
     "files_complete_unverified": ("Neověřeno", "?", "warning", True),
     "closed": ("Dokončeno", "✓", "success", True),
