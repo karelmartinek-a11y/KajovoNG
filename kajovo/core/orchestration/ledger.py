@@ -124,6 +124,23 @@ def _reserve_sqlite(logger, cfg, work_order, reservation: dict[str, Any]) -> Non
             "PLACENÝ_REQUEST_BEZ_WORK_ORDER: submit nemá zmrazenou pracovní identitu."
         )
     repo = repository_for_logger(logger)
+    if not repo.has_run(work_order.run_id):
+        from .contracts import canonical_sha256
+        from .run_config import build_run_config_v2, run_scope_hash
+        run_config = build_run_config_v2(cfg)
+        repo.register_run(
+            work_order.run_id,
+            lineage_id=work_order.run_id,
+            scope_hash=run_scope_hash(cfg),
+            policy_hash=canonical_sha256({
+                "unknown_pricing": run_config["unknown_pricing"],
+                "auto_repair": run_config["auto_repair"],
+                "verification_profile_ids": run_config["verification_profile_ids"],
+            }),
+            config=run_config,
+            approval_id=work_order.approval_id,
+            status="running",
+        )
     repo.register_work_order(
         work_order,
         body_ref=reservation["request_hash"],
