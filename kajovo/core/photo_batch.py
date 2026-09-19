@@ -783,7 +783,7 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
         apply_batch_status(job, matches[0])
         if not job.batch_id:
             raise ValueError("Dohledaná dávka nemá platné batch_id.")
-        if job.schema_version >= 2:
+        if job.schema_version >= 2 and _photo_ledger_present(job, log_dir):
             rows = [
                 image_edit_row(
                     item,
