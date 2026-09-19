@@ -23,6 +23,11 @@ def _submit_generate_batch(self: RunContext, client, manifest):
     if manifest.get("version") != 3:
         raise ContractError("Nové odeslání legacy snapshotové dávky je zakázáno; je nutná explicitní příprava FileContext.")
     report = CostContextReport(self.log.paths.run_dir)
+    from ..orchestration.ledger import reserve_batch
+    reserve_batch(
+        self.log, self.cfg, client,
+        manifest["requests"], manifest["cost_context_reports"],
+    )
     for row, measurement in zip(manifest["requests"], manifest["cost_context_reports"], strict=True):
         report.record(row["body"], custom_id=row["custom_id"],
                       path=manifest["expected"][row["custom_id"]], measurement=measurement)
