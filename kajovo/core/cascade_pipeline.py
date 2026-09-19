@@ -661,6 +661,11 @@ class CascadeRunExecutor:
                 if step.use_conversation_context
                 else ""
             )
+            if step.use_conversation_context and not previous_id:
+                raise ContractError(
+                    f"Krok {idx}: konverzační dependency {step.context_id!r} nemá "
+                    "doložené previous_response_id z předchozího kroku."
+                )
             if previous_id:
                 payload["previous_response_id"] = previous_id
             if step.temperature is not None:
