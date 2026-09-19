@@ -10,6 +10,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,22 @@ from .cascade_types import CascadeDefinition, CascadeOutput, CascadeStep
 from .contracts import ContractError, validate_paths
 from .openai_client import OpenAIClient
 from .openai_transport import SubmissionOutcomeUnknown
+from .orchestration.contracts import canonical_sha256
+from .orchestration.ledger import (
+    mark_submission,
+    release_reservation,
+    reserve_paid_request,
+    settle_usage,
+)
+from .orchestration.repository import repository_for_logger
+from .orchestration.run_config import (
+    DEFAULT_MAX_COST_MICROUSD,
+    DEFAULT_MAX_INPUT_TOKENS,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_PAID_REQUESTS,
+    validate_run_config_v2,
+)
+from .orchestration.work_order import freeze_order
 from .progress import ProgressEvent
 from .request_rules import validate_response_payload
 from .runs.ports import EventPort
@@ -125,6 +142,12 @@ class CascadeRunConfig:
     resume_snapshot: dict[str, Any] | None = None
     recovery_instruction: str = ""
     lineage: dict[str, Any] | None = None
+    max_cost_microusd: int | None = DEFAULT_MAX_COST_MICROUSD
+    max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    max_paid_requests: int = DEFAULT_MAX_PAID_REQUESTS
+    unknown_pricing: str = "block"
+    execution_approval_id: str = ""
 
 
 class CascadeRunExecutor:
@@ -153,6 +176,101 @@ class CascadeRunExecutor:
         self.logger: CascadeLogger | None = None
         self._failed_step_index = 0
         self._runtime_cache: dict[str, Any] = {}
+
+    def _ledger_cfg(self, model: str, approval_id: str):
+        return SimpleNamespace(
+            mode="CASCADE",
+            model=model,
+            send_as_c=False,
+            maximum_quality=False,
+            max_cost_microusd=self.cfg.max_cost_microusd,
+            max_input_tokens=self.cfg.max_input_tokens,
+            max_output_tokens=self.cfg.max_output_tokens,
+            max_paid_requests=self.cfg.max_paid_requests,
+            unknown_pricing=self.cfg.unknown_pricing,
+            auto_repair="within_approval",
+            verification_profile_ids=[],
+            stop_after_plan=False,
+            dry_run=False,
+            execution_approval_id=approval_id,
+            project=self.cfg.project,
+            prompt=self.cfg.cascade.name,
+            in_dir=self.cfg.in_dir,
+            out_dir=self.cfg.out_dir,
+            attached_file_ids=[],
+            input_file_ids=[],
+            attached_vector_store_ids=[],
+            qfile_output_path="",
+            qfile_output_format="",
+            qfile_suggest_path=False,
+            qa_continue_conversation=False,
+            response_id="",
+        )
+
+    def _register_ledger_run(
+        self,
+        run_id: str,
+        approval_id: str,
+        input_artifacts: list[dict[str, Any]],
+    ) -> None:
+        if self.logger is None:
+            raise RuntimeError("Cascade logger není inicializovaný.")
+        run_config = {
+            "version": 2,
+            "workflow": "CASCADE",
+            "execution": "live",
+            "quality": "standard",
+            "model_bindings": [
+                {"stage": step.id, "model": step.model}
+                for step in self.cfg.cascade.steps
+            ],
+            "max_cost_microusd": self.cfg.max_cost_microusd,
+            "max_input_tokens": self.cfg.max_input_tokens,
+            "max_output_tokens": self.cfg.max_output_tokens,
+            "max_paid_requests": self.cfg.max_paid_requests,
+            "unknown_pricing": self.cfg.unknown_pricing,
+            "auto_repair": "within_approval",
+            "verification_profile_ids": [],
+            "stop_after_plan": False,
+            "dry_run": False,
+        }
+        validate_run_config_v2(run_config)
+        repo = repository_for_logger(self.logger)
+        repo.register_run(
+            run_id,
+            lineage_id=run_id,
+            scope_hash=canonical_sha256(
+                {
+                    "run_config_v2": run_config,
+                    "cascade_definition": self.cfg.cascade.to_dict(),
+                    "input_artifacts": [
+                        {
+                            "artifact_id": row.get("artifact_id"),
+                            "path_in_bundle": row.get("path_in_bundle"),
+                        }
+                        for row in input_artifacts
+                    ],
+                }
+            ),
+            policy_hash=canonical_sha256(run_config),
+            config=run_config,
+            approval_id=approval_id,
+            status="running",
+        )
+        self.logger.update_state(
+            {
+                "run_config_v2": run_config,
+                "execution_authorization": {
+                    "approval_id": approval_id,
+                    "scope_hash": canonical_sha256(
+                        {
+                            "cascade_definition": self.cfg.cascade.to_dict(),
+                            "input_artifacts": input_artifacts,
+                        }
+                    ),
+                },
+            }
+        )
 
     def request_stop(self):
         self._stop = True
@@ -923,6 +1041,15 @@ class CascadeRunExecutor:
             input_artifacts, missing_input_artifacts = self._archive_cascade_inputs()
             self._cascade_input_artifact_ids = [row["artifact_id"] for row in input_artifacts]
             self._cascade_input_missing = list(missing_input_artifacts)
+            approval_id = (
+                self.cfg.execution_approval_id
+                or f"user-start:{run_id}"
+            )
+            self.cfg.execution_approval_id = approval_id
+            self.cfg.run_id = run_id
+            self._register_ledger_run(
+                run_id, approval_id, input_artifacts
+            )
             start_index = 0
             if self.cfg.cascade.run_from_step_id:
                 start_index = self.cfg.cascade.step_index(self.cfg.cascade.run_from_step_id)
@@ -1080,12 +1207,151 @@ class CascadeRunExecutor:
                         "requests", f"cascade_step_{idx:02d}_attempt_{repair_attempt + 1}",
                         payload, step_id=current_step_record_id,
                     )
+                    ledger_cfg = self._ledger_cfg(
+                        step.model,
+                        self.cfg.execution_approval_id,
+                    )
+                    projection = {
+                        "cascade_name": self.cfg.cascade.name,
+                        "step_id": step.id,
+                        "step_signature": step_signature(step),
+                        "attempt_no": repair_attempt + 1,
+                        "input": payload.get("input"),
+                        "previous_response_id": payload.get(
+                            "previous_response_id"
+                        ),
+                    }
+                    wire_format = (payload.get("text") or {}).get(
+                        "format"
+                    ) or {}
+                    order = freeze_order(
+                        ledger_cfg,
+                        {
+                            "run_id": run_id,
+                            "step_id": current_step_record_id,
+                            "task_id": step.id,
+                            "stage": "CASCADE",
+                            "route": "responses_live",
+                            "target_id": step.id,
+                            "target_path": None,
+                            "expected_target_hash": None,
+                            "contract_name": str(
+                                wire_format.get("name")
+                                or "CASCADE_TEXT"
+                            ),
+                            "schema": wire_format.get("schema") or {},
+                            "prompt": str(
+                                payload.get("instructions") or ""
+                            ),
+                            "model": step.model,
+                            "model_capability": {},
+                            "source_snapshot": {
+                                "step_signature": step_signature(step),
+                                "cascade_name": self.cfg.cascade.name,
+                            },
+                            "attempt_no": repair_attempt + 1,
+                            "approval_id": (
+                                self.cfg.execution_approval_id
+                            ),
+                        },
+                        projection,
+                    )
+                    reserve_paid_request(
+                        self.logger,
+                        ledger_cfg,
+                        client,
+                        payload,
+                        work_order=order,
+                    )
                     try:
                         response = client.create_response(payload)
-                        self.logger.save_json(
-                            "responses", f"cascade_step_{idx:02d}_attempt_{repair_attempt + 1}",
-                            response, step_id=current_step_record_id,
+                    except Exception as exc:
+                        if isinstance(
+                            exc, SubmissionOutcomeUnknown
+                        ):
+                            mark_submission(
+                                self.logger,
+                                order,
+                                None,
+                                unknown=True,
+                            )
+                            self.logger.update_state(
+                                {"status": "submission_unknown"}
+                            )
+                            self._write_runtime_state(
+                                {
+                                    "status": "submission_unknown",
+                                    "run_id": run_id,
+                                    "failed_step_id": step.id,
+                                    "failed_step_number": idx,
+                                }
+                            )
+                        elif (
+                            getattr(exc, "request_sent", None)
+                            is False
+                            or getattr(exc, "status_code", None)
+                            in {400, 401, 403, 404, 422, 429}
+                        ):
+                            release_reservation(
+                                self.logger, order
+                            )
+                        else:
+                            mark_submission(
+                                self.logger,
+                                order,
+                                None,
+                                unknown=True,
+                            )
+                            self.logger.update_state(
+                                {"status": "submission_unknown"}
+                            )
+                            self._write_runtime_state(
+                                {
+                                    "status": "submission_unknown",
+                                    "run_id": run_id,
+                                    "failed_step_id": step.id,
+                                    "failed_step_number": idx,
+                                }
+                            )
+                        raise
+                    provider_id = str(
+                        response.get("id") or ""
+                    ).strip()
+                    if not provider_id:
+                        mark_submission(
+                            self.logger,
+                            order,
+                            None,
+                            unknown=True,
                         )
+                        self.logger.update_state(
+                            {"status": "submission_unknown"}
+                        )
+                        self._write_runtime_state(
+                            {
+                                "status": "submission_unknown",
+                                "run_id": run_id,
+                                "failed_step_id": step.id,
+                                "failed_step_number": idx,
+                            }
+                        )
+                        raise SubmissionOutcomeUnknown(
+                            "Kaskádový placený krok nemá potvrzené response ID."
+                        )
+                    mark_submission(
+                        self.logger,
+                        order,
+                        provider_id,
+                        unknown=False,
+                    )
+                    settle_usage(
+                        self.logger, order, response
+                    )
+                    self.logger.save_json(
+                        "responses", f"cascade_step_{idx:02d}_attempt_{repair_attempt + 1}",
+                        response, step_id=current_step_record_id,
+                    )
+                    try:
                         decoded = validate_output(response, payload)
                         break
                     except OutputContractError as exc:
