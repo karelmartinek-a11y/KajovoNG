@@ -7,6 +7,8 @@ from ..contracts import (
     ContractError,
 )
 from ..progress import ProgressEvent
+from ..orchestration.executor import classify_response
+from ..orchestration.errors import OrchestrationError
 from ..request_rules import uses_reasoning_defaults
 from ..requirements import apply_quality
 from ..structured_output import (
@@ -121,9 +123,20 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
     cost_report.record(cost_payload, response=response)
     self.progress_event.emit(ProgressEvent(self._progress_stage, detail="Odpověď přijata z OpenAI Responses API; lokálně ověřuji výsledek.", source="api"))
     self.log.save_json("responses", f"received_{response.get('id', 'NOID')}", response)
-    if response.get("status") not in (None, "completed") or response.get("error"):
+    if response.get("error"):
         from ..contracts import RemoteResponseError
         raise RemoteResponseError(response)
+    try:
+        classified = classify_response(response)
+    except OrchestrationError as exc:
+        raise ContractError(str(exc)) from exc
+    if classified.kind in {"remote_pending", "incomplete", "remote_failed"}:
+        from ..contracts import RemoteResponseError
+        raise RemoteResponseError(response)
+    if classified.kind == "refusal":
+        raise ContractError("Provider odmítl pracovní požadavek; výstup nebyl přijat.")
+    if classified.kind == "tool_calls":
+        raise ContractError("TOOL_CALL_UNHANDLED: task vyžaduje explicitní tool-dispatch pokračování.")
     self.transition(RunStatus.PROCESSING_RESPONSE)
     validate_output(response, payload)
     return response
