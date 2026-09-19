@@ -79,7 +79,7 @@ def test_cascade_exposes_effective_output_directory():
 
 def test_text_cascade_cannot_complete_with_partial_response(tmp_path):
     from unittest.mock import patch
-    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-4.1-nano", input_text="test")])
+    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.6-luna", input_text="test")])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
     client = Mock()
@@ -110,7 +110,7 @@ def test_cascade_timestamp_zero_survives_round_trip():
 
 def test_text_cascade_unwraps_native_schema(tmp_path):
     from unittest.mock import patch
-    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.2", input_text="Ahoj")])
+    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.6-luna", input_text="Ahoj")])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
     client = Mock()
@@ -129,7 +129,7 @@ def test_missing_custom_schema_is_prepared_automatically(tmp_path):
     from unittest.mock import patch
 
     from kajovo.core.structured_output import obj
-    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.2", input_text="Vrať answer",
+    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.6-luna", input_text="Vrať answer",
         output_type="json", output_schema_kind="custom")])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
@@ -150,7 +150,7 @@ def test_invalid_cascade_content_is_rejected_before_local_upload(tmp_path):
     from unittest.mock import patch
     local = tmp_path / "input.txt"
     local.write_text("data", encoding="utf-8")
-    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.2", input_text="test",
+    definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.6-luna", input_text="test",
         files_local_paths=[str(local)], input_content_json=[{"type": "input_text", "text": 123}])])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
