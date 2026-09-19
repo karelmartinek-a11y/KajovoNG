@@ -22,8 +22,11 @@ def content_hash(value):
 
 def file_index(snapshot):
     structure = snapshot["structure"]
-    files = structure.get("files", structure.get("touched_files", []))
-    files = [*files, *structure.get("preserved_files", [])]
+    if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
+        files = list((structure.get("spine") or {}).get("files") or [])
+    else:
+        files = structure.get("files", structure.get("touched_files", []))
+        files = [*files, *structure.get("preserved_files", [])]
     validate_paths(files)
     return {file["path"]: file for file in files}
 
@@ -129,6 +132,16 @@ def implementation_schema():
 def validate_implementation(snapshot):
     import jsonschema
     structure = snapshot["structure"]
+    if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
+        from .orchestration.waves import build_execution_dag
+        dag = build_execution_dag(structure)
+        return {
+            "waves": [[list(wave)] for wave in dag.waves],
+            "cycles": [],
+            "content_dependencies": {
+                key: list(value) for key, value in dag.content_dependencies.items()
+            },
+        }
     implementation = structure.get("implementation")
     if implementation is None:
         raise ContractError("Příprava vyžaduje implementační kontrakt v1; legacy struktura není samostatně implementovatelná.")
@@ -197,13 +210,168 @@ class ContextCompiler:
 
     def __init__(self, snapshot):
         self.snapshot = deepcopy(snapshot)
-        self.graph = validate_implementation(self.snapshot)
         self.files = file_index(self.snapshot)
-        self.implementation = self.snapshot["structure"]["implementation"]
-        self.contracts = {c["path"]: c for c in self.implementation["files"]}
         self.snapshot_hash = content_hash(self.snapshot)
+        structure = self.snapshot["structure"]
+        self.is_v3 = structure.get("contract") == "IMPLEMENTATION_GRAPH_V3"
+        if self.is_v3:
+            from .orchestration.waves import build_execution_dag
+            dag = build_execution_dag(structure)
+            self.graph = {
+                "waves": [list(wave) for wave in dag.waves],
+                "cycles": [],
+                "content_dependencies": {
+                    key: list(value)
+                    for key, value in dag.content_dependencies.items()
+                },
+            }
+            self.implementation = structure
+            self.contracts = {
+                row["path"]: row["spec"]
+                for row in structure.get("file_specs", [])
+            }
+            self.interfaces = list((structure.get("spine") or {}).get("interfaces", []))
+        else:
+            self.graph = validate_implementation(self.snapshot)
+            self.implementation = structure["implementation"]
+            self.contracts = {c["path"]: c for c in self.implementation["files"]}
+            self.interfaces = list(self.implementation["interfaces"])
+
+    def _compile_v3(self, path, *, originals=None, verified_artifacts=None):
+        if path not in self.files:
+            raise ContractError(f"Neznámý cílový soubor {path}.")
+        if path not in self.contracts:
+            raise ContractError(f"{path}: chybí A2/B2 DETAIL kontrakt.")
+        file = self.files[path]
+        spec = deepcopy(self.contracts[path])
+        requirements = self.snapshot.get("requirements") or {}
+        plan = self.snapshot.get("plan") or {}
+        requirement_index = {
+            row["id"]: row for row in requirements.get("requirements", [])
+        }
+        selected_requirements = [
+            requirement_index[key]
+            for key in file.get("requirement_ids", [])
+            if key in requirement_index
+        ]
+        if {row["id"] for row in selected_requirements} != set(file.get("requirement_ids", [])):
+            raise ContractError(f"{path}: neznámý requirement.")
+        components = [
+            row for row in plan.get("components", [])
+            if row.get("id") == file.get("component_id")
+        ]
+        if len(components) != 1:
+            raise ContractError(f"{path}: chybí jednoznačná component.")
+
+        symbols = set(file.get("provides", []) + file.get("requires", []))
+        shared_interfaces = sorted(
+            [row for row in self.interfaces if row["id"] in symbols],
+            key=lambda row: row["id"],
+        )
+        dependencies = sorted(set(file.get("dependencies", [])))
+        content_dependencies = sorted(set(file.get("content_dependencies", [])))
+        obligations = []
+        for owner in self.snapshot["structure"]["spine"].get("obligation_owners", []):
+            if path in owner.get("paths", []):
+                obligations.append(deepcopy(owner))
+
+        relevant_sources = []
+        for source_path, content in sorted((originals or {}).items()):
+            if source_path == path or source_path in dependencies:
+                if not isinstance(content, str):
+                    raise ContractError("Původní obsah musí být přesný text.")
+                relevant_sources.append({
+                    "path": source_path,
+                    "content": content,
+                    "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    "reason": (
+                        "Původní měněný soubor"
+                        if source_path == path
+                        else "Přímá zdrojová závislost"
+                    ),
+                })
+        if file.get("action") == "modify" and path not in (originals or {}):
+            raise ContractError(f"{path}: chybí původní obsah měněného souboru.")
+
+        verified = []
+        for dependency in content_dependencies:
+            artifact = (verified_artifacts or {}).get(dependency)
+            if artifact is None:
+                raise ContractError(
+                    f"{path}: content dependency {dependency} nemá ověřený provider artefakt."
+                )
+            if artifact.get("validation_status") != "verified":
+                raise ContractError(
+                    f"{path}: content dependency {dependency} není na požadované ověřovací úrovni."
+                )
+            if artifact.get("contract_hash") != self.provider_hash(dependency):
+                raise ContractError(
+                    f"{path}: content dependency {dependency} má zastaralý contract hash."
+                )
+            content = artifact.get("content")
+            if not isinstance(content, str) or hashlib.sha256(content.encode("utf-8")).hexdigest() != artifact.get("output_hash"):
+                raise ContractError(f"{path}: neplatný hash dependency artefaktu {dependency}.")
+            verified.append({**artifact, "path": dependency})
+
+        implementation_contract = deepcopy(spec)
+        implementation_contract["expected_output_tokens"] = int(
+            implementation_contract.get("expected_visible_tokens") or 0
+        )
+        context = {
+            "contract_version": 3,
+            "target_file": deepcopy(file),
+            "implementation_contract": implementation_contract,
+            "relevant_requirements": sorted(
+                selected_requirements, key=lambda row: row["id"]
+            ),
+            "architecture_contracts": components,
+            "applicable_invariants": sorted(
+                obligations, key=lambda row: row["obligation_id"]
+            ),
+            "shared_type_contracts": shared_interfaces,
+            "dependency_contracts": [
+                {
+                    "path": dependency,
+                    "provides": self.files[dependency].get("provides", []),
+                    "interfaces": [
+                        row for row in self.interfaces
+                        if row["id"] in set(self.files[dependency].get("provides", []))
+                    ],
+                }
+                for dependency in dependencies
+            ],
+            "relevant_source_excerpts": relevant_sources,
+            "verified_dependency_artifacts": verified,
+            "cycle_contracts": [],
+        }
+        context["context_provenance"] = [
+            {
+                "component": key,
+                "value_hash": content_hash(value),
+                "source": "IMPLEMENTATION_GRAPH_V3",
+                "reason": "Explicitní vazba z validovaného SPINE/DETAIL grafu.",
+            }
+            for key, value in context.items()
+            if key != "context_provenance"
+        ]
+        return {
+            "source_snapshot_hash": self.snapshot_hash,
+            "file_context_hash": content_hash(context),
+            "contract_hash": content_hash(spec),
+            "dependency_hashes": {
+                dependency: self.provider_hash(dependency)
+                for dependency in dependencies
+            },
+            "working_context": deepcopy(context),
+        }
 
     def compile(self, path, *, originals=None, verified_artifacts=None):
+        if self.is_v3:
+            return self._compile_v3(
+                path,
+                originals=originals,
+                verified_artifacts=verified_artifacts,
+            )
         if path not in self.files:
             raise ContractError(f"Neznámý cílový soubor {path}.")
         file = self.files[path]
@@ -279,8 +447,15 @@ class ContextCompiler:
 
     def provider_hash(self, path):
         symbols = set(self.files[path].get("provides", []))
-        return content_hash({"path": path, "provides": sorted(symbols),
-            "interfaces": sorted([i for i in self.implementation["interfaces"] if i["id"] in symbols], key=lambda i: i["id"])})
+        interfaces = self.interfaces if self.is_v3 else self.implementation["interfaces"]
+        return content_hash({
+            "path": path,
+            "provides": sorted(symbols),
+            "interfaces": sorted(
+                [row for row in interfaces if row["id"] in symbols],
+                key=lambda row: row["id"],
+            ),
+        })
 
     def invalidated(self, previous, *, originals=None, previous_originals=None):
         """Přímé změny kontraktů a tranzitivní konzumenti; bez nesouvisejících souborů."""
