@@ -10,18 +10,32 @@ from kajovo.core.context_compiler import content_hash
 from test_workflows import make_worker
 
 
-def _input_json(payload):
+def _input_text(payload):
     text = []
     value = payload.get("input")
     if isinstance(value, str):
-        return json.loads(value)
+        return value
     for message in value or []:
         if not isinstance(message, dict):
             continue
         for part in message.get("content") or []:
             if isinstance(part, dict) and part.get("type") == "input_text":
                 text.append(str(part.get("text") or ""))
-    return json.loads("".join(text))
+    return "".join(text)
+
+
+def _input_json(payload):
+    return json.loads(_input_text(payload))
+
+
+def _file_input_json(payload):
+    text = _input_text(payload)
+    marker = '{"file_context":'
+    offset = text.find(marker)
+    if offset < 0:
+        raise AssertionError("FILE_CONTENT_V1 fixture nemá file_context.")
+    value, _end = json.JSONDecoder().raw_decode(text[offset:])
+    return value
 
 
 def _source_refs(source):
@@ -214,7 +228,11 @@ class V2Responder:
     def __call__(self, payload):
         self.calls.append(copy.deepcopy(payload))
         name = ((payload.get("text") or {}).get("format") or {}).get("name")
-        data = _input_json(payload)
+        data = (
+            _file_input_json(payload)
+            if name == "FILE_CONTENT_V1"
+            else _input_json(payload)
+        )
         if name == "A0R_REQUIREMENTS_V2":
             value = self._ready(requirements_data(data["source"]))
         elif name == "B0R_REQUIREMENTS_V2":
