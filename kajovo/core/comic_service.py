@@ -994,14 +994,73 @@ class ComicService:
                 snap["image_submitting"] = True
                 self.update_operation(operation["id"], snapshot=snap)
                 self.progress("COMIC_REFERENCE", detail="Vytvářím obrazovou referenci")
+                projection = {
+                    "entity_id": snap["entity"]["id"],
+                    "bible_id": snap["bible"]["id"],
+                    "descriptor_sha256": hashlib.sha256(
+                        snap["descriptor"].encode("utf-8")
+                    ).hexdigest(),
+                    "asset_sha256": [
+                        self.store.get("assets", asset)["sha256"]
+                        for asset in snap["assets"]
+                    ],
+                }
+                _repo, image_order = self._reserve_image_effect(
+                    operation,
+                    log,
+                    task_id="entity-image-" + snap["entity"]["id"],
+                    route="image_live",
+                    target_id=snap["entity"]["id"],
+                    body={
+                        "endpoint": "/v1/images/edits",
+                        **body,
+                    },
+                    projection=projection,
+                )
                 try:
-                    response = self.client.create_image("/v1/images/edits", body)
+                    response = self.client.create_image(
+                        "/v1/images/edits", body
+                    )
                 except Exception as exc:
-                    if getattr(exc, "status_code", None) in (400, 401, 403, 404, 422, 429):
+                    if getattr(exc, "status_code", None) in (
+                        400, 401, 403, 404, 422, 429
+                    ) or getattr(exc, "request_sent", None) is False:
+                        release_reservation(log, image_order)
                         snap["image_submitting"] = False
                         self.update_operation(operation["id"], snapshot=snap)
                         raise
-                    raise SubmissionUnknown("Obrazový submit nemá potvrzený výsledek; neposílám jej podruhé.") from exc
+                    mark_submission(
+                        log, image_order, None, unknown=True
+                    )
+                    raise SubmissionUnknown(
+                        "Obrazový submit nemá potvrzený výsledek; neposílám jej podruhé."
+                    ) from exc
+                provider_identity = str(
+                    response.get("id")
+                    or response.get("_request_id")
+                    or (
+                        "image-response-"
+                        + canonical_sha256(
+                            {
+                                "operation": operation["id"],
+                                "response": response,
+                            }
+                        )[:32]
+                    )
+                )
+                mark_submission(
+                    log,
+                    image_order,
+                    provider_identity,
+                    unknown=False,
+                )
+                self._settle_image_usage(
+                    log,
+                    image_order.budget_reservation_id,
+                    provider_item_id=provider_identity,
+                    usage=response.get("usage") or {},
+                    batch=False,
+                )
                 archive = self.store.asset(operation["project_id"], gzip.compress(canonical(response).encode(), mtime=0), {"role": "provider_archive", "encoding": "gzip"})
                 snap.update(image_archive=archive, image_parameters=body)
                 self.update_operation(operation["id"], snapshot=snap)
@@ -1183,11 +1242,25 @@ class ComicService:
             if batch["status"] == "cancelled" and not batch["provider_id"]:
                 continue
             if not batch["provider_id"]:
+                if batch["status"] == "rejected":
+                    raise ComicError(
+                        "batch_rejected",
+                        "Provider dávku jednoznačně odmítl; nový placený submit vyžaduje explicitní retry.",
+                    )
                 if batch["status"] in ("submitting", "submission_unknown"):
                     matches = exact_batch_matches(self.client.list_batches(), batch["input_file_id"], batch["endpoint"])
                     if len(matches) != 1:
                         raise SubmissionUnknown("Neurčitý submit nelze jednoznačně dohledat. Novou dávku neposílám.")
                     self.save_batch(batch["id"], matches[0])
+                    repo, reservation_id = self._image_reservation_for_task(
+                        log, "batch-" + batch["id"]
+                    )
+                    if reservation_id:
+                        repo.mark_submitted(
+                            reservation_id,
+                            str(matches[0].get("id") or ""),
+                            unknown=False,
+                        )
                 else:
                     if not allow_submit:
                         continue
@@ -1212,17 +1285,75 @@ class ComicService:
                         db.execute("UPDATE batches SET input_file_id=?,status='submitting' WHERE id=?", (file_id, batch["id"]))
                     for row in rows:
                         log.bundle.record_request(row["body"], name=row["custom_id"], endpoint=row["url"])
+                    projection = {
+                        "batch_id": batch["id"],
+                        "endpoint": batch["endpoint"],
+                        "input_file_id": file_id,
+                        "rows": [
+                            {
+                                "custom_id": row["custom_id"],
+                                "body_sha256": canonical_sha256(
+                                    row["body"]
+                                ),
+                            }
+                            for row in rows
+                        ],
+                    }
+                    _repo, batch_order = self._reserve_image_effect(
+                        operation,
+                        log,
+                        task_id="batch-" + batch["id"],
+                        route="image_batch",
+                        target_id=batch["id"],
+                        body={
+                            "endpoint": batch["endpoint"],
+                            "input_file_id": file_id,
+                            "rows": rows,
+                        },
+                        projection=projection,
+                    )
                     self.progress("COMIC_SUBMITTING", detail="Odesílám pracovní dávku")
                     try:
                         payload = self.client.create_image_batch(file_id, rows)
                     except Exception as exc:
-                        if getattr(exc, "status_code", None) in (400, 401, 403, 404, 422, 429):
+                        if getattr(exc, "status_code", None) in (
+                            400, 401, 403, 404, 422, 429
+                        ) or getattr(exc, "request_sent", None) is False:
+                            release_reservation(log, batch_order)
                             with self.store.transaction() as db:
                                 db.execute("UPDATE batches SET status='rejected' WHERE id=?", (batch["id"],))
                             raise
+                        mark_submission(
+                            log,
+                            batch_order,
+                            None,
+                            unknown=True,
+                        )
+                        with self.store.transaction() as db:
+                            db.execute(
+                                "UPDATE batches SET status='submission_unknown' WHERE id=?",
+                                (batch["id"],),
+                            )
                         raise SubmissionUnknown("Výsledek odeslání dávky není znám; obnova jej nejprve dohledá.") from exc
                     if not payload.get("id"):
+                        mark_submission(
+                            log,
+                            batch_order,
+                            None,
+                            unknown=True,
+                        )
+                        with self.store.transaction() as db:
+                            db.execute(
+                                "UPDATE batches SET status='submission_unknown' WHERE id=?",
+                                (batch["id"],),
+                            )
                         raise SubmissionUnknown("OpenAI nevrátilo ID pracovní dávky.")
+                    mark_submission(
+                        log,
+                        batch_order,
+                        str(payload["id"]),
+                        unknown=False,
+                    )
                     self.save_batch(batch["id"], payload)
             batch = self.store.get("batches", batch["id"])
             payload = batch["payload"] if batch["status"] in TERMINAL and batch["payload"].get("_local_results") else self.client.retrieve_batch(batch["provider_id"])
@@ -1309,6 +1440,22 @@ class ComicService:
                 continue
             self.check_stop()
             response = row.get("response") or {}
+            body = response.get("body") or {}
+            repo, reservation_id = self._image_reservation_for_task(
+                log, "batch-" + batch["id"]
+            )
+            if reservation_id and isinstance(body, dict):
+                self._settle_image_usage(
+                    log,
+                    reservation_id,
+                    provider_item_id=(
+                        str(batch.get("provider_id") or payload.get("id") or "")
+                        + ":"
+                        + str(row["custom_id"])
+                    ),
+                    usage=body.get("usage") or {},
+                    batch=True,
+                )
             if row.get("error") or response.get("status_code", 200) >= 400:
                 error = row.get("error") or (response.get("body") or {}).get("error") or {"code": "openai_error"}
                 self.item_error(item["id"], error)
