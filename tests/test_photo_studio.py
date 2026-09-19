@@ -57,21 +57,50 @@ def test_professionalize_payload_is_real_responses_work_not_preflight():
     assert payload["model"] == "gpt-5.6-luna"
     assert payload["store"] is False
     assert "instructions" in payload
-    assert "professional_prompt" in payload["text"]["format"]["schema"]["properties"]
+    assert payload["text"]["format"]["name"] == "PHOTO_PLAN_V1"
+    assert set(payload["text"]["format"]["schema"]["properties"]) == {
+        "professional_prompt",
+        "edit_actions",
+        "preserve_invariants",
+        "acceptance_criteria",
+    }
     assert "USER_PROMPT" in payload["input"]
 
 
-def test_professionalize_replaces_only_after_valid_response():
+def test_professionalize_replaces_only_after_valid_response(tmp_path):
     client = Mock()
+    from kajovo.core.context_compiler import content_hash
+
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 100,
+        "request_hash": content_hash(payload),
+    }
     client.create_response.return_value = {
         "id": "resp_photo",
         "status": "completed",
-        "output_text": json.dumps({"professional_prompt": "Correct verticals and preserve the real room."}),
+        "model": "gpt-5.6-luna",
+        "output_text": json.dumps(
+            {
+                "professional_prompt": "Correct verticals and preserve the real room.",
+                "edit_actions": ["Correct verticals."],
+                "preserve_invariants": ["Preserve the real room."],
+                "acceptance_criteria": ["Verticals are corrected without unrelated changes."],
+            }
+        ),
+        "usage": {"input_tokens": 100, "output_tokens": 30},
     }
-    result = professionalize_prompt(client, "gpt-5.6-luna", "srovnej stěny")
+    result = professionalize_prompt(
+        client,
+        "gpt-5.6-luna",
+        "srovnej stěny",
+        tmp_path / "LOG",
+    )
     assert result.original_prompt == "srovnej stěny"
     assert result.professional_prompt.startswith("Correct verticals")
+    assert result.photo_plan["version"] == 1
+    assert result.photo_plan["acceptance_criteria"]
     client.create_response.assert_called_once()
+    assert list((tmp_path / "LOG").glob("RUN_PHOTO_PROMPT_*/bundle.json"))
 
 
 def _image_model():
