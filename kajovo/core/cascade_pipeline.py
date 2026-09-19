@@ -1340,7 +1340,9 @@ class CascadeRunExecutor:
                             }
                         )
                         raise SubmissionOutcomeUnknown(
-                            "Kaskádový placený krok nemá potvrzené response ID."
+                            "cascade_response",
+                            "POST",
+                            "/v1/responses",
                         )
                     mark_submission(
                         self.logger,
