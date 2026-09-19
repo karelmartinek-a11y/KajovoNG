@@ -236,8 +236,8 @@ def _run_qfile(
                 "attached_file_ids": list(self.cfg.attached_file_ids or []),
                 "plan": plan,
             },
-            "attempt_no": 0,
-            "approval_id": f"user-qfile-path:{self.log.run_id}",
+            "attempt_no": 1,
+            "approval_id": getattr(self.cfg, "execution_approval_id", "") or f"user-qfile-path:{self.log.run_id}",
         },
         projection,
     )
