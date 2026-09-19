@@ -521,6 +521,38 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
             seal=str(final_state.get("status")) in {"completed", "failed"},
         )
         if bundle:
+            for staged in result.get("staged_files") or []:
+                if not isinstance(staged, dict) or not staged.get("staged_path"):
+                    continue
+                path = (Path(run_dir) / staged["staged_path"]).resolve()
+                try:
+                    path.relative_to(Path(run_dir).resolve())
+                except ValueError:
+                    continue
+                if path.is_file():
+                    try:
+                        bundle.archive_artifact(
+                            path,
+                            role="staged_output",
+                            kind="output_file",
+                            source="batch_import",
+                            reusable=True,
+                            reconstruction_role=str(staged.get("path") or ""),
+                            metadata={
+                                "batch_id": batch_id,
+                                "relative_path": staged.get("path"),
+                                "sha256": staged.get("sha256"),
+                                "expected_target_hash": staged.get("expected_target_hash"),
+                                "publication": "not_published",
+                            },
+                        )
+                    except (OSError, ValueError) as exc:
+                        bundle.append_event(
+                            "artifact.archive_error",
+                            {"path": str(path), "error": str(exc)},
+                            severity="error",
+                            human_message=f"Staged výstup nelze archivovat: {path}",
+                        )
             for destination in result.get("written") or []:
                 path = Path(safe_join_under_root(state["out_dir"], destination))
                 if path.is_file():
@@ -535,20 +567,37 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
                             metadata={"batch_id": batch_id},
                         )
                     except (OSError, ValueError) as exc:
-                        bundle.append_event("artifact.archive_error", {"path": destination, "error": str(exc)},
-                                            severity="error", human_message=f"Výstup nelze archivovat: {destination}")
-            import_errors = {**(result.get("errors") or {}), **(result.get("completed_errors") or {})}
+                        bundle.append_event(
+                            "artifact.archive_error",
+                            {"path": destination, "error": str(exc)},
+                            severity="error",
+                            human_message=f"Výstup nelze archivovat: {destination}",
+                        )
+            import_errors = {
+                **(result.get("errors") or {}),
+                **(result.get("completed_errors") or {}),
+            }
             bundle.record_validation(
                 target_type="batch_import",
                 target_id=batch_id,
                 validator="process_saved_batch",
-                status="failed" if import_errors or result.get("missing") or result.get("omitted") else "passed",
+                status=(
+                    "failed"
+                    if import_errors or result.get("missing") or result.get("omitted")
+                    else "passed"
+                ),
                 errors=[str(value) for value in import_errors.values()],
-                evidence={"status": result.get("status"), "written": result.get("written") or [],
-                          "error_details": result.get("error_details") or {}, "missing": result.get("missing") or [],
-                          "omitted": result.get("omitted") or []},
+                evidence={
+                    "status": result.get("status"),
+                    "written": result.get("written") or [],
+                    "staged": result.get("staged_files") or [],
+                    "published": bool(result.get("published")),
+                    "error_details": result.get("error_details") or {},
+                    "missing": result.get("missing") or [],
+                    "omitted": result.get("omitted") or [],
+                },
             )
-            if result.get("status") in {"completed", "files_complete_unverified", "partial", "dry_run", "failed"}:
+            if result.get("status") in {"completed", "dry_run", "failed"}:
                 bundle.seal()
         return result
     target = state.get("out_dir")
