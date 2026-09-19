@@ -298,7 +298,17 @@ class PhotosPage(QWidget):
             self.professional = value
             self.prompt.setPlainText(value.professional_prompt)
 
-        self.execute("Vylepšení zadání fotografie", lambda client, task: professionalize_prompt(client, model, prompt, task.logline.emit), receive)
+        self.execute(
+            "Vylepšení zadání fotografie",
+            lambda client, task: professionalize_prompt(
+                client,
+                model,
+                prompt,
+                self.context.settings.log_dir,
+                task.logline.emit,
+            ),
+            receive,
+        )
 
     def restore_prompt(self):
         if self.professional:
