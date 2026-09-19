@@ -272,8 +272,22 @@ def builtin_format(contract):
     return response_format(contract, schema)
 
 
-def resolve_schema(client, model, instructions, original=None, context=None):
-    """Příprava neurčitého kontraktu s omezeným počtem oprav."""
+def resolve_schema(
+    client,
+    model,
+    instructions,
+    original=None,
+    context=None,
+    *,
+    request=None,
+    max_output_tokens=None,
+):
+    """Příprava neurčitého kontraktu s omezeným počtem oprav.
+
+    Volitelný request callback umožní nadřazenému workflow obalit každý
+    generativní návrh vlastním WorkOrder/budget/recovery kontraktem.
+    """
+
     if original:
         try:
             return compile_schema(original)
@@ -287,7 +301,16 @@ def resolve_schema(client, model, instructions, original=None, context=None):
                 "Každé pole má konkrétní typ, pole items. Používej jen type, properties, required, additionalProperties, "
                 "items, enum, description, anyOf a lokální $defs/$ref. Zachovej požadované názvy a návaznosti.",
             "input": json.dumps({"instructions": instructions, "original_schema": original, "downstream": context, "validation_error": error}, ensure_ascii=False)}
-        response = client.create_response(payload)
+        if max_output_tokens is not None:
+            if type(max_output_tokens) is not int or max_output_tokens <= 0:
+                raise ValueError("max_output_tokens pro přípravu schema musí být kladné celé číslo.")
+            payload["max_output_tokens"] = max_output_tokens
+            payload["truncation"] = "disabled"
+        response = (
+            request(payload, _attempt + 1)
+            if request is not None
+            else client.create_response(payload)
+        )
         try:
             proposal = validate_output(response, payload)
             schema = _load_json(proposal["schema_json"])
