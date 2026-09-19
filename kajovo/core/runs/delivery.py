@@ -4,9 +4,9 @@ import difflib
 import hashlib
 import json
 import os
-from pathlib import Path
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from ..contracts import ContractError, validate_paths
