@@ -12,8 +12,27 @@ from pathlib import Path
 
 from .batch_submit import exact_batch_matches
 from .comic_store import ComicStore, now, uid
-from .comic_types import (BIBLE_SCHEMA, DESCRIPTOR_SCHEMA, IMAGE_MODEL, TEXT_MODEL, ComicError,
-                          PanelFormat, canonical, checked_text, normalize_bible, validate_document, validate_overlays)
+from .comic_types import (
+    BIBLE_SCHEMA,
+    CONTINUITY_SCHEMA,
+    DESCRIPTOR_SCHEMA,
+    IMAGE_MODEL,
+    SCRIPT_SCHEMA,
+    STORYBOARD_SCHEMA,
+    STORY_SCHEMA,
+    TEXT_MODEL,
+    ComicError,
+    PanelFormat,
+    canonical,
+    checked_text,
+    normalize_bible,
+    validate_continuity,
+    validate_document,
+    validate_overlays,
+    validate_script,
+    validate_story,
+    validate_storyboard,
+)
 from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, source_bytes, validate_image_request
 from .orchestration.errors import OrchestrationError
 from .orchestration.image_slots import (
@@ -130,6 +149,111 @@ class ComicService:
                     "assets": [r["asset_id"] for r in self.store.references(project)]}
         return self.new_operation(project, "bible", snapshot, project)
 
+    def _entity_context(self, project_id):
+        values = []
+        for entity in self.store.rows(
+            "entities",
+            "project_id=? AND archived=0",
+            (project_id,),
+            order="created_at",
+        ):
+            descriptor = ""
+            if entity["active_revision"]:
+                descriptor = self.store.get(
+                    "entity_revisions", entity["active_revision"]
+                )["descriptor"]
+            values.append(
+                {
+                    "id": entity["id"],
+                    "kind": entity["kind"],
+                    "name": entity["name"],
+                    "description": entity["description"],
+                    "descriptor": descriptor,
+                }
+            )
+        return values
+
+    def latest_document(self, project_id, kind):
+        rows = self.store.rows(
+            "comic_documents",
+            "project_id=? AND kind=?",
+            (project_id, kind),
+            order="created_at DESC",
+        )
+        return rows[0] if rows else None
+
+    def _require_bible(self, project_id):
+        project = self.store.get("projects", project_id)
+        if not project["bible_id"]:
+            raise ComicError("bible_missing", "Nejprve sestavte bibli komiksu.")
+        return project, self.store.get("bibles", project["bible_id"])
+
+    def start_story(self, project_id):
+        project, bible = self._require_bible(project_id)
+        snapshot = {
+            "project_revision": project["revision"],
+            "project": {
+                "id": project["id"],
+                "name": project["name"],
+                "description": project["description"],
+                "style": project["style"],
+            },
+            "bible_id": bible["id"],
+            "bible": bible["result"],
+            "entities": self._entity_context(project_id),
+        }
+        return self.new_operation(project_id, "story", snapshot, project_id)
+
+    def start_script(self, project_id):
+        project, bible = self._require_bible(project_id)
+        story = self.latest_document(project_id, "story")
+        if story is None:
+            raise ComicError("story_missing", "Nejprve vytvořte Story.")
+        snapshot = {
+            "project_revision": project["revision"],
+            "bible_id": bible["id"],
+            "bible": bible["result"],
+            "source_document_id": story["id"],
+            "story": story["result"],
+            "entities": self._entity_context(project_id),
+        }
+        return self.new_operation(project_id, "script", snapshot, project_id)
+
+    def start_storyboard(self, project_id):
+        project, bible = self._require_bible(project_id)
+        script = self.latest_document(project_id, "script")
+        if script is None:
+            raise ComicError("script_missing", "Nejprve vytvořte Script.")
+        snapshot = {
+            "project_revision": project["revision"],
+            "bible_id": bible["id"],
+            "bible": bible["result"],
+            "source_document_id": script["id"],
+            "script": script["result"],
+            "entities": self._entity_context(project_id),
+        }
+        return self.new_operation(project_id, "storyboard", snapshot, project_id)
+
+    def start_continuity(self, project_id):
+        project, bible = self._require_bible(project_id)
+        storyboard = self.latest_document(project_id, "storyboard")
+        script = self.latest_document(project_id, "script")
+        if storyboard is None or script is None:
+            raise ComicError(
+                "storyboard_missing",
+                "Continuity vyžaduje uložený Script a Storyboard.",
+            )
+        snapshot = {
+            "project_revision": project["revision"],
+            "bible_id": bible["id"],
+            "bible": bible["result"],
+            "source_document_id": storyboard["id"],
+            "storyboard": storyboard["result"],
+            "script": script["result"],
+            "entities": self._entity_context(project_id),
+        }
+        return self.new_operation(project_id, "continuity", snapshot, project_id)
+
     def start_entity(self, entity_id):
         entity = self.store.get("entities", entity_id)
         project = self.store.get("projects", entity["project_id"])
@@ -155,6 +279,14 @@ class ComicService:
                     self._bible(operation)
                 elif operation["kind"] == "entity":
                     self._entity(operation)
+                elif operation["kind"] == "story":
+                    self._story(operation)
+                elif operation["kind"] == "script":
+                    self._script(operation)
+                elif operation["kind"] == "storyboard":
+                    self._storyboard(operation)
+                elif operation["kind"] == "continuity":
+                    self._continuity(operation)
                 else:
                     self._batch(operation, allow_submit=allow_submit)
             except Exception as exc:
