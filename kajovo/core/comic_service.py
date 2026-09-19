@@ -20,7 +20,6 @@ from .comic_types import (
     SCRIPT_SCHEMA,
     STORYBOARD_SCHEMA,
     STORY_SCHEMA,
-    TEXT_MODEL,
     ComicError,
     PanelFormat,
     canonical,
