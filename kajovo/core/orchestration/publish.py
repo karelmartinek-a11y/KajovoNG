@@ -266,8 +266,33 @@ def publish_staged_run(run_dir: str | Path) -> dict[str, Any]:
     state["published_files"] = report["published"]
     state["publish_report"] = report
     state["unverified_publish_approved"] = True
+    state["status"] = "completed_unverified"
+    state["publication_state"] = "published_unverified"
     _write_bytes_atomic(
         state_path,
         (json.dumps(state, ensure_ascii=False, indent=2, default=str) + "\n").encode("utf-8"),
     )
+    try:
+        from ..run_bundle import RunBundle
+        bundle = RunBundle(run_root)
+        bundle.update_run({
+            "status": "completed_unverified",
+            "result_class": "completed_unverified",
+        })
+        bundle.append_event(
+            "publication.completed_unverified",
+            {
+                "plan_id": report["plan_id"],
+                "published": report["published"],
+                "explicit_user_take": True,
+            },
+            source_module="orchestration.publish",
+            operation="PUBLISH",
+            human_message="Uživatel výslovně převzal staged artefakty bez úplného funkčního ověření.",
+        )
+        bundle.seal()
+    except (OSError, ValueError, KeyError):
+        # Publikace je již doložena durable journalem; chyba sekundární indexace
+        # nesmí předstírat rollback úspěšně commitnutého OUT.
+        pass
     return report
