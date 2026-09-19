@@ -44,6 +44,13 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
                 "Zápis pomocné evidence selhal: %s", evidence_error
             )
 
+        if self.cfg.stop_after_plan:
+            return {
+                "mode": "GENERATE", "plan": plan, "structure": struct,
+                "status": "plan_ready", "checkpoint": "plan_ready",
+                "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
+            }
+
         files_raw = struct.get("files", []) or []
         if not files_raw:
             raise ContractError("GENERATE ReRun: uložená struktura neobsahuje žádný výstupní soubor.")
@@ -91,6 +98,15 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
         input_files, input_images = self._build_input_attachments(client, self._input_file_ids())
         plan, struct, resp2_id = prepare_delivery(
             self, client, "GENERATE", base_prev_id, a1_text, input_files, input_images, self._fs_tools)
+        if self.cfg.stop_after_plan:
+            self.progress_event.emit(
+                ProgressEvent("A2Q" if self.cfg.maximum_quality else "A2", detail="Ověřená příprava je hotová; A3 nebylo spuštěno.")
+            )
+            return {
+                "mode": "GENERATE", "plan": plan, "structure": struct,
+                "status": "plan_ready", "checkpoint": "plan_ready",
+                "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
+            }
         if self.cfg.send_as_c:
             selected = [f["path"] for f in struct["files"]
                         if f["kind"] == "text" and os.path.splitext(f["path"])[1].lower() not in (self.cfg.skip_exts or [])
