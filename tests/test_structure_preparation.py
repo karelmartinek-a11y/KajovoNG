@@ -3,7 +3,7 @@
 import copy
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11,8 +11,10 @@ from kajovo.core.contracts import ContractError
 from kajovo.core.generate_batch import (
     build_manifest, encode_requests, prepare_structure, validate_structure,
 )
-from test_workflows import make_worker, response
-from delivery_fixtures import plan_payload, requirements_payload, structure_payload
+from kajovo.core.orchestration.preparation import _prepare_spine, validate_spine_v1
+from change_v2_fixtures import (
+    format_names, plan_data, requirements_data, run, scenario, spine_data,
+)
 
 
 def graph_specification():
@@ -137,93 +139,186 @@ def test_manifest_creation_remains_strict_and_existing_requests_stay_unchanged()
     assert encode_requests(manifest) == raw
 
 
+def spine_specification():
+    prepared, _ = prepare_structure(graph_specification())
+    files = [{**row, "action": "generate"} for row in prepared["files"]]
+    spine = spine_data("GENERATE", files)
+    spine["interfaces"] = [
+        {
+            **interface, "version": 1, "kind": "symbol",
+            "input_contract": "Bez argumentů.", "output_contract": "None",
+            "error_semantics": "Výjimka se předá volajícímu.",
+            "lifecycle": "Volání bez trvalého stavu.",
+            "providers": [row["path"] for row in files if interface["id"] in row["provides"]],
+            "consumers": [row["path"] for row in files if interface["id"] in row["requires"]],
+            "requirement_ids": ["REQ-1"],
+        }
+        for interface in prepared["interfaces"]
+    ]
+    return spine
+
+
+def graph_scenario(tmp_path, batch, candidates):
+    spine = spine_specification()
+    remaining = iter(candidates)
+
+    def mutate(name, value, data):
+        if name == "A2_SPINE_V1":
+            value["result"]["data"] = copy.deepcopy(next(remaining))
+        elif name == "A2_FILE_SPEC_V1":
+            value["result"]["data"]["interface_bindings"] = [
+                {"id": row["id"], "version": row["version"]}
+                for row in data["interfaces"]
+            ]
+        return value
+
+    return scenario(tmp_path, "GENERATE", batch=batch, files=spine["files"], mutate=mutate)
+
+
+def test_v2_dependency_preparation_is_idempotent_and_keeps_content_edges_explicit():
+    original = spine_specification()
+    original["files"][1]["dependencies"] = []
+    before = copy.deepcopy(original)
+    prepared, additions = _prepare_spine(original)
+    assert original == before
+    assert prepared["files"][1]["dependencies"] == ["controller.py"]
+    assert prepared["files"][1]["content_dependencies"] == []
+    assert prepared["files"][1]["dependency_content_mode"] == "contract"
+    assert len(additions) == 1
+    assert _prepare_spine(prepared) == (prepared, [])
+
+
+def test_v2_dependency_preparation_never_guesses_provider_or_adds_self_dependency():
+    spine = spine_specification()
+    alternative = copy.deepcopy(spine["files"][5])
+    alternative["path"] = "alternative.py"
+    spine["files"].append(alternative)
+    controller = next(row for row in spine["interfaces"] if row["id"] == "controller")
+    controller["providers"].append("alternative.py")
+    spine["files"][1]["dependencies"] = []
+    spine["files"][2]["dependencies"] = ["engine.py", "alternative.py"]
+    spine["files"][5]["requires"] = ["controller"]
+    controller["consumers"].append("controller.py")
+    before = copy.deepcopy(spine)
+    assert _prepare_spine(spine) == (before, [])
+    assert spine == before
+
+
+def test_v2_reports_all_unresolvable_relationships_together():
+    spine = spine_specification()
+    spine["files"][5]["provides"] = []
+    next(row for row in spine["interfaces"] if row["id"] == "controller")["providers"] = []
+    spine["files"][2]["dependencies"].append("missing.py")
+    spine["files"][2]["requires"].append("unknown-interface")
+    spine["files"][3]["provides"].append("unknown-export")
+    before = copy.deepcopy(spine)
+    prepared, additions = _prepare_spine(spine)
+    assert not additions
+    with pytest.raises(ContractError) as failure:
+        validate_spine_v1("GENERATE", requirements_data({}), plan_data(), prepared)
+    for value in ("screen_start.py", "screen_game.py", "dialog.py", "controller",
+                  "missing.py", "unknown-interface", "unknown-export"):
+        assert value in str(failure.value)
+    assert spine == before
+
+
 @pytest.mark.parametrize("batch", [False, True])
 def test_new_a2_is_prepared_before_live_or_batch_generation(tmp_path, batch):
-    worker = make_worker(tmp_path, "GENERATE")
-    worker.cfg.send_as_c = batch
-    original = structure_payload(files=graph_specification()["files"], interfaces=graph_specification()["interfaces"])
-    base_prepared, additions = prepare_structure(graph_specification())
-    prepared = structure_payload(files=base_prepared["files"], interfaces=base_prepared["interfaces"])
-    client = Mock()
-    client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload()), response(2, original)]
-    client.upload_file.return_value = {"id": "file_input"}
-    client.create_batch.return_value = {"id": "batch_work"}
-    results, errors = [], []
-    worker.finished_ok.connect(results.append)
-    worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks", return_value=("obsah", "resp_file")) as generate:
-        worker.run()
-    assert not errors
-    assert client.create_response.call_count == 3
-    run = Path(worker.log.paths.run_dir)
-    evidence = json.loads(next((run / "manifests").glob("*A2_prepared_candidate_0*.json")).read_text(encoding="utf-8"))
-    assert evidence["structure"] == prepared
-    assert evidence["added_dependencies"] == additions
-    original_record = json.loads(next((run / "responses").glob("*A2_response*.json")).read_text(encoding="utf-8"))
-    assert json.loads(original_record["output_text"]) == original
-    snapshot = json.loads((run / "run_state.json").read_text(encoding="utf-8"))["preparation_snapshot"]
-    assert snapshot["structure"] == prepared
-    assert snapshot["canonical_stage"] == "A2"
+    prepared = spine_specification()
+    original = copy.deepcopy(prepared)
+    for row, legacy in zip(original["files"], graph_specification()["files"], strict=True):
+        row["dependencies"] = legacy["dependencies"]
+    before = copy.deepcopy(original)
+    worker, client, responder = graph_scenario(tmp_path, batch, [original])
+    results, errors = run(worker, client)
+    assert results and not errors
+    assert original == before
+    names = format_names(responder)
+    assert names[:3] == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V1"]
+    assert names[3:11] == ["A2_FILE_SPEC_V1"] * len(prepared["files"])
+    run_dir = Path(worker.log.paths.run_dir)
+    original_record = json.loads(next((run_dir / "responses").glob("*A2_SPINE_v2_response_0*.json")).read_text(encoding="utf-8"))
+    assert json.loads(original_record["output_text"])["result"]["data"] == original
+    evidence = json.loads(next((run_dir / "manifests").glob("*A2_SPINE_prepared_candidate_0*.json")).read_text(encoding="utf-8"))
+    assert evidence["spine"] == prepared
+    assert len(evidence["added_dependencies"]) == 5
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    checkpoint = state["preparation_snapshot"]
+    graph = checkpoint["graph"]
+    assert graph["contract"] == "IMPLEMENTATION_GRAPH_V3"
+    assert graph["spine"] == prepared
+    assert len(graph["file_specs"]) == len(prepared["files"])
+    assert checkpoint["canonical_stage"] == "A2"
     if batch:
-        state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
-        assert state["generate_batch"]["snapshot"]["structure"] == prepared
+        assert state["generate_batch"]["snapshot"]["structure"] == graph
         rows = [json.loads(line) for line in Path(client.upload_file.call_args.args[0]).read_text(encoding="utf-8").splitlines()]
         assert len(rows) == len(prepared["files"])
         assert all(json.loads(row["body"]["input"])["file_context"]["working_context"]["target_file"] in prepared["files"] for row in rows)
-        generate.assert_not_called()
+        assert "FILE_CONTENT_V1" not in names
     else:
-        assert results[0]["structure"] == prepared
-        assert generate.call_count == len(prepared["files"])
+        assert results[0]["structure"] == graph
+        assert names[11:] == ["FILE_CONTENT_V1"] * len(prepared["files"])
         client.create_batch.assert_not_called()
-        resume = json.loads(next((run / "manifests").glob("*resume_structure*.json")).read_text(encoding="utf-8"))
+        resume = json.loads(next((run_dir / "manifests").glob("*resume_structure*.json")).read_text(encoding="utf-8"))
         assert resume["resume_files"] == prepared["files"]
 
 
 def test_repair_receives_all_errors_and_current_prepared_manifest(tmp_path):
-    worker = make_worker(tmp_path, "GENERATE")
-    worker.cfg.send_as_c = True
-    bad = structure_payload(files=graph_specification()["files"], interfaces=graph_specification()["interfaces"])
+    fixed = spine_specification()
+    bad = copy.deepcopy(fixed)
     bad["files"][1]["requires"].append("unknown-a")
     bad["files"][3]["requires"].append("unknown-b")
-    fixed_base, _ = prepare_structure(graph_specification())
-    fixed = structure_payload(files=fixed_base["files"], interfaces=fixed_base["interfaces"])
-    good = structure_payload(files=graph_specification()["files"], interfaces=graph_specification()["interfaces"])
-    client = Mock()
-    client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload()), response(2, bad), response(3, good)]
-    client.upload_file.return_value = {"id": "file_input"}
-    client.create_batch.return_value = {"id": "batch_work"}
-    errors = []
-    worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
-        worker.run()
-    assert not errors
-    assert client.create_response.call_count == 4
-    repair = client.create_response.call_args_list[3].args[0]
-    context = json.loads(repair["input"][0]["content"][0]["text"])
-    assert "unknown-a" in context["validation_errors"] and "unknown-b" in context["validation_errors"]
-    assert context["structure"] == bad
-    assert context["requirements"] == requirements_payload()
-    assert context["plan"] == plan_payload()
-    request_log = json.loads(next((Path(worker.log.paths.run_dir) / "requests").glob("*A2_request_1*.json")).read_text(encoding="utf-8"))
+    worker, client, responder = graph_scenario(tmp_path, True, [bad, fixed])
+    results, errors = run(worker, client)
+    assert results and not errors
+    requests = [payload for payload in responder.calls if payload["text"]["format"]["name"] == "A2_SPINE_V1"]
+    assert len(requests) == 2
+    original_input = json.loads(requests[0]["input"][0]["content"][0]["text"])
+    run_dir = Path(worker.log.paths.run_dir)
+    context = json.loads(requests[1]["input"][0]["content"][0]["text"])
+    assert context["input"] == original_input
+    assert context["repair"]["candidate"] == bad
+    for value in ("screen_start.py", "dialog.py", "unknown-a", "unknown-b"):
+        assert value in context["repair"]["error"]
+    request_log = json.loads(next((run_dir / "requests").glob("*A2_SPINE_v2_request_1*.json")).read_text(encoding="utf-8"))
     assert json.loads(request_log["payload"]["input"][0]["content"][0]["text"]) == context
+    for attempt, candidate in enumerate((bad, fixed)):
+        record = json.loads(next((run_dir / "responses").glob(f"*A2_SPINE_v2_response_{attempt}*.json")).read_text(encoding="utf-8"))
+        assert json.loads(record["output_text"])["result"]["data"] == candidate
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-    assert state["generate_batch"]["snapshot"]["structure"] == fixed
+    assert state["generate_batch"]["snapshot"]["structure"]["spine"] == fixed
 
 
 @pytest.mark.parametrize("batch", [False, True])
-def test_unrepairable_manifest_blocks_all_file_generation(tmp_path, batch):
-    worker = make_worker(tmp_path, "GENERATE")
-    worker.cfg.send_as_c = batch
-    spec = structure_payload(files=graph_specification()["files"], interfaces=graph_specification()["interfaces"])
+@pytest.mark.parametrize("repeated", [False, True])
+def test_unrepairable_manifest_blocks_all_file_generation(tmp_path, batch, repeated):
+    spec = spine_specification()
     spec["files"][5]["provides"] = []
-    client = Mock()
-    client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload())] + [response(i + 2, spec) for i in range(3)]
-    errors = []
-    worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client), patch.object(worker, "_gen_file_chunks") as generate:
-        worker.run()
-    assert errors and "controller" in errors[0]
-    assert client.create_response.call_count == 4
+    next(row for row in spec["interfaces"] if row["id"] == "controller")["providers"] = []
+    candidates = [copy.deepcopy(spec) for _ in range(3)]
+    if not repeated:
+        for index, candidate in enumerate(candidates):
+            candidate["files"][0]["purpose"] = f"Odlišný kandidát {index}"
+    worker, client, responder = graph_scenario(tmp_path, batch, candidates)
+    with patch.object(worker, "_gen_file_chunks") as generate:
+        results, errors = run(worker, client)
+    assert not results and errors and "controller" in errors[0]
+    assert ("NO_PROGRESS" in errors[0]) is repeated
+    assert format_names(responder) == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2"] + ["A2_SPINE_V1"] * (2 if repeated else 3)
     client.create_batch.assert_not_called()
     client.upload_file.assert_not_called()
     generate.assert_not_called()
+
+
+def test_repeated_wire_invalid_spine_stops_before_third_paid_request(tmp_path):
+    def malformed(name, value, data):
+        if name == "A2_SPINE_V1":
+            value["result"]["data"]["files"][0]["requires"] = "není seznam"
+        return value
+
+    worker, client, responder = scenario(tmp_path, "GENERATE", batch=True, mutate=malformed)
+    results, errors = run(worker, client)
+    assert not results and errors and "NO_PROGRESS" in errors[0]
+    assert format_names(responder) == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2"] + ["A2_SPINE_V1"] * 2
+    client.upload_file.assert_not_called()
+    client.create_batch.assert_not_called()

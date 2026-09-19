@@ -29,7 +29,7 @@ def _work_orders(manifest: dict[str, Any]) -> dict[str, WorkOrder]:
         try:
             order = WorkOrder(**value)
             if str(raw.get("order_hash") or "") != order.order_hash:
-                raise ContractError(f"BATCH {custom_id}: WorkOrder hash nesouhlasĂ­.")
+                raise ContractError(f"BATCH {custom_id}: WorkOrder hash nesouhlasí.")
             result[str(custom_id)] = order
         except (TypeError, ValueError) as exc:
             raise ContractError(f"BATCH {custom_id}: neplatný WORK_ORDER_V2.") from exc
@@ -63,8 +63,8 @@ def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
 
 def _submit_generate_batch(self: RunContext, client, manifest):
     from ..cost_context_report import CostContextReport
-    from ..recoverable_artifacts import load_run_state
     from ..orchestration.repository import repository_for_logger
+    from ..recoverable_artifacts import load_run_state
 
     current_state = load_run_state(self.log.paths.run_dir)
     if (
@@ -80,6 +80,7 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             "je nutná explicitní příprava FileContext."
         )
 
+    encode_requests(manifest)
     work_orders = _work_orders(manifest)
     manifest_v4 = from_file_manifest(self.log.run_id, manifest)
     _save_v4(self.log, manifest_v4)

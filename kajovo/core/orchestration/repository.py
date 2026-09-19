@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,10 +45,15 @@ class OrchestrationRepository:
                 (_now(),),
             )
 
+    @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
-        db.execute("PRAGMA foreign_keys=ON")
-        return db
+        try:
+            with db:
+                db.execute("PRAGMA foreign_keys=ON")
+                yield db
+        finally:
+            db.close()
 
     def has_run(self, run_id: str) -> bool:
         with self.connect() as db:

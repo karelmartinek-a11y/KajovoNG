@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
+
 from test_generate_batch import manifest
 from test_workflows import make_worker
 
@@ -29,3 +31,19 @@ def test_continue_generate_batch_with_recovered_resume_files_skips_live_a1_a2(tm
     client.preflight_run.assert_not_called()
     client.create_batch.assert_called_once()
     assert Path(client.upload_file.call_args.args[0]).read_bytes()
+
+
+@pytest.mark.parametrize("field", ["model", "approval_id", "target_path", "run_id"])
+def test_changed_work_order_blocks_recovery_before_upload(tmp_path, field):
+    worker = make_worker(tmp_path, "GENERATE")
+    saved = manifest()
+    order = next(iter(saved["work_orders"].values()))
+    order[field] = "pozměněná-hodnota"
+    client = Mock()
+    from kajovo.core.contracts import ContractError
+
+    with pytest.raises(ContractError):
+        worker._submit_generate_batch(client, saved)
+    client.upload_file.assert_not_called()
+    client.create_batch.assert_not_called()
+    assert not (Path(worker.log.paths.run_dir).parent / "orchestration.sqlite3").exists()

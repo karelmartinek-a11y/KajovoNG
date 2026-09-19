@@ -235,25 +235,28 @@ def test_unsupported_schema_cannot_reach_api(client, bad):
 
 
 def test_known_contracts_are_native_for_gpt52(tmp_path):
-    from test_workflows import make_worker, response
+    from change_v2_fixtures import scenario, run, format_names
     from kajovo.core.generate_batch import build_manifest
     from test_generate_batch import specification
-    from delivery_fixtures import delivery_payloads
-    from kajovo.core.delivery_preparation import prepare_delivery
-
-    worker = make_worker(tmp_path, "MODIFY")
+    worker, client, responder = scenario(tmp_path, "MODIFY", stop_after_plan=True)
     worker.cfg.model = "gpt-5.2"
-    client = Mock()
-    client.create_response.side_effect = [response(index, data)
-                                         for index, data in enumerate(delivery_payloads("MODIFY"))]
-    prepare_delivery(worker, client, "MODIFY", None, "test", [], [], None)
+    worker.cfg.available_models = ["gpt-5.2"]
+    assert worker.cfg.max_output_tokens == 500_000
+    results, errors = run(worker, client)
+    assert not errors
+    assert results[0]["status"] == "plan_ready"
     calls = client.create_response.call_args_list
-    assert len(calls) == 3
-    for recorded, contract in zip(calls, ("B0R_REQUIREMENTS", "B1_PLAN", "B2_STRUCTURE"), strict=True):
+    assert format_names(responder) == ["B0R_REQUIREMENTS_V2", "B1_PLAN_V2", "B2_SPINE_V1", "B2_FILE_SPEC_V1"]
+    from pathlib import Path
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    assert state["budget_ledger_summary"]["output_tokens_reserved"] == 200
+    assert state["budget_ledger_summary"]["paid_requests_reserved"] == 4
+    assert all(call.kwargs.get("purpose") != "batch" for call in client.upload_file.call_args_list)
+    client.create_batch.assert_not_called()
+    for recorded in calls:
         payload = recorded.args[0]
         assert payload["model"] == "gpt-5.2"
         assert payload["text"]["format"]["strict"] is True
-        assert payload["text"]["format"]["name"] == contract
     manifest = build_manifest("r", "test", {}, specification(), "gpt-5.2", None)
     assert all(row["body"]["text"]["format"]["strict"] for row in manifest["requests"])
 

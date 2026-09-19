@@ -413,6 +413,7 @@ def test_batch_repair_instruction_is_in_new_requests_without_changing_snapshot()
     assert branch["snapshot_hash"] == ordinary["snapshot_hash"]
     for request in branch["requests"]:
         assert json.loads(request["body"]["input"])["recovery_instruction"] == "Oprav přesný typ návratové hodnoty."
-        chunk = request["body"]["text"]["format"]["schema"]["properties"]["chunking"]["properties"]
-        assert chunk["chunk_count"]["enum"] == [1]
-        assert chunk["has_more"]["enum"] == [False]
+        schema = request["body"]["text"]["format"]["schema"]
+        assert schema["properties"] == {"content": {"type": "string"}}
+        assert schema["required"] == ["content"]
+        assert schema["additionalProperties"] is False

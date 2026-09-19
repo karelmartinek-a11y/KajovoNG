@@ -27,7 +27,63 @@ def _load(logger) -> dict[str, Any]:
         raise ContractError(
             "Budget ledger má neplatný formát; placený submit je zablokován."
         )
+    # SQLite je autoritou settlementu i po pádu mezi transakcí a zápisem JSON.
+    repo = repository_for_logger(logger)
+    projection = (
+        "SELECT r.reservation_id,w.body_ref,r.state,r.input_limit,"
+        "r.output_limit,r.cost_microusd FROM reservations r "
+        "JOIN work_orders w ON w.work_order_hash=r.work_order_hash "
+    )
+    with repo.connect() as db:
+        rows = db.execute(
+            projection + "WHERE w.run_id=?",
+            (logger.run_id,),
+        ).fetchall()
+        by_id = {row[0]: row for row in rows}
+        explicit_ids = sorted({
+            row["reservation_id"] for row in value["reservations"].values()
+            if row.get("reservation_id")
+        } - by_id.keys())
+        # Obnovený Batch zachovává rodičovský run WorkOrderu. Explicitní ID
+        # proto není omezeno runem loggeru; dávkování drží limit SQL parametrů.
+        for offset in range(0, len(explicit_ids), 500):
+            identifiers = explicit_ids[offset:offset + 500]
+            placeholders = ",".join("?" for _ in identifiers)
+            imported = db.execute(
+                projection + f"WHERE r.reservation_id IN ({placeholders})",
+                identifiers,
+            ).fetchall()
+            by_id.update((row[0], row) for row in imported)
+    by_hash: dict[str, list] = {}
+    for row in rows:
+        by_hash.setdefault(row[1], []).append(row)
+    for reservation in value["reservations"].values():
+        reservation_id = reservation.get("reservation_id")
+        row = by_id.get(reservation_id)
+        if not reservation_id:
+            # Starší JSON nemá ID rezervace; použít jen jednoznačnou vazbu.
+            matches = by_hash.get(reservation.get("request_hash"), [])
+            row = matches[0] if len(matches) == 1 else None
+        if row is None:
+            continue
+        reservation.update(
+            reservation_id=row[0], state=row[2], input_tokens=row[3],
+            output_tokens=row[4], projected_cost_microusd=row[5],
+            pricing_known=row[5] is not None,
+        )
     return value
+
+
+def _save(logger, ledger, limits) -> None:
+    ledger["summary"] = {**_summarize(ledger["reservations"]), "limits": limits}
+    logger.save_json("manifests", "budget_ledger", ledger)
+    logger.update_state({"budget_ledger_summary": ledger["summary"]})
+
+
+def _refresh(logger) -> None:
+    ledger = _load(logger)
+    if ledger["reservations"]:
+        _save(logger, ledger, ledger.get("summary", {}).get("limits", {}))
 
 
 def _limits(cfg) -> dict[str, Any]:
@@ -63,7 +119,7 @@ def _reservation(payload: dict[str, Any], measurement: dict[str, Any]) -> dict[s
 
 
 def _summarize(reservations: dict[str, Any]) -> dict[str, Any]:
-    rows = list(reservations.values())
+    rows = [row for row in reservations.values() if row.get("state") != "released"]
     known_cost = [
         row["projected_cost_microusd"]
         for row in rows
@@ -177,6 +233,8 @@ def reserve_paid_request(
     else:
         measurement = enforce_budget(copy.deepcopy(measurement))
     reservation = _reservation(payload, measurement)
+    if work_order is not None:
+        reservation["reservation_id"] = work_order.budget_reservation_id
     ledger = _load(logger)
     reservation_key = key or reservation["request_hash"]
     if reservation_key in ledger["reservations"]:
@@ -190,9 +248,7 @@ def reserve_paid_request(
     _reserve_sqlite(logger, cfg, work_order, reservation)
 
     ledger["reservations"] = candidate
-    ledger["summary"] = {**summary, "limits": limits}
-    logger.save_json("manifests", "budget_ledger", ledger)
-    logger.update_state({"budget_ledger_summary": ledger["summary"]})
+    _save(logger, ledger, limits)
     return measurement
 
 
@@ -228,6 +284,10 @@ def reserve_batch(
             raise ContractError(
                 f"BATCH položka {row['custom_id']} nemá WORK_ORDER_V2."
             )
+        reservation["reservation_id"] = (
+            order.budget_reservation_id if isinstance(order, WorkOrder)
+            else order["budget_reservation_id"]
+        )
         pending.append((order, reservation))
 
     summary = _summarize(candidate)
@@ -266,9 +326,7 @@ def reserve_batch(
     )
 
     ledger["reservations"] = candidate
-    ledger["summary"] = {**summary, "limits": limits}
-    logger.save_json("manifests", "budget_ledger", ledger)
-    logger.update_state({"budget_ledger_summary": ledger["summary"]})
+    _save(logger, ledger, limits)
 
 
 def mark_submission(logger, work_order, provider_id: str | None, *, unknown: bool) -> None:
@@ -279,6 +337,7 @@ def mark_submission(logger, work_order, provider_id: str | None, *, unknown: boo
 
 def release_reservation(logger, work_order) -> None:
     repository_for_logger(logger).release(work_order.budget_reservation_id)
+    _refresh(logger)
 
 
 def settle_usage(logger, work_order, response: dict[str, Any]) -> None:
@@ -292,8 +351,10 @@ def settle_usage(logger, work_order, response: dict[str, Any]) -> None:
         from ..context_pricing import PRICES, VERSION, projected_cost
         model = str(response.get("model") or work_order.model)
         if isinstance(usage, dict):
-            input_tokens = int(usage.get("input_tokens") or 0)
-            output_tokens = int(usage.get("output_tokens") or 0)
+            input_tokens = usage.get("input_tokens")
+            output_tokens = usage.get("output_tokens")
+            if any(type(value) is not int or value < 0 for value in (input_tokens, output_tokens)):
+                raise ValueError("Neúplná usage nesmí snížit cenovou rezervaci.")
             projected = projected_cost(
                 model, input_tokens, output_tokens,
                 batch=work_order.route == "responses_batch",
@@ -317,3 +378,4 @@ def settle_usage(logger, work_order, response: dict[str, Any]) -> None:
         actual_cost_microusd=actual_cost_microusd,
         price_snapshot_hash=price_hash,
     )
+    _refresh(logger)

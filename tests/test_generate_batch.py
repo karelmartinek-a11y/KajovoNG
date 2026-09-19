@@ -1,7 +1,7 @@
 import copy
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,7 +14,7 @@ from kajovo.core.generate_batch import (
     repeat_saved_batch,
 )
 from test_workflows import make_worker, response
-from delivery_fixtures import plan_payload, requirements_payload, structure_payload, implementation_fixture
+from delivery_fixtures import implementation_fixture
 
 
 def specification():
@@ -87,6 +87,9 @@ def test_work_submission_uses_locally_validated_rows_without_second_submit(tmp_p
 
 
 def outputs(m):
+    from change_v2_fixtures import batch_output_rows
+    if m.get("version") == 3:
+        return batch_output_rows(m, dict.fromkeys(m["expected"].values(), "content\n"))
     return [
         {
             "custom_id": cid,
@@ -137,24 +140,23 @@ def test_batch_keeps_provider_cause_and_file_identity(tmp_path, code):
 
 
 def test_live_preparation_then_one_request_per_file(tmp_path):
-    worker = make_worker(tmp_path, "GENERATE")
-    worker.cfg.send_as_c = True
-    client = Mock()
-    struct = structure_payload(files=specification()["files"], interfaces=specification()["interfaces"])
-    client.create_response.side_effect = [
-        response(0, requirements_payload()),
-        response(1, plan_payload()),
-        response(2, struct),
+    from change_v2_fixtures import default_files, format_names, run, scenario
+
+    files = [
+        {**default_files("GENERATE")[0], "path": path}
+        for path in ("maths.py", "main.py")
     ]
-    client.upload_file.return_value = {"id": "file_input"}
-    client.create_batch.return_value = {"id": "batch_test"}
-    results, errors = [], []
-    worker.finished_ok.connect(results.append)
-    worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
-        worker.run()
-    assert not errors
-    assert client.create_response.call_count == 3
+    files[1]["dependencies"] = ["maths.py"]
+    worker, client, responder = scenario(tmp_path, "GENERATE", batch=True, files=files)
+    results, errors = run(worker, client)
+    assert not errors, errors
+    assert results[0]["status"] == "batch_pending"
+    assert format_names(responder) == [
+        "A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V1",
+        "A2_FILE_SPEC_V1", "A2_FILE_SPEC_V1",
+    ]
+    client.upload_file.assert_called_once()
+    client.create_batch.assert_called_once()
     rows = [
         json.loads(line)
         for line in Path(client.upload_file.call_args.args[0])
@@ -166,11 +168,19 @@ def test_live_preparation_then_one_request_per_file(tmp_path):
     assert all(row["body"]["store"] is False for row in rows)
     contexts = [json.loads(row["body"]["input"]) for row in rows]
     assert all("specification" not in context for context in contexts)
+    assert all(row["body"]["text"]["format"]["name"] == "FILE_CONTENT_V1" for row in rows)
+    assert {context["file_context"]["working_context"]["target_file"]["path"] for context in contexts} == {
+        "maths.py", "main.py",
+    }
     assert contexts[0]["file_context"]["file_context_hash"] != contexts[1]["file_context"]["file_context_hash"]
-    assert not (tmp_path / "out" / "maths.py").exists()
+    assert all(not (tmp_path / "out" / path).exists() for path in ("maths.py", "main.py"))
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert state["status"] == "batch_pending"
-    assert state["generate_batch"]["snapshot"]["structure"] == struct
+    graph = state["generate_batch"]["snapshot"]["structure"]
+    assert graph["contract"] == "IMPLEMENTATION_GRAPH_V3"
+    assert {row["path"] for row in graph["spine"]["files"]} == {"maths.py", "main.py"}
+    assert {row["path"] for row in graph["file_specs"]} == {"maths.py", "main.py"}
+    assert state["generate_batch"]["requests"] == rows
 
 
 @pytest.mark.parametrize(
@@ -182,6 +192,10 @@ def test_invalid_file_preserves_other_results(tmp_path, fault):
     first = rows[0]
     if fault == "duplicate":
         rows.append(copy.deepcopy(first))
+        with pytest.raises(ContractError, match="Duplicitní"):
+            import_results(m, [raw(rows[::-1])], str(tmp_path))
+        assert not list(tmp_path.iterdir())
+        return
     elif fault == "missing":
         rows.pop(0)
     elif fault == "incomplete":
@@ -195,7 +209,7 @@ def test_invalid_file_preserves_other_results(tmp_path, fault):
         if fault == "path":
             payload["path"] = "../escape.py"
         else:
-            payload["chunking"]["has_more"] = True
+            payload["chunking"] = {"has_more": True}
         first["response"]["body"]["output_text"] = json.dumps(payload)
     result = import_results(m, [raw(rows[::-1])], str(tmp_path))
     assert result["status"] == "partial"
@@ -263,20 +277,24 @@ def test_request_context_and_map_must_match():
 
 
 def test_invalid_preparation_never_submits_batch(tmp_path):
-    worker = make_worker(tmp_path, "GENERATE")
-    worker.cfg.send_as_c = True
-    bad = structure_payload(files=specification()["files"], interfaces=specification()["interfaces"])
-    bad["files"][1]["requires"] = ["unknown"]
-    client = Mock()
-    client.create_response.side_effect = [response(0, requirements_payload()), response(1, plan_payload())] + [
-        response(i + 2, bad) for i in range(3)
-    ]
-    errors = []
-    worker.finished_err.connect(errors.append)
-    with patch("kajovo.core.runs.executor.OpenAIClient", return_value=client):
-        worker.run()
+    from change_v2_fixtures import format_names, run, scenario
+
+    def invalid_spine(name, value, _data):
+        if name == "A2_SPINE_V1":
+            value["result"]["data"]["files"][0]["requires"] = ["unknown"]
+        return value
+
+    worker, client, responder = scenario(
+        tmp_path, "GENERATE", batch=True, mutate=invalid_spine,
+    )
+    results, errors = run(worker, client)
+    assert not results
     assert errors
-    assert client.create_response.call_count == 4
+    assert "hello.txt: neznámé interface binding." in errors[0]
+    assert format_names(responder) == [
+        "A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V1", "A2_SPINE_V1",
+    ]
+    client.upload_file.assert_not_called()
     client.create_batch.assert_not_called()
 
 
@@ -320,39 +338,155 @@ def test_output_change_after_repair_submission_is_preserved(tmp_path):
     assert path.read_text() == "new user edit"
 
 
-def test_restart_import_responses_and_selective_retry(tmp_path):
-    worker = make_worker(tmp_path, "GENERATE")
-    m = manifest()
-    worker.log.update_state(
-        {
-            "generate_batch": m,
-            "batch_id": "batch_test",
+@pytest.mark.parametrize("legacy,retry_original,repair_allowed", [
+    (True, True, False), (False, True, False), (False, True, True), (False, False, True),
+])
+def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_original, repair_allowed):
+    from change_v2_fixtures import batch_output_rows, run, scenario
+
+    if legacy:
+        worker = make_worker(tmp_path, "GENERATE")
+        m = manifest()
+        worker.log.update_state({
+            "generate_batch": m, "batch_id": "batch_legacy",
             "out_dir": str(tmp_path / "out"),
+        })
+        client = Mock()
+        client.retrieve_batch.return_value = {
+            "status": "completed", "output_file_id": "file_output",
         }
+        client.file_content.return_value = raw(outputs(m))
+        for _ in range(2):
+            result = process_saved_batch(
+                client, worker.log.paths.run_dir, "batch_legacy", worker.settings
+            )
+            assert result["status"] == "files_complete_unverified"
+        before = Path(worker.log.state_path).read_bytes()
+        with pytest.raises(ContractError, match="nový WorkOrder.*novou přípravu"):
+            repeat_saved_batch(client, worker.log.paths.run_dir, "batch_legacy", ["maths.py"])
+        assert Path(worker.log.state_path).read_bytes() == before
+        client.upload_file.assert_not_called()
+        client.create_batch.assert_not_called()
+        client.create_response.assert_not_called()
+        return
+
+    worker, client, _ = scenario(
+        tmp_path, "GENERATE", batch=True,
+        files=[{"path": path, "action": "generate"} for path in ("maths.py", "main.py")],
     )
-    client = Mock()
+    worker.cfg.auto_repair = "within_approval" if repair_allowed else "off"
+    results, errors = run(worker, client)
+    assert results and not errors
+    state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+    m = state["generate_batch"]
+    batch_id = state["batch_id"]
+    client.reset_mock()
     client.retrieve_batch.return_value = {
         "status": "completed",
         "output_file_id": "file_output",
     }
-    client.file_content.return_value = raw(outputs(m))
+    rows = batch_output_rows(m)
+    for row in rows:
+        row["response"]["body"]["id"] = "resp_" + row["custom_id"]
+    client.file_content.return_value = raw(rows)
     for _ in range(2):
         result = process_saved_batch(
-            client, worker.log.paths.run_dir, "batch_test", worker.settings
+            client, worker.log.paths.run_dir, batch_id, worker.settings
         )
         assert result["status"] == "files_complete_unverified"
     client.upload_file.return_value = {"id": "file_retry"}
     client.create_batch.return_value = {"id": "batch_retry"}
+    state_path = Path(worker.log.state_path)
+    approved_state = state_path.read_bytes()
+    if not repair_allowed:
+        with pytest.raises(ContractError, match="explicitní autorizaci"):
+            repeat_saved_batch(client, worker.log.paths.run_dir, batch_id, ["maths.py"])
+        assert state_path.read_bytes() == approved_state
+        client.upload_file.assert_not_called()
+        client.create_batch.assert_not_called()
+        client.create_response.assert_not_called()
+        return
+    for key, value in (
+        ("repair_allowed", False), ("expires_at", "2000-01-01T00:00:00+00:00"),
+        ("scope_hash", "jiný rozsah"), ("approval_id", "jiné schválení"),
+    ):
+        denied = json.loads(approved_state)
+        denied["execution_authorization"][key] = value
+        state_path.write_text(json.dumps(denied), encoding="utf-8")
+        with pytest.raises(ContractError, match="explicitní autorizaci"):
+            repeat_saved_batch(client, worker.log.paths.run_dir, batch_id, ["maths.py"])
+    client.upload_file.assert_not_called()
+    client.create_batch.assert_not_called()
+    state_path.write_bytes(approved_state)
+    import sqlite3
+    from unittest.mock import patch
+
+    with patch(
+        "kajovo.core.orchestration.repository.OrchestrationRepository.register_work_order",
+        side_effect=sqlite3.IntegrityError("UNIQUE constraint failed"),
+    ), pytest.raises(ContractError, match="souběžné operace"):
+        repeat_saved_batch(client, worker.log.paths.run_dir, batch_id, ["maths.py"])
+    client.upload_file.assert_not_called()
+    client.create_batch.assert_not_called()
+    assert state_path.read_bytes() == approved_state
     repeat_saved_batch(
         client,
         worker.log.paths.run_dir,
-        "batch_test",
+        batch_id,
         ["maths.py"],
         "Fix sum",
     )
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     retry = state["generate_batches"]["batch_retry"]
+    assert state["generate_batch"] == m
+    assert state["batch_id"] == batch_id
     assert len(retry["requests"]) == 1
+    assert set(retry["expected"].values()) == {"maths.py"}
+    order = next(iter(retry["work_orders"].values()))
+    original_order = next(value for value in m["work_orders"].values() if value["target_path"] == "maths.py")
+    assert order["task_id"] == original_order["task_id"]
+    assert order["attempt_no"] == 2
+    assert order["budget_reservation_id"] != original_order["budget_reservation_id"]
     assert retry["snapshot_hash"] == m["snapshot_hash"]
-    assert "current_content" in retry["requests"][0]["body"]["input"]
+    context = json.loads(retry["requests"][0]["body"]["input"])
+    assert context["recovery_instruction"] == "Fix sum"
+    assert context["repair_current_artifact"]["content"] == "content:maths.py\n"
+    assert context["repair_current_artifact"]["sha256"] == state["generated_hashes"]["maths.py"]
+    encode_requests(retry)
+    client.create_response.assert_not_called()
+    with pytest.raises(ContractError, match="předchozí pokus"):
+        repeat_saved_batch(client, worker.log.paths.run_dir, batch_id, ["maths.py"])
+    for current_id, current_manifest in (("batch_retry", retry), ("batch_retry3", None)):
+        if current_manifest is None:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            current_manifest = state["generate_batches"][current_id]
+        rows = batch_output_rows(current_manifest)
+        for row in rows:
+            row["response"]["body"]["id"] = "resp_" + row["custom_id"]
+        client.file_content.return_value = raw(rows)
+        result = process_saved_batch(client, worker.log.paths.run_dir, current_id, worker.settings)
+        assert result["status"] == "files_complete_unverified"
+        if current_id == "batch_retry":
+            client.create_batch.return_value = {"id": "batch_retry3"}
+            repeat_saved_batch(
+                client, worker.log.paths.run_dir,
+                batch_id if retry_original else current_id, ["maths.py"], "Fix sum again",
+            )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    third = state["generate_batches"]["batch_retry3"]
+    third_order = next(iter(third["work_orders"].values()))
+    assert third_order["attempt_no"] == 3
+    assert third_order["task_id"] == original_order["task_id"]
+    assert third_order["budget_reservation_id"] not in {
+        order["budget_reservation_id"], original_order["budget_reservation_id"],
+    }
+    assert third["snapshot"] == retry["snapshot"] == m["snapshot"]
+    assert state["generate_batch"] == m
+    assert state["batch_id"] == batch_id
+    before = state_path.read_bytes()
+    for source_id in (batch_id, "batch_retry3"):
+        with pytest.raises(ContractError, match="limit tří pokusů"):
+            repeat_saved_batch(client, worker.log.paths.run_dir, source_id, ["maths.py"])
+    assert state_path.read_bytes() == before
+    assert client.create_batch.call_count == client.upload_file.call_count == 2
     client.create_response.assert_not_called()

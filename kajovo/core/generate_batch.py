@@ -15,7 +15,6 @@ from pathlib import Path
 from .contracts import (
     ContractError,
     RemoteResponseError,
-    file_response_format,
     parse_json_strict,
     validate_paths,
 )
@@ -877,15 +876,73 @@ def _v3_cfg_namespace(state):
     )
 
 
-def _reserve_v3_followup(run_dir, state, manifest):
-    """Reserve the whole follow-up wave in one SQLite transaction."""
+def _reserve_v3_followup(run_dir, state, manifest, *, retry_source=None):
+    """Ověří pracovní identity a atomicky rezervuje rozpočet celé navazující dávky."""
     from .orchestration.repository import OrchestrationRepository
     from .orchestration.work_order import WorkOrder
 
+    encode_requests(manifest)
+    for candidate in (manifest, retry_source):
+        if candidate is None:
+            continue
+        for custom_id, raw in candidate["work_orders"].items():
+            order = WorkOrder(**{k: v for k, v in raw.items() if k != "order_hash"})
+            if raw.get("order_hash") != order.order_hash:
+                raise ContractError(f"{custom_id}: nesouhlasí hash WORK_ORDER_V2.")
     repo = OrchestrationRepository(
         Path(run_dir).resolve().parent / "orchestration.sqlite3"
     )
     cfg = _v3_cfg_namespace(state)
+    if retry_source is not None:
+        from dataclasses import replace
+
+        source_orders = {
+            value["target_path"]: value
+            for value in retry_source["work_orders"].values()
+        }
+        renamed = {}
+        orders_by_id = {}
+        for request in manifest["requests"]:
+            old_id = request["custom_id"]
+            path = manifest["expected"][old_id]
+            previous = source_orders[path]
+            with repo.connect() as db:
+                attempts = db.execute(
+                    "SELECT w.attempt_no,r.state FROM work_orders w "
+                    "LEFT JOIN reservations r ON r.work_order_hash=w.work_order_hash "
+                    "WHERE w.run_id=? AND w.task_id=?",
+                    (previous["run_id"], previous["task_id"]),
+                ).fetchall()
+            if any(status in {"reserved", "submitted", "unknown"} for _, status in attempts):
+                raise ContractError("Před opravou dokončete nebo dohledejte předchozí pokus úlohy.")
+            attempt = max([previous["attempt_no"], *(number for number, _ in attempts)]) + 1
+            if attempt > 3:
+                raise ContractError(
+                    "Úloha vyčerpala limit tří pokusů; automatické opravy jsou vyčerpány. "
+                    "Další postup vyžaduje explicitní rozhodnutí uživatele."
+                )
+            custom_id = f"{previous['task_id']}_retry_{attempt}"
+            raw_order = manifest["work_orders"][old_id]
+            order = WorkOrder(**{k: v for k, v in raw_order.items() if k != "order_hash"})
+            # I shodné souběžné opravy mají odlišný WorkOrder; unikátní pokus
+            # proto druhou registraci odmítne místo idempotentního přijetí.
+            order = replace(
+                order, task_id=previous["task_id"], step_id="batch:" + custom_id,
+                attempt_no=attempt,
+                budget_reservation_id="RES-" + digest({
+                    "order": order.to_dict(), "task_id": previous["task_id"],
+                    "attempt_no": attempt,
+                    "operation_id": uuid.uuid4().hex,
+                })[:32],
+            )
+            request["custom_id"] = custom_id
+            renamed[old_id] = custom_id
+            orders_by_id[custom_id] = {**order.to_dict(), "order_hash": order.order_hash}
+        manifest["expected"] = {renamed[key]: path for key, path in manifest["expected"].items()}
+        manifest["work_orders"] = orders_by_id
+        for report in manifest["cost_context_reports"]:
+            report["custom_id"] = renamed[report["custom_id"]]
+        encode_requests(manifest)
     reports = {
         str(row.get("custom_id")): row
         for row in manifest.get("cost_context_reports", [])
@@ -900,6 +957,8 @@ def _reserve_v3_followup(run_dir, state, manifest):
         order = WorkOrder(**{
             key: value for key, value in raw_order.items() if key != "order_hash"
         })
+        if raw_order.get("order_hash") != order.order_hash:
+            raise ContractError(f"{custom_id}: nesouhlasí hash WORK_ORDER_V2.")
         orders[custom_id] = order
         report = reports.get(custom_id)
         if not isinstance(report, dict):
@@ -915,18 +974,25 @@ def _reserve_v3_followup(run_dir, state, manifest):
             raise ContractError(
                 f"{custom_id}: cena modelu není lokálně ověřena a unknown_pricing=block."
             )
-        repo.register_work_order(
-            order,
-            body_ref=hashlib.sha256(
-                json.dumps(
-                    request["body"],
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest(),
-            input_hash=order.input_projection_hash,
-        )
+        import sqlite3
+
+        try:
+            repo.register_work_order(
+                order,
+                body_ref=hashlib.sha256(
+                    json.dumps(
+                        request["body"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+                input_hash=order.input_projection_hash,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ContractError(
+                "Pracovní pokus nelze zaregistrovat; ověřte stav souběžné operace před dalším odesláním."
+            ) from exc
         sql_rows.append({
             "reservation_id": order.budget_reservation_id,
             "work_order_hash": order.order_hash,
@@ -1617,6 +1683,27 @@ def _repeat_v3_batch(
         raise ContractError(
             "Neznámý submit musí být dohledán před novým odesláním."
         )
+    from datetime import datetime, timezone
+    from .orchestration.authorization import create_execution_authorization
+
+    authorization = state.get("execution_authorization") or {}
+    config = state.get("run_config_v2") or {}
+    try:
+        expected = create_execution_authorization(
+            Path(run_dir).name, config, state["run_scope_hash"]
+        ).to_dict()
+        expires = datetime.fromisoformat(authorization["expires_at"])
+        authorized = (
+            authorization.get("repair_allowed") is True
+            and expires > datetime.now(timezone.utc)
+            and all(authorization.get(key) == value for key, value in expected.items() if key != "expires_at")
+            and all(order.get("approval_id") == authorization["approval_id"]
+                    for order in source["work_orders"].values())
+        )
+    except (KeyError, TypeError, ValueError):
+        authorized = False
+    if not authorized:
+        raise ContractError("Oprava vyžaduje platnou explicitní autorizaci within_approval pro tento běh.")
     staged_files = list(state.get("staged_files") or [])
     verified_artifacts = _v3_verified_artifacts(
         run_dir, source, staged_files
@@ -1692,7 +1779,7 @@ def _repeat_v3_batch(
     manifest["deferred_paths"] = []
     manifest["blocked_requested_paths"] = []
 
-    repo, orders = _reserve_v3_followup(run_dir, state, manifest)
+    repo, orders = _reserve_v3_followup(run_dir, state, manifest, retry_source=source)
     data = encode_requests(manifest)
     request_path = (
         Path(run_dir)
@@ -1802,89 +1889,25 @@ def _repeat_v3_batch(
 
 
 def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
-    from .requirements import stage_instructions
-
-    state_path = Path(run_dir) / "run_state.json"
-    from .recoverable_artifacts import load_run_state, save_artifact
+    from .recoverable_artifacts import load_run_state
     state = load_run_state(run_dir)
     if source_batch_id != state.get("batch_id") and source_batch_id not in state.get("generate_batches", {}):
         raise ContractError("Dávka nepatří k tomuto běhu.")
     source = (state.get("generate_batches") or {}).get(source_batch_id, state["generate_batch"])
-    encode_requests(source)
-    if source.get("version") != 3:
-        raise ContractError("Legacy dávku lze importovat; nové odeslání vyžaduje implementační přípravu a manifest v3.")
     selected = set(paths)
     if (
-        (source.get("snapshot") or {}).get("structure", {}).get("contract")
+        source.get("version") == 3
+        and (source.get("snapshot") or {}).get("structure", {}).get("contract")
         == "IMPLEMENTATION_GRAPH_V3"
     ):
+        encode_requests(source)
         if not selected or not selected <= set(source["expected"].values()):
             raise ContractError("Vyberte pouze soubory z manifestu dávky.")
         return _repeat_v3_batch(
             client, run_dir, state, source, selected, feedback
         )
-    if state.get("submission_unknown") or state.get("pending_batch_submission") or state.get("status") == "submission_unknown":
-        raise ContractError("Neznámý submit musí být dohledán před novým odesláním.")
-    selected = set(paths)
-    if not selected or not selected <= set(source["expected"].values()):
-        raise ContractError("Vyberte pouze soubory z manifestu dávky.")
-    manifest = copy.deepcopy(source)
-    manifest["base_hashes"] = {p: h for p, h in {
-        **source.get("overwrite_hashes", {}), **source.get("base_hashes", {}),
-        **state.get("generated_hashes", {}),
-    }.items() if p in selected}
-    rows, expected = [], {}
-    prefix = uuid.uuid4().hex
-    stage = "B3_FILE" if manifest.get("mode") == "MODIFY" else "A3_FILE"
-    for source_row in source["requests"]:
-        row = copy.deepcopy(source_row)
-        path = source["expected"][row["custom_id"]]
-        if path not in selected:
-            continue
-        row["custom_id"] = f"{prefix}_{stage[:2]}_{len(rows):05d}"
-        row["body"]["instructions"] = stage_instructions(stage, batch=True)
-        if feedback:
-            dest = safe_join_under_root(state["out_dir"], path)
-            content = Path(dest).read_text(encoding="utf-8") if os.path.isfile(dest) else ""
-            row["body"]["input"] += "\n" + json.dumps({"repair": feedback, "current_content": content,
-                "instruction": "Oprav celý soubor, zachovej společná rozhraní."}, ensure_ascii=False)
-            # Výslovně vybraný obsah je základ opravy; další změny import opět ochrání.
-            if os.path.isfile(dest):
-                manifest["base_hashes"][path] = hashlib.sha256(Path(dest).read_bytes()).hexdigest()
-        rows.append(row)
-        expected[row["custom_id"]] = path
-    manifest.update(requests=rows, expected=expected, omitted=[])
-    for row in rows:
-        context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
-        action = context["file"]["action"] if stage == "B3_FILE" else None
-        row["body"]["text"] = file_response_format(stage, expected[row["custom_id"]], 0, action=action)
-        chunk = row["body"]["text"]["format"]["schema"]["properties"]["chunking"]["properties"]
-        chunk.update(chunk_count={"type": "integer", "enum": [1]}, has_more={"type": "boolean", "enum": [False]}, next_chunk_index={"type": "null"})
-        client.validate_access(row["body"], batch=True)
-    data = encode_requests(manifest)
-    path = Path(run_dir) / "requests" / f"repeat_{prefix}.jsonl"
-    path.write_bytes(data)
-    from .cost_context_report import CostContextReport
-    reporter = CostContextReport(run_dir)
-    for row in rows:
-        context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
-        measurement = measure_request(row["body"], compiled=context["file_context"], batch=True)
-        reporter.record(row["body"], custom_id=row["custom_id"], path=expected[row["custom_id"]],
-                        measurement=measurement, status="submitting")
-    uploaded = client.upload_file(str(path), purpose="batch")
-    state["pending_batch_submission"] = {"input_file_id": uploaded["id"], "manifest": manifest}
-    save_artifact(run_dir, "state/pending_batch_submission", state["pending_batch_submission"])
-    state["submission_input_file_id"] = uploaded["id"]
-    state["submission_endpoint"] = "/v1/responses"
-    state["submission_jsonl_sha256"] = hashlib.sha256(data).hexdigest()
-    state["submission_unknown"] = True
-    atomic_write_text(str(state_path), json.dumps(state, ensure_ascii=False, indent=2))
-    batch = submit_verified_batch(client, uploaded["id"], manifest["requests"])
-    state.setdefault("batch_records", {})[batch["id"]] = batch
-    state.setdefault("generate_batches", {})[batch["id"]] = manifest
-    save_artifact(run_dir, "state/generate_batches", state["generate_batches"])
-    state.pop("pending_batch_submission", None)
-    state["submission_unknown"] = False
-    state["status"] = "batch_pending"
-    atomic_write_text(str(state_path), json.dumps(state, ensure_ascii=False, indent=2))
-    return {"batch_id": batch["id"], "files": len(rows)}
+    raise ContractError(
+        "Legacy dávku lze importovat; nové odeslání vyžaduje nový WorkOrder "
+        "s kompatibilními schválenými podklady. Chybí implementační detail "
+        "IMPLEMENTATION_GRAPH_V3; spusťte novou přípravu."
+    )

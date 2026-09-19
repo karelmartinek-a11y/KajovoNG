@@ -34,8 +34,11 @@ def test_legacy_lock_keeps_manifest_and_all_artifact_checks(tmp_path, monkeypatc
     from kajovo.core.generate_batch import digest
     saved.pop("snapshot_hash")
     saved["snapshot_hash"] = digest(saved)
-    logger.update_state({"ui_state": {"mode": "GENERATE", "prompt": "test", "maximum_quality": False},
-                         "preparation_snapshot": saved, "status": "failed"})
+    logger.update_state({"ui_state": {
+        "mode": "GENERATE", "prompt": "test", "maximum_quality": False,
+        "stop_after_plan": False, "dry_run": False,
+    }})
+    logger.update_state({"preparation_snapshot": saved, "status": "failed"})
     lock = root / "execution.lock"
     lock.write_text("original process", encoding="utf-8")
     artifact = root / "artifacts" / "execution.lock"

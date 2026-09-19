@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 from kajovo.core.batch_completion import recover_unknown_submission
@@ -10,7 +9,7 @@ from kajovo.core.batch_submit import exact_batch_matches
 from kajovo.core.openai_client import OpenAIClient
 from kajovo.core.progress import ProgressClock, ProgressEvent
 from kajovo.core.runlog import RunLogger, verified_output_evidence
-from kajovo.core.runs.executor import RunExecutor as RunWorker
+from test_workflows import make_worker
 
 
 def test_exact_batch_recovery_uses_input_file_id_and_endpoint(tmp_path):
@@ -109,9 +108,7 @@ def test_partial_run_is_a_real_terminal_progress_state():
 
 
 def test_missing_deliverables_report_records_reason(tmp_path):
-    worker = RunWorker.__new__(RunWorker)
-    worker.cfg = SimpleNamespace(out_dir=str(tmp_path))
-    worker._log_debug = lambda _message: None
+    worker = make_worker(tmp_path, "GENERATE")
     report = worker._write_missing_files_report([
         {"path": "assets/logo.png", "purpose": "logo", "reason": "binární výstup"}
     ])
@@ -120,6 +117,8 @@ def test_missing_deliverables_report_records_reason(tmp_path):
     assert "assets/logo.png" in text
     assert "binární výstup" in text
     assert "automaticky nedodává" in text
+    assert Path(report).parent == Path(worker.log.paths.misc_dir)
+    assert not (Path(worker.cfg.out_dir) / "MISSINGFILES.md").exists()
 
 
 def test_user_progress_no_longer_exposes_obsolete_english_stage_messages():

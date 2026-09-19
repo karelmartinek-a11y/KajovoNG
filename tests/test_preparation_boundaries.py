@@ -9,51 +9,70 @@ import pytest
 
 from delivery_fixtures import delivery_payloads
 from kajovo.core.contracts import ContractError, RemoteResponseError
-from kajovo.core.delivery_preparation import prepare_delivery, validate_preparation_snapshot
+from kajovo.core.delivery_preparation import validate_preparation_snapshot
 from kajovo.core.generate_batch import digest
 from kajovo.core.run_bundle import LegacyRunAdapter
 from kajovo.core.requirements import validate_plan
 from kajovo.core.user_errors import describe_error
-from test_delivery_pipeline import _client
+from preparation_v2_helpers import decoded, preparation_scenario, prepare
 from test_workflows import make_worker
-
-
-def run_preparation(tmp_path, mode, values):
-    worker = make_worker(tmp_path, mode)
-    worker.cfg.maximum_quality = False
-    client, calls = _client(values)
-    return worker, client, calls
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 def test_plan_is_repaired_before_structure_and_preserves_attempts(tmp_path, mode):
-    req, plan, struct = delivery_payloads(mode)
-    bad = deepcopy(plan)
-    bad["architecture_items"][0]["requirement_ids"].append("AC-01")
-    worker, client, calls = run_preparation(tmp_path, mode, [req, bad, plan, struct])
-    with patch.object(worker, "_set"):
-        prepare_delivery(worker, client, mode, None, "zadání", [], [], None)
+    attempts = []
+    invalid = []
+
+    def mutate(name, value, context):
+        if name.endswith("1_PLAN_V2"):
+            attempts.append(deepcopy(value))
+            if len(attempts) == 1:
+                plan = value["result"]["data"]
+                if mode == "MODIFY":
+                    plan = plan["plan"]
+                plan["components"][0]["requirement_ids"].append("AC-01")
+                invalid.append(deepcopy(value["result"]["data"]))
+        return value
+
+    worker, client, responder = preparation_scenario(tmp_path, mode, mutate=mutate)
+    prepare(worker, client)
+    calls = responder.calls
     prefix = "A" if mode == "GENERATE" else "B"
-    assert [c["text"]["format"]["name"] for c in calls][:3] == [prefix + "0R_REQUIREMENTS", prefix + "1_PLAN", prefix + "1_PLAN"]
-    repair = json.loads("".join(c["text"] for m in calls[2]["input"] for c in m["content"]))
-    assert repair["plan"] == bad
-    assert repair["requirements"] == req
-    assert repair["validation_issues"][0]["stage"] == prefix + "1"
+    assert [c["text"]["format"]["name"] for c in calls][:3] == [
+        prefix + "0R_REQUIREMENTS_V2", prefix + "1_PLAN_V2", prefix + "1_PLAN_V2"]
+    repair = decoded(calls[2])
+    assert repair["input"] == decoded(calls[1])
+    assert "neznámý requirement" in repair["repair"]["error"]
+    assert len(attempts) == 2
     adapter = LegacyRunAdapter(worker.log.paths.run_dir)
     records = adapter.validations()
     assert [r["status"] for r in records].count("failed") == 1
     assert all(s["status"] == "completed" for s in worker.log.bundle.steps())
-    assert len([r for r in adapter.requests() if r["retry_attempt"] == 1]) == 1
+    evidence = {
+        "repair_requests": len([r for r in adapter.requests() if r["retry_attempt"] == 1]),
+        "invalid_candidate": invalid[0] in repair["repair"].values(),
+    }
+    assert evidence == {"repair_requests": 1, "invalid_candidate": True}
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-def test_identical_invalid_plan_stops_without_structure(tmp_path, mode):
-    req, plan, _ = delivery_payloads(mode)
-    plan["architecture_items"][0]["responsibility"] = ""
-    worker, client, calls = run_preparation(tmp_path, mode, [req, plan, plan])
+@pytest.mark.parametrize("fault", ["empty_responsibility", "unknown_requirement"])
+def test_identical_invalid_plan_stops_without_structure(tmp_path, mode, fault):
+    def mutate(name, value, context):
+        if name.endswith("1_PLAN_V2"):
+            plan = value["result"]["data"]
+            if mode == "MODIFY":
+                plan = plan["plan"]
+            if fault == "empty_responsibility":
+                plan["components"][0]["responsibility"] = ""
+            else:
+                plan["components"][0]["requirement_ids"] = ["UNKNOWN"]
+        return value
+
+    worker, client, responder = preparation_scenario(tmp_path, mode, mutate=mutate)
     with patch.object(worker, "_set"), pytest.raises(ContractError):
-        prepare_delivery(worker, client, mode, None, "zadání", [], [], None)
-    assert len(calls) == 3
+        prepare(worker, client)
+    assert len(responder.calls) == 3
     assert worker.cfg.preparation_snapshot["canonical_stage"].endswith("0R")
     assert worker.log.bundle.steps()[-1]["status"] == "failed"
 
@@ -103,11 +122,13 @@ def test_remote_cause_survives_runtime_and_persistence(tmp_path, code):
 
 
 def test_schema_invalid_reply_is_repaired_in_same_phase(tmp_path):
-    req, plan, struct = delivery_payloads("GENERATE")
-    worker, client, calls = run_preparation(tmp_path, "GENERATE", [{}, req, plan, struct])
-    with patch.object(worker, "_set"):
-        prepare_delivery(worker, client, "GENERATE", None, "zadání", [], [], None)
-    assert len(calls) == 4
+    def mutate(name, value, context):
+        return {} if len(responder.calls) == 1 else value
+
+    worker, client, responder = preparation_scenario(tmp_path, "GENERATE", mutate=mutate)
+    prepare(worker, client)
+    calls = responder.calls
+    assert len(calls) == 5
     assert calls[0]["text"] == calls[1]["text"]
     assert worker.log.bundle.steps()[0]["status"] == "completed"
 
@@ -141,13 +162,16 @@ def test_generate_keeps_foreign_output(tmp_path):
 
 
 def test_modify_plan_paths_are_checked_before_structure(tmp_path):
-    req, plan, _ = delivery_payloads("MODIFY")
-    plan["change_plan"]["files_to_add"] = [{"path": "../outside.py", "intent": "změna"}]
-    worker, client, calls = run_preparation(tmp_path, "MODIFY", [req, plan, plan])
+    def mutate(name, value, context):
+        if name == "B1_PLAN_V2":
+            value["result"]["data"]["files_to_add"] = ["../outside.py"]
+        return value
+
+    worker, client, responder = preparation_scenario(tmp_path, "MODIFY", mutate=mutate)
     with patch.object(worker, "_set"), pytest.raises(ContractError) as caught:
-        prepare_delivery(worker, client, "MODIFY", None, "zadání", [], [], None)
-    assert caught.value.issues[0].stage == "B1"
-    assert len(calls) == 3
+        prepare(worker, client)
+    assert "outside.py" in str(caught.value)
+    assert all("SPINE" not in p["text"]["format"]["name"] for p in responder.calls)
     assert worker.cfg.preparation_snapshot["canonical_stage"] == "B0R"
 
 

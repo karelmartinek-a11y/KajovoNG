@@ -28,6 +28,8 @@ def modify_manifest(model="gpt-4.1-nano", maximum_quality=False):
 
 def modify_outputs(manifest):
     result = outputs(manifest)
+    if manifest.get("version") == 3:
+        return result
     for item, row in zip(result, manifest["requests"], strict=True):
         payload = json.loads(item["response"]["body"]["output_text"])
         context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
@@ -59,11 +61,13 @@ def test_modify_rows_include_full_original_and_action():
     for row, action in zip(manifest["requests"], ("modify", "add"), strict=True):
         body = row["body"]
         context = json.loads(body["input"])
-        assert body["instructions"] == stage_instructions("B3_FILE", batch=True)
+        assert body["instructions"].startswith(stage_instructions("B3_FILE", batch=True))
         assert "additionalProperties" not in body["instructions"]
         sources = context["file_context"]["working_context"]["relevant_source_excerpts"]
         assert {s["path"]: s["content"] for s in sources} == {"maths.py": "původní\n" * 1000}
-        assert body["text"]["format"]["schema"]["properties"]["action"]["enum"] == [action]
+        assert set(body["text"]["format"]["schema"]["properties"]) == {"content"}
+        assert context["file"]["action"] == action
+        assert manifest["work_orders"][row["custom_id"]]["target_path"] == context["file"]["path"]
         assert "_B3_" in row["custom_id"]
         assert "originals" not in context
 
@@ -91,7 +95,7 @@ def test_modify_import_validates_file_contract(tmp_path, fault):
     body = rows[0]["response"]["body"]
     payload = json.loads(body["output_text"])
     if fault == "chunk":
-        payload["chunking"]["has_more"] = True
+        payload["chunking"] = {"has_more": True}
     else:
         payload[fault] = {"contract": "A3_FILE", "action": "add", "path": "foreign.py"}[fault]
     body["output_text"] = json.dumps(payload)
@@ -119,46 +123,110 @@ def test_modify_completion_protects_original_and_reimport(tmp_path):
 
 
 def test_modify_retry_keeps_source_manifest_and_original_hashes(tmp_path):
-    manifest = modify_manifest()
-    for row in manifest["requests"]:
-        row["body"]["instructions"] = stage_instructions("B3_FILE")
-    run, out = save_state(tmp_path, manifest)
+    from pathlib import Path
+    from change_v2_fixtures import batch_output_rows, run as run_scenario, scenario
+
+    worker, client, _ = scenario(
+        tmp_path, "MODIFY", batch=True,
+        files=[{"path": "maths.py", "action": "modify"}, {"path": "main.py", "action": "add"}],
+    )
+    out = Path(worker.cfg.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "maths.py").write_text("původní OUT\n", encoding="utf-8")
+    original_hash = hashlib.sha256((out / "maths.py").read_bytes()).hexdigest()
+    worker.cfg.auto_repair = "within_approval"
+    results, errors = run_scenario(worker, client)
+    assert results and not errors
+    run = Path(worker.log.paths.run_dir)
+    state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    manifest = state["generate_batch"]
+    primary_batch = state["batch_id"]
     original_manifest = copy.deepcopy(manifest)
-    client = Mock()
+    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    rows = batch_output_rows(manifest)
+    for row in rows:
+        row["response"]["body"]["id"] = "resp_" + row["custom_id"]
+    client.file_content.return_value = raw(rows)
+    result = complete_saved_batch(client, run, primary_batch, worker.settings)
+    assert result["status"] == "files_complete_unverified"
+    client.reset_mock()
     client.upload_file.return_value = {"id": "file_retry"}
     client.create_batch.return_value = {"id": "batch_retry"}
-    repeat_saved_batch(client, run, "batch_original", ["maths.py"])
+    repeat_saved_batch(client, run, primary_batch, ["maths.py"])
     state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
     assert state["generate_batch"] == original_manifest
+    assert state["batch_id"] == primary_batch
     retry = state["generate_batches"]["batch_retry"]
-    assert retry["requests"][0]["body"]["instructions"] == stage_instructions("B3_FILE", batch=True)
-    assert retry["base_hashes"] == manifest["overwrite_hashes"]
+    assert set(retry["expected"].values()) == {"maths.py"}
+    order = next(iter(retry["work_orders"].values()))
+    assert order["expected_target_hash"] == original_hash
+    context = json.loads(retry["requests"][0]["body"]["input"])
+    assert context["repair_current_artifact"]["sha256"] == state["generated_hashes"]["maths.py"]
+    assert context["repair_current_artifact"]["content"] == "content:maths.py\n"
     assert retry["snapshot"] == manifest["snapshot"]
     assert "_B3_" in retry["requests"][0]["custom_id"]
     encode_requests(state["generate_batch"])
+    encode_requests(retry)
     client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
-    client.file_content.return_value = raw(modify_outputs(retry))
+    rows = batch_output_rows(retry)
+    for row in rows:
+        row["response"]["body"]["id"] = "resp_" + row["custom_id"]
+    client.file_content.return_value = raw(rows)
     (out / "maths.py").write_text("po odeslání", encoding="utf-8")
-    result = complete_saved_batch(client, run, "batch_retry", None)
-    assert result["errors"]
+    result = complete_saved_batch(client, run, "batch_retry", worker.settings)
+    assert result["status"] == "files_complete_unverified"
+    assert result["published"] is False
+    assert result["staged_files"][0]["expected_target_hash"] == original_hash
+    from kajovo.core.orchestration.publish import prepare_publish
+    from kajovo.core.orchestration.errors import OrchestrationError
+
+    with pytest.raises(OrchestrationError, match="PUBLISH_CONFLICT"):
+        prepare_publish(result["staged_files"], out, {"maths.py": original_hash}, run_dir=run)
     assert (out / "maths.py").read_text(encoding="utf-8") == "po odeslání"
+    client.create_response.assert_not_called()
 
 
 def test_unknown_retry_recovery_keeps_primary_batch(tmp_path):
-    manifest = modify_manifest()
-    run, _ = save_state(tmp_path, manifest)
-    client = Mock()
+    from pathlib import Path
+    from change_v2_fixtures import batch_output_rows, run as run_scenario, scenario
+
+    worker, client, _ = scenario(
+        tmp_path, "MODIFY", batch=True,
+        files=[{"path": "maths.py", "action": "modify"}],
+    )
+    worker.cfg.auto_repair = "within_approval"
+    results, errors = run_scenario(worker, client)
+    assert results and not errors
+    run = Path(worker.log.paths.run_dir)
+    state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    manifest = state["generate_batch"]
+    primary_batch = state["batch_id"]
+    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    rows = batch_output_rows(manifest)
+    for row in rows:
+        row["response"]["body"]["id"] = "resp_" + row["custom_id"]
+    client.file_content.return_value = raw(rows)
+    result = complete_saved_batch(client, run, primary_batch, worker.settings)
+    assert result["status"] == "files_complete_unverified"
+    client.reset_mock()
     client.upload_file.return_value = {"id": "file_retry"}
     client.create_batch.side_effect = TimeoutError("neurčitý submit")
     with pytest.raises(TimeoutError):
-        repeat_saved_batch(client, run, "batch_original", ["maths.py"])
+        repeat_saved_batch(client, run, primary_batch, ["maths.py"])
     state_path = run / "run_state.json"
     before = json.loads(state_path.read_text(encoding="utf-8"))
-    recover_unknown_submission(run, [{"id": "batch_recovered", "input_file_id": "file_retry"}])
+    assert before["submission_unknown"] is True
+    with pytest.raises(ContractError, match="Neznámý submit"):
+        repeat_saved_batch(client, run, primary_batch, ["maths.py"])
+    recover_unknown_submission(run, [{"id": "batch_recovered", "input_file_id": "file_retry", "endpoint": "/v1/responses"}])
     after = json.loads(state_path.read_text(encoding="utf-8"))
-    assert after["batch_id"] == "batch_original"
+    assert after["batch_id"] == primary_batch
+    assert after["generate_batch"] == manifest
     assert after["generate_batches"]["batch_recovered"] == before["pending_batch_submission"]["manifest"]
     assert after["submission_unknown"] is False
+    assert "pending_batch_submission" not in after
+    client.create_batch.assert_called_once()
+    client.create_response.assert_not_called()
 
 
 def test_legacy_a3_manifest_import(tmp_path):
@@ -172,6 +240,8 @@ def test_legacy_a3_manifest_import(tmp_path):
         context = json.loads(row["body"]["input"])
         context["specification"] = manifest["snapshot"]
         row["body"]["input"] = json.dumps(context)
+        from kajovo.core.contracts import file_response_format
+        row["body"]["text"] = file_response_format("A3_FILE", context["file"]["path"], 0)
     assert import_results(manifest, [raw(outputs(manifest))], str(tmp_path))["status"] == "files_complete_unverified"
 
 
