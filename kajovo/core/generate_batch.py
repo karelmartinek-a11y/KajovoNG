@@ -174,7 +174,7 @@ def _build_manifest_v3(
     import jsonschema
 
     from .orchestration.preparation import GRAPH_SCHEMA
-    from .orchestration.waves import build_execution_dag, ready_tasks
+    from .orchestration.waves import build_execution_dag
     from .requirements import apply_quality, stage_instructions
 
     if mode not in {"GENERATE", "MODIFY"} or structure.get("mode") != mode:
@@ -212,18 +212,6 @@ def _build_manifest_v3(
         if isinstance(artifact, dict)
         and artifact.get("validation_status") == "verified"
     }
-    ready = set(ready_tasks(dag, {path: True for path in verified_targets}))
-    if not ready:
-        remaining_content = {
-            path: list(dag.content_dependencies.get(path, ()))
-            for path in compiler.files
-            if path not in verified_targets
-        }
-        raise ContractError(
-            "BATCH nemá připravenou dependency-wave; chybí verified content evidence: "
-            + json.dumps(remaining_content, ensure_ascii=False, sort_keys=True)
-        )
-
     production_actions = (
         {"generate"} if mode == "GENERATE" else {"add", "modify"}
     )
@@ -237,12 +225,40 @@ def _build_manifest_v3(
         raise ContractError(
             f"BATCH výběr obsahuje neprodukční nebo neznámé cesty: {sorted(requested - production)}"
         )
-    selected_paths = sorted(requested & ready)
-    blocked_requested = sorted(requested - ready)
-    if not selected_paths:
+
+    wave_index = {
+        path: index
+        for index, wave in enumerate(dag.waves)
+        for path in wave
+    }
+    # Normal continuation excludes already verified targets. An explicit repair
+    # selects only already verified targets and is therefore allowed to rebuild
+    # exactly those targets without reopening providers or siblings.
+    pending_requested = requested - verified_targets
+    candidates = pending_requested if pending_requested else requested
+    eligible = {
+        path
+        for path in candidates
+        if set(dag.content_dependencies.get(path, ())) <= verified_targets
+    }
+    if not eligible:
+        remaining_content = {
+            path: list(dag.content_dependencies.get(path, ()))
+            for path in sorted(candidates)
+        }
         raise ContractError(
-            "Vybrané soubory nejsou v aktuální dependency-wave; nejprve musí projít jejich verified_content dependency."
+            "BATCH nemá připravenou dependency-wave; chybí verified content evidence: "
+            + json.dumps(remaining_content, ensure_ascii=False, sort_keys=True)
         )
+    first_wave = min(wave_index[path] for path in eligible)
+    selected_paths = sorted(
+        path for path in eligible if wave_index[path] == first_wave
+    )
+    blocked_requested = sorted(
+        path
+        for path in requested
+        if path not in selected_paths and path not in verified_targets
+    )
 
     files_by_path = {row["path"]: row for row in structure["spine"]["files"]}
     selected = [files_by_path[path] for path in selected_paths]
