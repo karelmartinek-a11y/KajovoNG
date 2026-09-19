@@ -116,7 +116,9 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
                     self.log.run_id, self.cfg.prompt, plan, struct, a3_model,
                     self.cfg.temperature if self._model_caps(a3_model).get("supports_temperature", False) else None,
                     selected, requirements=self._delivery_snapshot["requirements"],
-                    maximum_quality=self.cfg.maximum_quality, recovery_instruction=self.cfg.recovery_instruction)
+                    maximum_quality=self.cfg.maximum_quality,
+                    recovery_instruction=self.cfg.recovery_instruction,
+                    run_config=self.cfg)
                 return self._submit_generate_batch(client, manifest)
 
         try:
