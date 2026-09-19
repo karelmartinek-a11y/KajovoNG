@@ -354,6 +354,8 @@ class RunLogger:
             ).isoformat()
         elif status in TERMINAL_STATUSES:
             patch["finished_at"] = datetime.now(timezone.utc).isoformat()
+        if isinstance(state.get("run_scope_hash"), str):
+            patch["run_scope_hash"] = state["run_scope_hash"]
         configuration = ui or state.get("configuration_snapshot")
         if configuration:
             raw = json.dumps(
@@ -390,7 +392,13 @@ class RunLogger:
         required_artifacts: list[str] = [str(row.get("artifact_id")) for row in self.bundle.artifacts()
             if row.get("available_local", True) and row.get("role") in
             {"user_input", "attached_file", "in_project_file", "input"} and row.get("artifact_id")]
-        if "ui_state" in patch and isinstance(state.get("ui_state"), dict):
+        if patch.get("status") == "plan_ready":
+            checkpoint_type = "plan_ready"
+            safe = True
+            reason = (
+                "Kanonická příprava je kompletní a ověřená; A3/B3 ani výrobní Batch nebyly spuštěny."
+            )
+        elif "ui_state" in patch and isinstance(state.get("ui_state"), dict):
             mode = str(state["ui_state"].get("mode") or "")
             if mode in {"GENERATE", "MODIFY", "QA", "QFILE"}:
                 checkpoint_type = "input_ready"
@@ -405,7 +413,7 @@ class RunLogger:
                     and row.get("role") in {"user_input", "attached_file", "in_project_file", "input"}
                     and row.get("artifact_id")
                 ]
-        if "preparation_snapshot" in patch and isinstance(
+        if not checkpoint_type and "preparation_snapshot" in patch and isinstance(
             state.get("preparation_snapshot"), dict
         ):
             snapshot = state["preparation_snapshot"]
