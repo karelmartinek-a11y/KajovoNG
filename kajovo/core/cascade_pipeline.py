@@ -178,6 +178,99 @@ class CascadeRunExecutor:
         self._failed_step_index = 0
         self._runtime_cache: dict[str, Any] = {}
 
+    def _schema_request(
+        self,
+        client,
+        step: CascadeStep,
+        idx: int,
+        payload: dict[str, Any],
+        attempt_no: int,
+    ) -> dict[str, Any]:
+        if self.logger is None:
+            raise RuntimeError("Cascade logger není inicializovaný.")
+        run_id = str(self.cfg.run_id or self.logger.run_id)
+        ledger_cfg = self._ledger_cfg(step.model, self.cfg.execution_approval_id)
+        task_id = f"{step.id}:schema"
+        projection = {
+            "cascade_name": self.cfg.cascade.name,
+            "step_id": step.id,
+            "step_signature": step_signature(step),
+            "attempt_no": attempt_no,
+            "purpose": "schema_preparation",
+            "input": payload.get("input"),
+        }
+        wire_format = (payload.get("text") or {}).get("format") or {}
+        order = freeze_order(
+            ledger_cfg,
+            {
+                "run_id": run_id,
+                "step_id": str(getattr(self, "_current_step_record_id", step.id)),
+                "task_id": task_id,
+                "stage": "CASCADE_SCHEMA",
+                "route": "responses_live",
+                "target_id": step.id,
+                "target_path": None,
+                "expected_target_hash": None,
+                "contract_name": str(
+                    wire_format.get("name") or "SCHEMA_PREPARATION"
+                ),
+                "schema": wire_format.get("schema") or {},
+                "prompt": str(payload.get("instructions") or ""),
+                "model": step.model,
+                "model_capability": model_spec(step.model),
+                "source_snapshot": {
+                    "step_signature": step_signature(step),
+                    "cascade_name": self.cfg.cascade.name,
+                    "purpose": "schema_preparation",
+                },
+                "attempt_no": attempt_no,
+                "approval_id": self.cfg.execution_approval_id,
+            },
+            projection,
+        )
+        reserve_paid_request(
+            self.logger,
+            ledger_cfg,
+            client,
+            payload,
+            work_order=order,
+        )
+        try:
+            response = client.create_response(payload)
+        except OutputContractError as exc:
+            response = getattr(exc, "response", None)
+            if not isinstance(response, dict):
+                raise
+        except Exception as exc:
+            if isinstance(exc, SubmissionOutcomeUnknown):
+                mark_submission(self.logger, order, None, unknown=True)
+            elif (
+                getattr(exc, "request_sent", None) is False
+                or getattr(exc, "status_code", None)
+                in {400, 401, 403, 404, 422, 429}
+            ):
+                release_reservation(self.logger, order)
+            else:
+                mark_submission(self.logger, order, None, unknown=True)
+            raise
+        provider_id = str(response.get("id") or "").strip()
+        if not provider_id:
+            mark_submission(self.logger, order, None, unknown=True)
+            raise SubmissionOutcomeUnknown(
+                "cascade_schema",
+                "POST",
+                "/v1/responses",
+            )
+        mark_submission(self.logger, order, provider_id, unknown=False)
+        settle_usage(self.logger, order, response)
+        self.logger.save_json(
+            "responses",
+            f"cascade_schema_{idx:02d}_attempt_{attempt_no}",
+            response,
+            step_id=str(getattr(self, "_current_step_record_id", step.id)),
+        )
+        return response
+
     def _ledger_cfg(self, model: str, approval_id: str):
         return SimpleNamespace(
             mode="CASCADE",
@@ -878,6 +971,10 @@ class CascadeRunExecutor:
                     step.instructions + "\n" + step.input_text,
                     None,
                     [],
+                    request=lambda payload, attempt: self._schema_request(
+                        client, step, idx, payload, attempt
+                    ),
+                    max_output_tokens=output_limit,
                 )
             wire_format = response_format(f"cascade_step_{idx:02d}_schema", schema)
         else:
