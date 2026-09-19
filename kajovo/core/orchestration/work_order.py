@@ -86,8 +86,8 @@ def validate_work_order_v2(value: dict[str, Any]) -> None:
         jsonschema.Draft202012Validator(WORK_ORDER_V2_SCHEMA).validate(value)
     except jsonschema.ValidationError as exc:
         raise ValueError(f"WORK_ORDER_V2: {exc.message}") from exc
-    if value["attempt_no"] < 0:
-        raise ValueError("WORK_ORDER_V2.attempt_no nesmí být záporné.")
+    if not 1 <= value["attempt_no"] <= 6:
+        raise ValueError("WORK_ORDER_V2.attempt_no musí být v rozsahu 1 až 6.")
     for key in (
         "run_id", "step_id", "task_id", "stage", "target_id",
         "input_projection_hash", "contract_name", "schema_hash", "prompt_hash",
