@@ -21,9 +21,17 @@ from .structured_output import prepare_payload
 
 
 def validate_modify_sources(structure, root, items, completed_paths=()):
-    """Ověří skutečné podklady B2 i pro výsledek bez změn a zachované vazby."""
+    """Ověří skutečné podklady B2/V3 proti zmrazenému IN."""
     sources = {item.rel_path: item for item in items}
-    for file in structure.get("touched_files", []):
+    if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
+        files = list((structure.get("spine") or {}).get("files") or [])
+        touched = [row for row in files if row.get("action") in {"add", "modify"}]
+        preserved = [row for row in files if row.get("action") == "preserve"]
+    else:
+        touched = list(structure.get("touched_files", []) or [])
+        preserved = list(structure.get("preserved_files", []) or [])
+
+    for file in touched:
         path = file["path"]
         if path in completed_paths:
             continue
@@ -32,16 +40,23 @@ def validate_modify_sources(structure, root, items, completed_paths=()):
             raise ContractError(f"B3: přidávaný soubor již existuje v IN: {path}")
         if file["action"] == "modify":
             item = sources.get(path)
-            if item is None or not os.path.isfile(target) or (
-                file.get("kind") != "binary" and not item.uploadable
+            if (
+                item is None
+                or not os.path.isfile(target)
+                or not item.uploadable
+                or sha256_file(target) != item.sha256
             ):
-                raise ContractError(f"B3: měněný soubor není dostupný ve schváleném IN: {path}")
-    for file in structure.get("preserved_files", []):
+                raise ContractError(
+                    f"B3: měněný soubor není dostupný v přesně zmrazeném IN: {path}"
+                )
+
+    for file in preserved:
         path = file["path"]
         item = sources.get(path)
-        if item is None or not item.uploadable:
-            raise ContractError(f"Zachovaný soubor není dostupný ve schváleném IN: {path}")
-        if sha256_file(safe_join_under_root(root, path)) != item.sha256:
+        if item is None:
+            raise ContractError(f"Zachovaný soubor není ve zmrazeném IN: {path}")
+        target = safe_join_under_root(root, path)
+        if not os.path.isfile(target) or sha256_file(target) != item.sha256:
             raise ContractError(f"IN se od skenu změnil: {path}")
 
 
