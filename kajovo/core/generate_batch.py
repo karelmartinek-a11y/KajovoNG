@@ -715,7 +715,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             if cid not in expected:
                 raise ContractError(f"Neznámé ID výsledku: {cid}")
             if cid in entries:
-                errors[cid] = "Duplicitní výsledek."
+                raise ContractError(f"Duplicitní ID výsledku: {cid}")
             entries[cid] = item
     contents, error_details = {}, {}
     for cid, path in expected.items():
@@ -1435,12 +1435,11 @@ def _process_saved_batch_v3(
     else:
         state["status"] = "files_complete_unverified"
     result["status"] = state["status"]
+    # import_status describes this provider batch, not the aggregate run.
+    # Another still-pending batch must not make an already imported batch look
+    # pending again.
     result["import_status"] = (
-        "dry_run"
-        if state["status"] == "dry_run"
-        else "files_complete_unverified"
-        if state["status"] == "files_complete_unverified"
-        else state["status"]
+        "dry_run" if manifest.get("dry_run") else "files_complete_unverified"
     )
     state["batch_imports"][batch_id] = copy.deepcopy(result)
     atomic_write_text(
