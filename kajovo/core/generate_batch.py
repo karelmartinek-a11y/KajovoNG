@@ -12,9 +12,10 @@ import time
 import uuid
 from pathlib import Path
 
-from .contracts import ContractError, RemoteResponseError, file_response_format, parse_json_strict, validate_paths
+from .contracts import ContractError, RemoteResponseError, parse_json_strict, validate_paths
 from .request_rules import uses_reasoning_defaults, validate_response_payload
-from .structured_output import validate_output
+from .structured_output import file_content_format, validate_output
+from .orchestration.work_order import freeze_order, validate_work_order_v2
 from .utils import atomic_write_text, is_versing_snapshot_dir, safe_join_under_root
 from .batch_submit import submit_verified_batch
 from .progress import ProgressEvent
@@ -152,7 +153,7 @@ def validate_batch_model(model):
 
 def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=None, *,
                    requirements=None, maximum_quality=False, mode="GENERATE", originals=None,
-                   recovery_instruction=""):
+                   recovery_instruction="", run_config=None, expected_target_hashes=None):
     from .requirements import apply_quality, stage_instructions, validate_traceability
 
     if mode not in {"GENERATE", "MODIFY"}:
@@ -203,7 +204,8 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
         raise ContractError("Manifest neobsahuje žádné vybrané textové soubory.")
     if len(selected) > 50_000:
         raise ContractError("Dávka překračuje 50 000 souborů.")
-    rows, reports = [], []
+    rows, reports, work_orders = [], [], []
+    expected_target_hashes = dict(expected_target_hashes or {})
     for index, file in enumerate(selected):
         action = file["action"] if modifying else None
         if modifying and action == "modify" and not isinstance(originals.get(file["path"]), str):
@@ -212,15 +214,15 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
         context = {"file_context": compiled, "file": file}
         if recovery_instruction:
             context["recovery_instruction"] = str(recovery_instruction)
-        fmt = file_response_format(stage, file["path"], 0, action=action)
-        chunk = fmt["format"]["schema"]["properties"]["chunking"]["properties"]
-        chunk["chunk_count"] = {"type": "integer", "enum": [1]}
-        chunk["has_more"] = {"type": "boolean", "enum": [False]}
-        chunk["next_chunk_index"] = {"type": "null"}
+        fmt = file_content_format()
         body = {
             "model": model,
             "store": False,
-            "instructions": stage_instructions(stage, batch=True),
+            "instructions": (
+                stage_instructions(stage, batch=True)
+                + "\nWire kontrakt FILE_CONTENT_V1: vrať pouze objekt s polem content. "
+                  "Cesta a akce jsou důvěryhodná metadata WorkOrderu, nikoli součást odpovědi."
+            ),
             "input": canonical(context),
         }
         body["text"] = fmt
@@ -237,10 +239,44 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
         report["legacy_estimated_input_tokens"] = legacy["input_tokens"]
         report["saved_estimated_input_tokens"] = legacy["input_tokens"] - report["input_tokens"]
         validate_response_payload(body)
-        rows.append({"custom_id": f"{run_id}_{stage[:2]}_{index:05d}", "method": "POST", "url": "/v1/responses", "body": body})
-        report.update(routing=routing, path=file["path"], custom_id=rows[-1]["custom_id"])
+        custom_id = f"{run_id}_{stage[:2]}_{index:05d}"
+        rows.append({"custom_id": custom_id, "method": "POST", "url": "/v1/responses", "body": body})
+        report.update(routing=routing, path=file["path"], custom_id=custom_id)
         reports.append(report)
+        cfg_for_order = run_config
+        if cfg_for_order is None:
+            from types import SimpleNamespace
+            cfg_for_order = SimpleNamespace(
+                maximum_quality=maximum_quality, auto_repair="off",
+                unknown_pricing="explicit_token_budget", max_cost_microusd=None,
+                max_input_tokens=2_000_000, max_output_tokens=500_000,
+                max_paid_requests=200,
+            )
+        order = freeze_order(
+            cfg_for_order,
+            {
+                "run_id": run_id,
+                "step_id": "batch:" + custom_id,
+                "task_id": custom_id,
+                "stage": stage.split("_", 1)[0],
+                "route": "responses_batch",
+                "target_id": file["path"],
+                "target_path": file["path"],
+                "expected_target_hash": expected_target_hashes.get(file["path"]),
+                "contract_name": "FILE_CONTENT_V1",
+                "schema": fmt["format"]["schema"],
+                "prompt": body["instructions"] + "\n" + body["input"],
+                "model": model,
+                "model_capability": {},
+                "source_snapshot": snapshot,
+                "attempt_no": 0,
+                "approval_id": f"user-start:{run_id}",
+            },
+            compiled,
+        )
+        work_orders.append({**order.to_dict(), "order_hash": order.order_hash})
     manifest = {"version": 3, "mode": mode, "snapshot": snapshot, "snapshot_hash": digest(snapshot), "requests": rows,
+                "work_orders": {row["task_id"]: row for row in work_orders},
                 "cost_context_reports": reports, "dependency_waves": compiler.graph,
                 "expected": {row["custom_id"]: file["path"] for row, file in zip(rows, selected, strict=True)},
                 "omitted": [f["path"] for f in files if f not in selected]}
@@ -305,13 +341,26 @@ def encode_requests(manifest):
             files = manifest["snapshot"]["structure"]["touched_files" if modifying else "files"]
             if context["file"] not in files:
                 raise ContractError("Souborová úloha mění kanonickou specifikaci souboru.")
-            properties = row["body"]["text"]["format"]["schema"]["properties"]
-            stage = "B3_FILE" if modifying else "A3_FILE"
-            if properties["contract"].get("enum") != [stage] or properties["path"].get("enum") != [context["file"]["path"]]:
-                raise ContractError("Schéma úlohy neodpovídá režimu nebo cestě manifestu.")
-            if modifying and ((manifest.get("version") == 2 and not isinstance(context.get("original_content"), str))
-                              or properties.get("action", {}).get("enum") != [context["file"]["action"]]):
-                raise ContractError("Úloha MODIFY nemá původní obsah nebo správnou akci.")
+            if manifest.get("version") == 3:
+                properties = row["body"]["text"]["format"]["schema"]["properties"]
+                if set(properties) != {"content"} or row["body"]["text"]["format"].get("name") != "FILE_CONTENT_V1":
+                    raise ContractError("V3 souborová úloha musí používat FILE_CONTENT_V1.")
+                order = (manifest.get("work_orders") or {}).get(row["custom_id"])
+                if not isinstance(order, dict):
+                    raise ContractError("V3 souborová úloha nemá WORK_ORDER_V2.")
+                validate_work_order_v2({k: v for k, v in order.items() if k != "order_hash"})
+                if order.get("target_path") != context["file"]["path"] or order.get("contract_name") != "FILE_CONTENT_V1":
+                    raise ContractError("WORK_ORDER_V2 neodpovídá cíli dávkové úlohy.")
+            else:
+                properties = row["body"]["text"]["format"]["schema"]["properties"]
+                stage = "B3_FILE" if modifying else "A3_FILE"
+                if properties["contract"].get("enum") != [stage] or properties["path"].get("enum") != [context["file"]["path"]]:
+                    raise ContractError("Historické schéma úlohy neodpovídá režimu nebo cestě manifestu.")
+                if modifying and (
+                    not isinstance(context.get("original_content"), str)
+                    or properties.get("action", {}).get("enum") != [context["file"]["action"]]
+                ):
+                    raise ContractError("Historická MODIFY úloha nemá původní obsah nebo správnou akci.")
     data = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
     if len(data) > 200_000_000:
         raise ContractError("JSONL překračuje 200 MB.")
@@ -382,13 +431,16 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
                     custom_id=cid, path=path,
                 )
             request_body = request_bodies[cid]
-            stage = "B3_FILE" if manifest.get("mode") == "MODIFY" else "A3_FILE"
-            payload = validate_output(body, {"text": request_body.get("text") or file_response_format(stage, path, 0)})
-            if payload.get("contract") != stage or payload.get("path") != path or not isinstance(payload.get("content"), str):
-                raise ContractError("Nesouhlasí souborový kontrakt nebo cesta.")
-            chunk = payload.get("chunking")
-            if not isinstance(chunk, dict) or type(chunk.get("chunk_index")) is not int or chunk["chunk_index"] != 0 or type(chunk.get("chunk_count")) is not int or chunk["chunk_count"] != 1 or chunk.get("has_more") is not False or chunk.get("next_chunk_index") is not None:
-                raise ContractError("Dávkový soubor musí být úplný v jediné části.")
+            if manifest.get("version") == 3:
+                payload = validate_output(body, {"text": request_body.get("text") or file_content_format()})
+                if not isinstance(payload.get("content"), str):
+                    raise ContractError("FILE_CONTENT_V1 vyžaduje content:string.")
+            else:
+                from .contracts import file_response_format
+                stage = "B3_FILE" if manifest.get("mode") == "MODIFY" else "A3_FILE"
+                payload = validate_output(body, {"text": request_body.get("text") or file_response_format(stage, path, 0)})
+                if payload.get("contract") != stage or payload.get("path") != path or not isinstance(payload.get("content"), str):
+                    raise ContractError("Nesouhlasí historický souborový kontrakt nebo cesta.")
             contents[cid] = payload["content"]
             if manifest.get("version") != 3 and not payload["content"].strip():
                 contents.pop(cid)
