@@ -182,10 +182,25 @@ def test_delivery_fixtures_have_complete_traceability_and_independent_values(mod
 def test_log_disk_error_does_not_repeat_api(tmp_path):
     worker = make_worker(tmp_path, "QA")
     client = Mock()
+    from kajovo.core.context_compiler import content_hash
+
+    client.count_input_tokens.side_effect = lambda payload: {
+        "input_tokens": 100,
+        "request_hash": content_hash(payload),
+    }
     client.create_response.return_value = response(1, "answer")
-    with patch.object(worker.log, "save_json", side_effect=OSError("disk failure")):
+    original_save = worker.log.save_json
+
+    def fail_only_after_provider(kind, *args, **kwargs):
+        if kind == "responses":
+            raise OSError("disk failure")
+        return original_save(kind, *args, **kwargs)
+
+    with patch.object(worker.log, "save_json", side_effect=fail_only_after_provider):
         with pytest.raises(OSError):
-            worker._create_response(client, {"model": "gpt-4o-mini", "input": "test"})
+            worker._create_response(
+                client, {"model": "gpt-4o-mini", "input": "test"}
+            )
     assert client.create_response.call_count == 1
 
 
