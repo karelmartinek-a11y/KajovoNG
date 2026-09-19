@@ -15,6 +15,7 @@ from ..delivery_preparation import (
     validate_preparation_snapshot,
 )
 from ..openai_client import OpenAIClient
+from ..orchestration.run_config import build_run_config_v2, run_scope_hash
 from ..openai_transport import SubmissionOutcomeUnknown
 from ..progress import ProgressEvent
 from ..request_rules import validate_run_options
@@ -71,7 +72,12 @@ class RunExecutor(RunContext):
             # Každý nový běh ukládá přesný rekonstruovatelný vstup ještě před
             # prvním síťovým požadavkem. RunLogger z něj vytvoří kanonický
             # input_ready checkpoint; u legacy záznamů se nic nedopočítává.
-            self.log.update_state({"ui_state": self.cfg.__dict__})
+            run_config_v2 = build_run_config_v2(self.cfg)
+            self.log.update_state({
+                "ui_state": self.cfg.__dict__,
+                "run_config_v2": run_config_v2,
+                "run_scope_hash": run_scope_hash(self.cfg),
+            })
             if self.cfg.mode in ("GENERATE", "MODIFY"):
                 self._response_journal = ResponseJournal(self.log, self.settings.response_poll_timeout_s)
                 saved_state = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
@@ -135,8 +141,11 @@ class RunExecutor(RunContext):
                     result["response_id"] = self._final_response_id
 
             final_status = "batch_pending" if result.get("batch_id") else str(result.get("status") or "completed")
-            if final_status not in ("completed", "partial", "batch_pending", "dry_run", "files_complete_unverified"):
-                raise ContractError(f"Neplatný terminální stav běhu: {final_status}")
+            if final_status not in (
+                "completed", "partial", "batch_pending", "dry_run",
+                "files_complete_unverified", "plan_ready",
+            ):
+                raise ContractError(f"Neplatný stav běhu: {final_status}")
             if final_status in ("completed", "partial", "dry_run", "files_complete_unverified"):
                 self.log.update_state({"status": final_status, "completed_at": time.time()})
             else:
