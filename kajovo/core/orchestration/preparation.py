@@ -412,11 +412,16 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
     acceptance_ids = {row["id"] for row in requirements["acceptance"]}
     interfaces = spine["interfaces"]
     interface_ids = _unique(interfaces, "id", "interfaces")
+    covered_requirements: set[str] = set()
+    used_components: set[str] = set()
     for row in files:
         if row["component_id"] not in component_ids:
             raise ContractError(f"{row['path']}: neznámá component.")
-        if not set(row["requirement_ids"]) <= req_ids:
+        used_components.add(row["component_id"])
+        row_requirements = set(row["requirement_ids"])
+        if not row_requirements <= req_ids:
             raise ContractError(f"{row['path']}: neznámý requirement.")
+        covered_requirements.update(row_requirements)
         if not set(row["dependencies"]) <= paths - {row["path"]}:
             raise ContractError(f"{row['path']}: neznámá/self dependency.")
         if not set(row["content_dependencies"]) <= set(row["dependencies"]):
@@ -437,9 +442,48 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
             raise ContractError(f"{interface['id']}: interface nemá providera.")
         if not set(interface["requirement_ids"]) <= req_ids:
             raise ContractError(f"{interface['id']}: neznámý requirement.")
+    mandatory_requirements = {
+        row["id"]
+        for row in requirements["requirements"]
+        if row["priority"] == "mandatory"
+    }
+    if not mandatory_requirements <= covered_requirements:
+        raise ContractError(
+            "SPINE nepokrývá mandatory requirements: "
+            f"{sorted(mandatory_requirements - covered_requirements)}"
+        )
+    mandatory_components = {
+        row["id"]
+        for row in plan["components"]
+        if set(row["requirement_ids"]) & mandatory_requirements
+    }
+    if not mandatory_components <= used_components:
+        raise ContractError(
+            "SPINE nemá implementačního vlastníka pro komponenty: "
+            f"{sorted(mandatory_components - used_components)}"
+        )
+
+    interfaces_by_id = {row["id"]: row for row in interfaces}
     for row in files:
         if not set(row["provides"] + row["requires"]) <= interface_ids:
             raise ContractError(f"{row['path']}: neznámé interface binding.")
+        available = set(row["dependencies"]) | {row["path"]}
+        for interface_id in row["requires"]:
+            providers = set(interfaces_by_id[interface_id]["providers"])
+            if not providers & available:
+                raise ContractError(
+                    f"{row['path']}: requires {interface_id} nemá providera v dependencies."
+                )
+        for interface_id in row["provides"]:
+            if row["path"] not in interfaces_by_id[interface_id]["providers"]:
+                raise ContractError(
+                    f"{row['path']}: provides {interface_id} není potvrzeno interface kontraktem."
+                )
+        for interface_id in row["requires"]:
+            if row["path"] not in interfaces_by_id[interface_id]["consumers"]:
+                raise ContractError(
+                    f"{row['path']}: requires {interface_id} není potvrzeno jako consumer."
+                )
     owned: set[str] = set()
     for owner in spine["obligation_owners"]:
         if not owner["reason"].strip() or not set(owner["paths"]) <= paths or not owner["paths"]:
@@ -469,8 +513,33 @@ def validate_file_spec_v1(worker, target: dict[str, Any], spine: dict[str, Any],
             raise ContractError(f"{target['path']}: konfliktní interface version.")
     if not set(spec["acceptance_ids"]) <= acceptance_ids:
         raise ContractError(f"{target['path']}: neznámá acceptance.")
+    requirement_index = {
+        row["id"]: row for row in requirements["requirements"]
+    }
+    expected_acceptance = {
+        criterion_id
+        for requirement_id in target["requirement_ids"]
+        for criterion_id in requirement_index[requirement_id]["acceptance_ids"]
+    }
+    if not expected_acceptance <= set(spec["acceptance_ids"]):
+        raise ContractError(
+            f"{target['path']}: detail nepokrývá acceptance "
+            f"{sorted(expected_acceptance - set(spec['acceptance_ids']))}."
+        )
     if target["requirement_ids"] and not spec["acceptance_ids"]:
         raise ContractError(f"{target['path']}: detail nemá akceptaci.")
+    if any(not value.strip() for value in spec["assumptions"]):
+        raise ContractError(f"{target['path']}: assumption nesmí být prázdný.")
+    for question in spec["unresolved_questions"]:
+        _source_refs_ok(worker, question["source_refs"])
+        if question["blocking"]:
+            raise ContractError(
+                f"{target['path']}: blokující nejasnost: {question['question']}"
+            )
+    if target["action"] == "modify" and not spec["preserved_behavior"]:
+        raise ContractError(
+            f"{target['path']}: MODIFY detail musí explicitně uvést preserved behavior."
+        )
     kinds = {row["kind"] for row in spec["facets"]}
     if not set(spec["required_facets"]) <= kinds:
         raise ContractError(f"{target['path']}: chybí required facet.")
@@ -478,9 +547,24 @@ def validate_file_spec_v1(worker, target: dict[str, Any], spine: dict[str, Any],
         raise ContractError(f"{target['path']}: expected_visible_tokens musí být kladné.")
     _source_refs_ok(worker, spec["source_refs"])
     criterion_ids = set(spec["acceptance_ids"])
+    scenario_coverage: set[str] = set()
     for scenario in spec["test_scenarios"]:
-        if not set(scenario["criterion_ids"]) <= criterion_ids:
-            raise ContractError(f"{target['path']}: test scenario odkazuje mimo detail acceptance.")
+        scenario_ids = set(scenario["criterion_ids"])
+        if not scenario_ids <= criterion_ids:
+            raise ContractError(
+                f"{target['path']}: test scenario odkazuje mimo detail acceptance."
+            )
+        scenario_coverage.update(scenario_ids)
+    mandatory_for_target = {
+        row["id"]
+        for row in requirements["acceptance"]
+        if row["mandatory"] and row["id"] in criterion_ids
+    }
+    if not mandatory_for_target <= scenario_coverage:
+        raise ContractError(
+            f"{target['path']}: test scenarios nepokrývají mandatory acceptance "
+            f"{sorted(mandatory_for_target - scenario_coverage)}."
+        )
 
 
 def _inventory(worker) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
