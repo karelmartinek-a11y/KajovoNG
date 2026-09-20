@@ -16,6 +16,7 @@ from ..orchestration.work_order import freeze_order
 from ..progress import ProgressEvent
 from ..request_rules import uses_reasoning_defaults
 from ..requirements import stage_instructions
+from ..safe_config import safe_ui_state
 from ..structured_output import (
     OutputContractError,
     file_content_format,
@@ -179,7 +180,7 @@ def _gen_file_chunks(
             f"{contract}_{path}_attempt_{attempt}_{ts_code()}",
             {
                 "payload": working,
-                "ui_state": self.cfg.__dict__,
+                "ui_state": safe_ui_state(self.cfg),
                 "work_order_hash": work_order.order_hash,
             },
             step_id=self._delivery_step_id,
