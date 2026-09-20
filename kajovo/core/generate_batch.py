@@ -1078,6 +1078,7 @@ def _submit_v3_followup_wave(
     if state.get("submission_unknown") or state.get("pending_batch_submission"):
         raise ContractError("Neznámý submit musí být dohledán před novým odesláním.")
 
+    ui = dict(state.get("ui_state") or {})
     cfg = _v3_cfg_namespace(state)
     originals = {}
     bundle = RunBundle(Path(run_dir))
@@ -1887,7 +1888,6 @@ def _repeat_v3_batch(
     expected_target_hashes = dict(source["snapshot"].get("expected_target_hashes") or {})
     if not selected <= expected_target_hashes.keys():
         raise ContractError("Oprava nemá zmrazené původní hashe cílových souborů.")
-    ui = dict(state.get("ui_state") or {})
     cfg = _v3_cfg_namespace(state)
     cfg.execution_approval_id = manual_authorization.approval_id
     model = str(source["requests"][0]["body"]["model"])
