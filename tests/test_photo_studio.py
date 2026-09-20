@@ -334,7 +334,7 @@ def test_photo_studio_is_real_main_navigation_page(qtbot, tmp_path):
 
 
 
-def test_photo_batch_submit_creates_shared_work_order_and_reservation(tmp_path):
+def test_photo_batch_submit_creates_work_order_and_provider_operation(tmp_path):
     source = tmp_path / "room.jpg"
     source.write_bytes(_image_bytes("JPEG"))
     log_dir = tmp_path / "LOG"
@@ -377,11 +377,11 @@ def test_photo_batch_submit_creates_shared_work_order_and_reservation(tmp_path):
             "SELECT route,task_id FROM work_orders WHERE run_id=?",
             (job.job_id,),
         ).fetchall()
-        reservation = db.execute(
-            "SELECT state,provider_id FROM reservations"
+        operations = db.execute(
+            "SELECT state,provider_id FROM provider_operations"
         ).fetchall()
     assert work == [("image_batch", "PHOTO_BATCH_SUBMIT")]
-    assert reservation == [("submitted", "batch_photo")]
+    assert operations == [("submitted", "batch_photo")]
     assert client._req.call_count == 1
 
 
