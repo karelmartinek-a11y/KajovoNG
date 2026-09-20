@@ -396,14 +396,17 @@ def _generate_image(worker, client, graph, target, delivery) -> bytes:
         )
     )
     repo.mark_submitted(order.attempt_id, provider_id, unknown=False)
-    if isinstance(response.get("usage"), dict):
-        repo.record_usage(
-            order.attempt_id,
-            provider="openai-image",
-            provider_item_id=provider_id,
-            usage=response["usage"],
-            raw_response_ref="image-response:" + provider_id,
-        )
+    repo.record_usage(
+        order.attempt_id,
+        provider="openai-image",
+        provider_item_id=provider_id,
+        usage=(
+            response["usage"]
+            if isinstance(response.get("usage"), dict)
+            else {}
+        ),
+        raw_response_ref="image-response:" + provider_id,
+    )
     items = response.get("data")
     if (
         not isinstance(items, list)
