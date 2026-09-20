@@ -204,13 +204,38 @@ def _approved_project_items(self: RunContext, root: str):
     root_path = Path(root).resolve()
     run_root = Path(self.log.paths.run_dir).resolve()
     rows = []
+    legacy_reapproved: list[dict[str, Any]] = []
+    legacy_scan: dict[str, Any] | None = None
     is_junction = getattr(os.path, "isjunction", lambda value: False)
+
+    def legacy_policy_item(relative: str):
+        nonlocal legacy_scan
+        if legacy_scan is None:
+            from ..filescan import scan_tree
+
+            policy = self.settings.security
+            scanned = scan_tree(
+                str(root_path),
+                root_path.name,
+                [
+                    ".git", "venv", ".venv", "LOG", "cache",
+                    "__pycache__", "node_modules", ".pytest_cache",
+                    ".ruff_cache",
+                ],
+                policy.deny_extensions_in,
+                policy.allow_extensions_in,
+                policy.deny_globs_in,
+                policy.allow_globs_in,
+                allow_sensitive=policy.allow_upload_sensitive,
+            )
+            legacy_scan = {item.rel_path: item for item in scanned}
+        return legacy_scan.get(relative)
+
     for artifact in self.log.bundle.artifacts():
         if artifact.get("role") != "in_project_file":
             continue
         metadata = artifact.get("metadata") or {}
-        if metadata.get("policy_decision") not in {None, "approved"}:
-            continue
+        decision = str(metadata.get("policy_decision") or "")
         rel = str(
             metadata.get("relative_path")
             or artifact.get("reconstruction_role")
@@ -220,6 +245,38 @@ def _approved_project_items(self: RunContext, root: str):
         bundle_rel = str(artifact.get("path_in_bundle") or "")
         if not rel or not expected or not bundle_rel:
             raise ContractError("SOURCE_PACK obsahuje neúplný schválený záznam.")
+
+        if decision and decision != "approved":
+            continue
+        if decision != "approved":
+            current_policy = legacy_policy_item(rel)
+            if current_policy is None:
+                raise ContractError(
+                    f"Starý SourcePack nemá doložitelné schválení zdroje: {rel}"
+                )
+            if not current_policy.uploadable:
+                raise ContractError(
+                    f"Starý SourcePack nelze znovu použít: {rel} "
+                    f"je nyní odmítnut politikou ({current_policy.reason})."
+                )
+            if (
+                not current_policy.sha256
+                or current_policy.sha256 != expected
+                or current_policy.size != int(metadata.get("size") or current_policy.size)
+            ):
+                raise ContractError(
+                    f"Starý SourcePack nelze znovu schválit se stejným obsahem: {rel}"
+                )
+            legacy_reapproved.append(
+                {
+                    "path": rel,
+                    "size": current_policy.size,
+                    "sha256": expected,
+                    "reason": current_policy.reason,
+                    "sensitive": bool(current_policy.sensitive),
+                }
+            )
+
         current = Path(safe_join_under_root(str(root_path), rel))
         if current.is_symlink() or is_junction(str(current)) or not current.is_file():
             raise ContractError(f"Schválený zdroj změnil typ nebo chybí: {rel}")
@@ -239,12 +296,30 @@ def _approved_project_items(self: RunContext, root: str):
             size=current.stat().st_size,
             sha256=expected,
             uploadable=True,
-            reason="approved_source_pack",
+            reason=(
+                "approved_source_pack"
+                if decision == "approved"
+                else "legacy_policy_reapproved"
+            ),
             sensitive=False,
         ))
+
+    if legacy_reapproved:
+        self.log.save_json(
+            "manifests",
+            "legacy_source_reapproval_v1",
+            {
+                "version": 1,
+                "policy": "current_security_policy",
+                "approved": sorted(
+                    legacy_reapproved,
+                    key=lambda row: str(row["path"]),
+                ),
+                "content_included": False,
+            },
+        )
     rows.sort(key=lambda item: item.rel_path)
     return rows
-
 
 def _zip_in_dir(self: RunContext, root: str) -> str:
     root = os.path.abspath(root)
