@@ -14,6 +14,7 @@ from .waves import build_execution_dag
 from ..context_limits import preparation_measurement
 from ..contracts import ContractError, extract_text_from_response, validate_paths
 from ..structured_output import array, obj, prepare_payload, response_format, validate_output
+from ..safe_config import safe_ui_state
 
 
 COMMON = (
@@ -825,7 +826,7 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
         measurement = preparation_measurement(working, client)
         worker.log.save_json(
             "requests", f"{stage}_v2_request_{attempt}",
-            {"payload": working, "ui_state": worker.cfg.__dict__}, step_id=step_id,
+            {"payload": working, "ui_state": safe_ui_state(worker.cfg)}, step_id=step_id,
         )
         candidate_hash: str | None = None
         try:
