@@ -140,9 +140,14 @@ def _gen_file_chunks(
             f"context_{path.replace('/', '_')}_attempt_{attempt}",
             {"context": compiled, "routing": routing, "measurement": report},
         )
+        expected_map = getattr(self, "_delivery_expected_target_hashes", None)
+        if expected_map is not None and path not in expected_map:
+            raise ContractError(
+                f"Chybí původní očekávaný stav cíle pro WorkOrder: {path}"
+            )
         expected_target_hash = (
-            getattr(self, "_delivery_overwrite_hashes", {}).get(path)
-            if contract == "B3_FILE"
+            expected_map[path]
+            if expected_map is not None
             else (getattr(self.cfg, "completed_hashes", None) or {}).get(path)
         )
         work_order = freeze_order(
