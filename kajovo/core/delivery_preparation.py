@@ -171,7 +171,12 @@ def prepare_delivery(
     tools,
 ):
     """New runs use CHANGE V2 preparation; old readers stay for legacy evidence."""
-    del previous_id, input_text, input_files, input_images
+    del previous_id
+    worker._preparation_runtime_inputs = {
+        "text": str(input_text or ""),
+        "file_ids": list(input_files or []),
+        "image_ids": list(input_images or []),
+    }
     from .orchestration.preparation import prepare_delivery_v2
 
     return prepare_delivery_v2(worker, client, mode, tools=tools)
