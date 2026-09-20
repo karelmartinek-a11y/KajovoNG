@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
+
 import pytest
 
 from change_v2_fixtures import (
@@ -25,7 +28,10 @@ from change_v2_fixtures import (
 )
 from kajovo.core.generate_batch import process_saved_batch
 from kajovo.core.orchestration.errors import OrchestrationError
-from kajovo.core.orchestration.publish import publish_staged_run
+from kajovo.core.orchestration.publish import (
+    publish_staged_run,
+    recover_publish_journal,
+)
 
 
 # Compatibility helpers imported by a few older non-contract test modules.
@@ -191,6 +197,74 @@ def test_publish_conflict_preserves_user_change(tmp_path):
     with pytest.raises(Exception, match="PUBLISH_CONFLICT|expected"):
         publish_staged_run(worker.log.paths.run_dir)
     assert target.read_text(encoding="utf-8") == "new user work\n"
+
+
+def test_publish_recovers_after_hard_process_exit_between_write_and_journal(tmp_path):
+    run_dir = tmp_path / "RUN_CRASH"
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    first = out_dir / "a.txt"
+    second = out_dir / "b.txt"
+    first.write_text("old-a\n", encoding="utf-8")
+    second.write_text("old-b\n", encoding="utf-8")
+
+    script = r"""
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+import kajovo.core.orchestration.publish as publish
+
+run_dir = Path(sys.argv[1]).resolve()
+out_dir = Path(sys.argv[2]).resolve()
+staging = run_dir / "staging" / "candidate" / "generated"
+staging.mkdir(parents=True, exist_ok=True)
+rows = []
+expected = {}
+for name, content in (("a.txt", b"new-a\n"), ("b.txt", b"new-b\n")):
+    path = staging / name
+    path.write_bytes(content)
+    rows.append({
+        "path": name,
+        "staged_path": path.relative_to(run_dir).as_posix(),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    })
+    target = out_dir / name
+    expected[name] = hashlib.sha256(target.read_bytes()).hexdigest()
+
+plan = publish.prepare_publish(rows, out_dir, expected, run_dir=run_dir)
+original = publish._write_bytes_atomic
+crash_target = (out_dir / "a.txt").resolve()
+
+def crash_after_target_write(path, data):
+    original(path, data)
+    if Path(path).resolve() == crash_target:
+        os._exit(91)
+
+publish._write_bytes_atomic = crash_after_target_write
+publish.commit_publish(plan, run_dir=run_dir)
+"""
+    child = subprocess.run(
+        [sys.executable, "-c", script, str(run_dir), str(out_dir)],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+    )
+    assert child.returncode == 91
+    assert first.read_text(encoding="utf-8") == "new-a\n"
+    assert second.read_text(encoding="utf-8") == "old-b\n"
+
+    report = recover_publish_journal(run_dir)
+    assert report is not None
+    assert report["status"] == "rolled_back"
+    assert first.read_text(encoding="utf-8") == "old-a\n"
+    assert second.read_text(encoding="utf-8") == "old-b\n"
+
+    # Recovery is idempotent and must not mutate the restored target again.
+    again = recover_publish_journal(run_dir)
+    assert again is not None and again["status"] == "rolled_back"
+    assert first.read_text(encoding="utf-8") == "old-a\n"
+    assert second.read_text(encoding="utf-8") == "old-b\n"
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
