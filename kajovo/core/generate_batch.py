@@ -265,10 +265,7 @@ def _build_manifest_v3(
     eligible = {
         path
         for path in candidates
-        if (
-            set(dag.content_dependencies.get(path, ()))
-            | set(dag.contract_dependencies.get(path, ()))
-        ) <= completed_targets
+        if set(dag.content_dependencies.get(path, ())) <= completed_targets
     }
     if not eligible:
         remaining_content = {
@@ -1552,10 +1549,7 @@ def _process_saved_batch_v3(
     ready_deferred = {
         path
         for path in (manifest.get("deferred_paths") or [])
-        if (
-            set(dag_for_ready.content_dependencies.get(path, ()))
-            | set(dag_for_ready.contract_dependencies.get(path, ()))
-        ) <= completed_for_ready
+        if set(dag_for_ready.content_dependencies.get(path, ())) <= completed_for_ready
     }
     if ready_deferred and not submitted_followup:
         atomic_write_text(
