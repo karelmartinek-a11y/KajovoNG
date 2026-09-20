@@ -39,6 +39,12 @@ class ResponseJournal:
                         "Evidence požadavku má neplatný hash; automatické pokračování je zablokováno."
                     )
 
+    def has_entry(self, payload) -> bool:
+        """Return whether this exact background payload already has journal state."""
+        body = copy.deepcopy(payload)
+        body.update(background=True, store=True)
+        return digest(body) in self.entries
+
     def confirmed_id(self, payload) -> str:
         """Return provider ID only when this exact background payload has one."""
         body = copy.deepcopy(payload)
