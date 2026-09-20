@@ -57,6 +57,7 @@ def prepare_provider_request(
     measurement: dict[str, Any] | None = None,
     batch: bool = False,
     work_order: WorkOrder | None = None,
+    allow_existing: bool = False,
 ) -> dict[str, Any]:
     """Ověří technické limity a připraví idempotentní provider operation."""
     if work_order is None:
@@ -80,6 +81,7 @@ def prepare_provider_request(
         work_order_hash=persisted_hash,
         endpoint=_endpoint(work_order),
         request_hash=content_hash(payload),
+        allow_existing=allow_existing,
     )
     return measurement
 
