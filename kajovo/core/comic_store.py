@@ -446,7 +446,7 @@ class ComicStore:
                     "id,project_id,name,position,revision,prompt_id,format,overlays,"
                     "active_version,deleted,created_at,updated_at,storyboard_id,"
                     "storyboard_position"
-                    ") VALUES(?,?,?,?,2,?,?,?,NULL,0,?,?,?,?,?)",
+                    ") VALUES(?,?,?,?,2,?,?,?,NULL,0,?,?,?,?)",
                     (
                         panel_id,
                         project_id,
