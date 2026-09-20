@@ -435,7 +435,8 @@ def _build_manifest_v3(
             row["custom_id"]: file["path"]
             for row, file in zip(rows, selected, strict=True)
         },
-        "omitted": sorted(
+        "omitted": [],
+        "resource_targets": sorted(
             row["path"]
             for row in structure["spine"]["files"]
             if row["action"] in production_actions and row["kind"] != "text"
