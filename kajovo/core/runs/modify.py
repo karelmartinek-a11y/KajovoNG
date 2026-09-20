@@ -105,8 +105,9 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
             with open(source_path, encoding="utf-8") as stream:
                 originals[source] = stream.read()
         target = safe_join_under_root(self.cfg.out_dir, path)
-        if os.path.isfile(target):
-            overwrite_hashes[path] = sha256_file(target)
+        overwrite_hashes[path] = (
+            sha256_file(target) if os.path.isfile(target) else None
+        )
     originals_path = self.log.find_json("manifests", "response_modify_originals") if self._response_journal else None
     if originals_path:
         saved_originals = json.loads(Path(originals_path).read_text(encoding="utf-8"))
@@ -117,6 +118,7 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
         })
     self._delivery_originals = originals
     self._delivery_overwrite_hashes = overwrite_hashes
+    self._delivery_expected_target_hashes = dict(overwrite_hashes)
     if self.cfg.send_as_c and touched:
         manifest = build_batch_manifest(
             self.log.run_id, self.cfg.prompt, plan, struct, self.cfg.model,
