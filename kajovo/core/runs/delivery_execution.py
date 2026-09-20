@@ -54,6 +54,9 @@ def _save_out_files(self: RunContext, files: list[dict[str, Any]]) -> dict[str, 
         subprogress_emit=self.subprogress.emit,
         overwrite_guard_enabled=hasattr(self, "_delivery_overwrite_hashes"),
         overwrite_hashes=getattr(self, "_delivery_overwrite_hashes", None),
+        expected_target_hashes=getattr(
+            self, "_delivery_expected_target_hashes", None
+        ),
     )
     self._progress_stage = "Ukládání"
     return save_out_files(context, files)
