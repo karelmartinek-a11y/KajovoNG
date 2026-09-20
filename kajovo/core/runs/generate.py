@@ -205,6 +205,12 @@ def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[
     }
     files.sort(key=lambda row: (wave_rank.get(row["path"], 10**9), row["path"]))
     self._delivery_verified_artifacts = {}
+    self._delivery_expected_target_hashes = {}
+    for row in files:
+        target = safe_join_under_root(self.cfg.out_dir, row["path"])
+        self._delivery_expected_target_hashes[row["path"]] = (
+            sha256_file(target) if os.path.isfile(target) else None
+        )
 
     total_files = len(files)
     base_a3_prev_id = ""
