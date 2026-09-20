@@ -152,10 +152,10 @@ def test_file_submit_persists_rejection_or_unknown_without_retry(tmp_path, fault
     client.upload_file.return_value = {"id": "file_input"}
     if fault == "rejected":
         client.create_batch.side_effect = OpenAIError("Odmítnuto", 400)
-        expected = "released"
+        expected = "not_submitted"
     else:
         client.create_batch.return_value = {"status": "validating"}
-        expected = "unknown"
+        expected = "submission_unknown"
     with pytest.raises((OpenAIError, ContractError)):
         worker._submit_generate_batch(client, manifest())
     state = read_state(worker.log.paths.run_dir)
@@ -165,7 +165,10 @@ def test_file_submit_persists_rejection_or_unknown_without_retry(tmp_path, fault
     )
     repo = OrchestrationRepository(Path(worker.settings.log_dir) / "orchestration.sqlite3")
     with repo.connect() as db:
-        assert {row[0] for row in db.execute("SELECT state FROM reservations")} == {expected}
+        assert {
+            row[0]
+            for row in db.execute("SELECT state FROM provider_operations")
+        } == {expected}
     client.create_batch.assert_called_once()
     client.upload_file.assert_called_once()
     if fault == "missing_id":
@@ -231,8 +234,10 @@ def test_photo_submit_retains_durable_failure_classification(tmp_path, photo_job
     assert saved["batch_id"] == ""
     repo = OrchestrationRepository(log_dir / "orchestration.sqlite3")
     with repo.connect() as db:
-        assert db.execute("SELECT state FROM reservations").fetchall() == [
-            ("released" if fault == "rejected" else "unknown",),
+        assert db.execute(
+            "SELECT state FROM provider_operations"
+        ).fetchall() == [
+            ("not_submitted" if fault == "rejected" else "submission_unknown",),
         ]
     client._req.assert_called_once()
     assert client._req.call_args.kwargs["max_attempts"] == 1
