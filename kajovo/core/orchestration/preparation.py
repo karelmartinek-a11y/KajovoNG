@@ -14,6 +14,7 @@ from .waves import build_execution_dag
 from ..context_limits import preparation_measurement
 from ..contracts import ContractError, extract_text_from_response, validate_paths
 from ..structured_output import array, obj, prepare_payload, response_format, validate_output
+from ..safe_config import safe_ui_state
 
 
 COMMON = (
@@ -640,7 +641,12 @@ def _inventory(worker) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
 
 def _source_subset(worker, requirements: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    source = copy.deepcopy(getattr(worker, "source_context", {}) or {"segments": [], "image_slots": []})
+    context = getattr(worker, "source_context", {}) or {}
+    source = {
+        "segments": copy.deepcopy(context.get("segments") or []),
+        "image_slots": copy.deepcopy(context.get("image_slots") or []),
+        "attachments": copy.deepcopy(context.get("attachments") or []),
+    }
     if not requirements:
         return source
     wanted = {
@@ -691,13 +697,91 @@ def _prepare_spine(spine: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str
     return prepared, additions
 
 
+def _compile_source_attachments(worker, client, stage: str, model: str):
+    from ..compat import SUPPORTED_INPUT_FILE_EXTS
+
+    caps = worker._model_caps(model)
+    runtime = getattr(worker, "_preparation_runtime_inputs", {}) or {}
+    file_ids = [str(value) for value in runtime.get("file_ids", []) if value]
+    image_ids = [str(value) for value in runtime.get("image_ids", []) if value]
+    seen_files = set(file_ids)
+    seen_images = set(image_ids)
+    mapping: list[dict[str, Any]] = []
+    cache = getattr(worker, "_source_upload_ids", None)
+    if cache is None:
+        cache = {}
+        worker._source_upload_ids = cache
+
+    root = Path(worker.log.paths.run_dir).resolve()
+    for source in (getattr(worker, "source_context", {}) or {}).get("_provider_inputs", []):
+        source_id = str(source.get("source_id") or "")
+        media = str(source.get("media_type") or "application/octet-stream")
+        filename = str(source.get("filename") or source_id)
+        provider_id = str(source.get("provider_file_id") or cache.get(source_id) or "")
+        representation = "input_image" if media.startswith("image/") else "input_file"
+        if representation == "input_image":
+            if not caps.get("supports_image_input", caps.get("supports_input_image", True)):
+                raise ContractError(
+                    f"{stage}: model {model} nepodporuje obrazový vstup {filename}."
+                )
+        else:
+            if not caps.get("supports_input_file", True):
+                raise ContractError(
+                    f"{stage}: model {model} nepodporuje dokumentový vstup {filename}."
+                )
+            suffix = Path(filename).suffix.lower()
+            if suffix not in SUPPORTED_INPUT_FILE_EXTS:
+                raise ContractError(
+                    f"{stage}: {filename} nemá podporovanou reprezentaci input_file "
+                    "a nebyl bezpečně extrahován jako UTF-8 text."
+                )
+        if not provider_id:
+            relative = str(source.get("path_in_bundle") or "")
+            local = (root / relative).resolve()
+            try:
+                local.relative_to(root)
+            except ValueError as exc:
+                raise ContractError(f"{stage}: source artifact uniká z RunBundle.") from exc
+            if not local.is_file():
+                raise ContractError(f"{stage}: chybí immutable source artifact {filename}.")
+            if hashlib.sha256(local.read_bytes()).hexdigest() != source.get("sha256"):
+                raise ContractError(f"{stage}: immutable source artifact změnil hash {filename}.")
+            uploaded = client.upload_file(str(local), purpose="user_data")
+            provider_id = str(uploaded.get("id") or "")
+            if not provider_id:
+                raise ContractError(f"{stage}: upload zdroje {filename} nevrátil file_id.")
+            cache[source_id] = provider_id
+        target = image_ids if representation == "input_image" else file_ids
+        seen = seen_images if representation == "input_image" else seen_files
+        if provider_id not in seen:
+            target.append(provider_id)
+            seen.add(provider_id)
+        mapping.append({
+            "source_id": source_id,
+            "representation": representation,
+            "provider_file_id": provider_id,
+            "sha256": source.get("sha256"),
+            "stage": stage,
+        })
+    worker.log.save_json(
+        "manifests",
+        f"source_delivery_{stage}",
+        {"stage": stage, "model": model, "sources": mapping},
+    )
+    return file_ids, image_ids
+
+
 def _request(worker, client, stage: str, input_value: dict[str, Any], model: str,
              semantic, *, tools=None) -> tuple[dict[str, Any], str]:
     fmt = FORMATS[stage]
+    request_text = json.dumps(input_value, ensure_ascii=False)
+    source_files, source_images = _compile_source_attachments(
+        worker, client, stage, model
+    )
     payload = worker._payload_base(
         model=model,
         instructions=PROMPTS[stage],
-        input_parts=worker._input_parts(json.dumps(input_value, ensure_ascii=False), [], []),
+        input_parts=worker._input_parts(request_text, source_files, source_images),
         prev_id=None,
         supports_temperature=worker._model_caps(model).get("supports_temperature", False),
     )
@@ -718,22 +802,22 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
         working = copy.deepcopy(payload)
         if attempt and last_error is not None:
             working.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
+            repair_text = json.dumps({
+                "input": input_value,
+                "repair": {
+                    "error": str(last_error),
+                    "candidate": failed_candidate,
+                    "instruction": "Oprav pouze uvedené porušení kontraktu; nevymýšlej chybějící data.",
+                },
+            }, ensure_ascii=False)
             working["input"] = worker._input_parts(
-                json.dumps({
-                    "input": input_value,
-                    "repair": {
-                        "error": str(last_error),
-                        "candidate": failed_candidate,
-                        "instruction": "Oprav pouze uvedené porušení kontraktu; nevymýšlej chybějící data.",
-                    },
-                }, ensure_ascii=False),
-                [], [],
+                repair_text, source_files, source_images
             )
         prepare_payload(working)
         measurement = preparation_measurement(working, client)
         worker.log.save_json(
             "requests", f"{stage}_v2_request_{attempt}",
-            {"payload": working, "ui_state": worker.cfg.__dict__}, step_id=step_id,
+            {"payload": working, "ui_state": safe_ui_state(worker.cfg)}, step_id=step_id,
         )
         candidate_hash: str | None = None
         try:
@@ -828,6 +912,8 @@ def validate_graph(
             "IMPLEMENTATION_GRAPH_V3 nelze ověřit bez kanonických requirements a plan."
         )
     validate_spine_v1(graph["mode"], requirements, plan, graph["spine"])
+    from .resource_delivery import validate_resource_plan
+    validate_resource_plan(worker, graph)
     specs = {row["path"]: row["spec"] for row in graph["file_specs"]}
     if len(specs) != len(graph["file_specs"]):
         raise ContractError("IMPLEMENTATION_GRAPH_V3 má duplicitní file_specs.")

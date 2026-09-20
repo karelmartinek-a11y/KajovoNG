@@ -42,6 +42,12 @@ def _save_out_files(self: RunContext, files: list[dict[str, Any]]) -> dict[str, 
         self.transition(RunStatus.DELIVERING)
     # Tenký Qt adaptér. Vlastní validace, hash guardy a durable zápis jsou
     # v Qt-nezávislé doménové vrstvě core.runs.delivery.
+    frozen_targets = getattr(self, "_delivery_expected_target_hashes", None)
+    verified_artifacts = getattr(self, "_delivery_verified_artifacts", None)
+    staged_resources = getattr(self, "_resource_staged_files", None)
+    strict_targets = bool(
+        frozen_targets or verified_artifacts or staged_resources
+    )
     context = DeliveryContext(
         cfg=self.cfg,
         settings=self.settings,
@@ -54,6 +60,10 @@ def _save_out_files(self: RunContext, files: list[dict[str, Any]]) -> dict[str, 
         subprogress_emit=self.subprogress.emit,
         overwrite_guard_enabled=hasattr(self, "_delivery_overwrite_hashes"),
         overwrite_hashes=getattr(self, "_delivery_overwrite_hashes", None),
+        expected_target_hashes=(
+            frozen_targets if strict_targets else None
+        ),
+        additional_staged=staged_resources,
     )
     self._progress_stage = "Ukládání"
     return save_out_files(context, files)

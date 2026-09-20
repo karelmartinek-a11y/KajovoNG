@@ -45,7 +45,8 @@ CREATE TABLE entity_revisions(id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFER
 CREATE TABLE panels(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), name TEXT NOT NULL,
  position INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1, prompt_id TEXT REFERENCES prompts(id),
  format TEXT NOT NULL, overlays TEXT NOT NULL, active_version TEXT REFERENCES panel_versions(id), deleted INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ storyboard_id TEXT REFERENCES comic_documents(id), storyboard_position INTEGER);
 CREATE TABLE prompts(id TEXT PRIMARY KEY, panel_id TEXT NOT NULL REFERENCES panels(id),
  document TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE bindings(prompt_id TEXT NOT NULL REFERENCES prompts(id), entity_id TEXT NOT NULL REFERENCES entities(id),
@@ -72,6 +73,9 @@ CREATE TABLE uploads(asset_id TEXT NOT NULL REFERENCES assets(id), account TEXT 
 CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT REFERENCES projects(id),
  operation TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX panels_order ON panels(project_id,deleted,position);
+CREATE UNIQUE INDEX panels_storyboard_position
+ ON panels(storyboard_id,storyboard_position)
+ WHERE storyboard_id IS NOT NULL;
 CREATE INDEX operations_pending ON operations(status);
 CREATE INDEX comic_documents_project_kind ON comic_documents(project_id,kind,created_at);
 CREATE INDEX entities_project ON entities(project_id,kind,archived);
@@ -103,6 +107,14 @@ CREATE TABLE comic_documents(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFER
 CREATE INDEX comic_documents_project_kind ON comic_documents(project_id,kind,created_at);
 """
 
+MIGRATION_V3 = """
+ALTER TABLE panels ADD COLUMN storyboard_id TEXT REFERENCES comic_documents(id);
+ALTER TABLE panels ADD COLUMN storyboard_position INTEGER;
+CREATE UNIQUE INDEX panels_storyboard_position
+ ON panels(storyboard_id,storyboard_position)
+ WHERE storyboard_id IS NOT NULL;
+"""
+
 
 def decoded(row):
     value = dict(row)
@@ -120,7 +132,7 @@ class ComicStore:
         self.root.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, 3):
                 raise ComicError("unsupported_database", "Knihovna vyžaduje jinou verzi aplikace.")
             if version == 0:
                 existing = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -129,17 +141,28 @@ class ComicStore:
                 db.executescript(
                     "BEGIN IMMEDIATE;"
                     + SCHEMA
-                    + "PRAGMA user_version=2;"
+                    + "PRAGMA user_version=3;"
                     + "INSERT INTO migrations VALUES(1,datetime('now'));"
                     + "INSERT INTO migrations VALUES(2,datetime('now'));"
+                    + "INSERT INTO migrations VALUES(3,datetime('now'));"
                     + "COMMIT;"
                 )
             elif version == 1:
                 db.executescript(
                     "BEGIN IMMEDIATE;"
                     + MIGRATION_V2
-                    + "PRAGMA user_version=2;"
+                    + MIGRATION_V3
+                    + "PRAGMA user_version=3;"
                     + "INSERT INTO migrations VALUES(2,datetime('now'));"
+                    + "INSERT INTO migrations VALUES(3,datetime('now'));"
+                    + "COMMIT;"
+                )
+            elif version == 2:
+                db.executescript(
+                    "BEGIN IMMEDIATE;"
+                    + MIGRATION_V3
+                    + "PRAGMA user_version=3;"
+                    + "INSERT INTO migrations VALUES(3,datetime('now'));"
                     + "COMMIT;"
                 )
 
@@ -304,6 +327,164 @@ class ComicStore:
                 db.execute("DELETE FROM style_refs WHERE project_id=?", (project,))
                 db.execute("UPDATE projects SET revision=revision+1 WHERE id=?", (project,))
             self.event(db, project, "remove_references", {"entity_id": entity})
+
+
+    def materialize_storyboard_panels(
+        self,
+        project_id,
+        storyboard_id,
+        continuity_id,
+        prepared,
+    ):
+        """Create an entire storyboard panel set in one SQLite transaction.
+
+        Old/manual panels have storyboard_id=NULL and are never claimed by name.
+        The unique (storyboard_id, storyboard_position) identity makes double
+        clicks and concurrent materialization idempotent.
+        """
+        if not isinstance(prepared, list) or not prepared:
+            raise ComicError("invalid_storyboard", "Storyboard nemá panely.")
+        positions = [int(row["storyboard_position"]) for row in prepared]
+        if len(positions) != len(set(positions)):
+            raise ComicError("invalid_storyboard", "Storyboard obsahuje duplicitní pozici.")
+
+        with self.transaction() as db:
+            storyboard = db.execute(
+                "SELECT id,project_id,kind FROM comic_documents WHERE id=?",
+                (storyboard_id,),
+            ).fetchone()
+            continuity = db.execute(
+                "SELECT id,project_id,kind,source_id,result FROM comic_documents WHERE id=?",
+                (continuity_id,),
+            ).fetchone()
+            if (
+                storyboard is None
+                or storyboard["project_id"] != project_id
+                or storyboard["kind"] != "storyboard"
+                or continuity is None
+                or continuity["project_id"] != project_id
+                or continuity["kind"] != "continuity"
+                or continuity["source_id"] != storyboard_id
+                or json.loads(continuity["result"]).get("status") != "pass"
+            ):
+                raise ComicError(
+                    "continuity_missing",
+                    "Materializace vyžaduje PASS continuity přesně pro tento storyboard.",
+                )
+
+            existing = list(db.execute(
+                "SELECT id,storyboard_position FROM panels "
+                "WHERE storyboard_id=? ORDER BY storyboard_position",
+                (storyboard_id,),
+            ))
+            if existing:
+                existing_positions = [int(row["storyboard_position"]) for row in existing]
+                if existing_positions == sorted(positions) and len(existing) == len(prepared):
+                    return [row["id"] for row in existing]
+                raise ComicError(
+                    "materialization_conflict",
+                    "Storyboard má neúplný nebo nejednoznačný historický stav; "
+                    "automatické přiřazení panelů je zablokováno.",
+                )
+
+            project = db.execute(
+                "SELECT style FROM projects WHERE id=? AND deleted=0",
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise ComicError("missing_record", "Projekt neexistuje.")
+            style = json.loads(project["style"])
+            entity_rows = {
+                row["id"]: row
+                for row in db.execute(
+                    "SELECT id,kind FROM entities "
+                    "WHERE project_id=? AND archived=0",
+                    (project_id,),
+                )
+            }
+            next_position = int(db.execute(
+                "SELECT COALESCE(MAX(position),-1)+1 FROM panels "
+                "WHERE project_id=? AND deleted=0",
+                (project_id,),
+            ).fetchone()[0])
+            created = []
+            for offset, row in enumerate(
+                sorted(prepared, key=lambda value: value["storyboard_position"])
+            ):
+                name = checked_text(row["name"], "Název panelu", 200, True)
+                document = row["document"]
+                fmt = row["format"]
+                overlays = row["overlays"]
+                validate_document(document)
+                PanelFormat(**fmt)
+                validate_overlays(overlays, style["sfx"])
+                bindings = {
+                    node["entity_id"]
+                    for node in document["nodes"]
+                    if node["type"] != "text"
+                }
+                for node in document["nodes"]:
+                    if node["type"] == "text":
+                        continue
+                    entity = entity_rows.get(node["entity_id"])
+                    if entity is None or node["type"] != entity["kind"] + "_ref":
+                        raise ComicError(
+                            "broken_reference",
+                            "Storyboard odkazuje na neaktivní nebo chybnou entitu.",
+                        )
+
+                sb_position = int(row["storyboard_position"])
+                panel_id = hashlib.sha256(
+                    f"storyboard:{storyboard_id}:{sb_position}".encode("utf-8")
+                ).hexdigest()[:32]
+                prompt_id = hashlib.sha256(
+                    f"storyboard-prompt:{storyboard_id}:{sb_position}".encode("utf-8")
+                ).hexdigest()[:32]
+                stamp = now()
+                db.execute(
+                    "INSERT INTO panels("
+                    "id,project_id,name,position,revision,prompt_id,format,overlays,"
+                    "active_version,deleted,created_at,updated_at,storyboard_id,"
+                    "storyboard_position"
+                    ") VALUES(?,?,?,?,2,NULL,?,?,NULL,0,?,?,?,?)",
+                    (
+                        panel_id,
+                        project_id,
+                        name,
+                        next_position + offset,
+                        canonical(fmt),
+                        canonical(overlays),
+                        stamp,
+                        stamp,
+                        storyboard_id,
+                        sb_position,
+                    ),
+                )
+                db.execute(
+                    "INSERT INTO prompts(id,panel_id,document,created_at) VALUES(?,?,?,?)",
+                    (prompt_id, panel_id, canonical(document), stamp),
+                )
+                db.executemany(
+                    "INSERT INTO bindings(prompt_id,entity_id) VALUES(?,?)",
+                    [(prompt_id, entity_id) for entity_id in sorted(bindings)],
+                )
+                db.execute(
+                    "UPDATE panels SET prompt_id=? WHERE id=?",
+                    (prompt_id, panel_id),
+                )
+                created.append(panel_id)
+
+            self.event(
+                db,
+                project_id,
+                "storyboard_materialized",
+                {
+                    "storyboard_id": storyboard_id,
+                    "continuity_id": continuity_id,
+                    "panel_ids": created,
+                },
+            )
+            return created
 
     def panel(self, project, name="Panel"):
         identifier, stamp = uid(), now()

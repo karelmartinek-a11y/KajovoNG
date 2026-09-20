@@ -445,11 +445,15 @@ class ComicService:
         prepare_provider_request(
             log, cfg, self.client, body, work_order=order
         )
-        mark_submission_started(log, order)
+        journal = ResponseJournal(
+            log, self.settings.response_poll_timeout_s
+        )
+        # Polling/resume is not a new provider submit. A journal entry is the
+        # durable authority for whether this exact payload was already sent.
+        if not journal.has_entry(body):
+            mark_submission_started(log, order)
         try:
-            response = ResponseJournal(
-                log, self.settings.response_poll_timeout_s
-            ).execute(
+            response = journal.execute(
                 self.client,
                 body,
                 stopped=self.stopped,
@@ -459,8 +463,8 @@ class ComicService:
                     detail=f"{state}, {seconds} s",
                 ),
             )
-        except ResponsePending as exc:
-            response_id = str(getattr(exc, "response_id", "") or "")
+        except ResponsePending:
+            response_id = journal.confirmed_id(body)
             mark_submission(
                 log,
                 order,
@@ -840,9 +844,12 @@ class ComicService:
         ):
             raise ComicError(
                 "continuity_missing",
-                "Storyboard lze převést na panely až po PASS continuity kontroly stejné verze.",
+                "Storyboard lze převést na panely až po PASS continuity "
+                "kontrole stejné verze.",
             )
 
+        # Starší explicitní materializační event je platná provenance. Pouhé
+        # podobné názvy panelů se nikdy nepovažují za důkaz původu.
         existing = self.store.rows(
             "events",
             "project_id=? AND operation='storyboard_materialized'",
@@ -850,8 +857,25 @@ class ComicService:
             order="created_at DESC",
         )
         for event in existing:
-            if event["data"].get("storyboard_id") == storyboard["id"]:
-                return list(event["data"].get("panel_ids") or [])
+            if event["data"].get("storyboard_id") != storyboard["id"]:
+                continue
+            panel_ids = list(event["data"].get("panel_ids") or [])
+            try:
+                panels = [self.store.get("panels", panel_id) for panel_id in panel_ids]
+            except ComicError as exc:
+                raise ComicError(
+                    "materialization_conflict",
+                    "Historická materializace je neúplná; automatická oprava "
+                    "původu panelů je zablokována.",
+                ) from exc
+            if panel_ids and all(
+                panel["project_id"] == project_id for panel in panels
+            ):
+                return panel_ids
+            raise ComicError(
+                "materialization_conflict",
+                "Historická materializace nemá úplnou sadu panelů.",
+            )
 
         entities = {
             row["id"]: row
@@ -862,14 +886,26 @@ class ComicService:
                 order="created_at",
             )
         }
-        created = []
-        for panel_spec in sorted(
-            storyboard["result"]["panels"], key=lambda row: row["position"]
-        ):
-            panel_id = self.store.panel(
-                project_id, f"Storyboard {panel_spec['position']:03d}"
+        specs = sorted(
+            storyboard["result"]["panels"],
+            key=lambda row: row["position"],
+        )
+        positions = [int(row["position"]) for row in specs]
+        if len(positions) != len(set(positions)):
+            raise ComicError(
+                "invalid_storyboard",
+                "Storyboard obsahuje duplicitní pozici panelu.",
             )
-            panel = self.store.get("panels", panel_id)
+
+        default_format = {
+            "width": 2048,
+            "height": 2048,
+            "dpi": 300,
+            "fit": "pad",
+            "experimental": False,
+        }
+        prepared = []
+        for panel_spec in specs:
             nodes = [
                 {
                     "type": "text",
@@ -921,27 +957,24 @@ class ComicService:
                         "font_size": 0.035,
                     }
                 )
-            self.store.save_panel(
-                panel_id,
-                panel["revision"],
-                f"Storyboard {panel_spec['position']:03d}",
-                {"version": 1, "nodes": nodes},
-                panel["format"],
-                overlays,
-            )
-            created.append(panel_id)
-        with self.store.transaction() as db:
-            self.store.event(
-                db,
-                project_id,
-                "storyboard_materialized",
+            prepared.append(
                 {
-                    "storyboard_id": storyboard["id"],
-                    "continuity_id": continuity["id"],
-                    "panel_ids": created,
-                },
+                    "storyboard_position": int(panel_spec["position"]),
+                    "name": f"Storyboard {int(panel_spec['position']):03d}",
+                    "document": {"version": 1, "nodes": nodes},
+                    "format": default_format,
+                    "overlays": overlays,
+                }
             )
-        return created
+
+        # Store validates every prepared row again inside BEGIN IMMEDIATE and
+        # creates the complete set plus provenance event in that one transaction.
+        return self.store.materialize_storyboard_panels(
+            project_id,
+            storyboard["id"],
+            continuity["id"],
+            prepared,
+        )
 
     def _entity(self, operation):
         snap = operation["snapshot"]

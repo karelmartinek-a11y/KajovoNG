@@ -7,6 +7,8 @@ import os
 import shutil
 import stat
 import subprocess
+import json
+import tempfile
 from pathlib import Path
 
 from .utils import atomic_write_text, safe_join_under_root
@@ -32,10 +34,16 @@ class ProjectGit:
         if not self.root.is_dir():
             raise ValueError("Adresář projektu neexistuje.")
 
-    def command(self, *arguments, required=True):
+    def command(self, *arguments, required=True, extra_env=None):
+        env = {
+            **os.environ,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GCM_INTERACTIVE": "Never",
+            **(extra_env or {}),
+        }
         result = subprocess.run(["git", *arguments], cwd=self.root, capture_output=True,
                                 encoding="utf-8", errors="replace", timeout=120,
-                                env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "Never"},
+                                env=env,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if required and result.returncode:
             raise subprocess.CalledProcessError(result.returncode, ["git", *arguments], result.stdout, result.stderr)
@@ -53,10 +61,18 @@ class ProjectGit:
             raise ValueError(f"Vyberte kořen repozitáře: {actual}")
         remote = self.command("remote", "get-url", "origin", required=False)
         paths = self.text("ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0")
+        tags = self.text("tag", "--sort=-creatordate").splitlines()
+        milestone_types = {}
+        for tag in tags:
+            meta = self._milestone_meta_path(tag)
+            milestone_types[tag] = (
+                "snapshot_v2" if meta.is_file() else "legacy_commit_only"
+            )
         return {"root": str(self.root), "repository": True,
                 "status": self.text("status", "--short", "--branch"),
                 "files": sorted({path for path in paths if path and allowed_file(path)}),
-                "tags": self.text("tag", "--sort=-creatordate").splitlines(),
+                "tags": tags,
+                "milestone_types": milestone_types,
                 "remote": remote.stdout.strip() if remote.returncode == 0 else ""}
 
     def init(self):
@@ -89,28 +105,189 @@ class ProjectGit:
             self.command("pull", "--ff-only", "origin", self.branch())
         return self.snapshot()
 
+    def _milestone_dir(self):
+        gitdir = Path(self.text("rev-parse", "--absolute-git-dir").strip())
+        directory = gitdir / "kajovo_milestones"
+        directory.mkdir(exist_ok=True)
+        return directory
+
+    def _milestone_meta_path(self, name):
+        gitdir = Path(self.text("rev-parse", "--absolute-git-dir").strip())
+        return (
+            gitdir
+            / "kajovo_milestones"
+            / (hashlib.sha256(name.encode("utf-8")).hexdigest() + ".json")
+        )
+
     def milestone(self, name):
         self.command("check-ref-format", "refs/tags/" + name)
-        self.command("rev-parse", "--verify", "HEAD")
-        changes = self.text("diff", "--binary", "--full-index", "HEAD", "--")
-        self.command("tag", "-a", name, "-m", name)
-        gitdir = Path(self.text("rev-parse", "--absolute-git-dir").strip())
-        archive = gitdir / "kajovo_milestones"
-        archive.mkdir(exist_ok=True)
-        atomic_write_text(str(archive / (hashlib.sha256(name.encode()).hexdigest() + ".diff")), changes)
-        return self.snapshot()
+        head = self.text("rev-parse", "--verify", "HEAD").strip()
+        if self.command(
+            "show-ref", "--verify", "--quiet", "refs/tags/" + name,
+            required=False,
+        ).returncode == 0:
+            raise ValueError("Milník s tímto názvem již existuje.")
+
+        real_index = Path(
+            self.text("rev-parse", "--git-path", "index").strip()
+        )
+        before_index = (
+            hashlib.sha256(real_index.read_bytes()).hexdigest()
+            if real_index.is_file()
+            else None
+        )
+        candidates = {
+            value
+            for value in self.text(
+                "ls-files", "--cached", "--others", "--exclude-standard", "-z"
+            ).split("\0")
+            if value and allowed_file(value)
+        }
+        tracked = {
+            value
+            for value in self.text("ls-files", "--cached", "-z").split("\0")
+            if value
+        }
+
+        with tempfile.TemporaryDirectory(prefix="kajovo_milestone_") as tmp:
+            index_path = Path(tmp) / "index"
+            env = {
+                "GIT_INDEX_FILE": str(index_path),
+                "GIT_AUTHOR_NAME": "Kajovo Milestone",
+                "GIT_AUTHOR_EMAIL": "milestone@localhost",
+                "GIT_COMMITTER_NAME": "Kajovo Milestone",
+                "GIT_COMMITTER_EMAIL": "milestone@localhost",
+            }
+            self.command("read-tree", "HEAD", extra_env=env)
+            for relative in sorted(candidates):
+                path = Path(safe_join_under_root(self.root, relative))
+                if path.exists() or path.is_symlink():
+                    self.command("add", "--", relative, extra_env=env)
+                elif relative in tracked:
+                    self.command(
+                        "rm", "--cached", "--ignore-unmatch", "--", relative,
+                        extra_env=env,
+                    )
+            # Allowed tracked deletions are absent from --others output and
+            # therefore need an explicit removal from the temporary index.
+            for relative in sorted(tracked):
+                if not allowed_file(relative):
+                    continue
+                path = Path(safe_join_under_root(self.root, relative))
+                if not path.exists() and not path.is_symlink():
+                    self.command(
+                        "rm", "--cached", "--ignore-unmatch", "--", relative,
+                        extra_env=env,
+                    )
+            tree = self.text_with_env(env, "write-tree").strip()
+            commit = self.text_with_env(
+                env,
+                "commit-tree",
+                tree,
+                "-p",
+                head,
+                "-m",
+                "Kájovo milestone: " + name,
+            ).strip()
+
+        after_index = (
+            hashlib.sha256(real_index.read_bytes()).hexdigest()
+            if real_index.is_file()
+            else None
+        )
+        if before_index != after_index:
+            raise RuntimeError(
+                "Vytváření milníku změnilo uživatelský index; milník nebyl označen."
+            )
+
+        self.command(
+            "update-ref",
+            "refs/tags/" + name,
+            commit,
+            "",
+        )
+        metadata = {
+            "version": 2,
+            "name": name,
+            "snapshot_commit": commit,
+            "base_head": head,
+            "branch": self.branch(),
+            "included_paths": sorted(candidates),
+            "excluded_policy": "allowed_file",
+        }
+        self._milestone_dir()
+        atomic_write_text(
+            str(self._milestone_meta_path(name)),
+            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+        )
+        result = self.snapshot()
+        result["milestone_notice"] = (
+            "Milník je úplný snapshot povoleného pracovního stromu; "
+            "uživatelský index ani aktivní větev nebyly při vytvoření změněny."
+        )
+        return result
+
+    def text_with_env(self, env, *arguments):
+        return self.command(*arguments, extra_env=env).stdout
 
     def restore(self, name):
         branch = self.branch()
         if self.text("status", "--porcelain").strip():
-            raise ValueError("Před obnovou milníku uložte nebo commitněte všechny místní změny.")
-        self.command("restore", "--source", "refs/tags/" + name, "--staged", "--worktree", "--", ".")
+            raise ValueError(
+                "Před obnovou milníku uložte nebo commitněte všechny místní změny "
+                "včetně netrackovaných souborů."
+            )
+        self.command("rev-parse", "--verify", "refs/tags/" + name + "^{commit}")
+        meta_path = self._milestone_meta_path(name)
+        if meta_path.is_file():
+            try:
+                metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError("Metadata milníku jsou poškozená.") from exc
+            if (
+                metadata.get("version") != 2
+                or metadata.get("snapshot_commit")
+                != self.text(
+                    "rev-parse", "refs/tags/" + name + "^{commit}"
+                ).strip()
+            ):
+                raise ValueError("Milník nemá platnou snapshot provenance.")
+            milestone_type = "snapshot_v2"
+        else:
+            # Legacy tag captured only a commit. It is deliberately restored
+            # only as that narrower committed tree; no archived diff is claimed.
+            milestone_type = "legacy_commit_only"
+
+        self.command(
+            "restore",
+            "--source",
+            "refs/tags/" + name,
+            "--staged",
+            "--worktree",
+            "--",
+            ".",
+        )
+        expected_tree = self.text(
+            "rev-parse", "refs/tags/" + name + "^{tree}"
+        ).strip()
+        actual_tree = self.text("write-tree").strip()
+        if actual_tree != expected_tree:
+            raise RuntimeError("Obnovený index neodpovídá snapshotu milníku.")
         if self.branch() != branch:
             raise RuntimeError("Po obnově neodpovídá aktivní větev původní větvi.")
-        return self.snapshot()
+        result = self.snapshot()
+        result["milestone_notice"] = (
+            "Obnoven úplný snapshot pracovního stromu."
+            if milestone_type == "snapshot_v2"
+            else "Obnoven starý milník typu legacy: pouze commit, bez rozpracovaného diffu."
+        )
+        return result
 
     def remove_milestone(self, name):
         self.command("tag", "-d", "--", name)
+        meta = self._milestone_meta_path(name)
+        if meta.is_file():
+            meta.unlink()
         return self.snapshot()
 
     def remove_repository(self):

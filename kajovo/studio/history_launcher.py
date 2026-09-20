@@ -110,12 +110,20 @@ class HistoryBranchLauncher:
         source_state = read_state(adapter.root)
         error = str(source_state.get("human_error") or source_state.get("error") or adapter.run_record().get("output_summary") or "Popis chyby nebyl uložen.")
         technical_error = str(source_state.get("technical_error") or source_state.get("error") or "Technický detail nebyl uložen.")
+        checkpoint_type = str(checkpoint.get("checkpoint_type") or "")
+        output_ui = copy.deepcopy(ui)
+        if (
+            relation == "continue"
+            and checkpoint_type == "plan_ready"
+            and mode in {"GENERATE", "MODIFY"}
+        ):
+            output_ui["stop_after_plan"] = False
         return BranchPreview(
-            relation, adapter.run_id, checkpoint_id, str(checkpoint.get("checkpoint_type") or ""),
+            relation, adapter.run_id, checkpoint_id, checkpoint_type,
             selected_stage, tuple(inherited), skipped,
             first_paid_operation(mode, checkpoint, selected_stage), error, technical_error,
             "Zdrojový běh zůstane neměnný; vznikne nový Run ID a nová lineage větev.",
-            str(self._output_dir(mode, state, ui) or ""),
+            str(self._output_dir(mode, state, output_ui) or ""),
         )
 
     @staticmethod
@@ -245,6 +253,29 @@ class HistoryBranchLauncher:
             merged["preparation_snapshot"] = validate_preparation_snapshot(
                 snapshot, merged["mode"], bool(merged.get("maximum_quality"))
             )
+        if (
+            preview.relation == "continue"
+            and preview.checkpoint_type == "plan_ready"
+            and merged.get("mode") in {"GENERATE", "MODIFY"}
+        ):
+            if not merged.get("preparation_snapshot"):
+                raise ValueError(
+                    "Checkpoint plan_ready nemá úplný ověřený preparation snapshot."
+                )
+            prefix = "A" if merged["mode"] == "GENERATE" else "B"
+            expected_stage = (
+                prefix + "2Q"
+                if bool(merged.get("maximum_quality"))
+                else prefix + "2"
+            )
+            if merged["preparation_snapshot"].get("canonical_stage") != expected_stage:
+                raise ValueError(
+                    "Checkpoint plan_ready nekončí na poslední požadované fázi přípravy."
+                )
+            merged["stop_after_plan"] = False
+            # Nový běh dostane od executor-u novou autorizaci svázanou s novým
+            # Run ID a znovu ověřeným SourcePackem. Starý approval se nedědí.
+            merged["execution_approval_id"] = ""
         evidence = verified_output_evidence(adapter.root, merged.get("out_dir"))
         hashes = {row["path"]: row["sha256"] for row in evidence if row.get("path") and row.get("sha256")}
         if preview.relation in {"continue", "repair"}:

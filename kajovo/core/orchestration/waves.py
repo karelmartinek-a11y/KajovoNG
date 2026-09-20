@@ -49,6 +49,8 @@ def build_execution_dag(graph: dict) -> ExecutionDag:
         content[path] = cdeps
         contract[path] = deps - cdeps
 
+    # Only verified-content dependencies serialize production. Contract-only
+    # dependencies are supplied as interface/contract context and may share a wave.
     pending = {path: set(values) for path, values in content.items()}
     waves: list[tuple[str, ...]] = []
     while pending:

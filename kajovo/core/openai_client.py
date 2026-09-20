@@ -229,6 +229,7 @@ class OpenAIClient:
         from .structured_output import text_format
         from .request_rules import uses_reasoning_defaults
         from .requirements import apply_quality
+        from .model_capabilities import ModelCapabilitiesCache
 
         models = [cfg.model]
         if cfg.mode == "GENERATE":
@@ -257,15 +258,15 @@ class OpenAIClient:
             if cfg.mode in ("GENERATE", "MODIFY"):
                 apply_quality(payload, getattr(cfg, "maximum_quality", False))
             self.validate_prepared_payload(payload)
-            spec = self._policy.model_spec(model)
-            caps_by_model[model] = {
-                "ok_basic": True,
-                "supports_structured_outputs": True,
+            typed = ModelCapabilitiesCache("").get(model)
+            if typed is None or not typed.ok_basic:
+                raise ValueError(f"Model {model} není povolen v capability registru.")
+            caps = typed.to_dict()
+            caps.update({
                 "supports_previous_response_id": bool(payload.get("previous_response_id")),
                 "supports_temperature": not uses_reasoning_defaults(model),
-                "supports_file_search": "file_search" in spec["features"],
-                "supports_input_file": "file_uploads" in spec["features"],
-            }
+            })
+            caps_by_model[model] = caps
         cfg.available_models = list(self._policy.catalog)
         cfg.caps_by_model = caps_by_model
         cfg.model_caps = caps_by_model[cfg.model]

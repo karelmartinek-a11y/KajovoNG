@@ -8,6 +8,7 @@ from ..contracts import ContractError
 from ..openai_client import OpenAIClient
 from ..orchestration.work_order import freeze_order
 from ..request_rules import uses_reasoning_defaults
+from ..safe_config import safe_ui_state
 from ..structured_output import (
     file_content_format,
     qfile_plan_format,
@@ -119,7 +120,7 @@ def _run_qfile(
         self.log.save_json(
             "requests",
             f"QFILE_PLAN_request_{ts_code()}",
-            {"payload": payload, "ui_state": self.cfg.__dict__},
+            {"payload": payload, "ui_state": safe_ui_state(self.cfg)},
             step_id=step_id,
         )
         self._log_api_action(
@@ -211,6 +212,9 @@ def _run_qfile(
     target = safe_join_under_root(self.cfg.out_dir, target_path)
     if Path(target).is_file():
         expected_target_hash = sha256_file(target)
+    self._delivery_expected_target_hashes = {
+        target_path: expected_target_hash
+    }
     projection = {
         "plan": plan,
         "request": prompt,
@@ -251,7 +255,7 @@ def _run_qfile(
         f"QFILE_request_{ts_code()}",
         {
             "payload": payload,
-            "ui_state": self.cfg.__dict__,
+            "ui_state": safe_ui_state(self.cfg),
             "work_order_hash": order.order_hash,
         },
         step_id=step_id,

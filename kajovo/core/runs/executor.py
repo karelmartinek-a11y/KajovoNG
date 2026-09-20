@@ -18,6 +18,7 @@ from ..openai_client import OpenAIClient
 from ..openai_transport import SubmissionOutcomeUnknown
 from ..orchestration.authorization import create_execution_authorization
 from ..orchestration.contracts import canonical_sha256
+from ..orchestration.publish import recover_publish_journal
 from ..orchestration.repository import repository_for_logger
 from ..orchestration.run_config import build_run_config_v2, run_scope_hash
 from ..orchestration.source_pack import freeze_run_sources, source_context
@@ -29,6 +30,7 @@ from ..response_journal import (
     ResponsePending,
     SubmissionUnknown,
 )
+from ..safe_config import safe_ui_state
 from .batch_execution import _submit_generate_batch
 from .context import RunContext
 from .contracts import RunStatus, WorkflowExecutor
@@ -70,6 +72,36 @@ class RunExecutor(RunContext):
         try:
             state_path = Path(self.log.state_path)
             saved_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
+            recovery = recover_publish_journal(self.log.paths.run_dir)
+            if recovery and recovery.get("status") in {"committed", "rolled_back"}:
+                if recovery["status"] == "committed":
+                    patch = {
+                        "published_files": recovery.get("published", []),
+                        "publish_report": recovery,
+                        "status": "completed_unverified",
+                        "publication_state": "published_unverified",
+                    }
+                    self.log.update_state(patch)
+                    self.finished_ok.emit({
+                        "mode": saved_state.get("mode") or self.cfg.mode,
+                        "status": "completed_unverified",
+                        "publication_recovered": True,
+                        **patch,
+                    })
+                    return
+                if saved_state.get("staged_files"):
+                    self.log.update_state({
+                        "status": "files_complete_unverified",
+                        "publication_state": "awaiting_verification_or_explicit_take",
+                        "publish_recovery": recovery,
+                    })
+                    self.finished_ok.emit({
+                        "mode": saved_state.get("mode") or self.cfg.mode,
+                        "status": "files_complete_unverified",
+                        "publication_recovered": True,
+                        "staged_files": saved_state.get("staged_files"),
+                    })
+                    return
             if saved_state.get("status") == "submission_unknown" or saved_state.get("submission_unknown"):
                 raise SubmissionUnknown("Nejasné předchozí odeslání blokuje nové operace.")
             self.transition(RunStatus.PREPARING)
@@ -124,7 +156,7 @@ class RunExecutor(RunContext):
             )
             self.log.update_state(
                 {
-                    "ui_state": self.cfg.__dict__,
+                    "ui_state": safe_ui_state(self.cfg),
                     "run_config_v2": run_config_v2,
                     "run_scope_hash": scope_hash,
                     "source_pack_hash": source_pack.hash,

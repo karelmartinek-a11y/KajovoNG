@@ -147,6 +147,46 @@ def test_bundle_export_validates_artifacts_and_preserves_destination_on_failure(
     assert target.read_bytes() == original
 
 
+def test_history_payload_redacts_legacy_runtime_credentials_without_mutating_source():
+    from kajovo.studio.history_data import payload
+
+    raw = {
+        "ui_state": {
+            "project": "Legacy",
+            "ssh_password": "synthetic-legacy-password",
+        }
+    }
+    request = {
+        "full_payload": {
+            "headers": {
+                "Authorization": "Bearer synthetic-token-value",
+            },
+            "ssh_password": "synthetic-legacy-password",
+        }
+    }
+    adapter = SimpleNamespace(
+        run_record=lambda: raw,
+        steps=lambda: [],
+        artifacts=lambda: [],
+        lineage=lambda: [],
+        checkpoints=lambda: [],
+        requests=lambda: [request],
+        responses=lambda: [],
+        validations=lambda: [],
+        events=lambda: [],
+    )
+
+    shown = payload(adapter)
+    assert shown["summary"]["ui_state"]["ssh_password"] == "[REDACTED]"
+    assert shown["requests"][0]["full_payload"]["ssh_password"] == "[REDACTED]"
+    assert (
+        shown["requests"][0]["full_payload"]["headers"]["Authorization"]
+        == "[REDACTED]"
+    )
+    assert raw["ui_state"]["ssh_password"] == "synthetic-legacy-password"
+    assert request["full_payload"]["ssh_password"] == "synthetic-legacy-password"
+
+
 def test_programmatic_phase_selection_updates_visible_text_and_copy(qtbot, tmp_path):
     from kajovo.studio.history_details import RunDetailView
     from kajovo.studio.history_data import payload

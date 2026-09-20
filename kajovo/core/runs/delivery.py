@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..contracts import ContractError, validate_paths
-from ..orchestration.verification import technical_staging_report
+from ..orchestration.verification import candidate_verification_report
 from ..progress import ProgressEvent
 from ..utils import atomic_write_text, ensure_dir, safe_join_under_root, sha256_file
 from .config import UiRunConfig
@@ -33,6 +33,8 @@ class DeliveryContext:
     subprogress_emit: EmitSignal
     overwrite_guard_enabled: bool
     overwrite_hashes: Mapping[str, str | None] | None = None
+    expected_target_hashes: Mapping[str, str | None] | None = None
+    additional_staged: Mapping[str, dict[str, Any]] | None = None
 
 
 def _expected_target_hash(
@@ -47,8 +49,26 @@ def _expected_target_hash(
     destination = safe_join_under_root(out_dir, relative)
     current_hash = sha256_file(destination) if os.path.isfile(destination) else None
 
+    frozen = context.expected_target_hashes
+    if frozen is not None:
+        if relative not in frozen:
+            raise ContractError(
+                f"Chybí původní očekávaný stav cíle: {relative}"
+            )
+        expected = frozen[relative]
+        if current_hash != expected:
+            raise ContractError(
+                f"OUT se během generování změnil; publikace je zablokována: {relative}"
+            )
+        return expected
+
     if cfg.mode == "MODIFY" and context.overwrite_guard_enabled:
-        expected = (context.overwrite_hashes or {}).get(relative)
+        guards = context.overwrite_hashes or {}
+        if relative not in guards:
+            raise ContractError(
+                f"Chybí původní hash MODIFY cíle: {relative}"
+            )
+        expected = guards[relative]
         if current_hash != expected:
             raise ContractError(
                 f"OUT se během generování změnil; publikace je zablokována: {relative}"
@@ -188,6 +208,20 @@ def save_out_files(
         )
         context.subprogress_emit(int(index * 100 / max(1, len(files))))
 
+    additional = {
+        str(path): dict(row)
+        for path, row in (context.additional_staged or {}).items()
+    }
+    combined = dict(additional)
+    for row in staged:
+        path = str(row["path"])
+        if path in combined and combined[path].get("sha256") != row.get("sha256"):
+            raise ContractError(
+                f"Staging obsahuje kolidující resource/text artefakt: {path}"
+            )
+        combined[path] = row
+    combined_staged = [combined[path] for path in sorted(combined)]
+
     diff_text = "".join(diff_parts)
     manifest = {
         "version": 2,
@@ -200,7 +234,7 @@ def save_out_files(
             else "awaiting_verification_or_explicit_take"
         ),
         "staging_root": staging_root.relative_to(run_root).as_posix(),
-        "files": staged,
+        "files": combined_staged,
     }
     atomic_write_text(
         str(staging_root / "manifest.json"),
@@ -209,9 +243,12 @@ def save_out_files(
     if cfg.mode == "MODIFY":
         atomic_write_text(str(staging_root / "changes.diff"), diff_text)
 
-    verification = technical_staging_report(
-        generated_root,
+    verification = candidate_verification_report(
+        run_root,
+        combined_staged,
+        mode=cfg.mode,
         target_id=f"{context.log.run_id}:{cfg.mode}",
+        profile_ids=list(cfg.verification_profile_ids or []),
     )
     atomic_write_text(
         str(staging_root / "verification.json"),
@@ -231,7 +268,7 @@ def save_out_files(
         {
             "dry_run": dry_run,
             "written_files": [],
-            "staged_files": staged,
+            "staged_files": combined_staged,
             "staging_root": manifest["staging_root"],
             "verification_evidence": verification,
             "publication_state": manifest["publication"],
@@ -241,12 +278,12 @@ def save_out_files(
     context.finish_delivery(
         files,
         saved=[],
-        staged=staged,
+        staged=combined_staged,
         dry_run=dry_run,
     )
     return {
         "saved": [],
-        "staged": staged,
+        "staged": combined_staged,
         "published": False,
         "dry_run": dry_run,
         "diff": diff_text,

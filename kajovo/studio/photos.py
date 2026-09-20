@@ -50,6 +50,7 @@ class PhotosPage(QWidget):
         self.context = context
         self.template_store = PhotoTemplateStore(Path(context.settings.cache_dir) / "photo_templates.json")
         self.professional = None
+        self.pending_professional = None
         self.busy = False
         self.jobs = []
         root = vertical(self, 0)
@@ -221,7 +222,11 @@ class PhotosPage(QWidget):
 
     def use_template(self):
         if self.template.currentData():
-            self.prompt.setPlainText(self.template_store.get(self.template.currentData()).prompt)
+            self.professional = None
+            self.pending_professional = None
+            self.prompt.setPlainText(
+                self.template_store.get(self.template.currentData()).prompt
+            )
 
     def save_template(self):
         dialog = ValueDialog("Nová šablona", "Název šablony", parent=self)
@@ -294,8 +299,20 @@ class PhotosPage(QWidget):
             self.notice.setText("Vyplňte zadání a vyberte dostupný textový model.")
             return
 
+        request_prompt = prompt
+
         def receive(value):
+            # Asynchronní výsledek smí změnit editor pouze tehdy, pokud
+            # uživatel mezitím nezměnil vstup. Jinak zůstává jen návrhem.
+            if self.prompt.toPlainText() != request_prompt:
+                self.pending_professional = value
+                self.notice.setText(
+                    "Vylepšený návrh je připraven, ale nebyl aplikován, "
+                    "protože zadání bylo mezitím změněno."
+                )
+                return
             self.professional = value
+            self.pending_professional = None
             self.prompt.setPlainText(value.professional_prompt)
 
         self.execute(
@@ -303,7 +320,7 @@ class PhotosPage(QWidget):
             lambda client, task: professionalize_prompt(
                 client,
                 model,
-                prompt,
+                request_prompt,
                 self.context.settings.log_dir,
                 task.logline.emit,
             ),
@@ -312,7 +329,10 @@ class PhotosPage(QWidget):
 
     def restore_prompt(self):
         if self.professional:
-            self.prompt.setPlainText(self.professional.original_prompt)
+            original = self.professional.original_prompt
+            self.professional = None
+            self.pending_professional = None
+            self.prompt.setPlainText(original)
 
     def start(self):
         if not self.context.models:
@@ -326,15 +346,32 @@ class PhotosPage(QWidget):
         if not paths or not prompt.strip() or not output or model not in self.context.models:
             self.notice.setText("Vyberte fotografie, dostupný model, zadání a výstupní adresář.")
             return
-        options = dict(source_paths=paths, human_prompt=self.professional.original_prompt if self.professional else prompt,
-                       professional_prompt=self.professional.professional_prompt if self.professional else "",
-                       final_prompt=prompt, prompt_source="professional" if self.professional else "human",
-                       template_id=self.template.currentData() or "", prompt_model=self.professional.model if self.professional else "",
-                       prompt_response_id=self.professional.response_id if self.professional else "",
-                       image_model=model, quality=self.quality.currentData(), size=self.size.currentData() or self.size.currentText().strip(),
-                       output_format=self.format.currentData(), output_dir=output,
-                       photo_plan=(self.professional.photo_plan if self.professional
-                                   else manual_photo_plan(prompt)))
+        professional = (
+            self.professional
+            if self.professional
+            and prompt.strip() == self.professional.professional_prompt.strip()
+            else None
+        )
+        options = dict(
+            source_paths=paths,
+            human_prompt=professional.original_prompt if professional else prompt,
+            professional_prompt=professional.professional_prompt if professional else "",
+            final_prompt=prompt,
+            prompt_source="professional" if professional else "human",
+            template_id=self.template.currentData() or "",
+            prompt_model=professional.model if professional else "",
+            prompt_response_id=professional.response_id if professional else "",
+            image_model=model,
+            quality=self.quality.currentData(),
+            size=self.size.currentData() or self.size.currentText().strip(),
+            output_format=self.format.currentData(),
+            output_dir=output,
+            photo_plan=(
+                professional.photo_plan
+                if professional
+                else manual_photo_plan(prompt)
+            ),
+        )
 
         def submit(client, task):
             job = photo_batch.new_job(**options)

@@ -32,7 +32,10 @@ class RunContext:
     _delivery_step_id: str
     _runtime_diag_file_ids: list[str]
     _delivery_originals: dict[str, str]
-    _delivery_overwrite_hashes: dict[str, str]
+    _delivery_overwrite_hashes: dict[str, str | None]
+    _delivery_expected_target_hashes: dict[str, str | None]
+    _resource_staged_files: dict[str, dict[str, Any]]
+    _resource_states: dict[str, dict[str, Any]]
 
     def __init__(
         self,
@@ -81,6 +84,9 @@ class RunContext:
         self.source_pack: Any = None
         self.source_context: dict[str, Any] = {}
         self._delivery_verified_artifacts: dict[str, dict[str, Any]] = {}
+        self._delivery_expected_target_hashes = {}
+        self._resource_staged_files = {}
+        self._resource_states = {}
         self._active_work_order: Any = None
         self._progress_stage: str = ""
 

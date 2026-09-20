@@ -5,11 +5,12 @@ oprávnění ke spuštění: launcher před použitím znovu validuje zdroj.
 """
 
 from collections import OrderedDict
-from threading import RLock
 from stat import S_ISREG
+from threading import RLock
 
-from kajovo.core.run_bundle import LegacyRunAdapter
 from kajovo.core.contracts import ContractError
+from kajovo.core.run_bundle import LegacyRunAdapter
+from kajovo.core.safe_config import redact_evidence
 
 
 def payload(adapter, *, detail=True):
@@ -21,7 +22,8 @@ def payload(adapter, *, detail=True):
     if detail:
         value.update(requests=adapter.requests(), responses=adapter.responses(),
                      validations=adapter.validations(), events=adapter.events())
-    return value
+    # Legacy files remain immutable; only the UI/read projection is redacted.
+    return redact_evidence(value)
 
 
 class HistoryData:
@@ -50,7 +52,8 @@ class HistoryData:
             if cached and cached[0] == signature:
                 self._cache.move_to_end(key)
                 return adapter, cached[1], cached[2]
-        value, state = payload(adapter, detail=detail), adapter.state()
+        value = payload(adapter, detail=detail)
+        state = redact_evidence(adapter.state())
         if detail and value["summary"].get("mode") == "MODIFY":
             from kajovo.core.runlog import verified_output_evidence
             out_dir = state.get("out_dir") or (state.get("ui_state") or {}).get("out_dir")

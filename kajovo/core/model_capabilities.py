@@ -31,6 +31,9 @@ class ModelCapabilities:
     supports_tools: bool
     supports_file_search: bool
     supports_vector_store: bool = False
+    supports_input_file: bool = False
+    supports_image_input: bool = False
+    vector_store_management: str = "runtime_check"
     supports_structured_outputs: bool = False
     notes: str = ""
     errors: dict | None = None
@@ -56,10 +59,26 @@ class ModelCapabilitiesCache:
         except ValueError:
             return None
         allowed = selectable(model)
-        fs = allowed and "file_search" in spec["features"]
-        return ModelCapabilities(model, 0, allowed, allowed,
-            allowed and spec["sampling"] == "always", fs, fs, fs,
-            allowed, f"Pevná matice {matrix_version()}; dostupnost účtu ověřuje API.")
+        features = set(spec["features"])
+        fs = allowed and "file_search" in features
+        return ModelCapabilities(
+            model=model,
+            tested_at=0,
+            ok_basic=allowed,
+            supports_previous_response_id=allowed,
+            supports_temperature=allowed and spec["sampling"] == "always",
+            supports_tools=fs,
+            supports_file_search=fs,
+            supports_vector_store=fs,
+            supports_input_file=allowed and "file_uploads" in features,
+            supports_image_input=allowed and "image_input" in features,
+            vector_store_management="runtime_check",
+            supports_structured_outputs=allowed,
+            notes=(
+                f"Pevná matice {matrix_version()}; správu vector store a "
+                "oprávnění účtu ověřuje runtime API."
+            ),
+        )
 
     def is_stale(self, model, ttl_hours):
         return False

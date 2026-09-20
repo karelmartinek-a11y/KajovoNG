@@ -39,6 +39,11 @@ from .orchestration.provider_operations import (
     prepare_provider_request,
     record_usage,
 )
+from .orchestration.publish import (
+    commit_publish,
+    prepare_publish,
+    recover_publish_journal,
+)
 from .orchestration.repository import repository_for_logger
 from .orchestration.run_config import validate_run_config_v2
 from .orchestration.work_order import freeze_order
@@ -58,6 +63,7 @@ from .utils import (
     ensure_dir,
     new_run_id,
     safe_join_under_root,
+    sha256_file,
     validate_relative_path,
 )
 
@@ -561,61 +567,204 @@ class CascadeRunExecutor:
                 raise ContractError("Výstupní soubor obsahuje neplatná base64 data.") from exc
         raise ContractError("Neznámé kódování výstupního souboru.")
 
+    def _freeze_cascade_targets(
+        self,
+        step: CascadeStep,
+        idx: int,
+    ) -> None:
+        out_dir = self._select_out_dir_for_step()
+        paths = {
+            self._normalize_expected_rel_path(path)
+            for path in (step.expected_out_files or [])
+            if str(path).strip()
+        }
+        paths.update(
+            self._normalize_expected_rel_path(output.file_name)
+            for output in step.outputs
+            if output.kind == "file" and str(output.file_name).strip()
+        )
+        if not paths:
+            return
+        if not out_dir:
+            raise RuntimeError(
+                f"Krok {idx}: souborový výstup vyžaduje OUT adresář."
+            )
+        out_abs = os.path.abspath(out_dir)
+        expected = getattr(self, "_cascade_expected_hashes", None)
+        if expected is None:
+            expected = {}
+            self._cascade_expected_hashes = expected
+        for rel in sorted(paths):
+            if rel in expected:
+                continue
+            destination = safe_join_under_root(
+                out_abs, rel.replace("/", os.sep)
+            )
+            expected[rel] = (
+                sha256_file(destination)
+                if os.path.isfile(destination)
+                else None
+            )
+        if self.logger:
+            self.logger.save_json(
+                "manifests",
+                f"cascade_step_{idx:02d}_target_expectations",
+                {
+                    "out_dir": out_abs,
+                    "expected_target_hashes": {
+                        rel: expected[rel] for rel in sorted(paths)
+                    },
+                },
+                step_id=str(
+                    getattr(self, "_current_step_record_id", "") or ""
+                ),
+            )
+
     def _write_files_atomically(
         self,
         rows: list[dict[str, Any]],
         out_dir: str,
         step_idx: int,
     ) -> dict[str, Any]:
-        out_abs = os.path.abspath(out_dir)
+        """Stage a complete file set; OUT is published only after all steps."""
+        del out_dir
+        if not self.logger:
+            raise RuntimeError("Kaskádový staging vyžaduje RunLogger.")
+        run_root = Path(self.logger.paths.run_dir).resolve()
+        stage_root = (
+            run_root / "staging" / "cascade"
+            / f"step_{step_idx:04d}" / "generated"
+        )
+        ensure_dir(str(stage_root))
+
         normalized: list[tuple[str, bytes]] = []
+        seen: set[str] = set()
         for row in rows:
             rel = self._normalize_expected_rel_path(str(row.get("path") or ""))
-            dst = safe_join_under_root(out_abs, rel.replace("/", os.sep))
-            data = self._decode_file_content(row)
-            normalized.append((dst, data))
+            key = os.path.normcase(rel.replace("\\", "/"))
+            if key in seen:
+                raise ContractError(
+                    f"Krok {step_idx}: duplicitní/case-collision cesta {rel}."
+                )
+            seen.add(key)
+            if rel not in getattr(self, "_cascade_expected_hashes", {}):
+                raise ContractError(
+                    f"Krok {step_idx}: cesta {rel} nemá před výrobou "
+                    "zmrazený očekávaný stav cíle."
+                )
+            normalized.append((rel, self._decode_file_content(row)))
 
-        ensure_dir(out_abs)
-        written: list[dict[str, Any]] = []
-        temp_paths: list[str] = []
-        try:
-            for dst, data in normalized:
-                ensure_dir(os.path.dirname(dst))
-                fd, temp_path = tempfile.mkstemp(prefix=".cascade_", dir=os.path.dirname(dst))
-                temp_paths.append(temp_path)
+        staged: list[dict[str, Any]] = []
+        for rel, data in normalized:
+            dst = Path(
+                safe_join_under_root(
+                    str(stage_root), rel.replace("/", os.sep)
+                )
+            )
+            ensure_dir(str(dst.parent))
+            fd, temp_path = tempfile.mkstemp(
+                prefix=".cascade_stage_", dir=str(dst.parent)
+            )
+            try:
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(data)
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.replace(temp_path, dst)
-                temp_paths.remove(temp_path)
-                written.append(
-                    {
-                        "path": os.path.relpath(dst, out_abs).replace(os.sep, "/"),
-                        "dst": dst,
-                        "bytes": os.path.getsize(dst),
-                    }
-                )
-        finally:
-            for temp_path in temp_paths:
-                with contextlib.suppress(OSError):
+            finally:
+                with contextlib.suppress(FileNotFoundError):
                     os.remove(temp_path)
-        if self.logger:
-            for row in written:
-                self.logger.record_fs_change(
-                    "write",
-                    row["path"],
-                    row["dst"],
-                    after_size=row["bytes"],
-                    step_id=str(getattr(self, "_current_step_record_id", "") or ""),
-                )
-            self.logger.save_json(
-                "manifests",
-                f"cascade_step_{step_idx:02d}_out_saved_map",
-                {"saved": written, "out_dir": out_abs},
-                step_id=str(getattr(self, "_current_step_record_id", "") or ""),
+            digest = sha256_file(str(dst))
+            row = {
+                "path": rel,
+                "staged_path": dst.relative_to(run_root).as_posix(),
+                "sha256": digest,
+                "bytes": dst.stat().st_size,
+                "expected_target_hash": self._cascade_expected_hashes[rel],
+                "cascade_step": step_idx,
+            }
+            staged.append(row)
+            self.logger.bundle.archive_artifact(
+                dst,
+                role="staged_output",
+                kind="output_file",
+                step_id=str(
+                    getattr(self, "_current_step_record_id", "") or ""
+                ),
+                reconstruction_role=rel,
+                reusable=True,
+                metadata={
+                    "relative_path": rel,
+                    "sha256": digest,
+                    "expected_target_hash": self._cascade_expected_hashes[rel],
+                    "publication": "not_published",
+                    "cascade_step": step_idx,
+                },
             )
-        return {"saved": written, "out_dir": out_abs}
+
+        aggregate = getattr(self, "_cascade_staged_files", None)
+        if aggregate is None:
+            aggregate = {}
+            self._cascade_staged_files = aggregate
+        for row in staged:
+            aggregate[row["path"]] = row
+        self.logger.save_json(
+            "manifests",
+            f"cascade_step_{step_idx:02d}_staged_map",
+            {
+                "staged": staged,
+                "publication": "deferred_until_cascade_complete",
+            },
+            step_id=str(getattr(self, "_current_step_record_id", "") or ""),
+        )
+        self.logger.update_state(
+            {
+                "cascade_staged_files": [
+                    aggregate[path] for path in sorted(aggregate)
+                ],
+                "cascade_expected_target_hashes": dict(
+                    self._cascade_expected_hashes
+                ),
+                "publication_state": "staged_not_published",
+            }
+        )
+        return {"staged": staged, "out_dir": ""}
+
+    def _publish_cascade_outputs(self) -> dict[str, Any] | None:
+        logger = self.logger
+        if logger is None:
+            raise RuntimeError("Cascade logger není inicializovaný.")
+        staged_map = getattr(self, "_cascade_staged_files", {}) or {}
+        if not staged_map:
+            return None
+        out_dir = self._select_out_dir_for_step()
+        if not out_dir:
+            raise RuntimeError("Kaskádová publikace nemá OUT adresář.")
+        staged = [staged_map[path] for path in sorted(staged_map)]
+        expected = getattr(self, "_cascade_expected_hashes", {}) or {}
+        if set(expected) != {row["path"] for row in staged}:
+            missing = sorted({row["path"] for row in staged} - set(expected))
+            raise ContractError(
+                "Kaskádová publikace nemá úplná původní očekávání: "
+                + ", ".join(missing)
+            )
+        plan = prepare_publish(
+            staged,
+            out_dir,
+            expected,
+            run_dir=logger.paths.run_dir,
+        )
+        report = commit_publish(
+            plan, run_dir=logger.paths.run_dir
+        )
+        logger.update_state(
+            {
+                "published_files": report["published"],
+                "publish_report": report,
+                "publication_state": "published",
+            }
+        )
+        return report
 
     def _save_manifest_to_out(
         self,
@@ -674,29 +823,49 @@ class CascadeRunExecutor:
                     "encoding": str(row.get("encoding") or "utf-8"),
                 }
             )
-        manifest_paths = {row["path"] for row in normalized_manifest}
-        missing = [rel for rel in expected if rel not in manifest_paths]
-        if missing:
+        manifest_paths = [row["path"] for row in normalized_manifest]
+        if len(manifest_paths) != len({os.path.normcase(path) for path in manifest_paths}):
             raise RuntimeError(
-                f"Krok {idx}: v manifestu chybí očekávané soubory: {', '.join(missing)}"
+                f"Krok {idx}: manifest obsahuje duplicitní/case-collision cestu."
+            )
+        missing = sorted(set(expected) - set(manifest_paths))
+        unexpected = sorted(set(manifest_paths) - set(expected))
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append("chybí: " + ", ".join(missing))
+            if unexpected:
+                details.append("neočekávané: " + ", ".join(unexpected))
+            raise RuntimeError(
+                f"Krok {idx}: manifest neodpovídá schválené množině (" +
+                "; ".join(details) + ")."
             )
 
-        # Nothing is written before the whole manifest passes validation.
         for row in normalized_manifest:
             self._decode_file_content(row)
-        self._save_manifest_to_out(normalized_manifest, out_dir, idx)
+        stage_report = self._save_manifest_to_out(
+            normalized_manifest, out_dir, idx
+        )
+        staged_by_path = {
+            row["path"]: row for row in stage_report["staged"]
+        }
 
+        logger = self.logger
+        if logger is None:
+            raise RuntimeError("Cascade logger není inicializovaný.")
         result: dict[str, dict[str, str]] = {}
-        out_abs = os.path.abspath(out_dir)
+        run_root = Path(logger.paths.run_dir).resolve()
         for rel in expected:
-            abs_path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
-            uploaded = client.upload_file(abs_path, purpose='user_data')
+            staged_row = staged_by_path[rel]
+            staged_path = (run_root / staged_row["staged_path"]).resolve()
+            staged_path.relative_to(run_root)
+            uploaded = client.upload_file(str(staged_path), purpose='user_data')
             file_id = str(uploaded.get("id") or "").strip()
             if not file_id:
                 raise RuntimeError(f"Krok {idx}: upload souboru nevrátil file_id: {rel}")
-            context[f"step.{idx}.out_file_path:{rel}"] = abs_path
+            context[f"step.{idx}.out_file_path:{rel}"] = str(staged_path)
             context[f"step.{idx}.out_file_id:{rel}"] = file_id
-            result[rel] = {"path": abs_path, "file_id": file_id}
+            result[rel] = {"path": str(staged_path), "file_id": file_id}
         return result
 
     def _load_resume_cache(
@@ -728,6 +897,12 @@ class CascadeRunExecutor:
             raise CascadeValidationError(
                 "Uložený mezistav kaskády je poškozený; spusťte kaskádu od začátku."
             )
+        self._cascade_staged_files = copy.deepcopy(
+            cache.get("cascade_staged_files") or {}
+        )
+        self._cascade_expected_hashes = copy.deepcopy(
+            cache.get("cascade_expected_target_hashes") or {}
+        )
         return (
             copy.deepcopy(context),
             {str(k): str(v) for k, v in context_ids.items() if v},
@@ -1043,19 +1218,27 @@ class CascadeRunExecutor:
             if not out_dir:
                 raise RuntimeError("Souborový výstup vyžaduje OUT adresář.")
             rows = [row for _, row in file_rows]
-            self._write_files_atomically(rows, out_dir, idx)
-            out_abs = os.path.abspath(out_dir)
+            stage_report = self._write_files_atomically(rows, out_dir, idx)
+            staged_by_path = {
+                row["path"]: row for row in stage_report["staged"]
+            }
+            logger = self.logger
+            if logger is None:
+                raise RuntimeError("Cascade logger není inicializovaný.")
+            run_root = Path(logger.paths.run_dir).resolve()
             for output, _row in file_rows:
                 rel = output.file_name
-                path = safe_join_under_root(out_abs, rel.replace("/", os.sep))
-                uploaded = client.upload_file(path, purpose='user_data')
+                staged_row = staged_by_path[rel]
+                path = (run_root / staged_row["staged_path"]).resolve()
+                path.relative_to(run_root)
+                uploaded = client.upload_file(str(path), purpose='user_data')
                 file_id = str(uploaded.get("id") or "").strip()
                 if not file_id:
                     raise RuntimeError(f"Krok {idx}: upload výstupu nevrátil file_id: {rel}")
-                value = {"kind": "file", "path": path, "file_id": file_id, "file_type": output.file_type}
+                value = {"kind": "file", "path": str(path), "file_id": file_id, "file_type": output.file_type}
                 values[self._value_key(step.id, output.id)] = value
                 summary[output.id] = value
-                context[f"step.{idx}.out_file_path:{rel}"] = path
+                context[f"step.{idx}.out_file_path:{rel}"] = str(path)
                 context[f"step.{idx}.out_file_id:{rel}"] = file_id
         return summary, decision_value
 
@@ -1092,6 +1275,12 @@ class CascadeRunExecutor:
     ) -> dict[str, Any]:
         return {
             "legacy_context": copy.deepcopy(context),
+            "cascade_staged_files": copy.deepcopy(
+                getattr(self, "_cascade_staged_files", {}) or {}
+            ),
+            "cascade_expected_target_hashes": copy.deepcopy(
+                getattr(self, "_cascade_expected_hashes", {}) or {}
+            ),
             "context_response_ids": copy.deepcopy(context_response_ids),
             "values": copy.deepcopy(values),
             "executed_step_ids": sorted(executed_step_ids),
@@ -1129,6 +1318,32 @@ class CascadeRunExecutor:
                 run_id,
                 project_name=self.cfg.project,
             )
+            recovered_publish = recover_publish_journal(
+                self.logger.paths.run_dir
+            )
+            if (
+                recovered_publish
+                and recovered_publish.get("status") == "committed"
+                and previous.get("status") in {"running", "completed"}
+            ):
+                result = {
+                    "mode": "KASKADA",
+                    "run_id": run_id,
+                    "status": "completed",
+                    "publication_recovered": True,
+                    "publish_report": recovered_publish,
+                    "published_files": recovered_publish.get("published", []),
+                }
+                self.logger.update_state(
+                    {
+                        "status": "completed",
+                        "result": result,
+                        "publish_report": recovered_publish,
+                        "published_files": recovered_publish.get("published", []),
+                    }
+                )
+                self.finished_ok.emit(result)
+                return
             if self.cfg.lineage:
                 lineage = dict(self.cfg.lineage)
                 source_run_id = str(lineage.pop("source_run_id", "") or "")
@@ -1152,6 +1367,8 @@ class CascadeRunExecutor:
                 start_index = self.cfg.cascade.step_index(self.cfg.cascade.run_from_step_id)
                 if start_index < 0:
                     raise CascadeValidationError("Vybraný počáteční krok už neexistuje.")
+            self._cascade_staged_files = {}
+            self._cascade_expected_hashes = {}
             context, context_response_ids, values, executed_step_ids = self._load_resume_cache(
                 start_index
             )
@@ -1282,6 +1499,7 @@ class CascadeRunExecutor:
                 )
 
                 self._check_stop()
+                self._freeze_cascade_targets(step, idx)
                 step_summary: dict[str, Any] = {}
                 decision_value: str | None = None
                 payload, schema, file_ids = self._prepare_step(
@@ -1620,6 +1838,7 @@ class CascadeRunExecutor:
                 current_index = next_index
                 current_step_record_id = ""
 
+            publish_report = self._publish_cascade_outputs()
             final_outputs = self._selected_final_outputs(values)
             text_value = per_step_text.get(str(max(per_step_text, key=int)), "") if per_step_text else ""
             result = {
@@ -1632,6 +1851,12 @@ class CascadeRunExecutor:
                 "step_text_outputs": per_step_text,
                 "step_out_files": per_step_out_files,
                 "final_outputs": final_outputs,
+                "publish_report": publish_report,
+                "published_files": (
+                    publish_report.get("published", [])
+                    if isinstance(publish_report, dict)
+                    else []
+                ),
                 "executed_step_ids": sorted(executed_step_ids),
                 "text": text_value,
             }

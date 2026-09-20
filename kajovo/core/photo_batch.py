@@ -45,6 +45,7 @@ class PhotoBatchItem:
     output_width: int = 0
     output_height: int = 0
     output_format_detected: str = ""
+    provider_result_sha256: str = ""
     technical_validation: str = "pending"
     content_acceptance: str = "unverified"
     content_acceptance_note: str = ""
@@ -388,7 +389,7 @@ def new_job(
     stamp = _now()
     items = make_items(source_paths)
     return PhotoBatchJob(
-        2,
+        3,
         "photojob_" + uuid.uuid4().hex,
         stamp,
         stamp,
@@ -436,7 +437,10 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
     ):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            for item in data.get("items", []):
+                item.setdefault("provider_result_sha256", "")
             data["items"] = [PhotoBatchItem(**item) for item in data.get("items", [])]
+            data["schema_version"] = max(3, int(data.get("schema_version") or 1))
             if not data.get("photo_plan"):
                 data["photo_plan"] = manual_photo_plan(data.get("final_prompt", ""))
             if not data.get("photo_plan_sha256"):
@@ -834,13 +838,51 @@ def mark_content_acceptance(
     return job
 
 
+def _stable_output_target(
+    output: Path,
+    item: PhotoBatchItem,
+    ext: str,
+    result_sha256: str,
+) -> Path:
+    stem = re.sub(
+        r"[^\w.-]+",
+        "_",
+        Path(item.source_name).stem,
+        flags=re.UNICODE,
+    ).strip("._") or "photo"
+    primary = output / f"{stem}_edited.{ext}"
+    stable_suffix = hashlib.sha256(
+        f"{item.custom_id}:{result_sha256}".encode("utf-8")
+    ).hexdigest()[:12]
+    candidates = [
+        primary,
+        output / f"{stem}_edited_{stable_suffix}.{ext}",
+    ]
+    for target in candidates:
+        if not target.exists():
+            return target
+        if _hash_file(target) == result_sha256:
+            return target
+    raise ValueError(
+        f"{item.source_name}: cílové názvy již obsahují cizí soubor; "
+        "výsledek nebyl přepsán."
+    )
+
+
 def download_results(client, job, log_dir, reporter=None, progress=None):
     refresh_job(client, job, log_dir)
-    if job.status != "completed" or not (job.output_file_id or job.error_file_id):
-        raise ValueError(f"BATCH není připraven ke stažení (stav: {job.status}).")
+    terminal = {"completed", "failed", "expired", "cancelled"}
+    if job.status not in terminal:
+        raise ValueError(f"BATCH není v konečném stavu (stav: {job.status}).")
+    if not (job.output_file_id or job.error_file_id):
+        raise ValueError(
+            f"BATCH skončil stavem {job.status}, ale provider neposkytl "
+            "output_file_id ani error_file_id."
+        )
 
     root = save_job(job, log_dir)
     output = Path(job.output_dir)
+    output.mkdir(parents=True, exist_ok=True)
     by_id = {item.custom_id: item for item in job.items}
     seen: set[str] = set()
 
@@ -856,55 +898,85 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             item = by_id[cid]
             response = row.get("response") or {}
             body = response.get("body") or {}
+            provider_result_hash = canonical_sha256(row)
             if job.schema_version >= 2 and isinstance(body, dict):
-                _record_photo_usage(
-                    job,
-                    cid,
-                    body.get("usage") or {},
-                    log_dir,
-                )
+                _record_photo_usage(job, cid, body.get("usage") or {}, log_dir)
             if row.get("error") or int(response.get("status_code") or 200) >= 400:
                 item.status = "failed"
                 item.error_message = json.dumps(
                     row.get("error") or body, ensure_ascii=False
                 )
+                item.provider_result_sha256 = provider_result_hash
+                save_job(job, log_dir)
                 continue
             data = body.get("data") or []
-            if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict) or not data[0].get("b64_json"):
+            if (
+                not isinstance(data, list)
+                or len(data) != 1
+                or not isinstance(data[0], dict)
+                or not data[0].get("b64_json")
+            ):
                 item.status = "failed"
-                item.error_message = "Výsledek musí obsahovat právě jeden obrázek s data[0].b64_json."
+                item.error_message = (
+                    "Výsledek musí obsahovat právě jeden obrázek "
+                    "s data[0].b64_json."
+                )
+                item.provider_result_sha256 = provider_result_hash
+                save_job(job, log_dir)
                 continue
             try:
                 binary = base64.b64decode(data[0]["b64_json"], validate=True)
-                image_info = inspect_photo_bytes(binary, job.output_format, model=job.image_model)
-            except (ValueError, TypeError) as exc:
+                image_info = inspect_photo_bytes(
+                    binary, job.output_format, model=job.image_model
+                )
+            except (ValueError, TypeError, OrchestrationError) as exc:
                 item.status = "failed"
                 item.technical_validation = "failed"
                 item.error_message = str(exc)
+                item.provider_result_sha256 = provider_result_hash
+                save_job(job, log_dir)
                 continue
-            ext = "jpg" if job.output_format == "jpeg" else job.output_format
-            stem = re.sub(
-                r"[^\w.-]+",
-                "_",
-                Path(item.source_name).stem,
-                flags=re.UNICODE,
-            ).strip("._") or "photo"
-            target = output / f"{stem}_edited.{ext}"
-            sequence = 2
-            while target.exists():
-                target = output / f"{stem}_edited_{sequence}.{ext}"
-                sequence += 1
-            _atomic_bytes(target, binary)
+
+            result_hash = hashlib.sha256(binary).hexdigest()
+            previous_hash = item.output_sha256
+            previous_acceptance = item.content_acceptance
+            previous_note = item.content_acceptance_note
+            existing = Path(item.output_path) if item.output_path else None
+            if (
+                existing
+                and existing.is_file()
+                and _hash_file(existing) == result_hash
+            ):
+                target = existing
+            else:
+                ext = "jpg" if job.output_format == "jpeg" else job.output_format
+                target = _stable_output_target(output, item, ext, result_hash)
+                if not target.exists():
+                    _atomic_bytes(target, binary)
+                elif _hash_file(target) != result_hash:
+                    raise ValueError(
+                        f"{item.source_name}: existující cizí výstup nebyl přepsán."
+                    )
+
             item.output_path = str(target)
-            item.output_sha256 = hashlib.sha256(binary).hexdigest()
+            item.output_sha256 = result_hash
+            item.provider_result_sha256 = provider_result_hash
             item.output_width = int(image_info["width"])
             item.output_height = int(image_info["height"])
             item.output_format_detected = str(image_info["format"])
             item.technical_validation = "passed"
-            item.content_acceptance = "unverified"
-            item.content_acceptance_note = ""
+            if (
+                previous_hash == result_hash
+                and previous_acceptance in {"accepted", "rejected", "unverified"}
+            ):
+                item.content_acceptance = previous_acceptance
+                item.content_acceptance_note = previous_note
+            else:
+                item.content_acceptance = "unverified"
+                item.content_acceptance_note = ""
             item.status = "downloaded"
             item.error_message = ""
+            save_job(job, log_dir)
             if reporter:
                 reporter(f"Ukládám {index}/{len(rows)}: {target.name}")
             if progress:
@@ -916,11 +988,13 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
         for row in _jsonl(raw, "batch_errors.jsonl"):
             cid = str(row.get("custom_id") or "")
             item = by_id.get(cid)
-            if item:
+            if item and item.status != "downloaded":
                 item.status = "failed"
+                item.provider_result_sha256 = canonical_sha256(row)
                 item.error_message = json.dumps(
                     row.get("error") or row, ensure_ascii=False
                 )
+                save_job(job, log_dir)
 
     done = sum(item.status == "downloaded" for item in job.items)
     failed = sum(item.status == "failed" for item in job.items)

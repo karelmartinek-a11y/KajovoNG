@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from ..contracts import (
@@ -16,13 +17,14 @@ from ..orchestration.work_order import freeze_order
 from ..progress import ProgressEvent
 from ..request_rules import uses_reasoning_defaults
 from ..requirements import stage_instructions
+from ..safe_config import safe_ui_state
 from ..structured_output import (
     OutputContractError,
     file_content_format,
     prepare_payload,
     validate_output,
 )
-from ..utils import ts_code
+from ..utils import safe_join_under_root, sha256_file, ts_code
 
 if TYPE_CHECKING:
     from .context import RunContext
@@ -139,9 +141,33 @@ def _gen_file_chunks(
             f"context_{path.replace('/', '_')}_attempt_{attempt}",
             {"context": compiled, "routing": routing, "measurement": report},
         )
+        expected_map = getattr(self, "_delivery_expected_target_hashes", None)
+        if expected_map is not None and path not in expected_map:
+            target = (
+                safe_join_under_root(self.cfg.out_dir, path)
+                if self.cfg.out_dir
+                else ""
+            )
+            frozen_hash = (
+                sha256_file(target)
+                if target and os.path.isfile(target)
+                else None
+            )
+            expected_map = dict(expected_map)
+            expected_map[path] = frozen_hash
+            self._delivery_expected_target_hashes = expected_map
+            self.log.save_json(
+                "manifests",
+                f"target_expectation_{path.replace('/', '_')}",
+                {
+                    "path": path,
+                    "expected_target_hash": frozen_hash,
+                    "frozen_before_provider_request": True,
+                },
+            )
         expected_target_hash = (
-            getattr(self, "_delivery_overwrite_hashes", {}).get(path)
-            if contract == "B3_FILE"
+            expected_map[path]
+            if expected_map is not None
             else (getattr(self.cfg, "completed_hashes", None) or {}).get(path)
         )
         work_order = freeze_order(
@@ -179,7 +205,7 @@ def _gen_file_chunks(
             f"{contract}_{path}_attempt_{attempt}_{ts_code()}",
             {
                 "payload": working,
-                "ui_state": self.cfg.__dict__,
+                "ui_state": safe_ui_state(self.cfg),
                 "work_order_hash": work_order.order_hash,
             },
             step_id=self._delivery_step_id,

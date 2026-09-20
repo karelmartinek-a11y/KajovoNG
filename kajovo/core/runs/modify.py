@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -22,6 +21,300 @@ if TYPE_CHECKING:
     from .context import RunContext
 
 from .attachments import prepare_modify_inputs
+
+
+def _run_v3_modify_production(
+    self: RunContext,
+    client: OpenAIClient,
+    diag_file_ids: list[str],
+    plan: dict[str, Any],
+    struct: dict[str, Any],
+    resp2_id: str | None,
+    root: str,
+    up_items: list[Any],
+    tools,
+    supports_fs: bool,
+    vs_id: str | None,
+) -> dict[str, Any]:
+    from ..orchestration.resource_delivery import (
+        dispatch_resource_target,
+        prepare_production_scope,
+    )
+    selected, completed, excluded = prepare_production_scope(self, struct)
+    files_by_path = {
+        str(row["path"]): row for row in struct["spine"]["files"]
+    }
+    source_items = {item.rel_path: item for item in up_items}
+    originals: dict[str, str] = {}
+    for path, target in selected.items():
+        if target.get("kind") != "text":
+            continue
+        if target.get("action") == "modify" and path not in source_items:
+            raise ContractError(
+                f"B3: měněný soubor není dostupný ve schváleném IN: {path}"
+            )
+        if target.get("action") == "add" and os.path.lexists(
+            safe_join_under_root(root, path)
+        ):
+            raise ContractError(f"B3: přidávaný soubor již existuje v IN: {path}")
+        for source in {path, *target.get("dependencies", [])}:
+            item = source_items.get(source)
+            if item is None:
+                continue
+            source_path = safe_join_under_root(root, source)
+            if sha256_file(source_path) != item.sha256:
+                raise ContractError(f"IN se od skenu změnil: {source}")
+            try:
+                originals[source] = Path(source_path).read_text(
+                    encoding="utf-8"
+                )
+            except UnicodeDecodeError:
+                if source == path:
+                    raise ContractError(
+                        f"B3: textový modify target není UTF-8: {path}"
+                    ) from None
+
+    self._delivery_originals = originals
+    self._delivery_overwrite_hashes = dict(
+        self._delivery_expected_target_hashes
+    )
+    self._delivery_verified_artifacts = {}
+    generated_text: dict[str, str] = {}
+    resource_pending: list[dict[str, Any]] = []
+
+    if self.cfg.send_as_c:
+        pending_resources = {
+            path
+            for path, row in selected.items()
+            if row.get("kind") != "text"
+        }
+        while pending_resources:
+            ready = sorted(
+                path
+                for path in pending_resources
+                if set(files_by_path[path].get("content_dependencies", [])) <= completed
+            )
+            if not ready:
+                break
+            for path in ready:
+                result = dispatch_resource_target(
+                    self,
+                    client,
+                    struct,
+                    path,
+                    generated_text=generated_text,
+                )
+                pending_resources.remove(path)
+                if result["status"] == "completed_unverified":
+                    completed.add(path)
+                else:
+                    resource_pending.append(result)
+
+        text_scope = sorted(
+            path
+            for path, row in selected.items()
+            if row.get("kind") == "text"
+        )
+        if not text_scope:
+            saved_map = self._save_out_files([])
+            return {
+                "mode": "MODIFY",
+                "plan": plan,
+                "structure": struct,
+                "saved": saved_map,
+                "response_id": resp2_id,
+                "vector_store_id": vs_id,
+                "supports_file_search": supports_fs,
+                "status": (
+                    "waiting_manual_resource"
+                    if resource_pending or pending_resources
+                    else "dry_run"
+                    if saved_map.get("dry_run")
+                    else "files_complete_unverified"
+                ),
+                "dry_run": bool(saved_map.get("dry_run")),
+                "resource_pending": resource_pending,
+                "excluded_paths": excluded,
+            }
+
+        ready_text = {
+            path
+            for path in text_scope
+            if set(files_by_path[path].get("content_dependencies", [])) <= completed
+        }
+        if not ready_text:
+            saved_map = self._save_out_files([])
+            blocked = sorted(set(text_scope) | pending_resources)
+            self.log.update_state(
+                {
+                    "status": "waiting_manual_resource",
+                    "resource_pending_paths": blocked,
+                }
+            )
+            return {
+                "mode": "MODIFY",
+                "plan": plan,
+                "structure": struct,
+                "saved": saved_map,
+                "status": "waiting_manual_resource",
+                "dry_run": bool(self.cfg.dry_run),
+                "blocked_paths": blocked,
+                "resource_pending": resource_pending,
+                "excluded_paths": excluded,
+            }
+
+        expected = {
+            path: self._delivery_expected_target_hashes[path]
+            for path in text_scope
+        }
+        manifest = build_batch_manifest(
+            self.log.run_id,
+            self.cfg.prompt,
+            plan,
+            struct,
+            self.cfg.model,
+            self.cfg.temperature,
+            text_scope,
+            requirements=self._delivery_snapshot["requirements"],
+            maximum_quality=self.cfg.maximum_quality,
+            mode="MODIFY",
+            originals=originals,
+            recovery_instruction=self.cfg.recovery_instruction,
+            run_config=self.cfg,
+            expected_target_hashes=expected,
+            approved_paths=text_scope,
+            completed_targets=completed,
+        )
+        manifest["overwrite_hashes"] = expected
+        manifest["dry_run"] = bool(self.cfg.dry_run)
+        manifest["versing"] = bool(self.cfg.versing)
+        manifest["resource_completed_paths"] = sorted(
+            path
+            for path in completed
+            if path in selected and selected[path].get("kind") != "text"
+        )
+        manifest["resource_pending_paths"] = sorted(pending_resources)
+        manifest["resource_expected_target_hashes"] = {
+            path: self._delivery_expected_target_hashes[path]
+            for path, row in selected.items()
+            if row.get("kind") != "text"
+        }
+        manifest["excluded_scope"] = excluded
+        return self._submit_generate_batch(client, manifest)
+
+    pending = set(selected)
+    out_files: list[dict[str, Any]] = []
+    chain_prev_id = ""
+    total = max(1, len(pending))
+    completed_count = 0
+    while pending:
+        ready = sorted(
+            path
+            for path in pending
+            if set(files_by_path[path].get("content_dependencies", [])) <= completed
+        )
+        if not ready:
+            break
+        for path in ready:
+            self._check_stop()
+            target = files_by_path[path]
+            pending.remove(path)
+            action = str(target.get("action") or "modify")
+            self._progress_stage = "B3"
+            self.progress_event.emit(
+                ProgressEvent(
+                    "B3",
+                    completed=completed_count,
+                    total=total,
+                    unit="cílů",
+                    detail=path,
+                )
+            )
+            if target.get("kind") == "text":
+                content, last_response_id = self._gen_file_chunks(
+                    client,
+                    prev_id=chain_prev_id,
+                    contract="B3_FILE",
+                    path=path,
+                    action=action,
+                    diag_file_ids=diag_file_ids,
+                    tools=tools if supports_fs else None,
+                )
+                if last_response_id:
+                    chain_prev_id = last_response_id
+                generated_text[path] = content
+                out_files.append(
+                    {"path": path, "content": content, "action": action}
+                )
+                completed.add(path)
+            else:
+                result = dispatch_resource_target(
+                    self,
+                    client,
+                    struct,
+                    path,
+                    generated_text=generated_text,
+                )
+                if result["status"] == "completed_unverified":
+                    completed.add(path)
+                else:
+                    resource_pending.append(result)
+            completed_count += 1
+            self.progress_event.emit(
+                ProgressEvent(
+                    "B3",
+                    completed=completed_count,
+                    total=total,
+                    unit="cílů",
+                    detail=path,
+                )
+            )
+
+    blocked = sorted(pending)
+    if blocked:
+        resource_pending.extend(
+            {
+                "path": path,
+                "status": "waiting_dependency",
+                "dependencies": list(
+                    files_by_path[path].get("dependencies", [])
+                ),
+            }
+            for path in blocked
+        )
+    self._verify_completed_files()
+    saved_map = self._save_out_files(out_files)
+    status = (
+        "waiting_manual_resource"
+        if any(row.get("status") == "waiting_manual" for row in resource_pending)
+        else "partial"
+        if resource_pending
+        else "dry_run"
+        if saved_map.get("dry_run")
+        else "files_complete_unverified"
+    )
+    self.log.update_state(
+        {
+            "resource_pending": resource_pending,
+            "excluded_paths": excluded,
+        }
+    )
+    return {
+        "mode": "MODIFY",
+        "plan": plan,
+        "structure": struct,
+        "saved": saved_map,
+        "response_id": resp2_id,
+        "vector_store_id": vs_id,
+        "supports_file_search": supports_fs,
+        "status": status,
+        "dry_run": bool(saved_map.get("dry_run")),
+        "missing_deliverables": [
+            row["path"] for row in resource_pending
+        ],
+        "resource_pending": resource_pending,
+        "excluded_paths": excluded,
+    }
 
 
 def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[str], base_prev_id: str | None) -> dict[str, Any]:
@@ -65,123 +358,19 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
             "dry_run": bool(self.cfg.dry_run),
             "response_id": resp2_id, "last_response_id": self._final_response_id or resp2_id,
         }
-    touched = []
-    omitted = []
-    for tf in touched_raw:
-        path = tf.get("path", "")
-        if not path:
-            continue
-        if path in (self.cfg.skip_paths or []):
-            continue
-        ext = os.path.splitext(path)[1].lower()
-        if tf.get("kind") != "text" or ext in (self.cfg.skip_exts or []):
-            self._log_debug(f"B3: skipping due to extension {ext} ({path})")
-            omitted.append(path)
-            continue
-        if path in (self.cfg.skip_paths or []):
-            self._log_debug(f"B3: skipping already completed {path}")
-            continue
-        touched.append(tf)
-
-    originals = {}
-    source_items = {item.rel_path: item for item in up_items}
-    overwrite_hashes = {}
-    for file in touched:
-        path = file["path"]
-        if file["action"] == "modify" and path not in source_items:
-            raise ContractError(f"B3: měněný soubor není dostupný ve schváleném IN: {path}")
-        if file["action"] == "add" and os.path.lexists(safe_join_under_root(root, path)):
-            raise ContractError(f"B3: přidávaný soubor již existuje v IN: {path}")
-        relevant = {path, *file.get("dependencies", [])}
-        for source in relevant:
-            if source in (self.cfg.skip_paths or []):
-                continue
-            item = source_items.get(source)
-            if item is None:
-                continue
-            source_path = safe_join_under_root(root, source)
-            if sha256_file(source_path) != item.sha256:
-                raise ContractError(f"IN se od skenu změnil: {source}")
-            with open(source_path, encoding="utf-8") as stream:
-                originals[source] = stream.read()
-        target = safe_join_under_root(self.cfg.out_dir, path)
-        if os.path.isfile(target):
-            overwrite_hashes[path] = sha256_file(target)
-    originals_path = self.log.find_json("manifests", "response_modify_originals") if self._response_journal else None
-    if originals_path:
-        saved_originals = json.loads(Path(originals_path).read_text(encoding="utf-8"))
-        originals, overwrite_hashes = saved_originals["originals"], saved_originals["overwrite_hashes"]
-    elif self._response_journal:
-        self.log.save_json("manifests", "response_modify_originals", {
-            "originals": originals, "overwrite_hashes": overwrite_hashes,
-        })
-    self._delivery_originals = originals
-    self._delivery_overwrite_hashes = overwrite_hashes
-    if self.cfg.send_as_c and touched:
-        manifest = build_batch_manifest(
-            self.log.run_id, self.cfg.prompt, plan, struct, self.cfg.model,
-            self.cfg.temperature, [file["path"] for file in touched],
-            requirements=self._delivery_snapshot["requirements"],
-            maximum_quality=self.cfg.maximum_quality, mode="MODIFY", originals=originals,
-            recovery_instruction=self.cfg.recovery_instruction,
-            run_config=self.cfg, expected_target_hashes=overwrite_hashes)
-        manifest["overwrite_hashes"] = overwrite_hashes
-        manifest["dry_run"] = bool(self.cfg.dry_run)
-        manifest["versing"] = bool(self.cfg.versing)
-        return self._submit_generate_batch(client, manifest)
-
-    from ..context_compiler import ContextCompiler
-    compiler = ContextCompiler(self._delivery_snapshot)
-    wave_rank = {
-        path: wave_index
-        for wave_index, wave in enumerate(compiler.graph.get("waves") or [])
-        for path in wave
-    }
-    total_files = len(touched)
-    chain_prev_id = ""
-    out_files: list[dict[str, Any]] = []
-    self._delivery_verified_artifacts = {}
-    generation_order = sorted(
-        [
-            row for row in touched_raw
-            if row in touched or row["path"] in (self.cfg.skip_paths or [])
-        ],
-        key=lambda row: (wave_rank.get(row["path"], 10**9), row["path"]),
+    return _run_v3_modify_production(
+        self,
+        client,
+        diag_file_ids,
+        plan,
+        struct,
+        resp2_id,
+        root,
+        up_items,
+        tools,
+        supports_fs,
+        vs_id,
     )
-    for i, tf in enumerate(generation_order, start=1):
-        self._check_stop()
-        path = tf.get("path", "")
-        if path in (self.cfg.skip_paths or []):
-            if self._response_journal and path in self._response_file_ids:
-                chain_prev_id = self._response_file_ids[path]
-            continue
-        action = tf.get("action", "modify")
-        self._progress_stage = "B3"
-        self.progress_event.emit(ProgressEvent("B3", completed=i - 1, total=total_files, unit="souborů", detail=str(path)))
-        self._set(50 + int(35 * (i - 1) / max(1, len(touched))), 0, f"B3: {'upravuji' if action == 'modify' else 'přidávám'} {path} ({i}/{total_files})")
-        content, last_resp_id = self._gen_file_chunks(
-            client,
-            prev_id=chain_prev_id,
-            contract="B3_FILE",
-            path=path,
-            action=action,
-            diag_file_ids=diag_file_ids,
-            tools=tools if supports_fs else None,
-        )
-        if last_resp_id:
-            chain_prev_id = last_resp_id
-        out_files.append({"path": path, "content": content, "action": action})
-        self.subprogress.emit(int(i * 100 / max(1, total_files)))
-        self.progress_event.emit(ProgressEvent("B3", completed=i, total=total_files, unit="souborů", detail=str(path)))
-
-    self._verify_completed_files()
-    saved_map = self._save_out_files(out_files)
-    if omitted:
-        self.log.update_state({"missing_deliverables": omitted})
-    return {"mode": "MODIFY", "plan": plan, "structure": struct, "saved": saved_map,
-            "response_id": resp2_id, "vector_store_id": vs_id, "supports_file_search": supports_fs,
-            "status": "partial" if omitted else "dry_run" if saved_map.get("dry_run") else "files_complete_unverified",
-            "dry_run": bool(saved_map.get("dry_run")), "missing_deliverables": omitted}
 
 # Režim QA.
 
