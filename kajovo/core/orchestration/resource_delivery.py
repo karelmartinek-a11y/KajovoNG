@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice
@@ -668,3 +669,193 @@ def dispatch_resource_target(
         "producer": producer,
         "staged": row,
     }
+
+
+def advance_batch_resources(
+    client,
+    run_dir: str | Path,
+    state: dict[str, Any],
+    manifest: dict[str, Any],
+    settings,
+) -> dict[str, Any]:
+    """Advance ready non-text targets after a batch wave without resubmitting text."""
+    from ..runlog import RunLogger
+
+    run_root = Path(run_dir).resolve()
+    graph = manifest["snapshot"]["structure"]
+    files = {
+        str(row["path"]): row for row in graph["spine"]["files"]
+    }
+    production_actions = (
+        {"generate"} if graph["mode"] == "GENERATE" else {"add", "modify"}
+    )
+    resource_targets = {
+        path
+        for path, row in files.items()
+        if row.get("action") in production_actions and row.get("kind") != "text"
+    }
+    excluded = {
+        str(row.get("path") or "")
+        for row in manifest.get("excluded_scope", [])
+        if isinstance(row, dict)
+    }
+    resource_targets -= excluded
+    if not resource_targets:
+        state["resource_completed_paths"] = []
+        state["resource_pending_paths"] = []
+        return state
+
+    log = RunLogger(
+        str(run_root.parent),
+        run_root.name,
+        project_name=str(state.get("project") or "NO_PROJECT"),
+        resume=True,
+        resume_import=True,
+    )
+    ui = dict(state.get("ui_state") or {})
+    run_config = dict(state.get("run_config_v2") or {})
+    cfg = SimpleNamespace(
+        mode=str(manifest.get("mode") or run_config.get("workflow") or "GENERATE"),
+        out_dir=str(state.get("out_dir") or ui.get("out_dir") or ""),
+        in_dir=str(ui.get("in_dir") or ""),
+        dry_run=bool(manifest.get("dry_run") or run_config.get("dry_run")),
+        skip_paths=list(ui.get("skip_paths") or []),
+        skip_exts=list(ui.get("skip_exts") or []),
+        completed_hashes=dict(ui.get("completed_hashes") or {}),
+        maximum_quality=bool(
+            run_config.get("quality") == "maximum"
+            or ui.get("maximum_quality")
+        ),
+        auto_repair=str(run_config.get("auto_repair") or "off"),
+        verification_profile_ids=list(
+            run_config.get("verification_profile_ids") or []
+        ),
+        stop_after_plan=False,
+        send_as_c=True,
+        model=str(ui.get("model") or ""),
+        model_a1=str(ui.get("model_a1") or ""),
+        model_a2=str(ui.get("model_a2") or ""),
+        model_a3=str(ui.get("model_a3") or ""),
+        execution_approval_id=str(
+            (state.get("execution_authorization") or {}).get("approval_id")
+            or ui.get("execution_approval_id")
+            or f"user-start:{run_root.name}"
+        ),
+    )
+    worker = SimpleNamespace(
+        log=log,
+        cfg=cfg,
+        source_context={},
+        _delivery_snapshot={
+            "requirements": manifest["snapshot"].get("requirements") or {},
+            "plan": manifest["snapshot"].get("plan") or {},
+            "structure": graph,
+        },
+        _delivery_expected_target_hashes={
+            **dict(manifest.get("resource_expected_target_hashes") or {}),
+            **dict(manifest["snapshot"].get("expected_target_hashes") or {}),
+        },
+        _resource_staged_files={
+            str(row["path"]): row
+            for row in state.get("resource_staged_files", [])
+            if isinstance(row, dict) and row.get("path")
+        },
+        _resource_states=dict(state.get("resource_states") or {}),
+    )
+
+    generated_text: dict[str, str] = {}
+    staged_rows = [
+        row
+        for row in state.get("staged_files", [])
+        if isinstance(row, dict) and row.get("path")
+    ]
+    for row in staged_rows:
+        path = str(row["path"])
+        target = files.get(path)
+        if not target or target.get("kind") != "text":
+            continue
+        relative = row.get("staged_path")
+        if not isinstance(relative, str):
+            continue
+        source = (run_root / relative).resolve()
+        try:
+            source.relative_to(run_root)
+        except ValueError:
+            continue
+        if source.is_file():
+            try:
+                generated_text[path] = source.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                pass
+
+    completed = {
+        path
+        for path, row in files.items()
+        if row.get("action") == "preserve"
+    }
+    completed.update(
+        str(path) for path in state.get("resource_completed_paths", [])
+    )
+    completed.update(
+        str(row["path"])
+        for row in staged_rows
+        if str(row.get("path") or "") in files
+    )
+    completed.update(
+        str(path)
+        for path in manifest.get("completed_dependency_targets", [])
+    )
+
+    pending = resource_targets - completed
+    waiting: set[str] = set()
+    while pending:
+        ready = sorted(
+            path
+            for path in pending
+            if set(files[path].get("dependencies", [])) <= completed
+        )
+        if not ready:
+            break
+        for path in ready:
+            result = dispatch_resource_target(
+                worker,
+                client,
+                graph,
+                path,
+                generated_text=generated_text,
+            )
+            pending.remove(path)
+            if result["status"] == "completed_unverified":
+                completed.add(path)
+            else:
+                waiting.add(path)
+
+    pending.update(waiting)
+    resource_rows = [
+        worker._resource_staged_files[path]
+        for path in sorted(worker._resource_staged_files)
+    ]
+    state["resource_staged_files"] = resource_rows
+    state["resource_states"] = worker._resource_states
+    state["resource_completed_paths"] = sorted(resource_targets & completed)
+    state["resource_pending_paths"] = sorted(pending)
+
+    merged = {
+        str(row["path"]): row
+        for row in state.get("staged_files", [])
+        if isinstance(row, dict) and row.get("path")
+    }
+    merged.update(
+        {str(row["path"]): row for row in resource_rows}
+    )
+    state["staged_files"] = [merged[path] for path in sorted(merged)]
+    log.update_state(
+        {
+            "resource_staged_files": resource_rows,
+            "resource_states": worker._resource_states,
+            "resource_completed_paths": state["resource_completed_paths"],
+            "resource_pending_paths": state["resource_pending_paths"],
+            "staged_files": state["staged_files"],
+        }
+    )
+    return state
