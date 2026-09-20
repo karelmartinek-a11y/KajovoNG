@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QDialog, QFileDialog, QListWidget, QPlainTextEdit, QTabWidget, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog, QFileDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QTabWidget, QWidget
 
 from kajovo.core.project_git import ProjectGit
 from .components import Form, PathInput, action, actions, caption, confirm, vertical
@@ -96,10 +97,19 @@ class VersionsPage(QWidget):
         self.status.setPlainText(result["status"])
         self.remote.setText(result["remote"])
         self.tags.clear()
-        self.tags.addItems(result["tags"])
+        types = result.get("milestone_types") or {}
+        for name in result["tags"]:
+            legacy = types.get(name) == "legacy_commit_only"
+            item = QListWidgetItem(
+                name + (" · legacy: jen commit" if legacy else " · snapshot")
+            )
+            item.setData(Qt.UserRole, name)
+            self.tags.addItem(item)
         self.files.clear()
         self.files.addItems(result["files"])
-        self.notice.setText("Stav projektu byl načten.")
+        self.notice.setText(
+            result.get("milestone_notice") or "Stav projektu byl načten."
+        )
 
     def refresh(self):
         self.execute("Načtení projektu", lambda service: service.snapshot())
@@ -112,7 +122,8 @@ class VersionsPage(QWidget):
         self.execute("Odeslání změn" if push else "Stažení změn", lambda service: service.synchronize(push))
 
     def tag(self):
-        return self.tags.currentItem().text() if self.tags.currentItem() else ""
+        item = self.tags.currentItem()
+        return str(item.data(Qt.UserRole) or "") if item else ""
 
     def create_tag(self):
         dialog = ValueDialog("Nový milník", "Název milníku", parent=self)
