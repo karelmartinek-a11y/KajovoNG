@@ -731,6 +731,9 @@ class CascadeRunExecutor:
         return {"staged": staged, "out_dir": ""}
 
     def _publish_cascade_outputs(self) -> dict[str, Any] | None:
+        logger = self.logger
+        if logger is None:
+            raise RuntimeError("Cascade logger není inicializovaný.")
         staged_map = getattr(self, "_cascade_staged_files", {}) or {}
         if not staged_map:
             return None
@@ -749,12 +752,12 @@ class CascadeRunExecutor:
             staged,
             out_dir,
             expected,
-            run_dir=self.logger.paths.run_dir,
+            run_dir=logger.paths.run_dir,
         )
         report = commit_publish(
-            plan, run_dir=self.logger.paths.run_dir
+            plan, run_dir=logger.paths.run_dir
         )
-        self.logger.update_state(
+        logger.update_state(
             {
                 "published_files": report["published"],
                 "publish_report": report,
@@ -847,8 +850,11 @@ class CascadeRunExecutor:
             row["path"]: row for row in stage_report["staged"]
         }
 
+        logger = self.logger
+        if logger is None:
+            raise RuntimeError("Cascade logger není inicializovaný.")
         result: dict[str, dict[str, str]] = {}
-        run_root = Path(self.logger.paths.run_dir).resolve()
+        run_root = Path(logger.paths.run_dir).resolve()
         for rel in expected:
             staged_row = staged_by_path[rel]
             staged_path = (run_root / staged_row["staged_path"]).resolve()
@@ -1216,7 +1222,10 @@ class CascadeRunExecutor:
             staged_by_path = {
                 row["path"]: row for row in stage_report["staged"]
             }
-            run_root = Path(self.logger.paths.run_dir).resolve()
+            logger = self.logger
+            if logger is None:
+                raise RuntimeError("Cascade logger není inicializovaný.")
+            run_root = Path(logger.paths.run_dir).resolve()
             for output, _row in file_rows:
                 rel = output.file_name
                 staged_row = staged_by_path[rel]
