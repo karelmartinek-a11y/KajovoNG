@@ -33,6 +33,7 @@ class DeliveryContext:
     subprogress_emit: EmitSignal
     overwrite_guard_enabled: bool
     overwrite_hashes: Mapping[str, str | None] | None = None
+    expected_target_hashes: Mapping[str, str | None] | None = None
 
 
 def _expected_target_hash(
@@ -47,8 +48,26 @@ def _expected_target_hash(
     destination = safe_join_under_root(out_dir, relative)
     current_hash = sha256_file(destination) if os.path.isfile(destination) else None
 
+    frozen = context.expected_target_hashes
+    if frozen is not None:
+        if relative not in frozen:
+            raise ContractError(
+                f"Chybí původní očekávaný stav cíle: {relative}"
+            )
+        expected = frozen[relative]
+        if current_hash != expected:
+            raise ContractError(
+                f"OUT se během generování změnil; publikace je zablokována: {relative}"
+            )
+        return expected
+
     if cfg.mode == "MODIFY" and context.overwrite_guard_enabled:
-        expected = (context.overwrite_hashes or {}).get(relative)
+        guards = context.overwrite_hashes or {}
+        if relative not in guards:
+            raise ContractError(
+                f"Chybí původní hash MODIFY cíle: {relative}"
+            )
+        expected = guards[relative]
         if current_hash != expected:
             raise ContractError(
                 f"OUT se během generování změnil; publikace je zablokována: {relative}"
