@@ -57,6 +57,7 @@ def _save_out_files(self: RunContext, files: list[dict[str, Any]]) -> dict[str, 
         expected_target_hashes=getattr(
             self, "_delivery_expected_target_hashes", None
         ),
+        additional_staged=getattr(self, "_resource_staged_files", None),
     )
     self._progress_stage = "Ukládání"
     return save_out_files(context, files)
