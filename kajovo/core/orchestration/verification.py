@@ -436,12 +436,32 @@ def build_verification_candidate(
         from ..run_bundle import RunBundle
 
         bundle = RunBundle(run_root)
+        legacy_reapproved: dict[str, str] = {}
+        for artifact in bundle.artifacts():
+            if (
+                artifact.get("role") != "manifest"
+                or artifact.get("reconstruction_role")
+                != "legacy_source_reapproval_v1"
+            ):
+                continue
+            manifest_rel = str(artifact.get("path_in_bundle") or "")
+            manifest_path = (run_root / manifest_rel).resolve()
+            try:
+                manifest_path.relative_to(run_root)
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            for row in payload.get("approved") or []:
+                if isinstance(row, dict) and row.get("path") and row.get("sha256"):
+                    legacy_reapproved[str(row["path"])] = str(row["sha256"])
+
         baseline: list[tuple[str, Path, str]] = []
         for artifact in bundle.artifacts():
             if artifact.get("role") != "in_project_file":
                 continue
             metadata = artifact.get("metadata") or {}
-            if metadata.get("policy_decision") not in {None, "approved"}:
+            decision = str(metadata.get("policy_decision") or "")
+            if decision and decision != "approved":
                 continue
             relative = str(
                 metadata.get("relative_path")
@@ -453,6 +473,11 @@ def build_verification_candidate(
                 or artifact.get("sha256")
                 or ""
             )
+            if decision != "approved" and legacy_reapproved.get(relative) != expected:
+                raise OrchestrationError(
+                    "VERIFY_BASELINE_UNAPPROVED",
+                    f"Legacy SourcePack nemá aktuální policy reapproval: {relative}",
+                )
             bundle_path = str(artifact.get("path_in_bundle") or "")
             if not relative or not expected or not bundle_path:
                 raise OrchestrationError(
