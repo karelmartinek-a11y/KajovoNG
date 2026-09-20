@@ -20,7 +20,7 @@ class RepairProposal:
     remote: bool
 
 
-def prepare_repair(directory, remote=False):
+def prepare_repair(directory, remote=False, expected_digest=""):
     root = Path(directory).resolve()
     expected = "run_this_script_repairme_kajovo.sh" if remote else "run_this_script_repairme_kajovo_windows.bat"
     paths = [path for path in root.iterdir() if path.name.casefold() == expected]
@@ -31,7 +31,12 @@ def prepare_repair(directory, remote=False):
     content = script.read_bytes()
     if not content:
         raise ValueError("Opravný skript je prázdný.")
-    return RepairProposal(root, script, content, description, hashlib.sha256(content).hexdigest(), remote)
+    digest = hashlib.sha256(content).hexdigest()
+    if expected_digest and digest != expected_digest:
+        raise ValueError(
+            "Publikovaný opravný skript neodpovídá evidovanému SHA-256."
+        )
+    return RepairProposal(root, script, content, description, digest, remote)
 
 
 def execute_repair(proposal, cfg):
@@ -57,3 +62,58 @@ def execute_repair(proposal, cfg):
     if result.returncode:
         raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
     return {"status": "completed", "text": "Opravný skript skončil bez chyby procesu; účinek ověřte diagnostikou.", "saved": [str(log)]}
+
+
+
+def published_repair_artifact(state, remote=False):
+    """Return a repair-script artifact only after an explicit successful publish."""
+    if not isinstance(state, dict) or state.get("dry_run"):
+        return None
+    if state.get("publication_state") != "published_unverified":
+        return None
+    name = (
+        "run_this_script_repairme_kajovo.sh"
+        if remote
+        else "run_this_script_repairme_kajovo_windows.bat"
+    )
+    matches = [
+        row for row in (state.get("published_files") or [])
+        if isinstance(row, dict)
+        and str(row.get("path") or "").casefold() == name.casefold()
+        and row.get("sha256")
+    ]
+    if len(matches) != 1:
+        return None
+    return {
+        "path": str(matches[0]["path"]),
+        "sha256": str(matches[0]["sha256"]),
+        "remote": bool(remote),
+    }
+
+
+def claim_published_repair_offer(run_dir, state, remote=False):
+    """Cross-process one-shot claim keyed by the exact published script hash."""
+    artifact = published_repair_artifact(state, remote)
+    if artifact is None:
+        return None
+    root = Path(run_dir).resolve()
+    claims = root / "manifests" / "repair_offer_claims"
+    claims.mkdir(parents=True, exist_ok=True)
+    token = hashlib.sha256(
+        (
+            ("remote:" if remote else "local:")
+            + artifact["path"]
+            + ":"
+            + artifact["sha256"]
+        ).encode("utf-8")
+    ).hexdigest()
+    claim = claims / token
+    try:
+        fd = os.open(str(claim), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return None
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(artifact["sha256"] + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    return artifact
