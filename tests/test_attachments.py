@@ -1,6 +1,7 @@
 from unittest.mock import Mock
 
 import pytest
+from PIL import Image
 
 from kajovo.core.compat import MAX_INPUT_FILE_BYTES, is_compatible_path, validate_input_file_sizes
 from kajovo.core.openai_client import OpenAIClient
@@ -95,3 +96,34 @@ def test_source_pack_blocks_when_remote_bytes_cannot_be_frozen(tmp_path):
         freeze_run_sources(
             worker.cfg, worker.settings, worker.log, client=client
         )
+
+
+def test_source_pack_approves_validated_project_image_as_asset(tmp_path):
+    worker = make_worker(tmp_path, "MODIFY")
+    project = tmp_path / "project"
+    project.mkdir()
+    image_path = project / "logo.png"
+    Image.new("RGB", (8, 8), (255, 255, 255)).save(image_path, format="PNG")
+    worker.cfg.in_dir = str(project)
+
+    pack = freeze_run_sources(
+        worker.cfg, worker.settings, worker.log, client=Mock()
+    )
+    image_sources = [source for source in pack.sources if source.kind == "image"]
+    assert len(image_sources) == 1
+    assert image_sources[0].media_type == "image/png"
+
+    evidence = source_context(worker.log, pack)
+    assert evidence["image_slots"][0]["slot_id"] == image_sources[0].id
+    provider = next(
+        row for row in evidence["_provider_inputs"]
+        if row["source_id"] == image_sources[0].id
+    )
+    assert provider["filename"] == "logo.png"
+
+    artifact = next(
+        row for row in worker.log.bundle.artifacts()
+        if row["role"] == "in_project_file"
+        and (row.get("metadata") or {}).get("relative_path") == "logo.png"
+    )
+    assert artifact["metadata"]["policy_decision"] == "approved_asset"
