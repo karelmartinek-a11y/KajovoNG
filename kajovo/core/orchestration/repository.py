@@ -1,4 +1,4 @@
-"""SQLite orchestration repository with transactional budget/effect identity."""
+"""SQLite orchestration repository for immutable work and provider-operation identity."""
 from __future__ import annotations
 
 import json
@@ -10,21 +10,103 @@ from typing import Any
 
 from .contracts import canonical_sha256
 from .errors import OrchestrationError
+from .work_order import attempt_identity
 
 _SCHEMA = """
 PRAGMA foreign_keys=ON;
-CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY, installed_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS runs(run_id TEXT PRIMARY KEY, lineage_id TEXT NOT NULL, scope_hash TEXT NOT NULL, policy_hash TEXT NOT NULL, config_json TEXT NOT NULL CHECK(json_valid(config_json)), status TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, approval_id TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS work_orders(work_order_hash TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id), task_id TEXT NOT NULL, attempt_no INTEGER NOT NULL CHECK(attempt_no BETWEEN 1 AND 3), body_ref TEXT NOT NULL, input_hash TEXT NOT NULL, schema_hash TEXT NOT NULL, prompt_hash TEXT NOT NULL, model TEXT NOT NULL, route TEXT NOT NULL, UNIQUE(run_id,task_id,attempt_no));
-CREATE TABLE IF NOT EXISTS reservations(reservation_id TEXT PRIMARY KEY, work_order_hash TEXT NOT NULL UNIQUE REFERENCES work_orders(work_order_hash), state TEXT NOT NULL CHECK(state IN ('reserved','submitted','unknown','settled','released')), cost_microusd INTEGER CHECK(cost_microusd>=0), input_limit INTEGER NOT NULL CHECK(input_limit>=0), output_limit INTEGER NOT NULL CHECK(output_limit>=0), provider_id TEXT, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS provider_operations(attempt_id TEXT PRIMARY KEY, work_order_hash TEXT NOT NULL REFERENCES work_orders(work_order_hash), endpoint TEXT NOT NULL, request_hash TEXT NOT NULL, state TEXT NOT NULL, provider_id TEXT, remote_input_file_id TEXT, raw_response_ref TEXT, UNIQUE(endpoint,provider_id));
-CREATE TABLE IF NOT EXISTS usage_records(provider TEXT NOT NULL, provider_item_id TEXT NOT NULL, attempt_id TEXT NOT NULL REFERENCES provider_operations(attempt_id), usage_json TEXT NOT NULL CHECK(json_valid(usage_json)), price_snapshot_hash TEXT, actual_cost_microusd INTEGER CHECK(actual_cost_microusd>=0), PRIMARY KEY(provider,provider_item_id));
-CREATE TABLE IF NOT EXISTS task_events(event_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id), task_id TEXT, sequence INTEGER NOT NULL, type TEXT NOT NULL, payload_ref TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(run_id,sequence));
-CREATE TABLE IF NOT EXISTS artifacts(artifact_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id), kind TEXT NOT NULL, contract_name TEXT NOT NULL, payload_sha256 TEXT NOT NULL, envelope_ref TEXT NOT NULL, validation_ref TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS artifact_dependencies(artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id), dependency_id TEXT NOT NULL REFERENCES artifacts(artifact_id), dependency_hash TEXT NOT NULL, PRIMARY KEY(artifact_id,dependency_id));
-CREATE TABLE IF NOT EXISTS verification_reports(report_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id), target_hash TEXT NOT NULL, profile_hash TEXT NOT NULL, result TEXT NOT NULL, report_ref TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS domain_outbox(event_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id), domain TEXT NOT NULL, target_id TEXT NOT NULL, expected_revision INTEGER NOT NULL, payload_ref TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','applied','conflict')));
+CREATE TABLE IF NOT EXISTS schema_version(
+    version INTEGER PRIMARY KEY,
+    installed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS runs(
+    run_id TEXT PRIMARY KEY,
+    lineage_id TEXT NOT NULL,
+    scope_hash TEXT NOT NULL,
+    policy_hash TEXT NOT NULL,
+    config_json TEXT NOT NULL CHECK(json_valid(config_json)),
+    status TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0,
+    approval_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS work_orders(
+    work_order_hash TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    task_id TEXT NOT NULL,
+    attempt_no INTEGER NOT NULL CHECK(attempt_no BETWEEN 1 AND 3),
+    body_ref TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    schema_hash TEXT NOT NULL,
+    prompt_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    route TEXT NOT NULL,
+    UNIQUE(run_id,task_id,attempt_no)
+);
+CREATE TABLE IF NOT EXISTS provider_operations(
+    attempt_id TEXT PRIMARY KEY,
+    work_order_hash TEXT NOT NULL REFERENCES work_orders(work_order_hash),
+    endpoint TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(
+        state IN ('prepared','submission_unknown','submitted','completed','not_submitted')
+    ),
+    provider_id TEXT,
+    remote_input_file_id TEXT,
+    raw_response_ref TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_records(
+    provider TEXT NOT NULL,
+    provider_item_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL REFERENCES provider_operations(attempt_id),
+    usage_json TEXT NOT NULL CHECK(json_valid(usage_json)),
+    PRIMARY KEY(provider,provider_item_id,attempt_id)
+);
+CREATE TABLE IF NOT EXISTS task_events(
+    event_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    task_id TEXT,
+    sequence INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    payload_ref TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id,sequence)
+);
+CREATE TABLE IF NOT EXISTS artifacts(
+    artifact_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    kind TEXT NOT NULL,
+    contract_name TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    envelope_ref TEXT NOT NULL,
+    validation_ref TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifact_dependencies(
+    artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+    dependency_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+    dependency_hash TEXT NOT NULL,
+    PRIMARY KEY(artifact_id,dependency_id)
+);
+CREATE TABLE IF NOT EXISTS verification_reports(
+    report_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    target_hash TEXT NOT NULL,
+    profile_hash TEXT NOT NULL,
+    result TEXT NOT NULL,
+    report_ref TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS domain_outbox(
+    event_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    domain TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    expected_revision INTEGER NOT NULL,
+    payload_ref TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','applied','conflict'))
+);
 CREATE INDEX IF NOT EXISTS idx_provider_state ON provider_operations(state);
+CREATE INDEX IF NOT EXISTS idx_provider_id ON provider_operations(provider_id);
 CREATE INDEX IF NOT EXISTS idx_runs_lineage ON runs(lineage_id);
 CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id,sequence);
 """
@@ -34,16 +116,227 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _table_exists(db: sqlite3.Connection, name: str) -> bool:
+    return db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (name,),
+    ).fetchone() is not None
+
+
+def _columns(db: sqlite3.Connection, name: str) -> set[str]:
+    if not _table_exists(db, name):
+        return set()
+    return {str(row[1]) for row in db.execute(f"PRAGMA table_info({name})")}
+
+
+def _route_endpoint(route: str) -> str:
+    if route == "responses_batch":
+        return "/v1/batches"
+    if route in {"image_live", "image_batch"}:
+        return "/v1/images/edits"
+    return "/v1/responses"
+
+
+def _migrate_legacy_economic_schema(db: sqlite3.Connection) -> None:
+    """LEGACY-DATA-READER: převede starou SQLite evidenci na nefinanční V2 schema."""
+    legacy_reservations = _table_exists(db, "reservations")
+    legacy_usage = {
+        "price_snapshot_hash",
+        "actual_cost_microusd",
+    } & _columns(db, "usage_records")
+    provider_columns = _columns(db, "provider_operations")
+    legacy_provider = bool(provider_columns) and "created_at" not in provider_columns
+    if not (legacy_reservations or legacy_usage or legacy_provider):
+        return
+
+    old_provider_rows: list[sqlite3.Row] = []
+    old_usage_rows: list[sqlite3.Row] = []
+    old_reservation_rows: list[sqlite3.Row] = []
+    db.row_factory = sqlite3.Row
+    if _table_exists(db, "provider_operations"):
+        old_provider_rows = list(db.execute("SELECT * FROM provider_operations"))
+    if _table_exists(db, "usage_records"):
+        old_usage_rows = list(db.execute("SELECT * FROM usage_records"))
+    if legacy_reservations:
+        old_reservation_rows = list(db.execute("SELECT * FROM reservations"))
+
+    work_rows = {
+        str(row["work_order_hash"]): row
+        for row in db.execute(
+            "SELECT work_order_hash,run_id,task_id,attempt_no,body_ref,route FROM work_orders"
+        )
+    }
+    old_attempt_to_work = {
+        str(row["attempt_id"]): str(row["work_order_hash"])
+        for row in old_provider_rows
+        if row["attempt_id"] and row["work_order_hash"]
+    }
+    provider_by_work = {
+        str(row["work_order_hash"]): row
+        for row in old_provider_rows
+        if row["work_order_hash"]
+    }
+    reservation_by_work = {
+        str(row["work_order_hash"]): row
+        for row in old_reservation_rows
+        if row["work_order_hash"]
+    }
+
+    db.executescript(
+        """
+        DROP TABLE IF EXISTS provider_operations_v2_migration;
+        DROP TABLE IF EXISTS usage_records_v2_migration;
+        CREATE TABLE provider_operations_v2_migration(
+            attempt_id TEXT PRIMARY KEY,
+            work_order_hash TEXT NOT NULL REFERENCES work_orders(work_order_hash),
+            endpoint TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(
+                state IN ('prepared','submission_unknown','submitted','completed','not_submitted')
+            ),
+            provider_id TEXT,
+            remote_input_file_id TEXT,
+            raw_response_ref TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE usage_records_v2_migration(
+            provider TEXT NOT NULL,
+            provider_item_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL REFERENCES provider_operations_v2_migration(attempt_id),
+            usage_json TEXT NOT NULL CHECK(json_valid(usage_json)),
+            PRIMARY KEY(provider,provider_item_id,attempt_id)
+        );
+        """
+    )
+
+    migrated_attempts: dict[str, str] = {}
+    for work_hash, work in work_rows.items():
+        provider = provider_by_work.get(work_hash)
+        legacy = reservation_by_work.get(work_hash)
+        if provider is None and legacy is None:
+            continue
+        new_attempt = attempt_identity(
+            str(work["run_id"]),
+            str(work["task_id"]),
+            int(work["attempt_no"]),
+        )
+        old_state = str(provider["state"]) if provider is not None else str(legacy["state"])
+        state_map = {
+            "reserved": "prepared",
+            "unknown": "submission_unknown",
+            "released": "not_submitted",
+            "settled": "completed",
+        }
+        state = state_map.get(old_state, old_state)
+        if state not in {
+            "prepared", "submission_unknown", "submitted", "completed", "not_submitted"
+        }:
+            state = "submission_unknown"
+        provider_id = (
+            provider["provider_id"]
+            if provider is not None and "provider_id" in provider.keys()
+            else (legacy["provider_id"] if legacy is not None else None)
+        )
+        endpoint = (
+            str(provider["endpoint"])
+            if provider is not None and provider["endpoint"]
+            else _route_endpoint(str(work["route"]))
+        )
+        request_hash = (
+            str(provider["request_hash"])
+            if provider is not None and provider["request_hash"]
+            else str(work["body_ref"])
+        )
+        remote_input = (
+            provider["remote_input_file_id"]
+            if provider is not None and "remote_input_file_id" in provider.keys()
+            else None
+        )
+        raw_ref = (
+            provider["raw_response_ref"]
+            if provider is not None and "raw_response_ref" in provider.keys()
+            else None
+        )
+        now = _now()
+        db.execute(
+            """
+            INSERT OR REPLACE INTO provider_operations_v2_migration(
+                attempt_id,work_order_hash,endpoint,request_hash,state,provider_id,
+                remote_input_file_id,raw_response_ref,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                new_attempt,
+                work_hash,
+                endpoint,
+                request_hash,
+                state,
+                provider_id,
+                remote_input,
+                raw_ref,
+                now,
+                now,
+            ),
+        )
+        migrated_attempts[work_hash] = new_attempt
+
+    for row in old_usage_rows:
+        work_hash = old_attempt_to_work.get(str(row["attempt_id"]))
+        new_attempt = migrated_attempts.get(work_hash or "")
+        if not new_attempt:
+            continue
+        db.execute(
+            """
+            INSERT OR REPLACE INTO usage_records_v2_migration(
+                provider,provider_item_id,attempt_id,usage_json
+            ) VALUES(?,?,?,?)
+            """,
+            (
+                row["provider"],
+                row["provider_item_id"],
+                new_attempt,
+                row["usage_json"],
+            ),
+        )
+        db.execute(
+            """
+            UPDATE provider_operations_v2_migration
+            SET state='completed',updated_at=?
+            WHERE attempt_id=?
+            """,
+            (_now(), new_attempt),
+        )
+
+    if _table_exists(db, "usage_records"):
+        db.execute("DROP TABLE usage_records")
+    if _table_exists(db, "provider_operations"):
+        db.execute("DROP TABLE provider_operations")
+    if legacy_reservations:
+        db.execute("DROP TABLE reservations")
+    db.execute(
+        "ALTER TABLE provider_operations_v2_migration RENAME TO provider_operations"
+    )
+    db.execute("ALTER TABLE usage_records_v2_migration RENAME TO usage_records")
+    db.row_factory = None
+
+
 class OrchestrationRepository:
     def __init__(self, path: str | Path):
         self.path = str(Path(path))
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
+        db = sqlite3.connect(self.path, timeout=10)
+        try:
+            db.execute("PRAGMA foreign_keys=OFF")
+            _migrate_legacy_economic_schema(db)
             db.executescript(_SCHEMA)
             db.execute(
-                "INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(1,?)",
+                "INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(2,?)",
                 (_now(),),
             )
+            db.commit()
+        finally:
+            db.close()
 
     @contextmanager
     def connect(self):
@@ -72,332 +365,318 @@ class OrchestrationRepository:
         approval_id: str,
         status: str = "preparing",
     ) -> None:
-        payload = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        payload = json.dumps(
+            config, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT lineage_id,scope_hash,policy_hash,config_json,approval_id FROM runs WHERE run_id=?",
+                """
+                SELECT lineage_id,scope_hash,policy_hash,config_json,approval_id
+                FROM runs WHERE run_id=?
+                """,
                 (run_id,),
             ).fetchone()
             expected = (lineage_id, scope_hash, policy_hash, payload, approval_id)
             if row and tuple(row) != expected:
                 db.rollback()
-                raise OrchestrationError("RUN_ID_CONFLICT", "Run ID má jinou zmrazenou konfiguraci.")
+                raise OrchestrationError(
+                    "RUN_ID_CONFLICT", "Run ID má jinou zmrazenou konfiguraci."
+                )
             if not row:
                 db.execute(
-                    "INSERT INTO runs(run_id,lineage_id,scope_hash,policy_hash,config_json,status,approval_id) VALUES(?,?,?,?,?,?,?)",
-                    (run_id, lineage_id, scope_hash, policy_hash, payload, status, approval_id),
+                    """
+                    INSERT INTO runs(
+                        run_id,lineage_id,scope_hash,policy_hash,config_json,status,approval_id
+                    ) VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (
+                        run_id,
+                        lineage_id,
+                        scope_hash,
+                        policy_hash,
+                        payload,
+                        status,
+                        approval_id,
+                    ),
                 )
             db.commit()
 
-    def register_work_order(self, order, *, body_ref: str, input_hash: str) -> None:
+    def register_work_order(self, order, *, body_ref: str, input_hash: str) -> str:
         value = order.to_dict() if hasattr(order, "to_dict") else dict(order)
         order_hash = getattr(order, "order_hash", None) or canonical_sha256(value)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT run_id,task_id,attempt_no,input_hash,schema_hash,prompt_hash,model,route FROM work_orders WHERE work_order_hash=?",
+                """
+                SELECT run_id,task_id,attempt_no,input_hash,schema_hash,prompt_hash,model,route
+                FROM work_orders WHERE work_order_hash=?
+                """,
                 (order_hash,),
             ).fetchone()
             expected = (
-                value["run_id"], value["task_id"], value["attempt_no"], input_hash,
-                value["schema_hash"], value["prompt_hash"], value["model"], value["route"],
+                value["run_id"],
+                value["task_id"],
+                value["attempt_no"],
+                input_hash,
+                value["schema_hash"],
+                value["prompt_hash"],
+                value["model"],
+                value["route"],
             )
-            if row and tuple(row) != expected:
-                db.rollback()
-                raise OrchestrationError("WORK_ORDER_CONFLICT", order_hash)
-            if not row:
-                db.execute(
-                    "INSERT INTO work_orders(work_order_hash,run_id,task_id,attempt_no,body_ref,input_hash,schema_hash,prompt_hash,model,route) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (order_hash, value["run_id"], value["task_id"], value["attempt_no"], body_ref, input_hash,
-                     value["schema_hash"], value["prompt_hash"], value["model"], value["route"]),
-                )
-            db.commit()
+            if row:
+                if tuple(row) != expected:
+                    db.rollback()
+                    raise OrchestrationError("WORK_ORDER_CONFLICT", order_hash)
+                db.commit()
+                return order_hash
 
-    def reserve(
+            legacy = db.execute(
+                """
+                SELECT work_order_hash,input_hash,schema_hash,prompt_hash,model,route
+                FROM work_orders WHERE run_id=? AND task_id=? AND attempt_no=?
+                """,
+                (value["run_id"], value["task_id"], value["attempt_no"]),
+            ).fetchone()
+            if legacy:
+                if tuple(legacy[1:]) != expected[3:]:
+                    db.rollback()
+                    raise OrchestrationError("WORK_ORDER_CONFLICT", str(legacy[0]))
+                db.commit()
+                return str(legacy[0])
+
+            db.execute(
+                """
+                INSERT INTO work_orders(
+                    work_order_hash,run_id,task_id,attempt_no,body_ref,input_hash,
+                    schema_hash,prompt_hash,model,route
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    order_hash,
+                    value["run_id"],
+                    value["task_id"],
+                    value["attempt_no"],
+                    body_ref,
+                    input_hash,
+                    value["schema_hash"],
+                    value["prompt_hash"],
+                    value["model"],
+                    value["route"],
+                ),
+            )
+            db.commit()
+            return order_hash
+
+    def prepare_provider_operation(
         self,
         *,
-        reservation_id: str,
+        attempt_id: str,
         work_order_hash: str,
-        cost_microusd: int | None,
-        input_limit: int,
-        output_limit: int,
-        max_cost_microusd: int | None,
-        max_input_tokens: int,
-        max_output_tokens: int,
-        max_paid_requests: int,
+        endpoint: str,
+        request_hash: str,
+        allow_existing: bool = False,
     ) -> bool:
         with self.connect() as db:
-            try:
-                db.execute("BEGIN IMMEDIATE")
-                existing = db.execute(
-                    "SELECT cost_microusd,input_limit,output_limit,state FROM reservations WHERE reservation_id=?",
-                    (reservation_id,),
-                ).fetchone()
-                expected = (cost_microusd, input_limit, output_limit)
-                if existing:
-                    if tuple(existing[:3]) != expected:
-                        raise OrchestrationError("RESERVATION_CONFLICT", reservation_id)
-                    db.commit()
-                    return False
-                run_id_row = db.execute(
-                    "SELECT run_id FROM work_orders WHERE work_order_hash=?",
-                    (work_order_hash,),
-                ).fetchone()
-                if not run_id_row:
-                    raise OrchestrationError("WORK_ORDER_UNKNOWN", work_order_hash)
-                run_id = run_id_row[0]
-                summary = db.execute(
-                    """
-                    SELECT COUNT(*),
-                           COALESCE(SUM(r.input_limit),0),
-                           COALESCE(SUM(r.output_limit),0),
-                           COALESCE(SUM(CASE WHEN r.state='released' THEN 0 ELSE r.cost_microusd END),0)
-                    FROM reservations r
-                    JOIN work_orders w ON w.work_order_hash=r.work_order_hash
-                    WHERE w.run_id=? AND r.state!='released'
-                    """,
-                    (run_id,),
-                ).fetchone()
-                count, input_used, output_used, cost_used = map(int, summary)
-                if count + 1 > max_paid_requests:
-                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit placených požadavků.")
-                if input_used + input_limit > max_input_tokens:
-                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit vstupních tokenů.")
-                if output_used + output_limit > max_output_tokens:
-                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit výstupních tokenů.")
-                if (
-                    max_cost_microusd is not None
-                    and cost_microusd is not None
-                    and cost_used + cost_microusd > max_cost_microusd
-                ):
-                    raise OrchestrationError("BUDGET_EXCEEDED", "Schválený cenový limit.")
-                db.execute(
-                    "INSERT INTO reservations(reservation_id,work_order_hash,state,cost_microusd,input_limit,output_limit,created_at) VALUES(?,?,?,?,?,?,?)",
-                    (reservation_id, work_order_hash, "reserved", cost_microusd, input_limit, output_limit, _now()),
-                )
-                db.commit()
-                return True
-            except Exception:
-                db.rollback()
-                raise
-
-
-    def reserve_many(
-        self,
-        rows: list[dict[str, Any]],
-        *,
-        max_cost_microusd: int | None,
-        max_input_tokens: int,
-        max_output_tokens: int,
-        max_paid_requests: int,
-    ) -> None:
-        if not rows:
-            return
-        with self.connect() as db:
-            try:
-                db.execute("BEGIN IMMEDIATE")
-                run_ids: set[str] = set()
-                new_rows: list[dict[str, Any]] = []
-                for row in rows:
-                    existing = db.execute(
-                        "SELECT cost_microusd,input_limit,output_limit FROM reservations WHERE reservation_id=?",
-                        (row["reservation_id"],),
-                    ).fetchone()
-                    expected = (
-                        row["cost_microusd"],
-                        row["input_limit"],
-                        row["output_limit"],
-                    )
-                    if existing:
-                        if tuple(existing) != expected:
-                            raise OrchestrationError(
-                                "RESERVATION_CONFLICT", row["reservation_id"]
-                            )
-                        continue
-                    run = db.execute(
-                        "SELECT run_id FROM work_orders WHERE work_order_hash=?",
-                        (row["work_order_hash"],),
-                    ).fetchone()
-                    if not run:
-                        raise OrchestrationError(
-                            "WORK_ORDER_UNKNOWN", row["work_order_hash"]
-                        )
-                    run_ids.add(str(run[0]))
-                    new_rows.append(row)
-                if len(run_ids) > 1:
-                    raise OrchestrationError(
-                        "BATCH_RUN_MISMATCH",
-                        "Jedna rezervace dávky nesmí míchat různé runy.",
-                    )
-                if not new_rows:
-                    db.commit()
-                    return
-                run_id = next(iter(run_ids))
-                summary = db.execute(
-                    """
-                    SELECT COUNT(*),
-                           COALESCE(SUM(r.input_limit),0),
-                           COALESCE(SUM(r.output_limit),0),
-                           COALESCE(SUM(CASE WHEN r.state='released' THEN 0 ELSE r.cost_microusd END),0)
-                    FROM reservations r
-                    JOIN work_orders w ON w.work_order_hash=r.work_order_hash
-                    WHERE w.run_id=? AND r.state!='released'
-                    """,
-                    (run_id,),
-                ).fetchone()
-                count, input_used, output_used, cost_used = map(int, summary)
-                proposed_input = sum(int(row["input_limit"]) for row in new_rows)
-                proposed_output = sum(int(row["output_limit"]) for row in new_rows)
-                proposed_known_cost = sum(
-                    int(row["cost_microusd"])
-                    for row in new_rows
-                    if row["cost_microusd"] is not None
-                )
-                if count + len(new_rows) > max_paid_requests:
-                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit placených požadavků.")
-                if input_used + proposed_input > max_input_tokens:
-                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit vstupních tokenů.")
-                if output_used + proposed_output > max_output_tokens:
-                    raise OrchestrationError("BUDGET_EXCEEDED", "Limit výstupních tokenů.")
-                if (
-                    max_cost_microusd is not None
-                    and cost_used + proposed_known_cost > max_cost_microusd
-                ):
-                    raise OrchestrationError("BUDGET_EXCEEDED", "Schválený cenový limit.")
-                for row in new_rows:
-                    db.execute(
-                        "INSERT INTO reservations(reservation_id,work_order_hash,state,cost_microusd,input_limit,output_limit,created_at) VALUES(?,?,?,?,?,?,?)",
-                        (
-                            row["reservation_id"],
-                            row["work_order_hash"],
-                            "reserved",
-                            row["cost_microusd"],
-                            row["input_limit"],
-                            row["output_limit"],
-                            _now(),
-                        ),
-                    )
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
-
-    def release(self, reservation_id: str) -> None:
-        with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT state FROM reservations WHERE reservation_id=?",
-                (reservation_id,),
+                """
+                SELECT work_order_hash,endpoint,request_hash,state
+                FROM provider_operations WHERE attempt_id=?
+                """,
+                (attempt_id,),
             ).fetchone()
-            if not row or row[0] != "reserved":
-                db.rollback()
-                raise OrchestrationError("RELEASE_UNSAFE", reservation_id)
+            expected = (work_order_hash, endpoint, request_hash)
+            if row:
+                if tuple(row[:3]) != expected:
+                    db.rollback()
+                    raise OrchestrationError("PROVIDER_OPERATION_CONFLICT", attempt_id)
+                if row[3] in {"submitted", "submission_unknown", "completed"}:
+                    if allow_existing:
+                        db.commit()
+                        return False
+                    db.rollback()
+                    raise OrchestrationError(
+                        "DUPLICATE_SUBMIT_BLOCKED",
+                        f"{attempt_id}: provider operace už mohla být odeslána.",
+                    )
+                db.execute(
+                    "UPDATE provider_operations SET state='prepared',updated_at=? WHERE attempt_id=?",
+                    (_now(), attempt_id),
+                )
+                db.commit()
+                return False
             db.execute(
-                "UPDATE reservations SET state='released' WHERE reservation_id=?",
-                (reservation_id,),
+                """
+                INSERT INTO provider_operations(
+                    attempt_id,work_order_hash,endpoint,request_hash,state,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?)
+                """,
+                (
+                    attempt_id,
+                    work_order_hash,
+                    endpoint,
+                    request_hash,
+                    "prepared",
+                    _now(),
+                    _now(),
+                ),
             )
             db.commit()
+            return True
 
-    def mark_submitted(self, reservation_id: str, provider_id: str | None, *, unknown: bool) -> None:
-        state = "unknown" if unknown else "submitted"
+    def mark_submission_started(self, attempt_id: str) -> None:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT state,provider_id FROM reservations WHERE reservation_id=?",
-                (reservation_id,),
+                "SELECT state FROM provider_operations WHERE attempt_id=?",
+                (attempt_id,),
             ).fetchone()
             if not row:
                 db.rollback()
-                raise OrchestrationError("RESERVATION_STATE", reservation_id)
-            current_state, current_provider = row
-            if (
-                current_provider
-                and provider_id
-                and current_provider != provider_id
-            ):
-                db.rollback()
-                raise OrchestrationError(
-                    "PROVIDER_ID_CONFLICT", reservation_id
-                )
-            if current_state == "settled":
-                # Recovery may replay the bookkeeping edge after the exact
-                # provider response has already been settled. Settlement is
-                # stronger evidence than submitted/unknown; never downgrade it.
+                raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+            if row[0] == "completed":
                 db.commit()
                 return
-            if current_state not in {"reserved", "submitted", "unknown"}:
+            if row[0] not in {"prepared", "not_submitted"}:
                 db.rollback()
-                raise OrchestrationError("RESERVATION_STATE", reservation_id)
+                raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
             db.execute(
-                "UPDATE reservations SET state=?,provider_id=COALESCE(provider_id,?) WHERE reservation_id=?",
-                (state, provider_id, reservation_id),
+                """
+                UPDATE provider_operations
+                SET state='submission_unknown',updated_at=?
+                WHERE attempt_id=?
+                """,
+                (_now(), attempt_id),
             )
             db.commit()
 
-    def settle(
+    def mark_submitted(
         self,
-        reservation_id: str,
+        attempt_id: str,
+        provider_id: str | None,
+        *,
+        unknown: bool,
+    ) -> None:
+        state = "submission_unknown" if unknown else "submitted"
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state,provider_id FROM provider_operations WHERE attempt_id=?",
+                (attempt_id,),
+            ).fetchone()
+            if not row:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+            current_state, current_provider = row
+            if current_provider and provider_id and current_provider != provider_id:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_ID_CONFLICT", attempt_id)
+            if current_state == "completed":
+                db.commit()
+                return
+            if current_state not in {
+                "prepared", "not_submitted", "submission_unknown", "submitted"
+            }:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
+            db.execute(
+                """
+                UPDATE provider_operations
+                SET state=?,provider_id=COALESCE(provider_id,?),updated_at=?
+                WHERE attempt_id=?
+                """,
+                (state, provider_id, _now(), attempt_id),
+            )
+            db.commit()
+
+    def mark_not_submitted(self, attempt_id: str) -> None:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state FROM provider_operations WHERE attempt_id=?",
+                (attempt_id,),
+            ).fetchone()
+            if not row:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+            if row[0] not in {"prepared", "submission_unknown", "not_submitted"}:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
+            db.execute(
+                """
+                UPDATE provider_operations
+                SET state='not_submitted',provider_id=NULL,updated_at=?
+                WHERE attempt_id=?
+                """,
+                (_now(), attempt_id),
+            )
+            db.commit()
+
+    def set_remote_input_file(self, attempt_id: str, file_id: str) -> None:
+        with self.connect() as db:
+            db.execute(
+                """
+                UPDATE provider_operations
+                SET remote_input_file_id=?,updated_at=?
+                WHERE attempt_id=?
+                """,
+                (file_id, _now(), attempt_id),
+            )
+
+    def record_usage(
+        self,
+        attempt_id: str,
         *,
         provider: str,
         provider_item_id: str,
         usage: dict[str, Any],
-        actual_cost_microusd: int | None,
-        price_snapshot_hash: str | None,
+        raw_response_ref: str | None = None,
     ) -> bool:
+        usage_json = json.dumps(
+            usage or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
         with self.connect() as db:
             try:
                 db.execute("BEGIN IMMEDIATE")
-                reservation = db.execute(
-                    "SELECT work_order_hash,state,cost_microusd,input_limit,output_limit "
-                    "FROM reservations WHERE reservation_id=?",
-                    (reservation_id,),
+                operation = db.execute(
+                    """
+                    SELECT state,provider_id FROM provider_operations WHERE attempt_id=?
+                    """,
+                    (attempt_id,),
                 ).fetchone()
-                if not reservation:
-                    raise OrchestrationError("RESERVATION_UNKNOWN", reservation_id)
-                work_order_hash, state, reserved_cost, reserved_input, reserved_output = reservation
-                if state == "released":
-                    raise OrchestrationError("SETTLE_RELEASED", reservation_id)
-                attempt_id = "ATTEMPT-" + work_order_hash[:24]
-                db.execute(
-                    "INSERT OR IGNORE INTO provider_operations(attempt_id,work_order_hash,endpoint,request_hash,state,provider_id) VALUES(?,?,?,?,?,?)",
-                    (attempt_id, work_order_hash, "provider", work_order_hash, "completed", provider_item_id),
-                )
+                if not operation:
+                    raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
                 current = db.execute(
-                    "SELECT usage_json,actual_cost_microusd FROM usage_records WHERE provider=? AND provider_item_id=?",
-                    (provider, provider_item_id),
+                    """
+                    SELECT usage_json FROM usage_records
+                    WHERE provider=? AND provider_item_id=? AND attempt_id=?
+                    """,
+                    (provider, provider_item_id, attempt_id),
                 ).fetchone()
-                usage_json = json.dumps(usage or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                 if current:
-                    if current != (usage_json, actual_cost_microusd):
+                    if current[0] != usage_json:
                         raise OrchestrationError("USAGE_CONFLICT", provider_item_id)
                     db.commit()
                     return False
                 db.execute(
-                    "INSERT INTO usage_records(provider,provider_item_id,attempt_id,usage_json,price_snapshot_hash,actual_cost_microusd) VALUES(?,?,?,?,?,?)",
-                    (provider, provider_item_id, attempt_id, usage_json, price_snapshot_hash, actual_cost_microusd),
-                )
-                actual_input = usage.get("input_tokens") if isinstance(usage, dict) else None
-                actual_output = usage.get("output_tokens") if isinstance(usage, dict) else None
-                if type(actual_input) is not int or actual_input < 0:
-                    actual_input = reserved_input
-                if type(actual_output) is not int or actual_output < 0:
-                    actual_output = reserved_output
-                settled_cost = (
-                    actual_cost_microusd
-                    if actual_cost_microusd is not None
-                    else reserved_cost
+                    """
+                    INSERT INTO usage_records(
+                        provider,provider_item_id,attempt_id,usage_json
+                    ) VALUES(?,?,?,?)
+                    """,
+                    (provider, provider_item_id, attempt_id, usage_json),
                 )
                 db.execute(
-                    "UPDATE reservations SET state='settled',provider_id=?,"
-                    "cost_microusd=?,input_limit=?,output_limit=? WHERE reservation_id=?",
-                    (
-                        provider_item_id,
-                        settled_cost,
-                        actual_input,
-                        actual_output,
-                        reservation_id,
-                    ),
+                    """
+                    UPDATE provider_operations
+                    SET state='completed',
+                        provider_id=COALESCE(provider_id,?),
+                        raw_response_ref=COALESCE(?,raw_response_ref),
+                        updated_at=?
+                    WHERE attempt_id=?
+                    """,
+                    (provider_item_id, raw_response_ref, _now(), attempt_id),
                 )
                 db.commit()
                 return True
@@ -405,34 +684,69 @@ class OrchestrationRepository:
                 db.rollback()
                 raise
 
-    def commit_transition(self, task_id: str, expected_revision: int, event: dict[str, Any]) -> dict[str, Any]:
+    def commit_transition(
+        self,
+        task_id: str,
+        expected_revision: int,
+        event: dict[str, Any],
+    ) -> dict[str, Any]:
         with self.connect() as db:
             try:
                 db.execute("BEGIN IMMEDIATE")
-                row = db.execute("SELECT status,revision FROM runs WHERE run_id=?", (task_id,)).fetchone()
+                row = db.execute(
+                    "SELECT status,revision FROM runs WHERE run_id=?",
+                    (task_id,),
+                ).fetchone()
                 if not row:
                     raise OrchestrationError("TASK_UNKNOWN", task_id)
                 status, revision = row
                 if revision != expected_revision:
                     raise OrchestrationError("REVISION_CONFLICT", task_id)
                 event_id = str(event.get("event_id") or canonical_sha256(event))
-                duplicate = db.execute("SELECT 1 FROM task_events WHERE event_id=?", (event_id,)).fetchone()
+                duplicate = db.execute(
+                    "SELECT 1 FROM task_events WHERE event_id=?",
+                    (event_id,),
+                ).fetchone()
                 if duplicate:
                     db.commit()
-                    return {"task_id": task_id, "revision": revision, "status": status}
+                    return {
+                        "task_id": task_id,
+                        "revision": revision,
+                        "status": status,
+                    }
                 new_status = str(event.get("status") or status)
                 sequence = revision + 1
                 db.execute(
-                    "INSERT INTO task_events(event_id,run_id,sequence,type,payload_ref,created_at) VALUES(?,?,?,?,?,?)",
-                    (event_id, task_id, sequence, str(event.get("type") or "transition"), canonical_sha256(event), _now()),
+                    """
+                    INSERT INTO task_events(
+                        event_id,run_id,sequence,type,payload_ref,created_at
+                    ) VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        event_id,
+                        task_id,
+                        sequence,
+                        str(event.get("type") or "transition"),
+                        canonical_sha256(event),
+                        _now(),
+                    ),
                 )
-                db.execute("UPDATE runs SET status=?,revision=? WHERE run_id=?", (new_status, sequence, task_id))
+                db.execute(
+                    "UPDATE runs SET status=?,revision=? WHERE run_id=?",
+                    (new_status, sequence, task_id),
+                )
                 db.commit()
-                return {"task_id": task_id, "revision": sequence, "status": new_status}
+                return {
+                    "task_id": task_id,
+                    "revision": sequence,
+                    "status": new_status,
+                }
             except Exception:
                 db.rollback()
                 raise
 
 
 def repository_for_logger(logger) -> OrchestrationRepository:
-    return OrchestrationRepository(Path(logger.paths.run_dir).parent / "orchestration.sqlite3")
+    return OrchestrationRepository(
+        Path(logger.paths.run_dir).parent / "orchestration.sqlite3"
+    )

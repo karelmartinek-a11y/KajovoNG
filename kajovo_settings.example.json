@@ -2,7 +2,7 @@
   "db_path": "kajovo.sqlite",
   "log_dir": "LOG",
   "cache_dir": "cache",
-  "batch_poll_interval_s": 4.0,
+  "batch_poll_interval_s": 4,
   "batch_timeout_s": 3600,
   "default_model": "gpt-4o-mini",
   "default_temperature": 0.2,
@@ -10,10 +10,10 @@
   "retry": {
     "max_attempts": 6,
     "base_delay_s": 0.8,
-    "max_delay_s": 20.0,
+    "max_delay_s": 20,
     "jitter_s": 0.25,
     "circuit_breaker_failures": 6,
-    "circuit_breaker_cooldown_s": 20.0
+    "circuit_breaker_cooldown_s": 20
   },
   "logging": {
     "max_total_mb": 2048,
@@ -21,18 +21,31 @@
     "encrypt_logs": false,
     "mask_secrets": false
   },
-  "pricing": {
-    "source_url": "https://openai.com/api/pricing/",
-    "cache_ttl_hours": 72,
-    "auto_refresh_on_start": true
-  },
   "security": {
     "allow_upload_sensitive": false,
     "deny_extensions_in": [
-      ".exe",".dll",".zip",".7z",".rar",".png",".jpg",".jpeg",".gif",".pdf",".db",".sqlite",".pkl",".pt",".onnx"
+      ".exe",
+      ".dll",
+      ".zip",
+      ".7z",
+      ".rar",
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".gif",
+      ".pdf",
+      ".db",
+      ".sqlite",
+      ".pkl",
+      ".pt",
+      ".onnx"
     ],
     "deny_globs_in": [
-      "**/.git/**","**/node_modules/**","**/venv/**","**/.venv/**","**/LOG/**"
+      "**/.git/**",
+      "**/node_modules/**",
+      "**/venv/**",
+      "**/.venv/**",
+      "**/LOG/**"
     ]
   },
   "smtp": {

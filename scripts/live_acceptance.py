@@ -1,8 +1,8 @@
-"""Explicitní, izolovaná a rozpočtově omezená live akceptace OpenAI cest.
+"""Explicitní, izolovaná a obnovitelná live akceptace OpenAI cest.
 
 Tento modul se nikdy nespouští z pytestu, CI ani startu aplikace. Generativní
-klient vznikne až po dvojitém autorizačním gate a API klíč se do evidence
-nikdy nezapisuje.
+klient vznikne až po explicitním autorizačním gate a API klíč se do evidence
+nikdy nezapisuje. Hospodárnost určuje minimální rozsah scénářů, nikoli cenový engine.
 """
 from __future__ import annotations
 
@@ -22,16 +22,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-AUTHORIZATION = "KAJOVONG-LIVE-ACCEPTANCE-2026-09-20-MAX-USD-1.00"
+AUTHORIZATION = "KAJOVONG-LIVE-ACCEPTANCE-2026-09-20"
 MODEL = "gpt-5.6-luna"
-MAX_TOTAL_USD = 1.00
 CASES = ("generate-live", "generate-batch", "photo-batch", "comic-panels")
-TEXT_CASE_MAX_USD = {"generate-live": 0.40, "generate-batch": 0.20}
-IMAGE_CASE_MAX_USD: dict[str, float | None] = {"photo-batch": None, "comic-panels": None}
 
 
 class Blocked(RuntimeError):
-    """Akceptaci nelze bezpečně spustit nebo pokračovat v placené práci."""
+    """Akceptaci nelze bezpečně spustit nebo pokračovat v provider práci."""
 
 
 class RemotePending(RuntimeError):
@@ -69,72 +66,28 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def safety_gate(confirm_paid: bool, authorization: str | None, max_total_usd: float) -> str:
-    """Vrátí klíč až po všech kontrolách; předtím se klient nevytváří."""
+def safety_gate(confirm_paid: bool, authorization: str | None) -> str:
+    """Vrátí klíč až po explicitním potvrzení skutečných provider requestů."""
     if not confirm_paid or authorization != AUTHORIZATION:
         raise Blocked("BLOCKED_AUTHORIZATION")
-    if max_total_usd <= 0 or max_total_usd > MAX_TOTAL_USD:
-        raise Blocked("BLOCKED_BUDGET")
     key = os.environ.get("OPENAI_API_KEY", "")
     if not key.strip():
         raise Blocked("BLOCKED_API_KEY")
     return key
 
 
-class Budget:
-    def __init__(self, limit: float):
-        self.limit = limit
-        self.cost = 0.0
-        self.paid_requests = 0
-        self.text_requests = 0
-        self.batch_requests = 0
-        self.image_items = 0
-        self.unknown: list[str] = []
-        self.seen_usage: set[str] = set()
-        self.committed_cost = 0.0
-
-    def before(self, *, known_max: float | None, label: str) -> None:
-        if self.unknown:
-            raise Blocked("BLOCKED_BUDGET")
-        if known_max is None:
-            raise Blocked("BLOCKED_BUDGET_MODEL")
-        if self.cost + self.committed_cost + known_max > self.limit:
-            raise Blocked("BLOCKED_BUDGET")
-
-    def add(self, usd: float | None, *, text=False, batch=False, images=0) -> None:
-        self.paid_requests += 1
-        self.text_requests += int(text)
-        self.batch_requests += int(batch)
-        self.image_items += images
-        if usd is None:
-            self.unknown.append("provider usage/cena nebyla úplná")
-        else:
-            self.cost += usd
-        if self.cost + self.committed_cost > self.limit:
-            raise Blocked("BLOCKED_BUDGET")
-
-    def commit_pending(self, usd: float | None, label: str) -> None:
-        if usd is None:
-            self.unknown.append(f"{label}: pending liability není doložitelná")
-            raise Blocked("BLOCKED_BUDGET_MODEL")
-        self.committed_cost += usd
-        if self.cost + self.committed_cost > self.limit:
-            raise Blocked("BLOCKED_BUDGET")
-
-
 def ensure_workspace(root: Path, main_sha: str) -> dict[str, Any]:
     path = root / "acceptance_state.json"
     state = read_checkpoint(path)
     if state:
-        if state.get("authorization") != AUTHORIZATION or state.get("authorization_ceiling_usd") != MAX_TOTAL_USD:
+        if state.get("authorization") != AUTHORIZATION:
             raise Blocked("BLOCKED_CHECKPOINT_MISMATCH")
         if state.get("program_sha") not in {None, "", main_sha}:
             raise Blocked("BLOCKED_CHECKPOINT_MISMATCH")
     else:
         state = {
-            "schema_version": 1,
+            "schema_version": 2,
             "authorization": AUTHORIZATION,
-            "authorization_ceiling_usd": MAX_TOTAL_USD,
             "program_sha": main_sha,
             "cases": {},
         }
@@ -146,38 +99,9 @@ def acceptance_run_dir(root: Path, case: str) -> Path:
     return root / "_runtime" / "LOG" / ("RUN_LIVE_ACCEPTANCE_" + case.replace("-", "_"))
 
 
-def rehydrate_budget(root: Path, limit: float, main_sha: str) -> Budget:
-    """Obnoví rozpočet z konkrétních run/job adresářů a checkpointů."""
-    budget = Budget(limit)
-    roots = {
-        "generate-live": acceptance_run_dir(root, "generate-live"),
-        "generate-batch": acceptance_run_dir(root, "generate-batch"),
-        "photo-batch": root / "_runtime" / "LOG" / "PHOTO",
-        "comic-panels": root / "comic-panels" / "LOG",
-    }
-    for case, evidence_root in roots.items():
-        if not evidence_root.exists():
-            continue
-        report = _base_report(case, main_sha, MODEL)
-        report["execution"] = "batch" if case != "generate-live" else "live"
-        if case == "photo-batch":
-            checkpoint = read_checkpoint(root / case / "acceptance_state.json")
-            if checkpoint.get("job_id"):
-                evidence_root = evidence_root / checkpoint["job_id"]
-        settle_evidence(evidence_root, budget, report, image_model=report.get("models") if case == "photo-batch" else None)
-    for case in ("photo-batch", "comic-panels"):
-        checkpoint = read_checkpoint(root / case / "acceptance_state.json")
-        if checkpoint.get("status") in {"preparing", "in_progress", "response_pending", "submission_unknown", "batch_pending"}:
-            budget.commit_pending(checkpoint.get("liability_usd"), case)
-    for case in ("generate-live", "generate-batch"):
-        state = read_checkpoint(acceptance_run_dir(root, case) / "run_state.json")
-        if state.get("status") in {"response_pending", "submission_unknown", "running", "remote_work", "batch_pending"}:
-            budget.commit_pending(TEXT_CASE_MAX_USD[case], case)
-    return budget
-
 
 def case_needs_new_submit(root: Path, case: str) -> bool:
-    """Rozliší nový placený submit od bezpečného obnovení existující práce."""
+    """Rozliší nový provider submit od bezpečného obnovení existující práce."""
     if case in {"generate-live", "generate-batch"}:
         state = read_checkpoint(acceptance_run_dir(root, case) / "run_state.json")
         return not state
@@ -198,7 +122,7 @@ def _empty_cfg_values() -> dict[str, Any]:
     return result
 
 
-def make_run_config(*, batch: bool, prompt: str, out: Path, max_cost_microusd: int, max_paid_requests: int):
+def make_run_config(*, batch: bool, prompt: str, out: Path):
     from kajovo.core.runs.config import UiRunConfig
 
     values = _empty_cfg_values()
@@ -238,11 +162,6 @@ def make_run_config(*, batch: bool, prompt: str, out: Path, max_cost_microusd: i
         maximum_quality=False,
         stop_after_plan=False,
         dry_run=False,
-        max_cost_microusd=max_cost_microusd,
-        max_input_tokens=100_000,
-        max_output_tokens=20_000,
-        max_paid_requests=max_paid_requests,
-        unknown_pricing="block",
         auto_repair="off",
         verification_profile_ids=[],
         execution_approval_id="",
@@ -266,66 +185,48 @@ def _run_executor(cfg, settings, key, logger) -> tuple[dict[str, Any] | None, st
     return result, error
 
 
-def _usage_cost(usage: Any, model: str, *, batch: bool) -> float | None:
-    from kajovo.core.context_pricing import projected_cost
-
-    if not isinstance(usage, dict):
-        return None
-    return_value = projected_cost(model, usage.get("input_tokens"), usage.get("output_tokens"), batch=batch)
-    return float(return_value["usd"]) if return_value else None
-
-
-def _find_usage(value: Any, model: str = "", identity: str = ""):
-    if isinstance(value, dict):
-        identifiers = [
-            str(value[key]) for key in (
-                "id", "response_id", "provider_item_id", "reservation_id", "custom_id", "batch_id"
-            ) if value.get(key)
-        ]
-        current_identity = ":".join(identifiers) or identity
-        usage = value.get("usage")
-        if isinstance(usage, dict):
-            yield model or str(value.get("model") or "") or MODEL, usage, current_identity
-        child_model = str(value.get("model") or model)
-        for child in value.values():
-            yield from _find_usage(child, child_model, current_identity)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _find_usage(child, model, identity)
-
-
-def settle_evidence(root: Path, budget: Budget, report: dict[str, Any], *, image_model: str | None = None) -> None:
-    """Sečte jen doložené usage; při neúplném usage zachová UNKNOWN."""
-    seen: set[str] = set()
-    found_usage = False
+def collect_raw_usage(root: Path, report: dict[str, Any]) -> None:
+    """Archivuje provider usage metadata beze změny a bez odvozování ceny."""
+    seen = {
+        json.dumps(item, ensure_ascii=False, sort_keys=True)
+        for item in report.get("raw_usage", [])
+        if isinstance(item, dict)
+    }
+    values = list(report.get("raw_usage", []))
+    if not root.exists():
+        report["raw_usage"] = values
+        return
     for path in root.rglob("*.json"):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        for model, usage, identity in _find_usage(payload):
-            found_usage = True
-            key = sha256_bytes(json.dumps(
-                {"identity": identity, "model": model, "usage": usage},
-                sort_keys=True,
-            ).encode())
-            if key in seen or key in budget.seen_usage:
-                continue
-            seen.add(key)
-            budget.seen_usage.add(key)
-            if image_model and model == image_model:
-                from kajovo.core.context_pricing import observed_image_cost
-
-                cost = observed_image_cost(model, usage, batch=True)
-                usd = float(cost["usd"]) if cost else None
-                report["image_usage"].append(usage)
-                budget.add(usd, batch=True, images=1)
-            else:
-                usd = _usage_cost(usage, model or MODEL, batch=report["execution"] == "batch")
-                report["token_usage"].append(usage)
-                budget.add(usd, text=True, batch=report["execution"] == "batch")
-    if not found_usage:
-        budget.unknown.append(f"{report['case']}: provider usage nebylo nalezeno")
+        stack = [payload]
+        while stack:
+            value = stack.pop()
+            if isinstance(value, dict):
+                current = value.get("usage")
+                if isinstance(current, dict):
+                    item = {
+                        "provider_item_id": str(
+                            value.get("id")
+                            or value.get("response_id")
+                            or value.get("provider_item_id")
+                            or value.get("batch_id")
+                            or ""
+                        ),
+                        "usage": current,
+                    }
+                    key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+                    if key not in seen:
+                        seen.add(key)
+                        values.append(item)
+                for child in value.values():
+                    if isinstance(child, (dict, list)):
+                        stack.append(child)
+            elif isinstance(value, list):
+                stack.extend(value)
+    report["raw_usage"] = values
 
 
 def enrich_ids(root: Path, report: dict[str, Any]) -> None:
@@ -368,9 +269,7 @@ def _base_report(case: str, main_sha: str, model: str | list[str]) -> dict[str, 
     return {
         "case": case, "status": "running", "started_at": now(), "finished_at": None,
         "main_sha": main_sha, "models": model, "execution": "live", "provider_response_ids": [],
-        "batch_ids": [], "input_file_ids": [], "output_file_ids": [], "paid_request_count": 0,
-        "text_requests": 0, "batch_requests": 0, "image_items": 0, "token_usage": [],
-        "image_usage": [], "settled_cost_usd": None, "unknown_cost": False,
+        "batch_ids": [], "input_file_ids": [], "output_file_ids": [], "raw_usage": [],
         "work_order_hashes": [], "artifact_sha256": [], "technical_validation": "pending",
         "content_acceptance": "not_applicable", "human_review_required": False, "errors": [],
     }
@@ -397,90 +296,8 @@ def _generated_path(run_dir: Path, out: Path, name: str) -> Path:
     raise RuntimeError(f"Výstup {name} nebyl nalezen v OUT ani stagingu")
 
 
-def _state_report(report: dict[str, Any], budget: Budget, *, cost_before: float = 0.0, paid_before: int = 0, text_before: int = 0, batch_before: int = 0, image_before: int = 0) -> None:
-    report["paid_request_count"] = budget.paid_requests - paid_before
-    report["text_requests"] = budget.text_requests - text_before
-    report["batch_requests"] = budget.batch_requests - batch_before
-    report["image_items"] = budget.image_items - image_before
-    report["settled_cost_usd"] = round(budget.cost - cost_before, 8) if not budget.unknown else None
-    report["unknown_cost"] = bool(budget.unknown)
-    report["unknown_cost_items"] = list(budget.unknown)
 
-
-def _removed_generate_legacy(case: str, root: Path, client, key: str, settings, budget: Budget, main_sha: str, batch: bool) -> dict[str, Any]:
-    from kajovo.core.runlog import RunLogger
-    from kajovo.core.batch_completion import complete_saved_batch, read_state
-
-    out = root / case / "OUT"
-    out.mkdir(parents=True, exist_ok=True)
-    report = _base_report(case, main_sha, MODEL)
-    report["execution"] = "batch" if batch else "live"
-    prompt = (
-        "Create exactly one file named answer.py. The file must define one top-level function "
-        "answer() with no parameters. The function must return the integer literal 42. "
-        "Do not create any other project files."
-        if not batch else
-        "Create exactly one file named batch_answer.py. It must define one top-level function "
-        "batch_answer() with no parameters. The function must return the integer literal 7. "
-        "Do not create any other project files."
-    )
-    run_id = "RUN_LIVE_ACCEPTANCE_" + case.replace("-", "_")
-    run_dir = Path(settings.log_dir) / run_id
-    state = read_state(run_dir) if run_dir.exists() else {}
-    logger = RunLogger(settings.log_dir, run_id, project_name="KájovoNG live acceptance", resume=bool(state))
-    try:
-        if not state.get("batch_id"):
-            cfg = make_run_config(batch=batch, prompt=prompt, out=out)
-            result, error = _run_executor(cfg, settings, key, logger)
-            if error:
-                state = read_state(run_dir)
-                if state.get("status") in {"response_pending", "submission_unknown"}:
-                    report["status"] = "pending"
-                    report["errors"] = [state["status"]]
-                    raise RemotePending(state["status"])
-                raise RuntimeError(error)
-            result = result or {}
-            report["provider_response_ids"] = [x for x in (result.get("response_id"), result.get("last_response_id")) if x]
-            if batch:
-                if not result.get("batch_id"):
-                    raise RuntimeError("GENERATE BATCH nevrátil batch_id")
-                report["batch_ids"] = [result["batch_id"]]
-                report["input_file_ids"] = [result.get("input_file_id")] if result.get("input_file_id") else []
-            else:
-                target = _generated_path(run_dir, out, "answer.py")
-                report["artifact_sha256"] = [_validate_generated(target, "answer", 42)]
-                report["technical_validation"] = "passed"
-                report["content_acceptance"] = "passed"
-        if batch:
-            bid = (read_state(run_dir).get("batch_id") or report["batch_ids"][0])
-            while True:
-                completed = complete_saved_batch(client, str(run_dir), bid, settings)
-                if completed.get("status") == "batch_pending":
-                    report["status"] = "pending"
-                    report["errors"] = ["REMOTE_PENDING"]
-                    raise RemotePending(bid)
-                if completed.get("status") not in {"files_complete_unverified", "completed"}:
-                    raise RuntimeError(json.dumps(completed, ensure_ascii=False))
-                state = read_state(run_dir)
-                target = _generated_path(run_dir, out, "batch_answer.py")
-                report["artifact_sha256"] = [_validate_generated(target, "batch_answer", 7)]
-                report["technical_validation"] = "passed"
-                report["content_acceptance"] = "passed"
-                break
-        report["status"] = "passed"
-    except RemotePending:
-        raise
-    except Blocked:
-        raise
-    except Exception as exc:
-        report["status"] = "failed"
-        report["errors"].append(str(exc))
-    finally:
-        report["finished_at"] = now()
-    return report
-
-
-def run_generate(case: str, root: Path, client, key: str, settings, budget: Budget, main_sha: str, batch: bool) -> dict[str, Any]:
+def run_generate(case: str, root: Path, client, key: str, settings, main_sha: str, batch: bool) -> dict[str, Any]:
     """Idempotentní GENERATE resume; stav bez batch_id nesmí znamenat nový LIVE submit."""
     from kajovo.core.batch_completion import complete_saved_batch, read_state
     from kajovo.core.runlog import RunLogger
@@ -503,10 +320,10 @@ def run_generate(case: str, root: Path, client, key: str, settings, budget: Budg
             report["status"] = "passed"
             return report
         if not batch and state.get("status") in {"response_pending", "submission_unknown", "running", "remote_work"}:
-            write_checkpoint(root / case / "acceptance_state.json", {
-                "case": case, "status": state.get("status"),
-                "liability_usd": TEXT_CASE_MAX_USD[case],
-            })
+            write_checkpoint(
+                root / case / "acceptance_state.json",
+                {"case": case, "status": state.get("status")},
+            )
             report["status"] = "pending"
             report["errors"] = [str(state.get("status"))]
             raise RemotePending(str(state.get("status")))
@@ -528,21 +345,19 @@ def run_generate(case: str, root: Path, client, key: str, settings, budget: Budg
         )
         logger = RunLogger(settings.log_dir, run_dir.name, project_name="KájovoNG live acceptance", resume=bool(state))
         if not state.get("batch_id"):
-            remaining = max(0.0, budget.limit - budget.cost - budget.committed_cost)
-            case_limit = TEXT_CASE_MAX_USD[case]
             cfg = make_run_config(
-                batch=batch, prompt=prompt, out=out,
-                max_cost_microusd=max(1, int(min(remaining, case_limit) * 1_000_000)),
-                max_paid_requests=8,
+                batch=batch,
+                prompt=prompt,
+                out=out,
             )
             result, error = _run_executor(cfg, settings, key, logger)
             state = read_state(run_dir)
             if error:
                 if state.get("status") in {"response_pending", "submission_unknown"}:
-                    write_checkpoint(root / case / "acceptance_state.json", {
-                        "case": case, "status": state["status"],
-                        "liability_usd": TEXT_CASE_MAX_USD[case],
-                    })
+                    write_checkpoint(
+                        root / case / "acceptance_state.json",
+                        {"case": case, "status": state["status"]},
+                    )
                     report["status"] = "pending"
                     report["errors"] = [state["status"]]
                     raise RemotePending(state["status"])
@@ -556,8 +371,9 @@ def run_generate(case: str, root: Path, client, key: str, settings, budget: Budg
                 report["batch_ids"] = [batch_id]
                 report["input_file_ids"] = [result.get("input_file_id")] if result.get("input_file_id") else []
                 write_checkpoint(root / case / "acceptance_state.json", {
-                    "case": case, "batch_id": batch_id, "input_file_id": result.get("input_file_id", ""),
-                    "status": "batch_pending", "liability_usd": TEXT_CASE_MAX_USD[case],
+                    "case": case, "batch_id": batch_id,
+                    "input_file_id": result.get("input_file_id", ""),
+                    "status": "batch_pending",
                 })
             else:
                 artifact = _generated_path(run_dir, out, name)
@@ -609,7 +425,7 @@ def choose_image_model(available: list[str]) -> str:
     raise Blocked("BLOCKED_IMAGE_MODEL_UNAVAILABLE")
 
 
-def run_photo(root: Path, client, settings, budget: Budget, main_sha: str, available: list[str]) -> dict[str, Any]:
+def run_photo(root: Path, client, settings, main_sha: str, available: list[str]) -> dict[str, Any]:
     from kajovo.core import photo_batch
 
     case_root = root / "photo-batch"
@@ -704,56 +520,8 @@ def run_photo(root: Path, client, settings, budget: Budget, main_sha: str, avail
     return report
 
 
-def _unused_comic_implementation(root: Path, client, settings, budget: Budget, main_sha: str, available: list[str]) -> dict[str, Any]:
-    from kajovo.core.comic_service import ComicService
-    from kajovo.core.config import AppSettings
 
-    case_root = root / "comic-panels"
-    comic_settings = AppSettings(comic_library_dir=str(case_root / "COMICS"), log_dir=str(case_root / "LOG"), response_timeout_s=600, response_poll_timeout_s=3600, batch_poll_interval_s=5, batch_timeout_s=3600)
-    service = ComicService(comic_settings, client)
-    report = _base_report("comic-panels", main_sha, [MODEL, "gpt-image-2.5-sunburst-2026-09-08"])
-    try:
-        if "gpt-image-2.5-sunburst-2026-09-08" not in available and "gpt-image-2.5-sunburst" not in available:
-            raise Blocked("BLOCKED_IMAGE_MODEL_UNAVAILABLE")
-        project = service.store.project("Live acceptance", "Jednoduchý syntetický panel", {"description": "Čistý komiks", "line": "jemná", "color": "barevná", "balloon": "dialogová", "sfx": False})
-        bible = service.start_bible(project)
-        while service.store.get("operations", bible)["status"] not in {"completed", "failed", "partial"}:
-            value = service.run(bible)
-            if value.get("status") in {"batch_pending", "response_pending", "submission_unknown"}:
-                raise RemotePending("comic-bible")
-        if service.store.get("operations", bible)["status"] != "completed":
-            raise RuntimeError("Bible nebyla dokončena")
-        panel = service.store.panel(project, "Live panel")
-        service.store.save_panel(panel, 2, "Live panel", {"version": 1, "nodes": [{"type": "text", "text": "A simple clean comic panel: a blue circle centered on a plain white background. No text."}]}, {"width": 816, "height": 816, "dpi": 300, "fit": "pad", "experimental": False}, [])
-        operation = service.start_panels(project, [panel])
-        while service.store.get("operations", operation)["status"] not in {"completed", "failed", "partial"}:
-            value = service.run(operation)
-            if value.get("status") in {"batch_pending", "response_pending", "submission_unknown"}:
-                raise RemotePending("comic-panel")
-        if service.store.get("operations", operation)["status"] != "completed":
-            raise RuntimeError("Panelová dávka nebyla dokončena")
-        version = service.store.get("panels", panel)["active_version"]
-        asset = service.store.get("panel_versions", version)["asset_id"]
-        path = service.store.asset_path(asset)
-        report["batch_ids"] = [row["provider_id"] for row in service.store.rows("batches", "operation_id=?", (operation,)) if row.get("provider_id")]
-        report["artifact_sha256"] = [sha256_file(path)]
-        report["technical_validation"] = "passed"
-        report["content_acceptance"] = "unverified"
-        report["human_review_required"] = True
-        report["status"] = "technical_pass_human_pending"
-    except RemotePending:
-        raise
-    except Blocked:
-        raise
-    except Exception as exc:
-        report["status"] = "failed"
-        report["errors"].append(str(exc))
-    finally:
-        report["finished_at"] = now()
-    return report
-
-
-def run_comic(root: Path, client, settings, budget: Budget, main_sha: str, available: list[str]) -> dict[str, Any]:
+def run_comic(root: Path, client, settings, main_sha: str, available: list[str]) -> dict[str, Any]:
     """Resumovatelná COMIC acceptance nad jedním persistentním stavem."""
     from kajovo.core.comic_service import ComicService
     from kajovo.core.config import AppSettings
@@ -844,22 +612,48 @@ def run_comic(root: Path, client, settings, budget: Budget, main_sha: str, avail
     return report
 
 
-def write_evidence(root: Path, reports: list[dict[str, Any]], budget: Budget, main_sha: str) -> None:
+def write_evidence(
+    root: Path,
+    reports: list[dict[str, Any]],
+    main_sha: str,
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
     summary = {
-        "main_sha": main_sha, "authorization": AUTHORIZATION, "authorization_ceiling_usd": MAX_TOTAL_USD,
-        "known_actual_cost_usd": round(budget.cost, 8) if not budget.unknown else None,
-        "unknown_cost_items": budget.unknown, "total_paid_requests": budget.paid_requests,
-        "text_requests": budget.text_requests, "batch_requests": budget.batch_requests,
-        "image_items": budget.image_items, "total_batches_created": sum(len(r.get("batch_ids", [])) for r in reports),
-        "total_images_generated_or_edited": sum(r.get("image_items", 0) for r in reports),
+        "main_sha": main_sha,
+        "authorization": AUTHORIZATION,
+        "provider_response_count": sum(
+            len(r.get("provider_response_ids", [])) for r in reports
+        ),
+        "batch_count": sum(len(r.get("batch_ids", [])) for r in reports),
+        "artifact_count": sum(len(r.get("artifact_sha256", [])) for r in reports),
     }
-    (root / "live_acceptance_report.json").write_text(json.dumps({"summary": summary, "cases": reports}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    lines = ["# KájovoNG live acceptance", "", f"Main SHA: `{main_sha}`", f"Known cost USD: `{summary['known_actual_cost_usd'] if summary['known_actual_cost_usd'] is not None else 'TOTAL_COST_NOT_FULLY_KNOWN'}`", "", "| Case | Backend | Human review |", "|---|---|---|"]
+    (root / "live_acceptance_report.json").write_text(
+        json.dumps(
+            {"summary": summary, "cases": reports},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    lines = [
+        "# KájovoNG live acceptance",
+        "",
+        f"Main SHA: `{main_sha}`",
+        "",
+        "| Case | Backend | Human review |",
+        "|---|---|---|",
+    ]
     for report in reports:
-        lines.append(f"| {report['case']} | {report['status']} | {report['human_review_required']} |")
-    lines.extend(["", f"Authorization ceiling: ${MAX_TOTAL_USD:.2f}", "Ceiling exceeded: NO", "", json.dumps(summary, ensure_ascii=False, indent=2)])
-    (root / "live_acceptance_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        lines.append(
+            f"| {report['case']} | {report['status']} | "
+            f"{report['human_review_required']} |"
+        )
+    lines.extend(["", json.dumps(summary, ensure_ascii=False, indent=2)])
+    (root / "live_acceptance_summary.md").write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+    )
 
 
 def cleanup_remote_inputs(client, reports: list[dict[str, Any]]) -> None:
@@ -879,12 +673,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--confirm-paid", action="store_true")
     parser.add_argument("--authorization")
-    parser.add_argument("--max-total-usd", type=float, default=MAX_TOTAL_USD)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--case", choices=CASES, action="append")
     args = parser.parse_args(argv)
     try:
-        key = safety_gate(args.confirm_paid, args.authorization, args.max_total_usd)
+        key = safety_gate(args.confirm_paid, args.authorization)
     except Blocked as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -894,64 +687,74 @@ def main(argv: list[str] | None = None) -> int:
 
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    settings = AppSettings(log_dir=str(root / "_runtime" / "LOG"), cache_dir=str(root / "_runtime" / "cache"))
+    settings = AppSettings(
+        log_dir=str(root / "_runtime" / "LOG"),
+        cache_dir=str(root / "_runtime" / "cache"),
+    )
     client = OpenAIClient(key, timeout_s=600)
     main_sha = os.environ.get("KAJOVONG_MAIN_SHA", "")
     if not main_sha:
         try:
             main_sha = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL,
+                ["git", "rev-parse", "HEAD"],
+                cwd=ROOT,
+                text=True,
+                stderr=subprocess.DEVNULL,
             ).strip()
         except (OSError, subprocess.SubprocessError):
             main_sha = "unknown"
     try:
         ensure_workspace(root, main_sha)
-        budget = rehydrate_budget(root, args.max_total_usd, main_sha)
         available = _model_check(client)
         reports: list[dict[str, Any]] = []
         for case in cases:
-            before = {
-                "cost": budget.cost, "paid": budget.paid_requests,
-                "text": budget.text_requests, "batch": budget.batch_requests,
-                "image": budget.image_items,
-            }
             if case == "generate-live":
-                if case_needs_new_submit(root, case):
-                    budget.before(known_max=TEXT_CASE_MAX_USD[case], label=case)
-                report = run_generate(case, root, client, key, settings, budget, main_sha, False)
-                settle_evidence(root / "_runtime" / "LOG" / "RUN_LIVE_ACCEPTANCE_generate_live", budget, report)
+                report = run_generate(
+                    case, root, client, key, settings, main_sha, False
+                )
+                usage_root = acceptance_run_dir(root, case)
             elif case == "generate-batch":
-                if case_needs_new_submit(root, case):
-                    budget.before(known_max=TEXT_CASE_MAX_USD[case], label=case)
-                report = run_generate(case, root, client, key, settings, budget, main_sha, True)
-                settle_evidence(root / "_runtime" / "LOG" / "RUN_LIVE_ACCEPTANCE_generate_batch", budget, report)
+                report = run_generate(
+                    case, root, client, key, settings, main_sha, True
+                )
+                usage_root = acceptance_run_dir(root, case)
             elif case == "photo-batch":
                 choose_image_model(available)
-                if case_needs_new_submit(root, case):
-                    budget.before(known_max=IMAGE_CASE_MAX_USD[case], label=case)
-                report = run_photo(root, client, settings, budget, main_sha, available)
-                settle_evidence(Path(settings.log_dir) / "PHOTO" / str(report.get("job_id") or ""), budget, report, image_model=report["models"])
+                report = run_photo(
+                    root, client, settings, main_sha, available
+                )
+                usage_root = (
+                    Path(settings.log_dir)
+                    / "PHOTO"
+                    / str(report.get("job_id") or "")
+                )
             else:
-                if case_needs_new_submit(root, case):
-                    budget.before(known_max=IMAGE_CASE_MAX_USD[case], label=case)
-                report = run_comic(root, client, settings, budget, main_sha, available)
-                settle_evidence(root / "comic-panels", budget, report, image_model="gpt-image-2.5-sunburst-2026-09-08")
-            _state_report(
-                report, budget, cost_before=before["cost"], paid_before=before["paid"],
-                text_before=before["text"], batch_before=before["batch"], image_before=before["image"],
-            )
+                report = run_comic(
+                    root, client, settings, main_sha, available
+                )
+                usage_root = root / "comic-panels"
+
+            collect_raw_usage(usage_root, report)
             enrich_ids(root, report)
             reports.append(report)
             root_state = read_checkpoint(root / "acceptance_state.json")
             root_state.setdefault("cases", {})[case] = {
                 "status": report.get("status"),
-                "identity": report.get("batch_ids") or report.get("provider_response_ids") or report.get("job_id"),
+                "identity": (
+                    report.get("batch_ids")
+                    or report.get("provider_response_ids")
+                    or report.get("job_id")
+                ),
             }
             write_checkpoint(root / "acceptance_state.json", root_state)
-            write_evidence(root, reports, budget, main_sha)
+            write_evidence(root, reports, main_sha)
         cleanup_remote_inputs(client, reports)
-        write_evidence(root, reports, budget, main_sha)
-        return 4 if any(r["status"] == "technical_pass_human_pending" for r in reports) else 0 if all(r["status"] == "passed" for r in reports) else 1
+        write_evidence(root, reports, main_sha)
+        if any(
+            r["status"] == "technical_pass_human_pending" for r in reports
+        ):
+            return 4
+        return 0 if all(r["status"] == "passed" for r in reports) else 1
     except RemotePending as exc:
         print(f"REMOTE_PENDING: {exc}", file=sys.stderr)
         return 3

@@ -30,7 +30,7 @@ class HistoryData:
         self._cache = OrderedDict()
         self._lock = RLock()
         self._bytes = 0
-        self._budget = 64 * 1024 * 1024
+        self._byte_limit = 64 * 1024 * 1024
 
     def read(self, directory, *, detail=False):
         adapter = LegacyRunAdapter(directory)
@@ -64,10 +64,10 @@ class HistoryData:
             # Odhad z velikostí zdrojových JSON souborů je konzervativní;
             # velký detail se může zobrazit, ale nezůstává v cache.
             size = sum(row[1] * 6 for row in signature if row[0].endswith((".json", ".jsonl")))
-            if size <= self._budget:
+            if size <= self._byte_limit:
                 self._cache[key] = (signature, value, state, size)
                 self._bytes += size
-                while len(self._cache) > self.capacity or self._bytes > self._budget:
+                while len(self._cache) > self.capacity or self._bytes > self._byte_limit:
                     _, evicted = self._cache.popitem(last=False)
                     self._bytes -= evicted[3]
         return adapter, value, state

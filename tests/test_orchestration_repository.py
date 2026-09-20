@@ -1,28 +1,15 @@
-from kajovo.core.orchestration.repository import OrchestrationRepository
-from kajovo.core.orchestration.work_order import WorkOrder
-import sqlite3
+from __future__ import annotations
+
+import json
 
 import pytest
 
-
-@pytest.mark.parametrize("fail", [False, True])
-def test_connection_closes_and_transaction_rolls_back_on_failure(tmp_path, fail):
-    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
-    try:
-        with repo.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            db.execute("INSERT INTO schema_version VALUES (2, 'test')")
-            if fail:
-                raise RuntimeError("Přerušená transakce")
-    except RuntimeError:
-        assert fail
-    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
-        db.execute("SELECT 1")
-    with repo.connect() as check:
-        assert bool(check.execute("SELECT 1 FROM schema_version WHERE version=2").fetchone()) is not fail
+from kajovo.core.orchestration.errors import OrchestrationError
+from kajovo.core.orchestration.repository import OrchestrationRepository
+from kajovo.core.orchestration.work_order import WorkOrder
 
 
-def _order(run_id, task_id, reservation_id):
+def _order(run_id: str, task_id: str, attempt_id: str) -> WorkOrder:
     return WorkOrder(
         version=2,
         run_id=run_id,
@@ -41,67 +28,136 @@ def _order(run_id, task_id, reservation_id):
         model_capability_hash="cap-" + task_id,
         policy_hash="policy-" + task_id,
         source_snapshot_hash="source-" + task_id,
-        budget_reservation_id=reservation_id,
+        attempt_id=attempt_id,
         approval_id="approval-1",
         attempt_no=1,
     )
 
 
-def test_settlement_reconciles_reserved_budget_to_actual_usage(tmp_path):
-    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
-    run_id = "RUN_TEST"
+def _run(repo: OrchestrationRepository, run_id: str) -> None:
     repo.register_run(
         run_id,
         lineage_id=run_id,
         scope_hash="scope",
         policy_hash="policy",
-        config={"version": 1},
+        config={"version": 2},
         approval_id="approval-1",
         status="running",
     )
 
-    first = _order(run_id, "TASK-1", "RES-1")
-    repo.register_work_order(first, body_ref="body-1", input_hash="input-1")
-    repo.reserve(
-        reservation_id=first.budget_reservation_id,
-        work_order_hash=first.order_hash,
-        cost_microusd=500,
-        input_limit=100,
-        output_limit=1000,
-        max_cost_microusd=10_000,
-        max_input_tokens=10_000,
-        max_output_tokens=1000,
-        max_paid_requests=10,
+
+def test_provider_operation_prevents_duplicate_submit(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-1")
+    order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
+    work_hash = repo.register_work_order(
+        order, body_ref="body", input_hash=order.input_projection_hash
     )
-    repo.mark_submitted(first.budget_reservation_id, "resp-1", unknown=False)
-    repo.settle(
-        first.budget_reservation_id,
+    assert repo.prepare_provider_operation(
+        attempt_id=order.attempt_id,
+        work_order_hash=work_hash,
+        endpoint="/v1/responses",
+        request_hash="request",
+    )
+    repo.mark_submission_started(order.attempt_id)
+    with pytest.raises(OrchestrationError, match="DUPLICATE_SUBMIT_BLOCKED"):
+        repo.prepare_provider_operation(
+            attempt_id=order.attempt_id,
+            work_order_hash=work_hash,
+            endpoint="/v1/responses",
+            request_hash="request",
+        )
+
+
+def test_confirmed_provider_submit_cannot_be_reopened(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-1")
+    order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
+    work_hash = repo.register_work_order(
+        order, body_ref="body", input_hash=order.input_projection_hash
+    )
+    repo.prepare_provider_operation(
+        attempt_id=order.attempt_id,
+        work_order_hash=work_hash,
+        endpoint="/v1/responses",
+        request_hash="request",
+    )
+    repo.mark_submission_started(order.attempt_id)
+    repo.mark_submitted(order.attempt_id, "resp-1", unknown=False)
+
+    with pytest.raises(OrchestrationError, match="PROVIDER_OPERATION_STATE"):
+        repo.mark_not_submitted(order.attempt_id)
+    with pytest.raises(OrchestrationError, match="PROVIDER_OPERATION_STATE"):
+        repo.mark_submission_started(order.attempt_id)
+
+
+def test_raw_usage_is_idempotent_and_operation_completes(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-1")
+    order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
+    work_hash = repo.register_work_order(
+        order, body_ref="body", input_hash=order.input_projection_hash
+    )
+    repo.prepare_provider_operation(
+        attempt_id=order.attempt_id,
+        work_order_hash=work_hash,
+        endpoint="/v1/responses",
+        request_hash="request",
+    )
+    repo.mark_submission_started(order.attempt_id)
+    repo.mark_submitted(order.attempt_id, "resp-1", unknown=False)
+    usage = {"input_tokens": 40, "output_tokens": 20}
+    assert repo.record_usage(
+        order.attempt_id,
         provider="openai",
         provider_item_id="resp-1",
-        usage={"input_tokens": 40, "output_tokens": 20},
-        actual_cost_microusd=100,
-        price_snapshot_hash="price-1",
+        usage=usage,
     )
-
+    assert not repo.record_usage(
+        order.attempt_id,
+        provider="openai",
+        provider_item_id="resp-1",
+        usage=usage,
+    )
     with repo.connect() as db:
-        row = db.execute(
-            "SELECT state,cost_microusd,input_limit,output_limit,provider_id "
-            "FROM reservations WHERE reservation_id='RES-1'"
+        state = db.execute(
+            "SELECT state,provider_id FROM provider_operations WHERE attempt_id=?",
+            (order.attempt_id,),
         ).fetchone()
-    assert row == ("settled", 100, 40, 20, "resp-1")
+        saved = db.execute(
+            "SELECT usage_json FROM usage_records WHERE provider_item_id='resp-1'"
+        ).fetchone()
+    assert state == ("completed", "resp-1")
+    assert json.loads(saved[0]) == usage
 
-    # The next reservation is allowed because the first one now consumes
-    # actual 20 output tokens rather than its original 1000-token ceiling.
-    second = _order(run_id, "TASK-2", "RES-2")
-    repo.register_work_order(second, body_ref="body-2", input_hash="input-2")
-    assert repo.reserve(
-        reservation_id=second.budget_reservation_id,
-        work_order_hash=second.order_hash,
-        cost_microusd=500,
-        input_limit=100,
-        output_limit=980,
-        max_cost_microusd=10_000,
-        max_input_tokens=10_000,
-        max_output_tokens=1000,
-        max_paid_requests=10,
-    )
+
+def test_new_schema_contains_only_nonfinancial_provider_evidence(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    with repo.connect() as db:
+        tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        provider_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(provider_operations)")
+        }
+        usage_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(usage_records)")
+        }
+    assert "provider_operations" in tables
+    assert provider_columns >= {
+        "attempt_id",
+        "work_order_hash",
+        "request_hash",
+        "state",
+        "provider_id",
+        "remote_input_file_id",
+    }
+    assert usage_columns == {
+        "provider",
+        "provider_item_id",
+        "attempt_id",
+        "usage_json",
+    }

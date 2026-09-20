@@ -22,21 +22,17 @@ Nový manifest má verzi 3. Auditní snapshot se ukládá jednou; řádky obsahu
 
 `RunLogger.find_json` preferuje přesný artefakt. Obnova přípravy a Batch načítá kanonická stavová pole přes `load_run_state`. Historické legacy běhy, jejichž starší verze obsah dříve redigovala a nemají přesný artefakt, se zpětně neopravují odhadem. Response journal zachovává request hash, response ID i neznámý submit; import failure nevyvolává generování.
 
-## Rozpočet a směrování
+## Technické limity a směrování
 
-Stejná měřicí vrstva chrání také globální přípravu GENERATE/MODIFY. A1/B1 a následující fáze předávají úplné původní zadání, přílohy a aktuální podklady bez připojené historie předchozích fází. Opravy nahrazují kandidáta, místo aby řetězily neplatné odpovědi. Starý checkpoint A1/B1 se obnoví z uložených podkladů bez opakování requirements/plánu. Explicitní vnější response návaznost se uplatní pouze v první syntéze A0R/B0R.
+Stejná měřicí vrstva chrání globální přípravu i souborové requesty. `context_limits.py` měří instrukce, input, schema a tools odděleně; FileContext má další rozpad po složkách. Lokální odhad je UTF-8 bajty / 3 doplněný konzervativní bajtovou horní mezí. Není to přesný tokenizer a neslouží k finančnímu rozhodování.
 
-`preparation_measurement` rezervuje maximální výstup modelu a 10 % okna. Pevná hranice globální přípravy je zbývající kapacita modelu se zohledněním samostatného vstupního limitu; 200k souborový limit se na ni nevztahuje. Obsah se nezkracuje a model ani Maximum Quality se nesnižují. Pro přílohy, vnější historii a lokálně nevyhovující horní mez se povinně používá [ne-generativní počítání tokenů](https://developers.openai.com/api/docs/guides/token-counting). Výsledek musí odpovídat hashi požadavku; selhání měření blokuje generování. Budoucí retrieval zůstává nejistý, ani přesné vstupní měření nezaručuje dokončení celé generace.
+`preparation_measurement` a `checked_measurement` validují skutečné technické capabilities z modelové registry: `context_window`, případný samostatný `max_input_tokens`, provider `max_output_tokens`, podporované parametry a zákaz truncation. Pro přílohy, vnější historii a jiné lokálně neurčitelné vstupy se používá [ne-generativní počítání tokenů](https://developers.openai.com/api/docs/guides/token-counting). Výsledek musí odpovídat hashi přesného payloadu; neplatné nebo nedostupné měření blokuje generativní submit. Budoucí retrieval zůstává explicitně nejistý.
 
-LIVE souborové pokračování a opravy používají stejnou kontrolu nejistých vstupů. Skutečné měření se přenáší do `cost_context_report` pod identitou pracovního requestu včetně background/store a metadata opravy; polling aktualizuje tutéž položku. Ověření pokrývají `test_preparation_budget.py`, `test_preparation_snapshot.py`, `test_delivery_pipeline.py` a `test_context_compiler.py`.
+U souborů se reasoning effort volí podle složitosti kontraktu v rámci podporovaných capabilities modelu. Maximum Quality zachovává nejvyšší podporovanou úroveň. Model zvolený uživatelem se automaticky nesnižuje. Výstupní limit je odvozen z očekávaného viditelného výstupu, reasoning rezervy a obálky, ale nikdy nesmí překročit provider capability. Pokud se request nevejde do technického okna modelu, runtime jej neposílá.
 
-`context_budget.py` měří instrukce, input, schema a tools odděleně; FileContext má další rozpad po složkách. Lokální odhad je UTF-8 bajty / 3, doplněný konzervativní bajtovou horní mezí pro kontrolu kontextového okna. Není to přesný tokenizer. Soubor, obrázek, retrieval a serverová historie jsou explicitně neznámé složky, dokud není dostupné přesné měření. `OpenAIClient.count_input_tokens` používá samostatný ne-generativní endpoint a váže výsledek k hashi payloadu. LIVE pokračování souboru jej používá pro započítání historie.
+KájovoNG neimplementuje cenový engine ani runtime finanční budget. Hospodárnost je řešena návrhem workflow a provozním rozhodnutím uživatele. Runtime validuje pouze technické a kontraktní limity API. Levnější model, menší prompty, Batch nebo minimální testovací workload jsou vývojová/provozní rozhodnutí mimo runtime kontrakty.
 
-Měkký vstupní limit je 40k/80k/120k podle transparentního skóre. Skóre závisí na počtu dependency kontraktů, symbolů, scénářů, očekávaném výstupu, cyklech a rizikových facets. Přípona souboru se nepoužívá. Pevný provozní strop je 200k, nad 150k je nutné zdůvodnění; rezerva modelového kontextu je 10 %. Kontextový limit respektuje také rezervovaný výstup a samostatný vstupní limit modelu. Zablokovaný vstup se neořezává. Desktop zatím nemá editor rozpočtových override; blokující úloha vyžaduje změnu přípravy nebo kapacity modelu.
-
-U souborů se volí medium/high/xhigh podle složitosti v rámci podporovaných effort. Maximum Quality zachovává nejvyšší podporovanou úroveň. Model zvolený uživatelem se automaticky nesnižuje; kapacitně nevyhovující model způsobí blokaci. Výstupní limit je 1,5násobek očekávaného viditelného výstupu plus reasoning rezerva a 1 024 tokenů obálky. Nad maximum modelu se požadavek neposílá. Není to garance, že model nikdy vyčerpá výstup; incomplete zůstává neúspěchem.
-
-Verzovaný ceník pokrývá explicitně doložené GPT-5.4 mini a GPT-5.6 Luna. Luna má cenový práh nad 272k input tokenů, násobky 2× input a 1,5× output. Odhad Batch používá 50% základní sazbu. Neznámé modely nemají vymyšlenou cenu. Regionální příplatky, cache, retrieval a úložiště nejsou zahrnuty. Zdroje: [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini), [Batch](https://developers.openai.com/api/docs/guides/batch).
+LIVE pokračování a opravy používají stejnou technickou kontrolu. Raw provider `usage` se archivuje beze změny jako telemetrie. Neprovádí se nad ním peněžní výpočet, model se nefiltruje podle lokálního ceníku a neexistuje finanční gate.
 
 ## Závislosti, pokračování a hranice ověření
 
@@ -46,8 +42,8 @@ Rozhraní compileru přijímá verified dependency artefakty pouze se stavem `ve
 
 LIVE začíná každý soubor bez historie přípravy. Další chunky navazují pouze uvnitř stejného souboru, posílají hash kontextu a prefixu namísto opakovaného FileContextu. Indexy, počet, konec a návaznost se nadále validují. Konečný obsah a hashe chunků se ukládají přesně. Protokol neprovádí slepé spojování neúplných JSON; při `incomplete` se běh zastaví. Dávkový soubor musí být celý v jedné odpovědi.
 
-## Report a UI
+## Evidence a UI
 
-GENERATE/MODIFY ukládá `cost_context_report.json`: identitu requestu, fázi, model, effort, odhad/přesný vstup, output budget, rezervu, cenový práh, varování, blokace, usage a incomplete důvod. Response journal doplňuje skutečnou usage i při neúplném výsledku. Batch import aktualizuje podle `custom_id`; opakovaný import nezapočítává usage dvakrát. Cena není označována za skutečné vyúčtování.
+GENERATE/MODIFY uchovává identitu requestu, fázi, model, effort, technické input/output limity, varování, blokace a raw provider usage v běžné orchestration/Run Bundle evidenci. Samostatný cenový report se nevytváří. Opakovaný import téže provider položky je idempotentní podle provider identity.
 
-Progress UI ukazuje velikost souborového vstupu, model, reasoning, výstupní rozpočet a varování. Batch příprava uvádí počet úloh a součet odhadů. Podrobný rozpad zůstává lokálně v reportu. Samostatný desktopový přehled cen, plné vykazování kaskád a automatický integrační scheduler nejsou touto vrstvou dodány.
+Progress UI může ukázat velikost vstupu, model, reasoning, technický výstupní limit a počet položek Batch. Nenabízí finanční limit, ceníkovou politiku ani zacházení s neznámou cenou.

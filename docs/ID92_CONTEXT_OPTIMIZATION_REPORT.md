@@ -1,5 +1,7 @@
 # Offline regrese kontextu ID92
 
+Tento report je výhradně technická analýza tokenů, context-window a struktury FileContextu. Runtime cenový engine není součástí KájovoNG a tento report neprovádí peněžní odhady.
+
 Archiv SHA-256 `788270ac6cf5cf1f1efc5dfc00cce18396b3ee11b49988d8ae49672b6e3e0e8b`: ověřeno všech 258 souborů.
 Zadání má 1,215,653 znaků. Struktura má 300 souborů; přesný lokálně dodaný SSOT se negeneruje. Vyhodnoceno všech 299 archivních souborových úloh.
 
@@ -16,7 +18,7 @@ Finální A2Q neobsahuje přesné verzované implementační kontrakty ani rozho
 | Medián | 46907.0 |
 | p90 / p95 / p99 | 47366.0 / 47573.7 / 47978.8 |
 | Nad 100k / 150k / 200k | 0 / 0 / 0 |
-| Nad doloženým cenovým prahem | 0 kandidátů; u Luny je práh 272k |
+
 
 Legacy: archivní API input_tokens včetně přílohy. Kandidát: lokální odhad UTF-8 bajty / 3; bez API přílohy, instrukcí a schema. Nejde o ekvivalentní přesná měření.
 

@@ -21,17 +21,10 @@ from .orchestration.contracts import canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.image_slots import image_policy
 from .orchestration.repository import OrchestrationRepository
-from .orchestration.run_config import (
-    DEFAULT_MAX_COST_MICROUSD,
-    DEFAULT_MAX_INPUT_TOKENS,
-    DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_PAID_REQUESTS,
-    build_run_config_v2,
-)
+from .orchestration.run_config import build_run_config_v2
 from .orchestration.work_order import freeze_order
 from .model_registry import model_spec, models_for_usage
 from .photo_prompt import manual_photo_plan
-from .context_pricing import VERSION as PRICING_VERSION, observed_image_cost
 from .utils import atomic_write_text
 
 IMAGE_EDIT_ENDPOINT = "/v1/images/edits"
@@ -467,11 +460,6 @@ def _photo_cfg(job):
         model=job.image_model,
         send_as_c=True,
         maximum_quality=job.quality in {"xhigh", "max"},
-        max_cost_microusd=DEFAULT_MAX_COST_MICROUSD,
-        max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
-        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-        max_paid_requests=DEFAULT_MAX_PAID_REQUESTS,
-        unknown_pricing="explicit_token_budget",
         auto_repair="off",
         verification_profile_ids=[],
         stop_after_plan=False,
@@ -540,7 +528,7 @@ def _photo_work_order(job, rows):
     return cfg, order, projection
 
 
-def _reserve_photo_submit(job, rows, log_dir):
+def _prepare_photo_submit(job, rows, log_dir):
     cfg, order, projection = _photo_work_order(job, rows)
     repo = _photo_repo(log_dir)
     run_config = build_run_config_v2(cfg)
@@ -560,22 +548,19 @@ def _reserve_photo_submit(job, rows, log_dir):
         approval_id=order.approval_id,
         status="running",
     )
-    repo.register_work_order(
+    persisted_hash = repo.register_work_order(
         order,
         body_ref=canonical_sha256(rows),
         input_hash=order.input_projection_hash,
     )
-    repo.reserve(
-        reservation_id=order.budget_reservation_id,
-        work_order_hash=order.order_hash,
-        cost_microusd=None,
-        input_limit=0,
-        output_limit=0,
-        max_cost_microusd=cfg.max_cost_microusd,
-        max_input_tokens=cfg.max_input_tokens,
-        max_output_tokens=cfg.max_output_tokens,
-        max_paid_requests=cfg.max_paid_requests,
+    repo.prepare_provider_operation(
+        attempt_id=order.attempt_id,
+        work_order_hash=persisted_hash,
+        endpoint="/v1/batches",
+        request_hash=canonical_sha256(rows),
     )
+    if job.input_file_id:
+        repo.set_remote_input_file(order.attempt_id, job.input_file_id)
     root = save_job(job, log_dir)
     atomic_write_text(
         str(root / "work_order_v2.json"),
@@ -589,7 +574,7 @@ def _reserve_photo_submit(job, rows, log_dir):
     return repo, order
 
 
-def _photo_ledger_present(job, log_dir):
+def _photo_operation_present(job, log_dir):
     return (
         Path(log_dir)
         / "PHOTO"
@@ -598,30 +583,37 @@ def _photo_ledger_present(job, log_dir):
     ).is_file()
 
 
+def _mark_photo_submission_started(job, rows, log_dir):
+    if not _photo_operation_present(job, log_dir):
+        return
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    _photo_repo(log_dir).mark_submission_started(order.attempt_id)
+
+
 def _mark_photo_submission(job, rows, log_dir, provider_id=None, *, unknown):
-    if not _photo_ledger_present(job, log_dir):
+    if not _photo_operation_present(job, log_dir):
         return
     _cfg, order, _projection = _photo_work_order(job, rows)
     _photo_repo(log_dir).mark_submitted(
-        order.budget_reservation_id,
+        order.attempt_id,
         provider_id,
         unknown=unknown,
     )
 
 
-def _release_photo_reservation(job, rows, log_dir):
-    if not _photo_ledger_present(job, log_dir):
+def _mark_photo_not_submitted(job, rows, log_dir):
+    if not _photo_operation_present(job, log_dir):
         return
     _cfg, order, _projection = _photo_work_order(job, rows)
-    _photo_repo(log_dir).release(order.budget_reservation_id)
+    _photo_repo(log_dir).mark_not_submitted(order.attempt_id)
 
 
-def _settle_photo_usage(job, custom_id, usage, log_dir):
+def _record_photo_usage(job, custom_id, usage, log_dir):
     if (
         not job.batch_id
         or not isinstance(usage, dict)
         or not usage
-        or not _photo_ledger_present(job, log_dir)
+        or not _photo_operation_present(job, log_dir)
     ):
         return
     rows = [
@@ -636,30 +628,13 @@ def _settle_photo_usage(job, custom_id, usage, log_dir):
         for item in job.items
     ]
     _cfg, order, _projection = _photo_work_order(job, rows)
-    observed = observed_image_cost(job.image_model, usage, batch=True)
-    actual = (
-        round(float(observed["usd"]) * 1_000_000)
-        if isinstance(observed, dict)
-        and isinstance(observed.get("usd"), (int, float))
-        else None
-    )
-    _photo_repo(log_dir).settle(
-        order.budget_reservation_id,
+    provider_item_id = f"{job.batch_id}:{custom_id}"
+    _photo_repo(log_dir).record_usage(
+        order.attempt_id,
         provider="openai-image",
-        provider_item_id=f"{job.batch_id}:{custom_id}",
+        provider_item_id=provider_item_id,
         usage=usage,
-        actual_cost_microusd=actual,
-        price_snapshot_hash=canonical_sha256(
-            {
-                "pricing_version": (
-                    observed.get("pricing_version")
-                    if isinstance(observed, dict)
-                    else PRICING_VERSION
-                ),
-                "model": job.image_model,
-                "batch": True,
-            }
-        ),
+        raw_response_ref="batch-item:" + provider_item_id,
     )
 
 
@@ -710,7 +685,8 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
     client._validate_resource_id(job.input_file_id)
     save_job(job, log_dir)
 
-    _reserve_photo_submit(job, rows, log_dir)
+    _prepare_photo_submit(job, rows, log_dir)
+    _mark_photo_submission_started(job, rows, log_dir)
     report("Odesílám pracovní Image Edit BATCH.", 92)
     job.status = "submission_unknown"
     save_job(job, log_dir)
@@ -723,7 +699,7 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
             in {400, 401, 403, 404, 422, 429}
         )
         if definite_reject:
-            _release_photo_reservation(job, rows, log_dir)
+            _mark_photo_not_submitted(job, rows, log_dir)
             job.status = "failed"
         else:
             _mark_photo_submission(
@@ -773,7 +749,7 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
         if not matches:
             raise ValueError(
                 "Neurčitý Image Edit submit zatím nelze přesně dohledat; "
-                "novou dávku neposílejte, aby nevznikl duplicitní placený běh."
+                "novou dávku neposílejte, aby nevznikl duplicitní provider běh."
             )
         if len(matches) != 1:
             raise ValueError(
@@ -783,7 +759,7 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
         apply_batch_status(job, matches[0])
         if not job.batch_id:
             raise ValueError("Dohledaná dávka nemá platné batch_id.")
-        if job.schema_version >= 2 and _photo_ledger_present(job, log_dir):
+        if job.schema_version >= 2 and _photo_operation_present(job, log_dir):
             rows = [
                 image_edit_row(
                     item,
@@ -881,7 +857,7 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             response = row.get("response") or {}
             body = response.get("body") or {}
             if job.schema_version >= 2 and isinstance(body, dict):
-                _settle_photo_usage(
+                _record_photo_usage(
                     job,
                     cid,
                     body.get("usage") or {},

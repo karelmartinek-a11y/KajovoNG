@@ -213,10 +213,15 @@ class RunExecutor(RunContext):
         except Exception as e:
             measurement = getattr(e, "context_report", None)
             if measurement:
-                from ..cost_context_report import CostContextReport
-                CostContextReport(self.log.paths.run_dir).record(
-                    {"model": measurement["model"]}, custom_id=measurement["request_hash"],
-                    measurement=measurement, status="blocked")
+                request_hash = str(measurement.get("request_hash") or "unknown")
+                self.log.save_json(
+                    "manifests",
+                    "context_limit_block_" + request_hash[:16],
+                    {
+                        "status": "blocked",
+                        "measurement": measurement,
+                    },
+                )
             msg = str(e)
             if self._last_prev_id_error:
                 msg = self._last_prev_id_error

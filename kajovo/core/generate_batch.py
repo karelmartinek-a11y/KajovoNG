@@ -26,7 +26,7 @@ from .batch_submit import submit_verified_batch
 from .progress import ProgressEvent
 from .run_bundle import RunBundle
 from .context_compiler import ContextCompiler, canonical
-from .context_budget import configure_file_request, measure_request, enforce_budget
+from .context_limits import configure_file_request, measure_request, ensure_technical_limits
 
 
 def object_schema(properties):
@@ -317,7 +317,7 @@ def _build_manifest_v3(
             body, compiled, maximum_quality=maximum_quality
         )
         apply_quality(body, maximum_quality)
-        report = enforce_budget(
+        report = ensure_technical_limits(
             measure_request(body, compiled=compiled, batch=True)
         )
         validate_response_payload(body, batch=True)
@@ -337,13 +337,17 @@ def _build_manifest_v3(
         if cfg_for_order is None:
             from types import SimpleNamespace
             cfg_for_order = SimpleNamespace(
+                mode=mode,
+                model=model,
+                model_a1="",
+                model_a2="",
+                model_a3="",
+                send_as_c=True,
                 maximum_quality=maximum_quality,
                 auto_repair="off",
-                unknown_pricing="explicit_token_budget",
-                max_cost_microusd=None,
-                max_input_tokens=2_000_000,
-                max_output_tokens=500_000,
-                max_paid_requests=200,
+                verification_profile_ids=[],
+                stop_after_plan=False,
+                dry_run=False,
                 execution_approval_id=f"user-start:{run_id}",
             )
         order = freeze_order(
@@ -388,7 +392,7 @@ def _build_manifest_v3(
         "snapshot_hash": digest(snapshot),
         "requests": rows,
         "work_orders": {row["task_id"]: row for row in work_orders},
-        "cost_context_reports": reports,
+        "context_reports": reports,
         "dependency_waves": {
             "waves": [list(wave) for wave in dag.waves],
             "content_dependencies": {
@@ -519,7 +523,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
             body["temperature"] = temperature
         routing = configure_file_request(body, compiled, maximum_quality=maximum_quality)
         apply_quality(body, maximum_quality)
-        report = enforce_budget(measure_request(body, compiled=compiled, batch=True))
+        report = ensure_technical_limits(measure_request(body, compiled=compiled, batch=True))
         legacy_context = {"specification": snapshot, "file": file}
         if modifying:
             legacy_context["original_content"] = originals.get(file["path"], "")
@@ -536,10 +540,10 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
         if cfg_for_order is None:
             from types import SimpleNamespace
             cfg_for_order = SimpleNamespace(
-                maximum_quality=maximum_quality, auto_repair="off",
-                unknown_pricing="explicit_token_budget", max_cost_microusd=None,
-                max_input_tokens=2_000_000, max_output_tokens=500_000,
-                max_paid_requests=200,
+                mode=mode, model=model, model_a1="", model_a2="", model_a3="",
+                send_as_c=True, maximum_quality=maximum_quality, auto_repair="off",
+                verification_profile_ids=[], stop_after_plan=False, dry_run=False,
+                execution_approval_id=f"user-start:{run_id}",
             )
         order = freeze_order(
             cfg_for_order,
@@ -566,7 +570,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
         work_orders.append({**order.to_dict(), "order_hash": order.order_hash})
     manifest = {"version": 3, "mode": mode, "snapshot": snapshot, "snapshot_hash": digest(snapshot), "requests": rows,
                 "work_orders": {row["task_id"]: row for row in work_orders},
-                "cost_context_reports": reports, "dependency_waves": compiler.graph,
+                "context_reports": reports, "dependency_waves": compiler.graph,
                 "expected": {row["custom_id"]: file["path"] for row, file in zip(rows, selected, strict=True)},
                 "omitted": [f["path"] for f in files if f not in selected]}
     if recovery_instruction:
@@ -634,7 +638,7 @@ def encode_requests(manifest):
             )
             if compiled != expected_context or "specification" in context or row["body"].get("tools"):
                 raise ContractError("FileContext neodpovídá kanonické přípravě.")
-            enforce_budget(measure_request(row["body"], compiled=compiled, batch=True))
+            ensure_technical_limits(measure_request(row["body"], compiled=compiled, batch=True))
         elif digest(context["specification"]) != manifest["snapshot_hash"]:
             raise ContractError("Úloha neodpovídá společné specifikaci.")
         if context["file"]["path"] != manifest["expected"][row["custom_id"]]:
@@ -866,14 +870,29 @@ def _v3_cfg_namespace(state):
 
     cfg = dict(state.get("run_config_v2") or {})
     ui = dict(state.get("ui_state") or {})
+    workflow = str(cfg.get("workflow") or ui.get("mode") or "GENERATE")
     return SimpleNamespace(
-        maximum_quality=bool(cfg.get("quality") == "maximum" or ui.get("maximum_quality")),
-        auto_repair=str(cfg.get("auto_repair") or ui.get("auto_repair") or "off"),
-        unknown_pricing=str(cfg.get("unknown_pricing") or ui.get("unknown_pricing") or "block"),
-        max_cost_microusd=cfg.get("max_cost_microusd", ui.get("max_cost_microusd")),
-        max_input_tokens=int(cfg.get("max_input_tokens") or ui.get("max_input_tokens") or 0),
-        max_output_tokens=int(cfg.get("max_output_tokens") or ui.get("max_output_tokens") or 0),
-        max_paid_requests=int(cfg.get("max_paid_requests") or ui.get("max_paid_requests") or 0),
+        mode=workflow,
+        model=str(ui.get("model") or ""),
+        model_a1=str(ui.get("model_a1") or ""),
+        model_a2=str(ui.get("model_a2") or ""),
+        model_a3=str(ui.get("model_a3") or ""),
+        send_as_c=True,
+        maximum_quality=bool(
+            cfg.get("quality") == "maximum" or ui.get("maximum_quality")
+        ),
+        auto_repair=str(
+            cfg.get("auto_repair") or ui.get("auto_repair") or "off"
+        ),
+        verification_profile_ids=list(
+            cfg.get("verification_profile_ids")
+            or ui.get("verification_profile_ids")
+            or []
+        ),
+        stop_after_plan=bool(
+            cfg.get("stop_after_plan", ui.get("stop_after_plan", False))
+        ),
+        dry_run=bool(cfg.get("dry_run", ui.get("dry_run", False))),
         execution_approval_id=str(
             (state.get("execution_authorization") or {}).get("approval_id")
             or ui.get("execution_approval_id")
@@ -882,26 +901,33 @@ def _v3_cfg_namespace(state):
     )
 
 
-def _reserve_v3_followup(run_dir, state, manifest, *, retry_source=None):
-    """Ověří pracovní identity a atomicky rezervuje rozpočet celé navazující dávky."""
+def _prepare_v3_followup(run_dir, state, manifest, *, retry_source=None):
+    """Zmrazí attempt/effect identity bez finančního rozhodování."""
+    from dataclasses import replace
+
+    from .context_limits import ensure_technical_limits
     from .orchestration.repository import OrchestrationRepository
-    from .orchestration.work_order import WorkOrder
+    from .orchestration.work_order import (
+        attempt_identity,
+        work_order_from_mapping,
+    )
 
     encode_requests(manifest)
     for candidate in (manifest, retry_source):
         if candidate is None:
             continue
         for custom_id, raw in candidate["work_orders"].items():
-            order = WorkOrder(**{k: v for k, v in raw.items() if k != "order_hash"})
-            if raw.get("order_hash") != order.order_hash:
-                raise ContractError(f"{custom_id}: nesouhlasí hash WORK_ORDER_V2.")
+            order = work_order_from_mapping(raw)
+            if "attempt_id" in raw and raw.get("order_hash") != order.order_hash:
+                raise ContractError(
+                    f"{custom_id}: nesouhlasí hash WORK_ORDER_V2."
+                )
+
     repo = OrchestrationRepository(
         Path(run_dir).resolve().parent / "orchestration.sqlite3"
     )
-    cfg = _v3_cfg_namespace(state)
-    if retry_source is not None:
-        from dataclasses import replace
 
+    if retry_source is not None:
         source_orders = {
             value["target_path"]: value
             for value in retry_source["work_orders"].values()
@@ -914,14 +940,22 @@ def _reserve_v3_followup(run_dir, state, manifest, *, retry_source=None):
             previous = source_orders[path]
             with repo.connect() as db:
                 attempts = db.execute(
-                    "SELECT w.attempt_no,r.state FROM work_orders w "
-                    "LEFT JOIN reservations r ON r.work_order_hash=w.work_order_hash "
+                    "SELECT w.attempt_no,p.state FROM work_orders w "
+                    "LEFT JOIN provider_operations p "
+                    "ON p.work_order_hash=w.work_order_hash "
                     "WHERE w.run_id=? AND w.task_id=?",
                     (previous["run_id"], previous["task_id"]),
                 ).fetchall()
-            if any(status in {"reserved", "submitted", "unknown"} for _, status in attempts):
-                raise ContractError("Před opravou dokončete nebo dohledejte předchozí pokus úlohy.")
-            attempt = max([previous["attempt_no"], *(number for number, _ in attempts)]) + 1
+            if any(
+                status in {"prepared", "submitted", "submission_unknown"}
+                for _, status in attempts
+            ):
+                raise ContractError(
+                    "Před opravou dokončete nebo dohledejte předchozí pokus úlohy."
+                )
+            attempt = max(
+                [int(previous["attempt_no"]), *(int(number) for number, _ in attempts)]
+            ) + 1
             if attempt > 3:
                 raise ContractError(
                     "Úloha vyčerpala limit tří pokusů; automatické opravy jsou vyčerpány. "
@@ -929,94 +963,79 @@ def _reserve_v3_followup(run_dir, state, manifest, *, retry_source=None):
                 )
             custom_id = f"{previous['task_id']}_retry_{attempt}"
             raw_order = manifest["work_orders"][old_id]
-            order = WorkOrder(**{k: v for k, v in raw_order.items() if k != "order_hash"})
-            # I shodné souběžné opravy mají odlišný WorkOrder; unikátní pokus
-            # proto druhou registraci odmítne místo idempotentního přijetí.
+            order = work_order_from_mapping(raw_order)
             order = replace(
-                order, task_id=previous["task_id"], step_id="batch:" + custom_id,
+                order,
+                task_id=previous["task_id"],
+                step_id="batch:" + custom_id,
                 attempt_no=attempt,
-                budget_reservation_id="RES-" + digest({
-                    "order": order.to_dict(), "task_id": previous["task_id"],
-                    "attempt_no": attempt,
-                    "operation_id": uuid.uuid4().hex,
-                })[:32],
+                attempt_id=attempt_identity(
+                    str(previous["run_id"]),
+                    str(previous["task_id"]),
+                    attempt,
+                ),
             )
             request["custom_id"] = custom_id
             renamed[old_id] = custom_id
-            orders_by_id[custom_id] = {**order.to_dict(), "order_hash": order.order_hash}
-        manifest["expected"] = {renamed[key]: path for key, path in manifest["expected"].items()}
+            orders_by_id[custom_id] = {
+                **order.to_dict(),
+                "order_hash": order.order_hash,
+            }
+        manifest["expected"] = {
+            renamed[key]: path for key, path in manifest["expected"].items()
+        }
         manifest["work_orders"] = orders_by_id
-        for report in manifest["cost_context_reports"]:
+        for report in manifest["context_reports"]:
             report["custom_id"] = renamed[report["custom_id"]]
         encode_requests(manifest)
+
     reports = {
         str(row.get("custom_id")): row
-        for row in manifest.get("cost_context_reports", [])
+        for row in manifest.get("context_reports", [])
     }
-    sql_rows = []
     orders = {}
     for request in manifest["requests"]:
         custom_id = str(request["custom_id"])
         raw_order = (manifest.get("work_orders") or {}).get(custom_id)
         if not isinstance(raw_order, dict):
             raise ContractError(f"{custom_id}: chybí WORK_ORDER_V2.")
-        order = WorkOrder(**{
-            key: value for key, value in raw_order.items() if key != "order_hash"
-        })
-        if raw_order.get("order_hash") != order.order_hash:
-            raise ContractError(f"{custom_id}: nesouhlasí hash WORK_ORDER_V2.")
-        orders[custom_id] = order
+        order = work_order_from_mapping(raw_order)
+        if "attempt_id" in raw_order and raw_order.get("order_hash") != order.order_hash:
+            raise ContractError(
+                f"{custom_id}: nesouhlasí hash WORK_ORDER_V2."
+            )
         report = reports.get(custom_id)
         if not isinstance(report, dict):
-            raise ContractError(f"{custom_id}: chybí cost/context report.")
-        projected = report.get("projected_cost")
-        usd = projected.get("usd") if isinstance(projected, dict) else None
-        cost = (
-            round(float(usd) * 1_000_000)
-            if isinstance(usd, (int, float))
-            else None
-        )
-        if cost is None and cfg.unknown_pricing == "block":
-            raise ContractError(
-                f"{custom_id}: cena modelu není lokálně ověřena a unknown_pricing=block."
-            )
+            raise ContractError(f"{custom_id}: chybí context report.")
+        ensure_technical_limits(copy.deepcopy(report))
+        body_hash = hashlib.sha256(
+            json.dumps(
+                request["body"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         import sqlite3
 
         try:
-            repo.register_work_order(
+            persisted_hash = repo.register_work_order(
                 order,
-                body_ref=hashlib.sha256(
-                    json.dumps(
-                        request["body"],
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                ).hexdigest(),
+                body_ref=body_hash,
                 input_hash=order.input_projection_hash,
             )
         except sqlite3.IntegrityError as exc:
             raise ContractError(
-                "Pracovní pokus nelze zaregistrovat; ověřte stav souběžné operace před dalším odesláním."
+                "Pracovní pokus nelze zaregistrovat; ověřte stav "
+                "souběžné operace před dalším odesláním."
             ) from exc
-        sql_rows.append({
-            "reservation_id": order.budget_reservation_id,
-            "work_order_hash": order.order_hash,
-            "cost_microusd": cost,
-            "input_limit": int(report.get("input_tokens") or 0),
-            "output_limit": int(
-                report.get("output_budget")
-                or request["body"].get("max_output_tokens")
-                or 0
-            ),
-        })
-    repo.reserve_many(
-        sql_rows,
-        max_cost_microusd=cfg.max_cost_microusd,
-        max_input_tokens=cfg.max_input_tokens,
-        max_output_tokens=cfg.max_output_tokens,
-        max_paid_requests=cfg.max_paid_requests,
-    )
+        repo.prepare_provider_operation(
+            attempt_id=order.attempt_id,
+            work_order_hash=persisted_hash,
+            endpoint="/v1/batches",
+            request_hash=body_hash,
+        )
+        orders[custom_id] = order
     return repo, orders
 
 
@@ -1084,7 +1103,7 @@ def _submit_v3_followup_wave(
         verified_artifacts=verified_artifacts,
     )
     next_manifest["source_manifest_hash"] = digest(source_manifest)
-    repo, orders = _reserve_v3_followup(run_dir, state, next_manifest)
+    repo, orders = _prepare_v3_followup(run_dir, state, next_manifest)
     data = encode_requests(next_manifest)
     requests_dir = Path(run_dir) / "requests"
     requests_dir.mkdir(parents=True, exist_ok=True)
@@ -1134,6 +1153,9 @@ def _submit_v3_followup_wave(
         json.dumps(state, ensure_ascii=False, indent=2),
     )
 
+    for order in orders.values():
+        repo.set_remote_input_file(order.attempt_id, input_file_id)
+        repo.mark_submission_started(order.attempt_id)
     try:
         batch = submit_verified_batch(
             client, input_file_id, next_manifest["requests"]
@@ -1146,13 +1168,13 @@ def _submit_v3_followup_wave(
         )
         if definite_reject:
             for order in orders.values():
-                repo.release(order.budget_reservation_id)
+                repo.mark_not_submitted(order.attempt_id)
             v4 = transition_batch_manifest(v4, "failed")
             state["submission_unknown"] = False
         else:
             for order in orders.values():
                 repo.mark_submitted(
-                    order.budget_reservation_id, None, unknown=True
+                    order.attempt_id, None, unknown=True
                 )
             v4 = transition_batch_manifest(v4, "submission_unknown")
             state["status"] = "submission_unknown"
@@ -1167,7 +1189,7 @@ def _submit_v3_followup_wave(
     if not batch_id:
         for order in orders.values():
             repo.mark_submitted(
-                order.budget_reservation_id, None, unknown=True
+                order.attempt_id, None, unknown=True
             )
         v4 = transition_batch_manifest(v4, "submission_unknown")
         state["batch_manifests_v4"][v4["manifest_id"]] = v4
@@ -1182,7 +1204,7 @@ def _submit_v3_followup_wave(
 
     for order in orders.values():
         repo.mark_submitted(
-            order.budget_reservation_id, batch_id, unknown=False
+            order.attempt_id, batch_id, unknown=False
         )
     v4 = transition_batch_manifest(
         v4, "submitted", provider_batch_id=batch_id
@@ -1220,25 +1242,19 @@ def _process_saved_batch_v3(
     progress=None,
 ):
     """Import one V3 wave into immutable staging and advance the DAG."""
-    from .context_pricing import PRICES, VERSION, projected_cost
     from .orchestration.batch_manifest import transition as transition_batch_manifest
     from .orchestration.repository import OrchestrationRepository
     from .orchestration.verification import technical_staging_report
-    from .orchestration.work_order import WorkOrder
+    from .orchestration.work_order import work_order_from_mapping
 
     run_root = Path(run_dir).resolve()
     repo = OrchestrationRepository(run_root.parent / "orchestration.sqlite3")
 
-    # Settle per-response usage idempotently. Polling or repeated import cannot
-    # charge the same provider item twice.
+    # Provider usage se archivuje beze změny; opakovaný import je idempotentní.
     orders = {}
     for custom_id, raw_order in (manifest.get("work_orders") or {}).items():
         if isinstance(raw_order, dict):
-            orders[str(custom_id)] = WorkOrder(**{
-                key: value
-                for key, value in raw_order.items()
-                if key != "order_hash"
-            })
+            orders[str(custom_id)] = work_order_from_mapping(raw_order)
     for raw in raw_files:
         for line in raw.decode("utf-8").splitlines():
             if not line.strip():
@@ -1254,35 +1270,12 @@ def _process_saved_batch_v3(
             usage = body.get("usage")
             if order is None or not provider_id or not isinstance(usage, dict):
                 continue
-            model = str(body.get("model") or order.model)
-            input_tokens = int(usage.get("input_tokens") or 0)
-            output_tokens = int(usage.get("output_tokens") or 0)
-            priced = projected_cost(
-                model, input_tokens, output_tokens, batch=True
-            )
-            actual_cost = (
-                round(float(priced["usd"]) * 1_000_000)
-                if isinstance(priced, dict)
-                and isinstance(priced.get("usd"), (int, float))
-                else None
-            )
-            price_hash = (
-                digest({
-                    "version": VERSION,
-                    "model": model,
-                    "price": PRICES.get(model),
-                    "batch": True,
-                })
-                if model in PRICES
-                else None
-            )
-            repo.settle(
-                order.budget_reservation_id,
+            repo.record_usage(
+                order.attempt_id,
                 provider="openai",
                 provider_item_id=provider_id,
                 usage=usage,
-                actual_cost_microusd=actual_cost,
-                price_snapshot_hash=price_hash,
+                raw_response_ref="batch-item:" + provider_id,
             )
 
     staging_root = run_root / "staging" / "batch" / str(batch_id)
@@ -1537,8 +1530,6 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
             raw_files.append(raw)
             raw_path = safe_join_under_root(str(response_dir), f"{batch_id}_{key}.jsonl")
             Path(raw_path).write_bytes(raw)
-    from .cost_context_report import CostContextReport
-    reporter = CostContextReport(run_dir)
     batch_usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     requests_by_id = {r["custom_id"]: r["body"] for r in manifest["requests"]}
     for raw in raw_files:
@@ -1551,8 +1542,6 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
                 body = (result_row.get("response") or {}).get("body") or {"status": "failed"}
                 if result_row.get("error"):
                     body = {**body, "error": result_row["error"]}
-                reporter.record(requests_by_id[cid], custom_id=cid, response=body,
-                                path=manifest["expected"][cid])
                 usage = body.get("usage") or {}
                 batch_usage["input_tokens"] += usage.get("input_tokens", 0)
                 batch_usage["output_tokens"] += usage.get("output_tokens", 0)
@@ -1772,7 +1761,7 @@ def _repeat_v3_batch(
     manifest["deferred_paths"] = []
     manifest["blocked_requested_paths"] = []
 
-    repo, orders = _reserve_v3_followup(run_dir, state, manifest, retry_source=source)
+    repo, orders = _prepare_v3_followup(run_dir, state, manifest, retry_source=source)
     data = encode_requests(manifest)
     request_path = (
         Path(run_dir)
@@ -1814,6 +1803,9 @@ def _repeat_v3_batch(
         str(Path(run_dir) / "run_state.json"),
         json.dumps(state, ensure_ascii=False, indent=2),
     )
+    for order in orders.values():
+        repo.set_remote_input_file(order.attempt_id, input_file_id)
+        repo.mark_submission_started(order.attempt_id)
     try:
         batch = submit_verified_batch(
             client, input_file_id, manifest["requests"]
@@ -1826,13 +1818,13 @@ def _repeat_v3_batch(
         )
         if definite_reject:
             for order in orders.values():
-                repo.release(order.budget_reservation_id)
+                repo.mark_not_submitted(order.attempt_id)
             v4 = transition_batch_manifest(v4, "failed")
             state["submission_unknown"] = False
         else:
             for order in orders.values():
                 repo.mark_submitted(
-                    order.budget_reservation_id, None, unknown=True
+                    order.attempt_id, None, unknown=True
                 )
             v4 = transition_batch_manifest(v4, "submission_unknown")
             state["status"] = "submission_unknown"
@@ -1847,7 +1839,7 @@ def _repeat_v3_batch(
     if not batch_id:
         for order in orders.values():
             repo.mark_submitted(
-                order.budget_reservation_id, None, unknown=True
+                order.attempt_id, None, unknown=True
             )
         state["status"] = "submission_unknown"
         state["submission_unknown"] = True
@@ -1863,7 +1855,7 @@ def _repeat_v3_batch(
 
     for order in orders.values():
         repo.mark_submitted(
-            order.budget_reservation_id, batch_id, unknown=False
+            order.attempt_id, batch_id, unknown=False
         )
     v4 = transition_batch_manifest(
         v4, "submitted", provider_batch_id=batch_id

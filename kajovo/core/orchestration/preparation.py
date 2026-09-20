@@ -11,7 +11,7 @@ import jsonschema
 
 from .contracts import canonical_sha256
 from .waves import build_execution_dag
-from ..context_budget import preparation_measurement
+from ..context_limits import preparation_measurement
 from ..contracts import ContractError, extract_text_from_response, validate_paths
 from ..structured_output import array, obj, prepare_payload, response_format, validate_output
 

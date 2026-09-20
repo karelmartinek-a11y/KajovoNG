@@ -2,6 +2,8 @@
 
 ## Účel
 
+KájovoNG v PHOTO runtime nepočítá ani neodhaduje peněžní hodnotu operací. Validuje pouze technické image/Files/Batch capabilities a zachovává WorkOrder, attempt/provider identity, recovery a raw provider usage.
+
 Photo Studio je samostatná pracovní sekce pro profesionální úpravu existujících fotografií. Textový prompt lze volitelně převést přes pracovní Responses API do profesionální anglické instrukce. Samotná úprava fotografie se nikdy neposílá LIVE; probíhá výhradně jako pracovní BATCH na `/v1/images/edits`.
 
 ## UI
@@ -109,7 +111,7 @@ Output JSONL se nesmí potichu tolerovat. Neplatný JSON, neznámé nebo duplici
 
 Pro úspěšnou položku musí být v `response.body.data[0].b64_json` dekódovatelný výsledek. Nestačí platný Base64: před zápisem se výsledek skutečně dekóduje přes Pillow, musí být statický PNG/JPEG/WebP, odpovídat objednanému formátu, vejít se do 64 MP a projít `verify()` i úplným `load()`. Teprve poté se soubor atomicky zapíše a uloží se SHA-256, rozměry a detekovaný formát. Poškozené bajty s příponou obrázku jsou chybou položky. Photo Job je po stažení `downloaded`, `partial` nebo `failed` podle skutečných položek.
 
-Bezprostředně před jediným pracovním `POST /batches` se job uloží jako `submission_unknown`. Pokud transport po odeslání nedokáže potvrdit výsledek, nový placený submit se automaticky neposílá. Obnova nejprve vyhledá přesnou dávku podle `input_file_id` a endpointu `/v1/images/edits`; pokračuje pouze při právě jedné shodě. Nula nebo více shod jsou explicitní blokující stavy.
+Bezprostředně před jediným pracovním `POST /batches` se job uloží jako `submission_unknown`. Pokud transport po odeslání nedokáže potvrdit výsledek, nový provider submit se automaticky neposílá. Obnova nejprve vyhledá přesnou dávku podle `input_file_id` a endpointu `/v1/images/edits`; pokračuje pouze při právě jedné shodě. Nula nebo více shod jsou explicitní blokující stavy.
 
 Lokální umělý upscale se automaticky neprovádí. Požadovaná velikost se objednává od image modelu; program nevytváří falešný dojem nového detailu resamplingem.
 
@@ -119,7 +121,7 @@ Stávající GENERATE/MODIFY Batch nad `/v1/responses` zůstává beze změny. P
 
 ## Testovací kontrakt
 
-Testy jsou pouze lokální/mockované a nesmí posílat placené požadavky. Ověřují zejména:
+Testy jsou pouze lokální/mockované a nesmí posílat skutečné provider požadavky. Ověřují zejména:
 
 - neměnnost vestavěných šablon;
 - CRUD uživatelských šablon;

@@ -32,14 +32,13 @@
   "candidate_distribution": {
     "max": 48709,
     "mean": 46938.03344481605,
-    "p50": 46907.0,
-    "p90": 47366.0,
+    "p50": 46907,
+    "p90": 47366,
     "p95": 47573.7,
     "p99": 47978.77999999999,
     "over_100000": 0,
     "over_150000": 0,
-    "over_200000": 0,
-    "over_long_context_pricing_threshold": 0
+    "over_200000": 0
   },
   "measurement": "Legacy: archivní API input_tokens včetně přílohy. Kandidát: lokální odhad UTF-8 bajty / 3; bez API přílohy, instrukcí a schema. Nejde o ekvivalentní přesná měření.",
   "dependency_graph": {
@@ -1058,7 +1057,6 @@
       "candidate_estimated_tokens": 46817,
       "candidate_utf8_bytes": 140449,
       "candidate_hash": "82784cec3cc1fcd99903467d73021bf4cf63f63315e4504af1ac7d1eab4d8399",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1073,7 +1071,6 @@
       "candidate_estimated_tokens": 46410,
       "candidate_utf8_bytes": 139229,
       "candidate_hash": "9099c14f97976ac9ced5719bba101598ac4e7cd0857f581707a6d5e59b822c1c",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1088,7 +1085,6 @@
       "candidate_estimated_tokens": 46683,
       "candidate_utf8_bytes": 140048,
       "candidate_hash": "f7d2ef98bdd65adcee75dbeb7849e7efd5294d899cb1e791da6706fd2530065b",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1103,7 +1099,6 @@
       "candidate_estimated_tokens": 47197,
       "candidate_utf8_bytes": 141590,
       "candidate_hash": "67ae8a706754765f320f66591b7fe70e549cbe3b92906b1920f088e8c6c55d4e",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1118,7 +1113,6 @@
       "candidate_estimated_tokens": 46426,
       "candidate_utf8_bytes": 139278,
       "candidate_hash": "859b364d0e289005955ffc8a2675888aebf8dccf738b4b6c27144f518276dc36",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1133,7 +1127,6 @@
       "candidate_estimated_tokens": 47089,
       "candidate_utf8_bytes": 141266,
       "candidate_hash": "a66618a2d57b35ede9f8bbd214b365890825b183ae52e787b53ea7a72f08979d",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1148,7 +1141,6 @@
       "candidate_estimated_tokens": 46734,
       "candidate_utf8_bytes": 140202,
       "candidate_hash": "724c43b59e867a8485e8f1a4c2f2e1a5bac3708f8a03802c762242c87ee242c4",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1163,7 +1155,6 @@
       "candidate_estimated_tokens": 46780,
       "candidate_utf8_bytes": 140340,
       "candidate_hash": "3bf7a1d19bd460f7e59936a55c64d8eb9ab860985ccc5af8318be24ffc08674d",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1178,7 +1169,6 @@
       "candidate_estimated_tokens": 46880,
       "candidate_utf8_bytes": 140639,
       "candidate_hash": "4fbcca1ff12c996851541f9449608133b5ead5317a4d3bbd433166c9707b91f9",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1193,7 +1183,6 @@
       "candidate_estimated_tokens": 46833,
       "candidate_utf8_bytes": 140497,
       "candidate_hash": "85d576a24510358aabf502eb00be31cf960d643f1c2ec18d5dc00bbcd6d0cc49",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1208,7 +1197,6 @@
       "candidate_estimated_tokens": 46386,
       "candidate_utf8_bytes": 139156,
       "candidate_hash": "b65e384f6b56eaf25e25eedba4102774cc73dd8bfb8cfd9d270bb9f778f68161",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1223,7 +1211,6 @@
       "candidate_estimated_tokens": 46834,
       "candidate_utf8_bytes": 140500,
       "candidate_hash": "99d214aef2f5603fcee36c17a9e3a4f0f87f25102aff7ae0211fc14192e4ffc5",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1238,7 +1225,6 @@
       "candidate_estimated_tokens": 47347,
       "candidate_utf8_bytes": 142041,
       "candidate_hash": "578072bdb2446ab52a4d17cfbd8fec5aa35873ad46c699af4e4ee5f03a393b38",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1253,7 +1239,6 @@
       "candidate_estimated_tokens": 46410,
       "candidate_utf8_bytes": 139228,
       "candidate_hash": "f2d0cd348d3406863b06ec25399be6ab85d4a7dcdcc3151e23caf10506bf1fc1",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1268,7 +1253,6 @@
       "candidate_estimated_tokens": 46411,
       "candidate_utf8_bytes": 139231,
       "candidate_hash": "baf19b26612e2f32b6496c4d0f3c0cf7f636d06864c527c63de9b27cbf9d2ea5",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1283,7 +1267,6 @@
       "candidate_estimated_tokens": 46402,
       "candidate_utf8_bytes": 139205,
       "candidate_hash": "224a3f3744d5d4c080a1cef9fece232f459b71f9ff5a75d9aaec7800d75d4e13",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1298,7 +1281,6 @@
       "candidate_estimated_tokens": 46407,
       "candidate_utf8_bytes": 139221,
       "candidate_hash": "393b2b8a4e7f9ad101403ce4b5f217f78fa30b055810159042ff46521e523515",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1313,7 +1295,6 @@
       "candidate_estimated_tokens": 46407,
       "candidate_utf8_bytes": 139219,
       "candidate_hash": "0806e8b90cd2a9ac12789bf39918131a53c3164d6407c6a8838c147e307c786a",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1328,7 +1309,6 @@
       "candidate_estimated_tokens": 46399,
       "candidate_utf8_bytes": 139196,
       "candidate_hash": "9187c10b8e3ed36326413ce648417cb38164fb549da8c85355a008fe197f947b",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1343,7 +1323,6 @@
       "candidate_estimated_tokens": 46405,
       "candidate_utf8_bytes": 139215,
       "candidate_hash": "c183863f09f250b3dc3e933d1b9ea7d7234914099997df4342f9209446f9dc94",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1358,7 +1337,6 @@
       "candidate_estimated_tokens": 46407,
       "candidate_utf8_bytes": 139220,
       "candidate_hash": "8e005a3eee0022414c200c620e783be43601eca8c85922de22cafcfa7a4c567f",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1373,7 +1351,6 @@
       "candidate_estimated_tokens": 46396,
       "candidate_utf8_bytes": 139186,
       "candidate_hash": "54c4b32f2feb67b95c3b4c5e5c99fee2b7e677d893833e55f9d4f2b317f38df1",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1388,7 +1365,6 @@
       "candidate_estimated_tokens": 46410,
       "candidate_utf8_bytes": 139228,
       "candidate_hash": "12c1253e853e959b29c964b03b320184ac6495f3a8568acd48a85145cdb2fc22",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1403,7 +1379,6 @@
       "candidate_estimated_tokens": 46404,
       "candidate_utf8_bytes": 139211,
       "candidate_hash": "500435d1af012e00e034a4cf4b6383b46dd4dd657859cefe6853504fdedc3496",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1418,7 +1393,6 @@
       "candidate_estimated_tokens": 46401,
       "candidate_utf8_bytes": 139201,
       "candidate_hash": "c69623de05d83b21f98d5899af5299fd7b1b9a1956de6b075a182d0a800288a3",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1433,7 +1407,6 @@
       "candidate_estimated_tokens": 46404,
       "candidate_utf8_bytes": 139212,
       "candidate_hash": "0ec78dc5d3724914b3824fad65d6b12b2eb16fb25c85f253a5d1bc0fa07809ae",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1448,7 +1421,6 @@
       "candidate_estimated_tokens": 46406,
       "candidate_utf8_bytes": 139216,
       "candidate_hash": "57d7d6f581517ddbca5e8934c193d1efe27f7f655ed8ef646f0af40eec9e1784",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1463,7 +1435,6 @@
       "candidate_estimated_tokens": 46994,
       "candidate_utf8_bytes": 140981,
       "candidate_hash": "8ad3cd8559d12c25d53dcc0283adc943b726976f12c3911049e7677907bea43b",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1478,7 +1449,6 @@
       "candidate_estimated_tokens": 46891,
       "candidate_utf8_bytes": 140673,
       "candidate_hash": "e71ffc258c77e8a2a676ee904fe054c9ccb8626cdc40ec316e047179c2cac3a1",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1493,7 +1463,6 @@
       "candidate_estimated_tokens": 46891,
       "candidate_utf8_bytes": 140671,
       "candidate_hash": "4c5404992bde516a7c5de810a80b2005baf5911f3ab550807fe917f39d7b1325",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1508,7 +1477,6 @@
       "candidate_estimated_tokens": 46910,
       "candidate_utf8_bytes": 140728,
       "candidate_hash": "08fd06657b73f6a3efbbc94627075e20d10a1d967f86061e41e9f3152ef76659",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1523,7 +1491,6 @@
       "candidate_estimated_tokens": 47053,
       "candidate_utf8_bytes": 141158,
       "candidate_hash": "0c22b8c967ea03259a18ea1d56025844c964a1603cb5e3e74bc4befb25eddeca",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1538,7 +1505,6 @@
       "candidate_estimated_tokens": 47017,
       "candidate_utf8_bytes": 141049,
       "candidate_hash": "6c2556815154fb81c15d61461cf78e89a3cc5fe33a3bbe4aeaa4666464536b67",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1553,7 +1519,6 @@
       "candidate_estimated_tokens": 46888,
       "candidate_utf8_bytes": 140662,
       "candidate_hash": "1056c9fc5beeca703cea8b410f2c2e8103180b33efc46addcb8f8307bb725fed",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1568,7 +1533,6 @@
       "candidate_estimated_tokens": 46712,
       "candidate_utf8_bytes": 140135,
       "candidate_hash": "1e9e5bfc6aab4ca6d2395024c89b6a0168c825e280d220b41e81378d51cfe00b",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1583,7 +1547,6 @@
       "candidate_estimated_tokens": 46720,
       "candidate_utf8_bytes": 140158,
       "candidate_hash": "27625b45567b0f295bb3a4f568ec5f59805b8c4a71c1973fc62a540205f4e8f8",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1598,7 +1561,6 @@
       "candidate_estimated_tokens": 47037,
       "candidate_utf8_bytes": 141111,
       "candidate_hash": "d509947ae8ab6ccc37aab982a20dfcb8e9fb08eb736721a8120fda0609ff2c84",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1613,7 +1575,6 @@
       "candidate_estimated_tokens": 46905,
       "candidate_utf8_bytes": 140714,
       "candidate_hash": "32bfad26fb8b8af2a08226550a8fa3d90388cbfde9b8e6c2a04f1f02d943e6aa",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1628,7 +1589,6 @@
       "candidate_estimated_tokens": 46738,
       "candidate_utf8_bytes": 140214,
       "candidate_hash": "62111854b14299382239f7c37b0542282525f64c9b3b902b4b43ed95baa84eca",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1643,7 +1603,6 @@
       "candidate_estimated_tokens": 46884,
       "candidate_utf8_bytes": 140650,
       "candidate_hash": "cf412ae64fa54e259af9fe04ea5484e58419a84c09d4c98cd10c30775bdfece9",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1658,7 +1617,6 @@
       "candidate_estimated_tokens": 47119,
       "candidate_utf8_bytes": 141356,
       "candidate_hash": "41c524c62885646960f68d6638a67a611d0bf4fe76efdeaaa198df360302a6f1",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1673,7 +1631,6 @@
       "candidate_estimated_tokens": 48709,
       "candidate_utf8_bytes": 146125,
       "candidate_hash": "c046068480a8e94ff48d23d2494008d46f07d4e8c728613c4e568364cf70fc17",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1688,7 +1645,6 @@
       "candidate_estimated_tokens": 47573,
       "candidate_utf8_bytes": 142718,
       "candidate_hash": "3947c99cf7f0f36b4e49ae8b39d36034be2330ac84a30db6de73502fa9ea1d73",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1703,7 +1659,6 @@
       "candidate_estimated_tokens": 46938,
       "candidate_utf8_bytes": 140812,
       "candidate_hash": "97b7fd9c10a153a293ca41bbb2cea2e32bd9f4d05174b045eb923d0b9b7f3733",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1718,7 +1673,6 @@
       "candidate_estimated_tokens": 46662,
       "candidate_utf8_bytes": 139986,
       "candidate_hash": "6d09b65cc6baf1aa295b3818b02491a842b6895e47611996f6cd70e8acbb4189",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1733,7 +1687,6 @@
       "candidate_estimated_tokens": 46796,
       "candidate_utf8_bytes": 140386,
       "candidate_hash": "635ef62993650b8a87e39164fff9e18b686a462568252d10e3d070a5bc41578d",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1748,7 +1701,6 @@
       "candidate_estimated_tokens": 46645,
       "candidate_utf8_bytes": 139934,
       "candidate_hash": "694656574fc94fc4604df34c486aa0b95578b79fcf3f11ed9f074a4ceb024f9c",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1763,7 +1715,6 @@
       "candidate_estimated_tokens": 46563,
       "candidate_utf8_bytes": 139688,
       "candidate_hash": "b4658fd60fdded31b8f88085149927b9650aaaf598de568e875787056c77ab71",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1778,7 +1729,6 @@
       "candidate_estimated_tokens": 46557,
       "candidate_utf8_bytes": 139671,
       "candidate_hash": "d7cd222ca12471910ee86807f9fb603230f17aee3e782d17b369b0d1ecc4b18a",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1793,7 +1743,6 @@
       "candidate_estimated_tokens": 46797,
       "candidate_utf8_bytes": 140391,
       "candidate_hash": "aa6c5cb23c7acd9689c4363d188ca3dc8150f6f70b30b144f13d998c895c099b",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1808,7 +1757,6 @@
       "candidate_estimated_tokens": 46515,
       "candidate_utf8_bytes": 139543,
       "candidate_hash": "2083b6ee67fa6ddbcdc9d2fc48ff661816a04202c6a43a58ff5ba6c202185ad0",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1823,7 +1771,6 @@
       "candidate_estimated_tokens": 46568,
       "candidate_utf8_bytes": 139702,
       "candidate_hash": "1a13f48c99fd20adac1ab8d1719c05abc6f0f336c2583f37d475231a381860da",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1838,7 +1785,6 @@
       "candidate_estimated_tokens": 46791,
       "candidate_utf8_bytes": 140373,
       "candidate_hash": "00712eff8ffb83a7e0d7e7bdfda1237ca84ea491398df75ebd4b0891feca0bb6",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1853,7 +1799,6 @@
       "candidate_estimated_tokens": 46696,
       "candidate_utf8_bytes": 140087,
       "candidate_hash": "2599caaf1901ccd76928419f81a58107b36f35b60b7e7723fd495de03f23ab29",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1868,7 +1813,6 @@
       "candidate_estimated_tokens": 46874,
       "candidate_utf8_bytes": 140621,
       "candidate_hash": "cfb31ea63b2badf9f36a4c1966a62449fbbae17bbeac94cac1cbeef118320a40",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1883,7 +1827,6 @@
       "candidate_estimated_tokens": 46580,
       "candidate_utf8_bytes": 139740,
       "candidate_hash": "fadaaee5b774e8bf6303ae8d7973215994a241f66a8d04dddbc87b73c5fc0957",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1898,7 +1841,6 @@
       "candidate_estimated_tokens": 46715,
       "candidate_utf8_bytes": 140145,
       "candidate_hash": "f441a40a99ded3baea1551ae268f3335822ff58bfdd024eac6450f886e0917fc",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1913,7 +1855,6 @@
       "candidate_estimated_tokens": 46731,
       "candidate_utf8_bytes": 140192,
       "candidate_hash": "8ddddae05b05f2700f3092d45d9270195851b2604fd199e4e61cf5da429748dd",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1928,7 +1869,6 @@
       "candidate_estimated_tokens": 46650,
       "candidate_utf8_bytes": 139949,
       "candidate_hash": "074970e33318a3ccd8e57403b18f556a4cc94a51d3dd150cb9dd6bb73bdfccab",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1943,7 +1883,6 @@
       "candidate_estimated_tokens": 47262,
       "candidate_utf8_bytes": 141785,
       "candidate_hash": "1de927f20d9bf267a4c52af1101d49c950839823824a09e74f35ba6fb2c709be",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1958,7 +1897,6 @@
       "candidate_estimated_tokens": 47083,
       "candidate_utf8_bytes": 141248,
       "candidate_hash": "625a588c489a0226d2b3be7bb47c88f4863735fe331a2c15c2e4ec21295febba",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1973,7 +1911,6 @@
       "candidate_estimated_tokens": 46967,
       "candidate_utf8_bytes": 140901,
       "candidate_hash": "eb1c80e0117a5c6ff3015d167e19c293df1f4ab9f60f3b31a5c113bcedd43e1b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -1988,7 +1925,6 @@
       "candidate_estimated_tokens": 47092,
       "candidate_utf8_bytes": 141275,
       "candidate_hash": "7f80d9e6b1db3320758322566e44c46db33ded6f6c2305111f1af3f8b2a9c04c",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2003,7 +1939,6 @@
       "candidate_estimated_tokens": 47213,
       "candidate_utf8_bytes": 141639,
       "candidate_hash": "e0cbb9f795383742c85d3b4873f0f38ddd9a2a642106194a15efd9a6880f1b2d",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2018,7 +1953,6 @@
       "candidate_estimated_tokens": 47241,
       "candidate_utf8_bytes": 141722,
       "candidate_hash": "a4757016d32d4d28adc04bef1f68f0f4867a6a3d7cd37c6253d7c3df5579d356",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2033,7 +1967,6 @@
       "candidate_estimated_tokens": 47041,
       "candidate_utf8_bytes": 141123,
       "candidate_hash": "c49edd2134522eccba40fe0823addb5fa5a4c9318aea811d5c2926f534c37915",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2048,7 +1981,6 @@
       "candidate_estimated_tokens": 46819,
       "candidate_utf8_bytes": 140456,
       "candidate_hash": "843c5b8c8a95d04161aecf2ac589b905ad4e91d74a87b82e251898a2c49dc815",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2063,7 +1995,6 @@
       "candidate_estimated_tokens": 46936,
       "candidate_utf8_bytes": 140807,
       "candidate_hash": "a35ddcff5ab11a4c1b1ea4d5c9e4c8b8b6a08f62fdd9ad077d168d5307861294",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2078,7 +2009,6 @@
       "candidate_estimated_tokens": 47370,
       "candidate_utf8_bytes": 142108,
       "candidate_hash": "76533af3cea510e48fc92efc126d17410bddc889bd42eb1394e77f0bf4b9ac57",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2093,7 +2023,6 @@
       "candidate_estimated_tokens": 47490,
       "candidate_utf8_bytes": 142469,
       "candidate_hash": "71bc6a6fbf98cc73ab7a60303836cae8a3cc9c98dd9062a4f396fda977a71e1e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2108,7 +2037,6 @@
       "candidate_estimated_tokens": 47401,
       "candidate_utf8_bytes": 142202,
       "candidate_hash": "f7dbf223eedc1f46348d1bf787831cd660ff85ba00af2b4a7efa9913363c7ce9",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2123,7 +2051,6 @@
       "candidate_estimated_tokens": 47380,
       "candidate_utf8_bytes": 142139,
       "candidate_hash": "6588dce5c7cfbcff68d152b82c23f3dab3ae1d3c5c30807b2dfbbd98e376b4e2",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2138,7 +2065,6 @@
       "candidate_estimated_tokens": 47390,
       "candidate_utf8_bytes": 142170,
       "candidate_hash": "35525a4647c2a7ecfa86a794b27f86c0b3bc97c21814023d4dd578f735017e1d",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2153,7 +2079,6 @@
       "candidate_estimated_tokens": 46858,
       "candidate_utf8_bytes": 140573,
       "candidate_hash": "e00a2e04cae41401950bf361c87965ffb2386af91e1f300c5ed39d21c8c8a2fa",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2168,7 +2093,6 @@
       "candidate_estimated_tokens": 47786,
       "candidate_utf8_bytes": 143356,
       "candidate_hash": "12cdf21009bc3f13fb8a58330dcc111464646f9ae9e5a474a51c8699f440cf1f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2183,7 +2107,6 @@
       "candidate_estimated_tokens": 46632,
       "candidate_utf8_bytes": 139894,
       "candidate_hash": "f5e6a854619da1967af7dc32b50b94d46654d0907cae74d18be224c4161ad5c0",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2198,7 +2121,6 @@
       "candidate_estimated_tokens": 46898,
       "candidate_utf8_bytes": 140692,
       "candidate_hash": "bc3d6dfa54276a46bb1d77f4095d8c7e3b5dc7201a82314dd6014b6f763a6a58",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2213,7 +2135,6 @@
       "candidate_estimated_tokens": 46678,
       "candidate_utf8_bytes": 140033,
       "candidate_hash": "5e7a4c62844acf116de11f6df4e9905891b53010cf8a7da03328e7b57c239cb3",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2228,7 +2149,6 @@
       "candidate_estimated_tokens": 46933,
       "candidate_utf8_bytes": 140798,
       "candidate_hash": "4c00eb97c0d890d7a2072be01c665d370419d02eee86676f49aceab52e7ab1ba",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2243,7 +2163,6 @@
       "candidate_estimated_tokens": 46945,
       "candidate_utf8_bytes": 140833,
       "candidate_hash": "69fed909791c59dd4fe997b729cf1d7e7d7f393c2b954e2fbea86ee50338fd00",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2258,7 +2177,6 @@
       "candidate_estimated_tokens": 46826,
       "candidate_utf8_bytes": 140478,
       "candidate_hash": "3ff25e5edb36257dbdeaf71f4090167455f0a029fd0812a19dd7332c2f469828",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2273,7 +2191,6 @@
       "candidate_estimated_tokens": 46526,
       "candidate_utf8_bytes": 139578,
       "candidate_hash": "e8ea4c3b881b981fd2d34ec0f0c813be3d3976dda09f401df70bda3dbbcf2f60",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2288,7 +2205,6 @@
       "candidate_estimated_tokens": 46970,
       "candidate_utf8_bytes": 140909,
       "candidate_hash": "2fa7400b1352da1bf60edf9f502a46b387d550fc404e5df227547fff26978974",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2303,7 +2219,6 @@
       "candidate_estimated_tokens": 46770,
       "candidate_utf8_bytes": 140310,
       "candidate_hash": "1f843cf21be44547ba8d280755d9d7d82ef5c0a1f23cc498076c1d702dba3abb",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2318,7 +2233,6 @@
       "candidate_estimated_tokens": 47010,
       "candidate_utf8_bytes": 141028,
       "candidate_hash": "e17e8acf1cc8c546579fa32d54d00be10c9517d1954b23806fb9fefa72b7b59c",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2333,7 +2247,6 @@
       "candidate_estimated_tokens": 46909,
       "candidate_utf8_bytes": 140725,
       "candidate_hash": "bd37780767fa0ca002de42ab55e1d459b1f6e800e040f1d96b4fa9e9fe375fce",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2348,7 +2261,6 @@
       "candidate_estimated_tokens": 47092,
       "candidate_utf8_bytes": 141276,
       "candidate_hash": "df8cfcb3f218e767568604032cbab12a9089410f4f3bd386c4aff1b65f412df8",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2363,7 +2275,6 @@
       "candidate_estimated_tokens": 46998,
       "candidate_utf8_bytes": 140993,
       "candidate_hash": "330cc010c860a76b2d88c1b03a4f71890147162474df1da27e3b06c0670c3cb1",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2378,7 +2289,6 @@
       "candidate_estimated_tokens": 46468,
       "candidate_utf8_bytes": 139404,
       "candidate_hash": "9c78b59c9268e64727e9bd07e412e157e8d736c2adcd9d797fff4dc436db73ad",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2393,7 +2303,6 @@
       "candidate_estimated_tokens": 46929,
       "candidate_utf8_bytes": 140786,
       "candidate_hash": "4ee5b41c9da1f8bf78df46ae3c25223a127f36161f0c420c9040ef5983667662",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2408,7 +2317,6 @@
       "candidate_estimated_tokens": 46730,
       "candidate_utf8_bytes": 140189,
       "candidate_hash": "964be127cd18eb4af375aa534c60f36dbfc3e3a404a69d39a9b41a9c50a96f6a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2423,7 +2331,6 @@
       "candidate_estimated_tokens": 46612,
       "candidate_utf8_bytes": 139834,
       "candidate_hash": "d75c3ea9363e3fe0370f55bc7f1726de9f7b5ce998cf05801dd0b8b32941bb18",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2438,7 +2345,6 @@
       "candidate_estimated_tokens": 46705,
       "candidate_utf8_bytes": 140115,
       "candidate_hash": "d88d0ccde7bda661b6ad064a9812ecdc436e110f6c501c109ddd731fe11afc1e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2453,7 +2359,6 @@
       "candidate_estimated_tokens": 46637,
       "candidate_utf8_bytes": 139910,
       "candidate_hash": "f2cb2d5b34ddf6cde14331a954d861e202d689c68d779d7a39be157e116c82d5",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2468,7 +2373,6 @@
       "candidate_estimated_tokens": 46725,
       "candidate_utf8_bytes": 140173,
       "candidate_hash": "bb2ad2f352b11401c852f7d4db340f0ae4c17cd4b267209e53813224d9027709",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2483,7 +2387,6 @@
       "candidate_estimated_tokens": 46973,
       "candidate_utf8_bytes": 140919,
       "candidate_hash": "f9635e905a7f3be81d5efa222bb1878e0b948da1a418ec9def296308387ffab5",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2498,7 +2401,6 @@
       "candidate_estimated_tokens": 46860,
       "candidate_utf8_bytes": 140579,
       "candidate_hash": "a25404ff9834e3f48ea32d7c59062da9a472415005a07ac5169b285b6ffd45b8",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2513,7 +2415,6 @@
       "candidate_estimated_tokens": 46739,
       "candidate_utf8_bytes": 140217,
       "candidate_hash": "939b14a257f78837df7b2b59fc76a85e803c7492a7bdb6938e0b77b55ae435e6",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2528,7 +2429,6 @@
       "candidate_estimated_tokens": 47255,
       "candidate_utf8_bytes": 141765,
       "candidate_hash": "b5de91a16dddf4bd56f8268c44484572e6acd36907b384c17a36cbdadff9e174",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2543,7 +2443,6 @@
       "candidate_estimated_tokens": 46985,
       "candidate_utf8_bytes": 140955,
       "candidate_hash": "c1862649fc13adf085855139d1fae66b3311cd9721b2aec0af07f17afaa6dc11",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2558,7 +2457,6 @@
       "candidate_estimated_tokens": 47480,
       "candidate_utf8_bytes": 142440,
       "candidate_hash": "7946910961de8a1321661b3e57e358ff4419ebd9a10ff8b8750a2fb74e15c46b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2573,7 +2471,6 @@
       "candidate_estimated_tokens": 46988,
       "candidate_utf8_bytes": 140963,
       "candidate_hash": "e82dd1e6715923e9bd14a7fca7ef9584b2008a78a5d6ec4c0a1e7b8a4309b7ea",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2588,7 +2485,6 @@
       "candidate_estimated_tokens": 46935,
       "candidate_utf8_bytes": 140804,
       "candidate_hash": "ce5fcd2a056df83adda720403d17ed4c083b4dc78cc94e32eacf9782b73f5e57",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2603,7 +2499,6 @@
       "candidate_estimated_tokens": 47181,
       "candidate_utf8_bytes": 141541,
       "candidate_hash": "7464ff038e2d8b4f72a42c64d652d3330ee0edcafa12f42d061550ba0b690526",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2618,7 +2513,6 @@
       "candidate_estimated_tokens": 46805,
       "candidate_utf8_bytes": 140414,
       "candidate_hash": "e8d62e6d76c82350fe7380964b489276faf326a0b8a89b5056f2772d1d1dbb16",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2633,7 +2527,6 @@
       "candidate_estimated_tokens": 47123,
       "candidate_utf8_bytes": 141367,
       "candidate_hash": "f03eeedb6dcbbbf3775d09f2ab7a8b3451b0786fbd266c57659f35c3ebb3088e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2648,7 +2541,6 @@
       "candidate_estimated_tokens": 47151,
       "candidate_utf8_bytes": 141451,
       "candidate_hash": "21dc9eac273b78b97a559af826bbce11a2bd8109f9be48bf97b71593546d82ce",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2663,7 +2555,6 @@
       "candidate_estimated_tokens": 47338,
       "candidate_utf8_bytes": 142014,
       "candidate_hash": "1ba4249c1bbd2c63da2f199b9d95ffe4d01909436154727e5c4550d5fb178c73",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2678,7 +2569,6 @@
       "candidate_estimated_tokens": 47049,
       "candidate_utf8_bytes": 141145,
       "candidate_hash": "adfdfaa3f5cc49e620bf1f9e877836c96e62e3e8d32a5b68a1832fa1d9b23793",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2693,7 +2583,6 @@
       "candidate_estimated_tokens": 47010,
       "candidate_utf8_bytes": 141029,
       "candidate_hash": "47cea6a1a97a9971239a8c802feaaadb43d743cff2dca2b9a5c455fdb6cbbb4d",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2708,7 +2597,6 @@
       "candidate_estimated_tokens": 47469,
       "candidate_utf8_bytes": 142407,
       "candidate_hash": "930478f29b658cb3b5eedf3f7310530a59ea49942cc56d35c4e3824250fecb82",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2723,7 +2611,6 @@
       "candidate_estimated_tokens": 47029,
       "candidate_utf8_bytes": 141086,
       "candidate_hash": "fe5194db8be98e290a529e0e46ee21f228ac616b10185359f70845de21fe3a61",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2738,7 +2625,6 @@
       "candidate_estimated_tokens": 46833,
       "candidate_utf8_bytes": 140498,
       "candidate_hash": "7e834e1473ffda93c2d6efd26acaa858e75eaf782dade20ff0d25067687ae025",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2753,7 +2639,6 @@
       "candidate_estimated_tokens": 46958,
       "candidate_utf8_bytes": 140874,
       "candidate_hash": "e72961d4a289d47f0e49a39a8f863085448cdc60dcf3a1475e06a7d583963192",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2768,7 +2653,6 @@
       "candidate_estimated_tokens": 46719,
       "candidate_utf8_bytes": 140157,
       "candidate_hash": "0d2852f6d6a7821e074b400c79887bf298c709435020feaba42c7973ccae75c2",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2783,7 +2667,6 @@
       "candidate_estimated_tokens": 46866,
       "candidate_utf8_bytes": 140597,
       "candidate_hash": "7cf9fd91f8e7d5bcfdb6c83920ae3ef7de638505a3db5ebd23a3b68409614994",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2798,7 +2681,6 @@
       "candidate_estimated_tokens": 46927,
       "candidate_utf8_bytes": 140781,
       "candidate_hash": "8961262946b201218db3362a18135ed5826a552738b5da5b6f887edc26c20eac",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2813,7 +2695,6 @@
       "candidate_estimated_tokens": 48262,
       "candidate_utf8_bytes": 144784,
       "candidate_hash": "c6b93302419c3d56ac159af228c73a820edcea56fae7eebd9aefbf04d8c5dd98",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2828,7 +2709,6 @@
       "candidate_estimated_tokens": 46709,
       "candidate_utf8_bytes": 140126,
       "candidate_hash": "141d7e7cd64b1ba6046d3643bd820b924fccce186fcb0a98a76f8a08608541ab",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2843,7 +2723,6 @@
       "candidate_estimated_tokens": 46910,
       "candidate_utf8_bytes": 140730,
       "candidate_hash": "bd0d8bdd3590aa16d397729992b5d70753b97c35af73cecb4a44f8a586bc459e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2858,7 +2737,6 @@
       "candidate_estimated_tokens": 46916,
       "candidate_utf8_bytes": 140746,
       "candidate_hash": "c9516bfd2639bef810f7b0d16240923816d81b216bd6ffbe3c585c9d97a3437b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2873,7 +2751,6 @@
       "candidate_estimated_tokens": 46602,
       "candidate_utf8_bytes": 139805,
       "candidate_hash": "adf9e82f9da18805914108f9834e94f7f367de00114127150624cce157ff9f10",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2888,7 +2765,6 @@
       "candidate_estimated_tokens": 46708,
       "candidate_utf8_bytes": 140124,
       "candidate_hash": "d7a501772a1cf2d6592f420c0f17932ded1613015aebffc088c55cbcd1374466",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2903,7 +2779,6 @@
       "candidate_estimated_tokens": 46735,
       "candidate_utf8_bytes": 140203,
       "candidate_hash": "c31c0dd8a53d6c72190e4b890bdf4842985795d2ff907ddacc50863b621ab499",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2918,7 +2793,6 @@
       "candidate_estimated_tokens": 46603,
       "candidate_utf8_bytes": 139807,
       "candidate_hash": "cc520693a6f9bed54e3225d296e67842952b04ee2a6eb8f5634352aad1c5cc98",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2933,7 +2807,6 @@
       "candidate_estimated_tokens": 46754,
       "candidate_utf8_bytes": 140262,
       "candidate_hash": "da26dbfeb88ac4e91d17fd378fea70fd692e20958f79dae1eb21ce6dcc976aa4",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2948,7 +2821,6 @@
       "candidate_estimated_tokens": 46648,
       "candidate_utf8_bytes": 139944,
       "candidate_hash": "41c4f5b9002ebc42c32bd487759fb4719aabe9b4dcaba2e417be5e8c008e9c96",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2963,7 +2835,6 @@
       "candidate_estimated_tokens": 46492,
       "candidate_utf8_bytes": 139476,
       "candidate_hash": "84ccaba464187cac089bdf64081512c38a7d12a14eb595169470df55ff4303de",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2978,7 +2849,6 @@
       "candidate_estimated_tokens": 46639,
       "candidate_utf8_bytes": 139915,
       "candidate_hash": "f5d342ca22a54d1fe539e49bb163ab7d526b01659287d3bbac2740e2583d0dca",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -2993,7 +2863,6 @@
       "candidate_estimated_tokens": 46929,
       "candidate_utf8_bytes": 140787,
       "candidate_hash": "dd7c0cfedf4536d00f4644cba0d21eb9476da0f2fbbe947d9c10a5efac78752d",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3008,7 +2877,6 @@
       "candidate_estimated_tokens": 46491,
       "candidate_utf8_bytes": 139471,
       "candidate_hash": "4d695b9f5dc3783eab5f206ab399747045853d71037ba2515663d1743a4daaf2",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3023,7 +2891,6 @@
       "candidate_estimated_tokens": 46753,
       "candidate_utf8_bytes": 140257,
       "candidate_hash": "5b24e8c575217a018d933ba735f1839e153cd9703e5807e9a8ac3b0bf5fc556e",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3038,7 +2905,6 @@
       "candidate_estimated_tokens": 46675,
       "candidate_utf8_bytes": 140024,
       "candidate_hash": "4cbb2d26bb9f56f7021e7815d2eca36abab04910e8d4c93f04d71bbb39b0b22a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3053,7 +2919,6 @@
       "candidate_estimated_tokens": 46993,
       "candidate_utf8_bytes": 140978,
       "candidate_hash": "ece46a34be227e8fd3fa3bf500a5c6c60aee9a6354629f5aad6bcf75e42fdd1b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3068,7 +2933,6 @@
       "candidate_estimated_tokens": 46992,
       "candidate_utf8_bytes": 140975,
       "candidate_hash": "389b94cc6cb3efcf058bedcddbb4336dd11825188003ef323c051aab451662a9",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3083,7 +2947,6 @@
       "candidate_estimated_tokens": 46751,
       "candidate_utf8_bytes": 140252,
       "candidate_hash": "bfa4944f18690dc6a3de89b2dc65eddb921721692a3c669879047f0fcb13d45f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3098,7 +2961,6 @@
       "candidate_estimated_tokens": 46830,
       "candidate_utf8_bytes": 140488,
       "candidate_hash": "c5775a6f1395182bbdbf0e4aad281cc20984d200558f14deafd9594a26e333ff",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3113,7 +2975,6 @@
       "candidate_estimated_tokens": 46749,
       "candidate_utf8_bytes": 140247,
       "candidate_hash": "0110f09aac362a835a4bb2f9f160b5e50bb3c616ae49e90f0f2d7de2d1978887",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3128,7 +2989,6 @@
       "candidate_estimated_tokens": 46907,
       "candidate_utf8_bytes": 140720,
       "candidate_hash": "4903544ee1e2e1df41b45c702694b17fe614af2703f2b3915985659347472665",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3143,7 +3003,6 @@
       "candidate_estimated_tokens": 46942,
       "candidate_utf8_bytes": 140826,
       "candidate_hash": "e82a2d1d612b1c31d1e0b3a68decbdf06d061226fa9ee3611dd30da9b81b235b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3158,7 +3017,6 @@
       "candidate_estimated_tokens": 46633,
       "candidate_utf8_bytes": 139897,
       "candidate_hash": "453c7cd253acf14f35f3599ca4f97fbe9bac80d13a337d776a1f29b05678bdd5",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3173,7 +3031,6 @@
       "candidate_estimated_tokens": 46866,
       "candidate_utf8_bytes": 140597,
       "candidate_hash": "6649f979a894856f1ede617151ea6da001174b2a1546cea21c3d2b8a5e32a0ec",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3188,7 +3045,6 @@
       "candidate_estimated_tokens": 47258,
       "candidate_utf8_bytes": 141772,
       "candidate_hash": "587d02d39bb6ceb3d37cf96d4770b2d385a3d5b491cb6969f53e8e675921888b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3203,7 +3059,6 @@
       "candidate_estimated_tokens": 47150,
       "candidate_utf8_bytes": 141450,
       "candidate_hash": "811e1d75e7abb00db3cc52e4bc3e1371c6522013ba831a47dd6fa90bfc4f8cf2",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3218,7 +3073,6 @@
       "candidate_estimated_tokens": 47032,
       "candidate_utf8_bytes": 141096,
       "candidate_hash": "7734390686671f611fb647dccc33ed6bac7fb9bede2a90d6a4a973739cb5528a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3233,7 +3087,6 @@
       "candidate_estimated_tokens": 47346,
       "candidate_utf8_bytes": 142038,
       "candidate_hash": "ee01ab7067f5c9eb1e736f18c6cbe208b8448b1c2871c1b91187b7881a5600eb",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3248,7 +3101,6 @@
       "candidate_estimated_tokens": 46840,
       "candidate_utf8_bytes": 140519,
       "candidate_hash": "5a503fe02c1d5d79e138477397d4389f199e10fc54b9a5733a61d098344c8991",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3263,7 +3115,6 @@
       "candidate_estimated_tokens": 46957,
       "candidate_utf8_bytes": 140871,
       "candidate_hash": "48506fb90ffb41fe70aba22eece2136f9d541db12b210080a987ee00174790ff",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3278,7 +3129,6 @@
       "candidate_estimated_tokens": 46835,
       "candidate_utf8_bytes": 140503,
       "candidate_hash": "f328d3b9ddcba10811fb2950418060c491773a0306b5586339d55fe28a410044",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3293,7 +3143,6 @@
       "candidate_estimated_tokens": 46750,
       "candidate_utf8_bytes": 140250,
       "candidate_hash": "67f57a512b68ce74c376d2932cc774d9237714cf617984ee494a47f190a1693f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3308,7 +3157,6 @@
       "candidate_estimated_tokens": 46726,
       "candidate_utf8_bytes": 140176,
       "candidate_hash": "2dbbcbd40977e3ba279a6513062b1e81685d5f7a51af553ae824f91dee3969e9",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3323,7 +3171,6 @@
       "candidate_estimated_tokens": 47110,
       "candidate_utf8_bytes": 141330,
       "candidate_hash": "b41f3b867af9f7b58965be6e45916cb508f57bf64cdf40be847a441db1b8aa4f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3338,7 +3185,6 @@
       "candidate_estimated_tokens": 46655,
       "candidate_utf8_bytes": 139963,
       "candidate_hash": "77bd2f0857555383fdee347db51599fa4627cef5f1956bdf4870a047f35994d1",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3353,7 +3199,6 @@
       "candidate_estimated_tokens": 46870,
       "candidate_utf8_bytes": 140609,
       "candidate_hash": "7b001c00b524442c621371d7b034cbad74312657784de7e725aa401b4429396b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3368,7 +3213,6 @@
       "candidate_estimated_tokens": 46710,
       "candidate_utf8_bytes": 140128,
       "candidate_hash": "74824ba53ad4af892cfa593de6679e2679837564a55b387185affba446062969",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3383,7 +3227,6 @@
       "candidate_estimated_tokens": 47029,
       "candidate_utf8_bytes": 141086,
       "candidate_hash": "7a39a5e1071339b1fcd1ceceacf0264ca71450dfcd9fc9dd5b525b31ceb2050b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3398,7 +3241,6 @@
       "candidate_estimated_tokens": 47344,
       "candidate_utf8_bytes": 142031,
       "candidate_hash": "8443586c012a48d87ea1300acbc8597bdc8c91954531579430b0626fe35868bf",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3413,7 +3255,6 @@
       "candidate_estimated_tokens": 46698,
       "candidate_utf8_bytes": 140093,
       "candidate_hash": "1576e3ae0d85d210f2d6f979edb263f967c72bab7198b559f316736d9895f45a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3428,7 +3269,6 @@
       "candidate_estimated_tokens": 46719,
       "candidate_utf8_bytes": 140156,
       "candidate_hash": "8f90792802bc0e6a059f6f4182e5b350abd7131abcb1d3e7eb8a0a0d0d56899e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3443,7 +3283,6 @@
       "candidate_estimated_tokens": 47043,
       "candidate_utf8_bytes": 141128,
       "candidate_hash": "b7b05c5bc05a12350e74983c0abb959a31d939dae2196f9388836be57482bc3c",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3458,7 +3297,6 @@
       "candidate_estimated_tokens": 46783,
       "candidate_utf8_bytes": 140349,
       "candidate_hash": "74cf3ffdbb5ba68b346f2bdee53649ee764a95e7780dbb5506358f61aa6766c8",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3473,7 +3311,6 @@
       "candidate_estimated_tokens": 46962,
       "candidate_utf8_bytes": 140885,
       "candidate_hash": "e376ee3c0e07e25d02c2ea2d15c27c449471175db109368d8d39a05255807726",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3488,7 +3325,6 @@
       "candidate_estimated_tokens": 46740,
       "candidate_utf8_bytes": 140220,
       "candidate_hash": "e0509ed0a8d8c8de3d6e8ed38e1928eb9059fcd20bc367e4947b6afacd9a117c",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3503,7 +3339,6 @@
       "candidate_estimated_tokens": 47437,
       "candidate_utf8_bytes": 142310,
       "candidate_hash": "a72c7d4de29bcdb65c58f70e71167042b176d468520f7f656f20864985f73e9a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3518,7 +3353,6 @@
       "candidate_estimated_tokens": 46939,
       "candidate_utf8_bytes": 140816,
       "candidate_hash": "db13dc180cb2209cf2c4bfa78cb0cd2acb832bd787fd44e8389ac76ac0c6d84d",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3533,7 +3367,6 @@
       "candidate_estimated_tokens": 46950,
       "candidate_utf8_bytes": 140848,
       "candidate_hash": "2c344dccaf5cfa87d0e940010da838f3bdcab8747bfb68b479fddb09c9be58fd",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3548,7 +3381,6 @@
       "candidate_estimated_tokens": 47077,
       "candidate_utf8_bytes": 141229,
       "candidate_hash": "9f48e119c119b438ae6d668f5c280b1fce5ed0b9dd2bd32f31008d370d234c31",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3563,7 +3395,6 @@
       "candidate_estimated_tokens": 46520,
       "candidate_utf8_bytes": 139559,
       "candidate_hash": "1321083e291ef0de870f6ba8f8b565392ac8134865465d282d0b140b456e407a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3578,7 +3409,6 @@
       "candidate_estimated_tokens": 46973,
       "candidate_utf8_bytes": 140919,
       "candidate_hash": "0ff8ffe4c202573b71816446757110604df2e6228366eeefa7c96de7a9b5f811",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3593,7 +3423,6 @@
       "candidate_estimated_tokens": 46959,
       "candidate_utf8_bytes": 140877,
       "candidate_hash": "998ab9703978042483b2d93616495bd0729a4fc23144e83cca125b81ddfeb082",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3608,7 +3437,6 @@
       "candidate_estimated_tokens": 47071,
       "candidate_utf8_bytes": 141213,
       "candidate_hash": "b6fe8f076a57a07de70ce93ebbd9b3b27d9fffb5ad665eca77828ff911a54383",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3623,7 +3451,6 @@
       "candidate_estimated_tokens": 47020,
       "candidate_utf8_bytes": 141060,
       "candidate_hash": "653ee394c26f604026f0aa3aef48cc8711bb159c686882b8a0a1bff15dfebe1f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3638,7 +3465,6 @@
       "candidate_estimated_tokens": 47670,
       "candidate_utf8_bytes": 143009,
       "candidate_hash": "4b731e9261eb92810d61aed95b2abd1bd72d109ae3ac5a9ebb241794d3dff90c",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3653,7 +3479,6 @@
       "candidate_estimated_tokens": 47026,
       "candidate_utf8_bytes": 141078,
       "candidate_hash": "2b0086c8957bde0772e5c3bf6078487c3796a6534207e047d869221cc9a4a3c2",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3668,7 +3493,6 @@
       "candidate_estimated_tokens": 47005,
       "candidate_utf8_bytes": 141013,
       "candidate_hash": "8803c6977a20347bcbb2cbae92e678aaa7b87d6862b42b22e6eedbb7ee3e5aa8",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3683,7 +3507,6 @@
       "candidate_estimated_tokens": 47920,
       "candidate_utf8_bytes": 143758,
       "candidate_hash": "aeb5ed87a0a6adf289f58e3599cf4907e9ae1c218a6241cc23bce85d4d055caf",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3698,7 +3521,6 @@
       "candidate_estimated_tokens": 46683,
       "candidate_utf8_bytes": 140048,
       "candidate_hash": "6fb440d3ac0c2f5d33428d4a12c01503a693b3a1610c9c4c18f679e090b4d937",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3713,7 +3535,6 @@
       "candidate_estimated_tokens": 46666,
       "candidate_utf8_bytes": 139996,
       "candidate_hash": "170f59be2722e2e3bae9649920a83cee98c55a1c0d0cf0de4ecb9ee1629234d3",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3728,7 +3549,6 @@
       "candidate_estimated_tokens": 47095,
       "candidate_utf8_bytes": 141285,
       "candidate_hash": "f6600999657caee369bd7fd48eaf2d2d512d8b05db8a93ee00bded6939c9699e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3743,7 +3563,6 @@
       "candidate_estimated_tokens": 46714,
       "candidate_utf8_bytes": 140140,
       "candidate_hash": "cb847011e36a151e46e0d73a429826fd5d439cbf0c22935b898cbad2f193085e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3758,7 +3577,6 @@
       "candidate_estimated_tokens": 47083,
       "candidate_utf8_bytes": 141248,
       "candidate_hash": "276de13754d004efab57da07e3ec8d1c5d818dcb522f20acc2232e19ae06f2c2",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3773,7 +3591,6 @@
       "candidate_estimated_tokens": 46720,
       "candidate_utf8_bytes": 140160,
       "candidate_hash": "cf46da9239d86838571ef402d789069b037774869e7d0e0d72682a0132dc3167",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3788,7 +3605,6 @@
       "candidate_estimated_tokens": 46925,
       "candidate_utf8_bytes": 140774,
       "candidate_hash": "375fc156c3c5010891ebbac0d7bb00aebd437451e5cadb6ffbe9334f1fe6f8f3",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3803,7 +3619,6 @@
       "candidate_estimated_tokens": 46860,
       "candidate_utf8_bytes": 140580,
       "candidate_hash": "0ce444309f04caa5854104a47160cb74c98f728682a2b65a6ad80a55ff2a5959",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3818,7 +3633,6 @@
       "candidate_estimated_tokens": 47685,
       "candidate_utf8_bytes": 143053,
       "candidate_hash": "683352b068443b3063d94b31273860a276db9cf210bb4aa1df58ac199189c481",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3833,7 +3647,6 @@
       "candidate_estimated_tokens": 47113,
       "candidate_utf8_bytes": 141337,
       "candidate_hash": "789ace3b52c8bb9af551c2d5addf2804852381f2a8fde4278aaf0a752d6f83f8",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3848,7 +3661,6 @@
       "candidate_estimated_tokens": 46544,
       "candidate_utf8_bytes": 139632,
       "candidate_hash": "243935af28b295c1a60204a78e982a92d6d352bb49bec4bd4d432b1338c5d1b1",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3863,7 +3675,6 @@
       "candidate_estimated_tokens": 46732,
       "candidate_utf8_bytes": 140196,
       "candidate_hash": "e41a7e325ec672d27ca6f5479ed50d0faedce27d6e0ae3b16c7c6d879c5dbb16",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3878,7 +3689,6 @@
       "candidate_estimated_tokens": 47082,
       "candidate_utf8_bytes": 141245,
       "candidate_hash": "a144172edfb864887052d946c7a7bcc8bd886f90529f812aac8f531b2d91e69e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3893,7 +3703,6 @@
       "candidate_estimated_tokens": 47338,
       "candidate_utf8_bytes": 142013,
       "candidate_hash": "9a97a4954e1d60ce2b399f76d679105d0cef4fe7129ec8ad75dbe5db06b9f211",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3908,7 +3717,6 @@
       "candidate_estimated_tokens": 46614,
       "candidate_utf8_bytes": 139840,
       "candidate_hash": "e9195d96591003a65141c1fb8ccd8e67df3197c9ad3b790b2e322b11d7383366",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3923,7 +3731,6 @@
       "candidate_estimated_tokens": 47365,
       "candidate_utf8_bytes": 142094,
       "candidate_hash": "fa87e137d7d5803d502fe8ae6c605366dd1d045871c8e4c5c237ebc575c77658",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3938,7 +3745,6 @@
       "candidate_estimated_tokens": 47243,
       "candidate_utf8_bytes": 141727,
       "candidate_hash": "08171cc66d717b7fcd3ee2981b691a3eed4605630287c3b7f538c4705457ca6f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3953,7 +3759,6 @@
       "candidate_estimated_tokens": 46980,
       "candidate_utf8_bytes": 140940,
       "candidate_hash": "fc39dc30181f6bfa9f9a6dd6e18f25075542dcf9e6c1efeaf0bb2f849daf1141",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3968,7 +3773,6 @@
       "candidate_estimated_tokens": 46707,
       "candidate_utf8_bytes": 140121,
       "candidate_hash": "cac17c09f7acd6f52bea51ced2efa158441b4c846b223da8ec28a211042fa61c",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3983,7 +3787,6 @@
       "candidate_estimated_tokens": 47250,
       "candidate_utf8_bytes": 141748,
       "candidate_hash": "2c79ce452ad64c7591f3779e78e1ee1b41801eb652571514d93c5744283dd2da",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -3998,7 +3801,6 @@
       "candidate_estimated_tokens": 46978,
       "candidate_utf8_bytes": 140933,
       "candidate_hash": "3c8d7364a94fefdc88c140fa30db731475c5c25bca1e73be4cd67f9af1ab97f1",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4013,7 +3815,6 @@
       "candidate_estimated_tokens": 47022,
       "candidate_utf8_bytes": 141064,
       "candidate_hash": "1141c7585a1480b1cb83121e90648125410bcbec714f88ec92fd0317419b1167",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4028,7 +3829,6 @@
       "candidate_estimated_tokens": 47745,
       "candidate_utf8_bytes": 143233,
       "candidate_hash": "30189a0bc1952190e35494c2b86269b899242821603c779b8e2024469e453ff5",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4043,7 +3843,6 @@
       "candidate_estimated_tokens": 46965,
       "candidate_utf8_bytes": 140893,
       "candidate_hash": "2f53d0a6ab71996b33f729811517b38285c664368fd74d9ead6571bc2a9a8c7d",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4058,7 +3857,6 @@
       "candidate_estimated_tokens": 46764,
       "candidate_utf8_bytes": 140291,
       "candidate_hash": "396f3a0dd7ce5856b154c6d2edb0ddb50a13a6fefa2ff001744b7111f7c61df9",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4073,7 +3871,6 @@
       "candidate_estimated_tokens": 46726,
       "candidate_utf8_bytes": 140178,
       "candidate_hash": "e459dc9e796876c15d70c53be1419193a8898e3ec170f1708daaf88d29b2622f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4088,7 +3885,6 @@
       "candidate_estimated_tokens": 47144,
       "candidate_utf8_bytes": 141432,
       "candidate_hash": "43d43178aabeadf8d3f06cb3f14bc602818fbf937f702944961e503c483c446f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4103,7 +3899,6 @@
       "candidate_estimated_tokens": 46905,
       "candidate_utf8_bytes": 140713,
       "candidate_hash": "b6376b19ef20761e6ec80b427431cc8bf6fc1e4f3bc8512c1759734111956fcc",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4118,7 +3913,6 @@
       "candidate_estimated_tokens": 46738,
       "candidate_utf8_bytes": 140213,
       "candidate_hash": "3dab50b0abddf382d85aeefe03067522032e7651ec0e790381bc5f17d0cae23b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4133,7 +3927,6 @@
       "candidate_estimated_tokens": 46856,
       "candidate_utf8_bytes": 140568,
       "candidate_hash": "abda76527ba75da200466a93409957d61bf69f7b19c93cc8adc20eee7f326995",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4148,7 +3941,6 @@
       "candidate_estimated_tokens": 47146,
       "candidate_utf8_bytes": 141436,
       "candidate_hash": "9a3361a9c53d13367c8aa9e84594a202ca1170f3dc13c5c0414e5becd567e0d7",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4163,7 +3955,6 @@
       "candidate_estimated_tokens": 46984,
       "candidate_utf8_bytes": 140951,
       "candidate_hash": "e3968203defa28124af0ee28d1d617931f20adec6b861e261fd171a36003ab6e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4178,7 +3969,6 @@
       "candidate_estimated_tokens": 47302,
       "candidate_utf8_bytes": 141904,
       "candidate_hash": "e0f24ac53a3886ba094a0d87a6e1786508dee21d32f19c090311781ccabaa376",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4193,7 +3983,6 @@
       "candidate_estimated_tokens": 47488,
       "candidate_utf8_bytes": 142463,
       "candidate_hash": "f89109a4cff48f9a59f1997b26ca8ddca1702eac2422ab4814b15e6106cf4589",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4208,7 +3997,6 @@
       "candidate_estimated_tokens": 46746,
       "candidate_utf8_bytes": 140237,
       "candidate_hash": "af73ecaca5fdae502801d11501dbe112b8b8ffb42ec262fb5eac8f7a27286a11",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4223,7 +4011,6 @@
       "candidate_estimated_tokens": 46404,
       "candidate_utf8_bytes": 139212,
       "candidate_hash": "9bf2036d4015e18c43cbc5f5049f800cad5445b8210565645c12a28f6a8a76e8",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4238,7 +4025,6 @@
       "candidate_estimated_tokens": 47857,
       "candidate_utf8_bytes": 143570,
       "candidate_hash": "49960ce215db45898bc991a26537f9f26c3bf26b34a82181e1d41a7d63cba76a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4253,7 +4039,6 @@
       "candidate_estimated_tokens": 47036,
       "candidate_utf8_bytes": 141107,
       "candidate_hash": "56d315b173f04fb2939a3f5c116895559daa114ba96c0ed61b9b563d27858e0b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4268,7 +4053,6 @@
       "candidate_estimated_tokens": 46907,
       "candidate_utf8_bytes": 140719,
       "candidate_hash": "955dc484bceec7eda0730bfff03b276492463ece1323a0614b0584655c290bf1",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4283,7 +4067,6 @@
       "candidate_estimated_tokens": 47179,
       "candidate_utf8_bytes": 141535,
       "candidate_hash": "48b657332d4f39d99ec2dec9ddec59170380d943d41060ec7661590c94214fc7",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4298,7 +4081,6 @@
       "candidate_estimated_tokens": 46857,
       "candidate_utf8_bytes": 140571,
       "candidate_hash": "e9bbb7d3c9708dd08fe34f5305b7ad5646707dbfff0daa1050f9f6a4b85a4907",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4313,7 +4095,6 @@
       "candidate_estimated_tokens": 47069,
       "candidate_utf8_bytes": 141205,
       "candidate_hash": "73fa43eeb382a71430dcd65deefbce48a460169ea008f33f9733c29bc47cfaff",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4328,7 +4109,6 @@
       "candidate_estimated_tokens": 47019,
       "candidate_utf8_bytes": 141056,
       "candidate_hash": "1d4e83c8c486e5ee334946cb3fa9d7dd8c6a62e71e289c423d407f2627a6a95b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4343,7 +4123,6 @@
       "candidate_estimated_tokens": 47197,
       "candidate_utf8_bytes": 141591,
       "candidate_hash": "2c827dbd00573e6f89eea5e3c0ab9a0af0cd07092941252e6dff4bfa0999254f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4358,7 +4137,6 @@
       "candidate_estimated_tokens": 46932,
       "candidate_utf8_bytes": 140795,
       "candidate_hash": "5990e10c8eacabd3b598cd6c2ae1399370949bdbbb1db8e63188048ea180ea40",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4373,7 +4151,6 @@
       "candidate_estimated_tokens": 47162,
       "candidate_utf8_bytes": 141485,
       "candidate_hash": "ac6b7fefb8c938160d61dde556421b7f65afa5c0c8ec48c4edd59d71ebffcc70",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4388,7 +4165,6 @@
       "candidate_estimated_tokens": 47671,
       "candidate_utf8_bytes": 143012,
       "candidate_hash": "30c8cfb17081693a66e175ec6b6b2ef1e930c3f620cda9c950ae137be47df85b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4403,7 +4179,6 @@
       "candidate_estimated_tokens": 46941,
       "candidate_utf8_bytes": 140821,
       "candidate_hash": "e3b0ecbd21dc6a6e5a6727a60fd3b2cd28ec34dd564f4a68462fb77dba24b442",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4418,7 +4193,6 @@
       "candidate_estimated_tokens": 47250,
       "candidate_utf8_bytes": 141748,
       "candidate_hash": "b94e2342ee1e85003e1c0a77564f5d0ba4336ec0c17aa287323b4c586004d8c8",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4433,7 +4207,6 @@
       "candidate_estimated_tokens": 47608,
       "candidate_utf8_bytes": 142823,
       "candidate_hash": "9f1470ed02b009f658da219f35f394cb59763e2945ec36a0ee3841df650a97cd",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4448,7 +4221,6 @@
       "candidate_estimated_tokens": 47443,
       "candidate_utf8_bytes": 142329,
       "candidate_hash": "be75b924d6f4a3b4f0c2dc06f609e9aae191f5a4470fc55722c7bbe129a942bd",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4463,7 +4235,6 @@
       "candidate_estimated_tokens": 46689,
       "candidate_utf8_bytes": 140066,
       "candidate_hash": "e89c8edbb8b20517c15a54a58881e97fe34370881d2d6772b170f6387fead807",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4478,7 +4249,6 @@
       "candidate_estimated_tokens": 46697,
       "candidate_utf8_bytes": 140089,
       "candidate_hash": "f79b235e8f4491363a85c6d8aee70995b70db87e21ef4145ba14efcfb695b30b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4493,7 +4263,6 @@
       "candidate_estimated_tokens": 47046,
       "candidate_utf8_bytes": 141137,
       "candidate_hash": "c45b9d81372ff16d59bf2403284acbf7c9b06ee98a594dd4df582f29495b0675",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4508,7 +4277,6 @@
       "candidate_estimated_tokens": 46981,
       "candidate_utf8_bytes": 140943,
       "candidate_hash": "98d2d979633ae54aed8f81c9fb72b6b29145151c627d9e5b80d20aec0c866d89",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4523,7 +4291,6 @@
       "candidate_estimated_tokens": 46929,
       "candidate_utf8_bytes": 140785,
       "candidate_hash": "214d3980135bb8c43dce38d7b4380081ede7da1337d22a4bdeb992ebf3da26a1",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4538,7 +4305,6 @@
       "candidate_estimated_tokens": 46530,
       "candidate_utf8_bytes": 139589,
       "candidate_hash": "c87fd0c37fb9674fcd346a55722f472bb4835a10de20fe4e1e6220729f745851",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4553,7 +4319,6 @@
       "candidate_estimated_tokens": 46553,
       "candidate_utf8_bytes": 139658,
       "candidate_hash": "3e950d805197b48045f4270eb7a531803a667ca0d5d2d66a16e7f71ce2626ee5",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4568,7 +4333,6 @@
       "candidate_estimated_tokens": 46820,
       "candidate_utf8_bytes": 140459,
       "candidate_hash": "0b891475ff25600b7f90b73d945c01539342cefb2ef1ab6918bfff177913228b",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4583,7 +4347,6 @@
       "candidate_estimated_tokens": 46542,
       "candidate_utf8_bytes": 139625,
       "candidate_hash": "4f37869f22bbf75839eac5ab508da76c984577b485f13064705830084654f296",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4598,7 +4361,6 @@
       "candidate_estimated_tokens": 46635,
       "candidate_utf8_bytes": 139903,
       "candidate_hash": "84403d94b58d0eb49b9c0f9ec4b2105f0068082f02448af89a82f5a3338f6887",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4613,7 +4375,6 @@
       "candidate_estimated_tokens": 47026,
       "candidate_utf8_bytes": 141076,
       "candidate_hash": "2f48b98a9c917409f0c5a2ac99f7acda1291824fcb0a46513aebb0a51682a51f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4628,7 +4389,6 @@
       "candidate_estimated_tokens": 46637,
       "candidate_utf8_bytes": 139910,
       "candidate_hash": "08f17c27314171735aafae0113c087a3e9ca069dc79f19157fa7e1f444a5c6b1",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4643,7 +4403,6 @@
       "candidate_estimated_tokens": 46585,
       "candidate_utf8_bytes": 139754,
       "candidate_hash": "2a82bfdcc1fc8fc0c635b29889eab4b717bb38c46e6be2a7eefe9efa2826a081",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4658,7 +4417,6 @@
       "candidate_estimated_tokens": 46603,
       "candidate_utf8_bytes": 139809,
       "candidate_hash": "c3fba7840c19c195496a4235b5fd5b4e73ca054d26f79f22bbb6a17ed34b453a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4673,7 +4431,6 @@
       "candidate_estimated_tokens": 46598,
       "candidate_utf8_bytes": 139793,
       "candidate_hash": "29bf0a24076f11bef9a5aa369c9dd57f4ac366773c562364410c2b23420fd7f5",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4688,7 +4445,6 @@
       "candidate_estimated_tokens": 46794,
       "candidate_utf8_bytes": 140382,
       "candidate_hash": "b19c3cad88b77d25d0718527bcf22669a71a958e2154224f8ae37cc3cb852b00",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4703,7 +4459,6 @@
       "candidate_estimated_tokens": 46750,
       "candidate_utf8_bytes": 140250,
       "candidate_hash": "1bfcc81771636e91799e17a79916e780efac9ba34ff7c6931a932d0c27a8eb25",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4718,7 +4473,6 @@
       "candidate_estimated_tokens": 46874,
       "candidate_utf8_bytes": 140622,
       "candidate_hash": "c68cc8f7246310206db6613664aef806f1440cb3acbf1ce7d6a79fe783c6f0bb",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4733,7 +4487,6 @@
       "candidate_estimated_tokens": 46985,
       "candidate_utf8_bytes": 140955,
       "candidate_hash": "cebe6f409afb0293cd8fdad8637d3a3cf24f94cb41c6b8f7cccf76c31d457f09",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4748,7 +4501,6 @@
       "candidate_estimated_tokens": 46524,
       "candidate_utf8_bytes": 139570,
       "candidate_hash": "54d15018ccfe8217b56a9905c6f1b72001c83b7898779c9a2cafc2152b785847",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4763,7 +4515,6 @@
       "candidate_estimated_tokens": 46526,
       "candidate_utf8_bytes": 139578,
       "candidate_hash": "9b11499fb1f00e6ec2f1c9209a10add61913f65cff5f9a2af937589e1d37369f",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4778,7 +4529,6 @@
       "candidate_estimated_tokens": 46861,
       "candidate_utf8_bytes": 140583,
       "candidate_hash": "4d5c1c633ab4b8414c67519875a6d7a3fd73e828995c74be9d84ca568f889192",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4793,7 +4543,6 @@
       "candidate_estimated_tokens": 46549,
       "candidate_utf8_bytes": 139647,
       "candidate_hash": "fda3cad8dd8a9f174aeea3f966d2c66f3b4e18dead814b0a009d62990907827a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4808,7 +4557,6 @@
       "candidate_estimated_tokens": 46851,
       "candidate_utf8_bytes": 140553,
       "candidate_hash": "b3ac5d271b805b1cef84220ee5811396158e28a11c95d8a8d80c6804a8eee1e8",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4823,7 +4571,6 @@
       "candidate_estimated_tokens": 46745,
       "candidate_utf8_bytes": 140234,
       "candidate_hash": "10f33f1a85e8472fbf3a2cdc22e35789ac2d2241ca2a5757615029588c9b41d3",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4838,7 +4585,6 @@
       "candidate_estimated_tokens": 47001,
       "candidate_utf8_bytes": 141003,
       "candidate_hash": "dfb2b956bfb9714b674b45de47e03dfa57e59bbc4a433ac0280cb5e1a6c5537e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4853,7 +4599,6 @@
       "candidate_estimated_tokens": 46629,
       "candidate_utf8_bytes": 139887,
       "candidate_hash": "5c275f50b832ffc150ae06dcc759a0a8b1d48fa9442ed8be617365a455fe7562",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4868,7 +4613,6 @@
       "candidate_estimated_tokens": 47215,
       "candidate_utf8_bytes": 141643,
       "candidate_hash": "4448463f8cbbc8e81f026a3b095799222aebcd42c121a4bac4a5849dedfd6c12",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4883,7 +4627,6 @@
       "candidate_estimated_tokens": 46850,
       "candidate_utf8_bytes": 140549,
       "candidate_hash": "4a601012c03184acbbfe2e7ff2828acdb099602ba08df176872d0505ab9ddab4",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4898,7 +4641,6 @@
       "candidate_estimated_tokens": 46858,
       "candidate_utf8_bytes": 140574,
       "candidate_hash": "7fc8e56c8c91804167ada0becf263f5cf9d5e50fac657e775497493e450ad06e",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4913,7 +4655,6 @@
       "candidate_estimated_tokens": 47060,
       "candidate_utf8_bytes": 141180,
       "candidate_hash": "82760b2fed4a63092e7b3b498fbb2537a1ceabb8683f6f2638b0ad91142668e3",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4928,7 +4669,6 @@
       "candidate_estimated_tokens": 47003,
       "candidate_utf8_bytes": 141009,
       "candidate_hash": "5640603e6b8f01176ad0cdebb1c1f55d7f99acdbffa22a8dae9d16e954fcc022",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4943,7 +4683,6 @@
       "candidate_estimated_tokens": 47375,
       "candidate_utf8_bytes": 142123,
       "candidate_hash": "53a1dd656de7484ac9387194b94e593a17b3df9743b4298d15c4cb4d47e39899",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4958,7 +4697,6 @@
       "candidate_estimated_tokens": 46652,
       "candidate_utf8_bytes": 139954,
       "candidate_hash": "245ff998a6a96f86d455319e8a1248b25b476ff2901cec36bcc763e404ccb777",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4973,7 +4711,6 @@
       "candidate_estimated_tokens": 46821,
       "candidate_utf8_bytes": 140461,
       "candidate_hash": "66cb982d481f440295c15a3ebb7e1b99d575fa87ff0e5b9075ed9cdd4a78002a",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -4988,7 +4725,6 @@
       "candidate_estimated_tokens": 47398,
       "candidate_utf8_bytes": 142194,
       "candidate_hash": "e081adaa22b04d514863242cef4d7d8646d813bc60b33d296881fb9033b269c4",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5003,7 +4739,6 @@
       "candidate_estimated_tokens": 47580,
       "candidate_utf8_bytes": 142740,
       "candidate_hash": "3fa09973d806353cc2fbef08e6d7af18afcf9e157ae6d603d61f04ab018c75ae",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5018,7 +4753,6 @@
       "candidate_estimated_tokens": 47134,
       "candidate_utf8_bytes": 141400,
       "candidate_hash": "16c70a0b3613d00e04e28b2c1c11fc71820e82f5c8c2219c3fcc38f54f4b2750",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5033,7 +4767,6 @@
       "candidate_estimated_tokens": 47242,
       "candidate_utf8_bytes": 141724,
       "candidate_hash": "ebc7b1c971c9d4f195047c2688aeafa8bb825d40d2844839a2cf9133b349fb54",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5048,7 +4781,6 @@
       "candidate_estimated_tokens": 47414,
       "candidate_utf8_bytes": 142242,
       "candidate_hash": "f87b8621c21b84fc14a0e49a686e1a75e356e07740425a6b2f5ba6205613869d",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5063,7 +4795,6 @@
       "candidate_estimated_tokens": 47117,
       "candidate_utf8_bytes": 141350,
       "candidate_hash": "895872582935bb07bc2439e8ee39401b75c21e21a9f24de1a126175d73bbc1d5",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5078,7 +4809,6 @@
       "candidate_estimated_tokens": 46905,
       "candidate_utf8_bytes": 140715,
       "candidate_hash": "980d5d05db55ffc02e261862cfad3fba75c2ec546fd2f3f1d47898ea54741db1",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5093,7 +4823,6 @@
       "candidate_estimated_tokens": 47781,
       "candidate_utf8_bytes": 143342,
       "candidate_hash": "ae3a7a599fe2cae660cb73d7fe4c78108cbf44669eb10743f126766a75401038",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5108,7 +4837,6 @@
       "candidate_estimated_tokens": 46946,
       "candidate_utf8_bytes": 140836,
       "candidate_hash": "ea7d6c9d81e3faa840131a39cebd4f2d99b26cf028c4a0b80a1c627d3cbc49b2",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5123,7 +4851,6 @@
       "candidate_estimated_tokens": 47144,
       "candidate_utf8_bytes": 141431,
       "candidate_hash": "db1ffc2e45a0b885152930ca2530e24a75e22dbafed79ca304f544883e044b48",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5138,7 +4865,6 @@
       "candidate_estimated_tokens": 47973,
       "candidate_utf8_bytes": 143919,
       "candidate_hash": "86190e6a6849e06bf1c163f1b641010e72edf47697ac2ec6978b4153e9a15337",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5153,7 +4879,6 @@
       "candidate_estimated_tokens": 48566,
       "candidate_utf8_bytes": 145698,
       "candidate_hash": "0c8fc8f253e0dc9ee64410e08f2497d3dda6031de7578d495a10c32af92eb692",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5168,7 +4893,6 @@
       "candidate_estimated_tokens": 46895,
       "candidate_utf8_bytes": 140683,
       "candidate_hash": "e0ebeca3dc44c8be3537888ab9a425d798ded832f398e515b9aa56e57ff44c31",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5183,7 +4907,6 @@
       "candidate_estimated_tokens": 47157,
       "candidate_utf8_bytes": 141471,
       "candidate_hash": "a65448343ac51c77909a81da538c158b64a57d12ff7398e218528edc592c1b77",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5198,7 +4921,6 @@
       "candidate_estimated_tokens": 46782,
       "candidate_utf8_bytes": 140344,
       "candidate_hash": "ff11d44d63b713099101335464b8eae4aa221df1ae3cf0f64af5a3f237013578",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5213,7 +4935,6 @@
       "candidate_estimated_tokens": 47108,
       "candidate_utf8_bytes": 141322,
       "candidate_hash": "e4833c5750518b560c9e2323da88b10e27f290f18e659c2df287ca05f80a6a91",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5228,7 +4949,6 @@
       "candidate_estimated_tokens": 46530,
       "candidate_utf8_bytes": 139589,
       "candidate_hash": "9c5a8d9fb8b0280f4f8e9583877ae5dab274bb4a9ec558ef8401b720acf58648",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5243,7 +4963,6 @@
       "candidate_estimated_tokens": 46741,
       "candidate_utf8_bytes": 140221,
       "candidate_hash": "34bc7e1389037ccabff823e5d7bcb4d2ba442e8d4f8f3ca65d3e06fa5ee751f3",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5258,7 +4977,6 @@
       "candidate_estimated_tokens": 47258,
       "candidate_utf8_bytes": 141772,
       "candidate_hash": "84d008e6a824c98297951db3882e79c7c73ee8f0a76c13a00ee86915d2dcb258",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5273,7 +4991,6 @@
       "candidate_estimated_tokens": 47005,
       "candidate_utf8_bytes": 141014,
       "candidate_hash": "ec25298cedddf75194f184aba1984d89ff29bfb9a17c06a5849f10b6a165cb52",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5288,7 +5005,6 @@
       "candidate_estimated_tokens": 47780,
       "candidate_utf8_bytes": 143339,
       "candidate_hash": "97423c91868e90071b4aad737c8d66636ad69fdada3dd805374b3ae13b9a1cf5",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5303,7 +5019,6 @@
       "candidate_estimated_tokens": 47182,
       "candidate_utf8_bytes": 141546,
       "candidate_hash": "39dfa3aa886935068005f8e114e786e5392470493047446de795366f610910ed",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5318,7 +5033,6 @@
       "candidate_estimated_tokens": 47144,
       "candidate_utf8_bytes": 141432,
       "candidate_hash": "9edcc78169dd59526e46fdeff95d10f4493e0753473975450c0f480ba6989329",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5333,7 +5047,6 @@
       "candidate_estimated_tokens": 47078,
       "candidate_utf8_bytes": 141232,
       "candidate_hash": "43bfae7c67e3f54e259b3c57054ee6198adfe71fabb0852830b4c64ef08bbb98",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5348,7 +5061,6 @@
       "candidate_estimated_tokens": 46841,
       "candidate_utf8_bytes": 140521,
       "candidate_hash": "2e9b787057d626e07a9777783e4d44915d808fbd02f9558a81864dc431ba2faa",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5363,7 +5075,6 @@
       "candidate_estimated_tokens": 47091,
       "candidate_utf8_bytes": 141273,
       "candidate_hash": "5910b6ca045a2595b9bf5416276ee6401ba3e8d17f77b45e01c6cc957212b6d7",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5378,7 +5089,6 @@
       "candidate_estimated_tokens": 46740,
       "candidate_utf8_bytes": 140220,
       "candidate_hash": "035458e7d928492a07b611df50f4bc3b31387900a876eac96e07295682add0a1",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5393,7 +5103,6 @@
       "candidate_estimated_tokens": 47443,
       "candidate_utf8_bytes": 142328,
       "candidate_hash": "de038ddb9aeba3fa9f1fa86fccccfb57308b70f50651c1a8976fcdf00b278b76",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5408,7 +5117,6 @@
       "candidate_estimated_tokens": 46796,
       "candidate_utf8_bytes": 140387,
       "candidate_hash": "470d42b47f281f811d6cdcbd995cc689b2a275e6ad6bdc27455066dff6121375",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5423,7 +5131,6 @@
       "candidate_estimated_tokens": 47177,
       "candidate_utf8_bytes": 141530,
       "candidate_hash": "acfe1ac550003650fc03a8320ca028a8f53b216c5ec4d6db6c9e8cd9d5dae355",
-      "long_context_threshold": null,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5438,7 +5145,6 @@
       "candidate_estimated_tokens": 47148,
       "candidate_utf8_bytes": 141444,
       "candidate_hash": "2aacff402534fe58bdc33c639dd60c7631d705cbde6df0d22bb8c8925087bf93",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5453,7 +5159,6 @@
       "candidate_estimated_tokens": 46644,
       "candidate_utf8_bytes": 139930,
       "candidate_hash": "e75d2f6a16d4fdf2a4089b60120838e977a2c1897e8c1a7f2cea1b0ee9fbe819",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5468,7 +5173,6 @@
       "candidate_estimated_tokens": 46510,
       "candidate_utf8_bytes": 139529,
       "candidate_hash": "900a1ca4cf411410a09b6978922e91f83b4612068e38361e3e8e750a65b20626",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5483,7 +5187,6 @@
       "candidate_estimated_tokens": 46655,
       "candidate_utf8_bytes": 139965,
       "candidate_hash": "c22207eb7088f17053b20474be8d0d4ea536d624d398f6bd2e6a8a631e2e553c",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5498,7 +5201,6 @@
       "candidate_estimated_tokens": 47138,
       "candidate_utf8_bytes": 141414,
       "candidate_hash": "74837c36135beb16d043e98582e791ebeea56b22c8ec9f163dd110cd966c1cfc",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5513,7 +5215,6 @@
       "candidate_estimated_tokens": 47243,
       "candidate_utf8_bytes": 141728,
       "candidate_hash": "93714556712e2ebdfebc87fa8236be3c95883c090e90fbda011b95d924931805",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
@@ -5528,7 +5229,6 @@
       "candidate_estimated_tokens": 47140,
       "candidate_utf8_bytes": 141418,
       "candidate_hash": "5cfe71b47868d1cc84c23049968c6b8e3abfdacc2405bf43500cca4b4b649c48",
-      "long_context_threshold": 272000,
       "status": "blocked_missing_implementation_contract",
       "blockers": [
         "Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",

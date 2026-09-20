@@ -8,12 +8,14 @@ from ..batch_submit import submit_verified_batch
 from ..contracts import ContractError
 from ..generate_batch import encode_requests
 from ..orchestration.batch_manifest import from_file_manifest, transition
-from ..orchestration.ledger import (
+from ..orchestration.provider_operations import (
+    mark_not_submitted,
     mark_submission,
-    release_reservation,
-    reserve_batch,
+    mark_submission_started,
+    prepare_batch,
+    set_remote_input_file,
 )
-from ..orchestration.work_order import WorkOrder
+from ..orchestration.work_order import WorkOrder, work_order_from_mapping
 from ..progress import ProgressEvent
 
 if TYPE_CHECKING:
@@ -25,10 +27,12 @@ def _work_orders(manifest: dict[str, Any]) -> dict[str, WorkOrder]:
     for custom_id, raw in (manifest.get("work_orders") or {}).items():
         if not isinstance(raw, dict):
             raise ContractError(f"BATCH {custom_id}: neplatný WORK_ORDER_V2.")
-        value = {key: item for key, item in raw.items() if key != "order_hash"}
         try:
-            order = WorkOrder(**value)
-            if str(raw.get("order_hash") or "") != order.order_hash:
+            order = work_order_from_mapping(raw)
+            if (
+                "attempt_id" in raw
+                and str(raw.get("order_hash") or "") != order.order_hash
+            ):
                 raise ContractError(f"BATCH {custom_id}: WorkOrder hash nesouhlasí.")
             result[str(custom_id)] = order
         except (TypeError, ValueError) as exc:
@@ -62,7 +66,6 @@ def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
 
 
 def _submit_generate_batch(self: RunContext, client, manifest):
-    from ..cost_context_report import CostContextReport
     from ..orchestration.repository import repository_for_logger
     from ..recoverable_artifacts import load_run_state
 
@@ -89,7 +92,7 @@ def _submit_generate_batch(self: RunContext, client, manifest):
     # WorkOrder proto nemusí mít parent run už zapsaný v lokální databázi.
     # WorkOrder zůstává immutable; pouze doplníme důvěryhodný parent z jeho
     # vlastní identity, aby následná FK vazba nebyla nahrazena nečitelnou
-    # chybou při rezervaci.
+    # chybou při registraci provider operace.
     repo = repository_for_logger(self.log)
     for order in work_orders.values():
         if repo.has_run(order.run_id):
@@ -104,32 +107,22 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             status="running",
         )
 
-    report = CostContextReport(self.log.paths.run_dir)
-    reserve_batch(
+    prepare_batch(
         self.log,
         self.cfg,
-        client,
         manifest["requests"],
-        manifest["cost_context_reports"],
+        manifest["context_reports"],
         work_orders=work_orders,
     )
-    for row, measurement in zip(
-        manifest["requests"], manifest["cost_context_reports"], strict=True
-    ):
-        report.record(
-            row["body"],
-            custom_id=row["custom_id"],
-            path=manifest["expected"][row["custom_id"]],
-            measurement=measurement,
-        )
-    total_input = sum(r["input_tokens"] for r in manifest["cost_context_reports"])
+    total_input = sum(
+        r["input_tokens"] for r in manifest["context_reports"]
+    )
     self.progress_event.emit(
         ProgressEvent(
             "Kontext BATCH",
             detail=(
                 f"{len(manifest['requests'])} úloh · odhad vstupu "
-                f"{total_input:,} tokenů · {manifest['requests'][0]['body']['model']} "
-                "· podrobnosti v cost_context_report.json"
+                f"{total_input:,} tokenů · {manifest['requests'][0]['body']['model']}"
             ),
         )
     )
@@ -181,11 +174,15 @@ def _submit_generate_batch(self: RunContext, client, manifest):
         "batch_manifest_v4_id": manifest_v4["manifest_id"],
     }
     self.log.update_state(evidence)
+    for order in work_orders.values():
+        set_remote_input_file(self.log, order, input_file_id)
 
     self._set(55, 0, "Odesílám pracovní dávku…", stage="BATCH SUBMIT")
     manifest_v4 = transition(manifest_v4, "submitting")
     _save_v4(self.log, manifest_v4)
     self.log.update_state({"submission_unknown": True})
+    for order in work_orders.values():
+        mark_submission_started(self.log, order)
     try:
         batch = submit_verified_batch(
             client, input_file_id, manifest["requests"]
@@ -198,7 +195,7 @@ def _submit_generate_batch(self: RunContext, client, manifest):
         )
         if definite_reject:
             for order in work_orders.values():
-                release_reservation(self.log, order)
+                mark_not_submitted(self.log, order)
             manifest_v4 = transition(manifest_v4, "failed")
             _save_v4(self.log, manifest_v4)
             self.log.update_state({"submission_unknown": False})

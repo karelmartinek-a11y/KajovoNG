@@ -180,10 +180,10 @@ def test_bible_real_request_contract_and_saved_revision(comic):
             "SELECT route FROM work_orders ORDER BY rowid"
         ).fetchall()
         states = db.execute(
-            "SELECT state FROM reservations ORDER BY rowid"
+            "SELECT state FROM provider_operations ORDER BY rowid"
         ).fetchall()
     assert ("responses_live",) in routes
-    assert ("settled",) in states
+    assert ("completed",) in states
 
 
 @pytest.mark.parametrize("kind,count", [("character", 1), ("character", 3), ("environment", 1)])
@@ -206,13 +206,13 @@ def test_entity_generated_from_references(comic, tmp_path, kind, count):
     repo = OrchestrationRepository(Path(service.settings.log_dir) / "orchestration.sqlite3")
     with repo.connect() as db:
         rows = db.execute(
-            "SELECT w.route,r.state FROM work_orders w "
-            "JOIN reservations r ON r.work_order_hash=w.work_order_hash "
+            "SELECT w.route,p.state FROM work_orders w "
+            "JOIN provider_operations p ON p.work_order_hash=w.work_order_hash "
             "WHERE w.run_id=? ORDER BY w.rowid",
             (operation["run_id"],),
         ).fetchall()
-    assert ("responses_live", "settled") in rows
-    assert ("image_live", "settled") in rows
+    assert ("responses_live", "completed") in rows
+    assert ("image_live", "completed") in rows
 
 
 @pytest.mark.parametrize("kinds", [[], ["character"], ["character", "character"], ["environment"], ["character", "environment"], ["character", "character", "environment"]])
@@ -273,8 +273,8 @@ def test_batch_partial_retry_and_resume(comic):
     repo = OrchestrationRepository(Path(service.settings.log_dir) / "orchestration.sqlite3")
     with repo.connect() as db:
         rows = db.execute(
-            "SELECT w.route,r.state,r.provider_id FROM work_orders w "
-            "JOIN reservations r ON r.work_order_hash=w.work_order_hash "
+            "SELECT w.route,p.state,p.provider_id FROM work_orders w "
+            "JOIN provider_operations p ON p.work_order_hash=w.work_order_hash "
             "WHERE w.run_id=?",
             (operation_row["run_id"],),
         ).fetchall()

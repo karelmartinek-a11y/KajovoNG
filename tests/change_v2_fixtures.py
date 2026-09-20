@@ -358,7 +358,6 @@ def scenario(
     worker.cfg.maximum_quality = maximum_quality
     worker.cfg.dry_run = dry_run
     worker.cfg.stop_after_plan = stop_after_plan
-    worker.cfg.unknown_pricing = "explicit_token_budget"
     worker.cfg.verification_profile_ids = []
     if mode == "MODIFY":
         in_dir = tmp_path / "in"

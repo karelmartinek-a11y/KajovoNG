@@ -39,6 +39,12 @@ class ResponseJournal:
                         "Evidence požadavku má neplatný hash; automatické pokračování je zablokováno."
                     )
 
+    def has_entry(self, payload) -> bool:
+        """Return whether this exact background payload already has journal state."""
+        body = copy.deepcopy(payload)
+        body.update(background=True, store=True)
+        return digest(body) in self.entries
+
     def confirmed_id(self, payload) -> str:
         """Return provider ID only when this exact background payload has one."""
         body = copy.deepcopy(payload)
@@ -206,8 +212,6 @@ class ResponseJournal:
         return copy.deepcopy(response)
 
     def _record(self, key, entry, response):
-        from .cost_context_report import CostContextReport
-
         # GET request ID není změna pracovního výsledku. Opakovaná stejná
         # odpověď nesmí při pollingu přepisovat celý deník, stav a jeho přílohy.
         previous = dict(entry.get("response") or {})
@@ -218,10 +222,6 @@ class ResponseJournal:
             entry["checked_at"] = time.time()
             return
 
-        CostContextReport(self.log.paths.run_dir).record(
-            entry["payload"],
-            response=response,
-        )
         if response.get("status") not in ("queued", "in_progress"):
             self.log.save_json(
                 "responses",

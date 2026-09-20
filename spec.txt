@@ -323,13 +323,12 @@ pokud není skutečnou závislostí testovaného chování.
   úlohám s hashem a verzí. Změna kontraktu musí invalidovat dotčené konzumenty.
 - Tokeny počítat nad přesným finálním payloadem a uložit model/snapshot,
   hash payloadu, souborové hashe, výsledek count, max_output_tokens a rezervu.
-- Podmínka přijetí: input_count + output_budget + safety_margin <= model_limit.
+- Podmínka přijetí: input_count + output_limit + safety_margin <= model_limit.
   Velikost rezervy je návrhový parametr k ověření, nikoli zjištěná konstanta API.
-- Zavést samostatný rozpočet kontextu na úlohu; překročení vrací přípravu
-  k úpravě. Nezapínat tiché ořezání vstupu, které by odstranilo povinnosti.
+- Zavést samostatnou technickou kontrolu kontextu na úlohu; překročení skutečného modelového limitu vrací přípravu k úpravě. Nezapínat tiché ořezání vstupu, které by odstranilo povinnosti.
 - Limit výstupu i reasoning volit podle úlohy. Rozsah 32–64 tisíc výstupních
   tokenů je pouze kandidát pro vybrané složité úlohy, nikoli univerzální řešení.
-  Snížení reasoning může pomoci ceně a délce, ale vyžaduje ověření kvality.
+  Snížení reasoning může zkrátit zpracování, ale vyžaduje ověření kvality.
 - Pokud celý soubor nevychází, nespojovat kusy neúplného JSON naslepo.
   Posoudit buď menší odpovědnost souboru, nebo explicitní verzovaný protokol
   pokračování. Ten by vyžadoval kontrolu pořadí, integrity a úplnosti; nejde
@@ -363,34 +362,9 @@ ověřit; nezaručovat jejich použitelnost před kontrolou. Neúplné texty moh
 pomoci opravě, ale nesmí být vydávány za hotové soubory. Zbývá 261 úloh
 bez dokončené odpovědi, případně další opravy zjištěné obsahovou validací.
 
-10. NÁKLADY A ROZPOČTOVÁ EVIDENCE
+10. RUNTIME EKONOMICKÁ HRANICE
 
-Ruční A2 a A2Q, vykázaná spotřeba:
-A2:  input 395 403, output 93 583.
-A2Q: input 398 576, output 92 871.
-Konzervativní přepočet při sazbách 5 USD / milion vstupních a 30 USD / milion
-výstupních tokenů: 4,784505 + 4,779010 = 9,563515 USD.
-
-Pozor na další nevysvětlenou anomálii: uložené odpovědi A2/A2Q vykazují více
-output_tokens než požadovaných 90 000 a reasoning_tokens shodné s output_tokens,
-přesto obsahují viditelný strukturovaný výstup. Tato metadata zde neopravujeme
-odhadem. Pro rezervaci byl použit celý vykázaný výstup. Soulad těchto metadat
-s fakturací a významem tokenových limitů je další otázka pro poskytovatele.
-
-Luna Batch má dlouhý vstup nad 272 tisíc tokenů. Při sazbách Batch pro dlouhý
-kontext 0,20 USD / milion input a 0,90 USD / milion output vychází přibližně
-6,2276684 USD; při konzervativním použití sazby cache write 0,25 USD na celý
-vstup 7,5678898 USD. Skutečné použití cache-write sazby zde není doložené;
-jde o rezervu, nikoli tvrzení o faktuře.
-
-Konzervativní dosavadní součet dodatečné práce: 17,1314048 USD.
-Z původních 60 USD tedy zbývá výpočtově 42,8685952 USD.
-Nejde o ověřený zůstatek účtu; případné jiné běhy, daně či odlišná fakturace
-nejsou zahrnuté. Rozpočtový odhad vychází z uložené spotřeby a ceníku.
-
-Budoucí rozpočet musí sčítat skutečnou dosavadní spotřebu, rezervace již
-odeslaných úloh, nové požadavky a rezervu na opravy. Neúplné odpovědi jsou
-spotřebou. Nesmí se prezentovat pouze cena dalšího Batch jako celková cena.
+Novější autorské rozhodnutí ruší veškerý runtime cenový engine a finanční limity. Program nepočítá ani neodhaduje peněžní hodnotu provider operací, neblokuje podle ceny a nevybírá model podle ceny. Hospodárnost se řeší návrhem konkrétního workflow a testovacího workloadu mimo runtime. Provider usage zůstává pouze raw telemetrií.
 
 11. DŮKAZNÍ SOUBORY A REPRODUKCE BEZ NOVÉHO GENEROVÁNÍ
 
@@ -406,7 +380,7 @@ V LOG/manual_ID92:
 - batch_requests.jsonl: společná sada 299 řádků, nebyla odeslána jako smíšená dávka;
 - gpt-5.4-mini.jsonl, gpt-5.6-luna.jsonl: skutečné vstupní sady;
 - batch_token_counts.json: count výsledky podle digestu request body;
-- batch_budget.json: per-request vstupy, limity a cenové rezervace;
+- historický archivní soubor s původním názvem `batch_budget.json`: používá se pouze jako zdroj uložených token-count měření; jeho ekonomická pole nejsou runtime vstupem;
 - batch_expected.json: custom_id -> relativní cesta;
 - gpt-5.4-mini_submission.json, gpt-5.6-luna_submission.json: metadata dávek;
 - gpt-5.4-mini_error_file_id.jsonl: 228 chybových řádků;
@@ -415,8 +389,7 @@ V LOG/manual_ID92:
 
 handoff.json je starší předávací záznam ze stavu batch_pending; jeho průběžné
 počty nejsou autoritou pro konečný výsledek. Pro stav použít poslední submission
-metadata a jednotlivé stažené řádky. Původní rezervace v A2_budget/A2Q_budget
-také nejsou náhradou finálně vykázaného usage.
+metadata a jednotlivé stažené řádky. Historické A2/A2Q záznamy s dřívějšími ekonomickými poli jsou pouze archivní evidence a nový runtime je nepoužívá. Autoritativní provider telemetry zůstává raw `usage`.
 
 Ne-generativní reprodukce posouzení:
 1) Ověřit shodu řádků per-model JSONL s filtrem společné sady.
@@ -435,11 +408,11 @@ Při případné realizaci doplnit dočasná testovací data a mockované API:
 - vyloučení nesouvisejících částí bez skrytého fallbacku na celý SSOT;
 - chybějící kontrakt, neznámý symbol, konfliktní verze a cyklus závislostí;
 - invalidaci konzumentů po změně poskytovatele;
-- hranice input/output/reserve a blokaci příliš velkého requestu;
+- hranice technického input/output context window a blokaci příliš velkého requestu;
 - completed Batch s HTTP 200, ale body.status=incomplete;
 - neplatný JSON, prázdný obsah, chybnou cestu, duplicity a odmítnutí;
 - obnovu pouze chybějících výsledků a zákaz duplicity neznámého odeslání;
-- souběžné cenové rezervace, skutečný usage a stop před překročením rozpočtu;
+- souběžnou attempt/provider identitu, raw usage a zákaz duplicitního submitu;
 - oddělení redigovaných logů od přesných obnovitelných artefaktů.
 
 Přijetí změny vyžaduje prokázat na reprezentativních pracovních souborech
@@ -470,13 +443,10 @@ manifesty; nezneplatnit potichu již připravené běhy.
 https://developers.openai.com/api/docs/models/gpt-5.4-mini
 Uvádí kontextové okno 400 000 a podporu reasoning.
 https://developers.openai.com/api/docs/models/gpt-5.6-luna
-Uvádí okno 1 050 000, výstup až 128 000 a cenová pravidla dlouhého kontextu.
+Uvádí technické context window a výstupní capabilities modelu.
 https://developers.openai.com/api/docs/guides/reasoning
 Popisuje společný rozpočet reasoning a výstupu a stav incomplete při vyčerpání
 max_output_tokens. Doporučená počáteční rezerva 25 000 není záruka dokončení.
-https://developers.openai.com/api/docs/pricing
-Zdroj sazeb pro cenový přepočet. Před budoucím odesláním znovu ověřit ceny
-a dostupnost konkrétních modelů; dokumentace se může změnit.
 
 ZÁVĚREČNÉ VYMEZENÍ
 

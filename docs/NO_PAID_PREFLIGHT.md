@@ -4,6 +4,9 @@ Tento dokument je závazný doplněk SSOT pro review změn v oblasti OpenAI tran
 
 ## Invariant
 
+KájovoNG neimplementuje cenový engine ani runtime finanční budget. Hospodárnost je řešena návrhem workflow a provozním rozhodnutím uživatele. Runtime validuje pouze technické a kontraktní limity API. Přepínač `--confirm-paid` v ruční live acceptance pouze potvrzuje vědomé povolení skutečných provider requestů; neurčuje ani nekontroluje peněžní strop.
+
+
 Kájovo NG **nesmí před skutečnou pracovní generativní operací odesílat samostatný placený test, probe, preflight Response ani zkušební BATCH**.
 
 Před pracovní operací jsou povoleny pouze:

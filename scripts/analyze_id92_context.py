@@ -12,9 +12,8 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from kajovo.core.context_budget import measure  # noqa: E402
+from kajovo.core.context_limits import measure  # noqa: E402
 from kajovo.core.context_compiler import content_hash, dependency_groups, global_obligations  # noqa: E402
-from kajovo.core.context_pricing import PRICES  # noqa: E402
 
 
 def percentile(values, fraction):
@@ -47,18 +46,18 @@ def analyze(archive, manifest_path):
             return json.loads((manual / name).read_text("utf-8"))
 
         snapshot = read("final_preparation_snapshot.json")
-        budget = {r["custom_id"]: r for r in read("batch_budget.json")["rows"]}
+        measurements = {r["custom_id"]: r for r in read("batch_budget.json")["rows"]}
         counts = read("batch_token_counts.json")
         verified_requests = set()
         with (manual / "batch_requests.jsonl").open(encoding="utf-8") as stream:
             for line in stream:
                 request = json.loads(line)
                 cid = request["custom_id"]
-                if cid in verified_requests or counts.get(content_hash(request["body"])) != budget[cid]["input_tokens"]:
-                    raise ValueError("Rozpočet nemá shodné hashově přiřazené archivní měření requestu.")
+                if cid in verified_requests or counts.get(content_hash(request["body"])) != measurements[cid]["input_tokens"]:
+                    raise ValueError("Archivní token-count evidence nemá shodné hashové přiřazení requestu.")
                 verified_requests.add(cid)
-        if verified_requests != set(budget):
-            raise ValueError("Rozpočet a pracovní JSONL mají odlišná ID.")
+        if verified_requests != set(measurements):
+            raise ValueError("Archivní token-count evidence a pracovní JSONL mají odlišná ID.")
         targets = read("batch_expected.json")
         if not isinstance(targets, dict):
             raise ValueError("Neznámý tvar archivního mapování.")
@@ -82,12 +81,11 @@ def analyze(archive, manifest_path):
                 "unscoped_global_obligations": global_obligations(snapshot),
             }
             size = measure(candidate)
-            rows.append({"path": path, "custom_id": cid, "model": budget[cid]["model"],
-                         "legacy_input_tokens": budget[cid]["input_tokens"],
+            rows.append({"path": path, "custom_id": cid, "model": measurements[cid]["model"],
+                         "legacy_input_tokens": measurements[cid]["input_tokens"],
                          "candidate_estimated_tokens": size["estimated_tokens"],
                          "candidate_utf8_bytes": size["utf8_bytes"],
                          "candidate_hash": content_hash(candidate),
-                         "long_context_threshold": PRICES.get(budget[cid]["model"], {}).get("long_context_threshold"),
                          "status": "blocked_missing_implementation_contract",
                          "blockers": ["Chybí přesné verzované symboly, error/lifecycle kontrakty a působnost globálních povinností.",
                                       "Kandidát není platný FileContextV1 a nesmí se odeslat do API."]})
@@ -118,9 +116,7 @@ def analyze(archive, manifest_path):
                 "blocked_files": len(rows), "safe_file_contexts": 0,
                 "candidate_distribution": {"max": max(sizes), "mean": candidate_total / len(rows),
                     **{f"p{p}": percentile(sizes, p / 100) for p in (50, 90, 95, 99)},
-                    **{f"over_{limit}": sum(n > limit for n in sizes) for limit in (100000, 150000, 200000)},
-                    "over_long_context_pricing_threshold": sum(bool(r["long_context_threshold"] and
-                        r["candidate_estimated_tokens"] > r["long_context_threshold"]) for r in rows)},
+                    **{f"over_{limit}": sum(n > limit for n in sizes) for limit in (100000, 150000, 200000)}},
                 "measurement": "Legacy: archivní API input_tokens včetně přílohy. Kandidát: lokální odhad UTF-8 bajty / 3; bez API přílohy, instrukcí a schema. Nejde o ekvivalentní přesná měření.",
                 "dependency_graph": dependency_groups(snapshot), "files": rows}
 
@@ -151,7 +147,6 @@ Finální A2Q neobsahuje přesné verzované implementační kontrakty ani rozho
 | Medián | {dist['p50']:.1f} |
 | p90 / p95 / p99 | {dist['p90']:.1f} / {dist['p95']:.1f} / {dist['p99']:.1f} |
 | Nad 100k / 150k / 200k | {dist['over_100000']} / {dist['over_150000']} / {dist['over_200000']} |
-| Nad doloženým cenovým prahem | {dist['over_long_context_pricing_threshold']} kandidátů; u Luny je práh 272k |
 
 {report['measurement']}
 
