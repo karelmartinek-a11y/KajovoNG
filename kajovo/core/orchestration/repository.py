@@ -600,7 +600,7 @@ class OrchestrationRepository:
             if not row:
                 db.rollback()
                 raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
-            if row[0] == "completed":
+            if row[0] not in {"prepared", "submission_unknown", "not_submitted"}:
                 db.rollback()
                 raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
             db.execute(
