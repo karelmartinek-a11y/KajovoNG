@@ -445,11 +445,15 @@ class ComicService:
         prepare_provider_request(
             log, cfg, self.client, body, work_order=order
         )
-        mark_submission_started(log, order)
+        journal = ResponseJournal(
+            log, self.settings.response_poll_timeout_s
+        )
+        # Polling/resume is not a new provider submit. A journal entry is the
+        # durable authority for whether this exact payload was already sent.
+        if not journal.has_entry(body):
+            mark_submission_started(log, order)
         try:
-            response = ResponseJournal(
-                log, self.settings.response_poll_timeout_s
-            ).execute(
+            response = journal.execute(
                 self.client,
                 body,
                 stopped=self.stopped,
@@ -459,8 +463,8 @@ class ComicService:
                     detail=f"{state}, {seconds} s",
                 ),
             )
-        except ResponsePending as exc:
-            response_id = str(getattr(exc, "response_id", "") or "")
+        except ResponsePending:
+            response_id = journal.confirmed_id(body)
             mark_submission(
                 log,
                 order,
