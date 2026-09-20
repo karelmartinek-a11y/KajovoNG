@@ -12,6 +12,23 @@ from ..filescan import scan_tree
 from .contracts import canonical_sha256
 from .errors import OrchestrationError
 
+_SAFE_PROJECT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def project_binary_asset_candidate(item) -> bool:
+    return bool(
+        not item.uploadable
+        and item.reason == "binary"
+        and not item.sensitive
+        and Path(item.rel_path).suffix.lower() in _SAFE_PROJECT_IMAGE_EXTS
+    )
+
+
+def validate_project_binary_asset(data: bytes) -> None:
+    from ..image_runtime import inspect_image
+
+    inspect_image(data)
+
 
 @dataclass(frozen=True)
 class SourceSegment:
@@ -325,7 +342,8 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
         approved: list[dict] = []
         is_junction = getattr(os.path, "isjunction", lambda value: False)
         for item in items:
-            if not item.uploadable:
+            asset_candidate = project_binary_asset_candidate(item)
+            if not item.uploadable and not asset_candidate:
                 rejected.append({
                     "path": item.rel_path,
                     "size": item.size,
@@ -347,7 +365,7 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
                     "SOURCE_PATH_UNSAFE",
                     f"Schválený zdroj změnil typ nebo je odkaz: {item.rel_path}",
                 )
-            if not item.sha256:
+            if item.uploadable and not item.sha256:
                 raise OrchestrationError(
                     "SOURCE_APPROVAL_HASH_MISSING",
                     f"Schválený zdroj nemá hash politiky: {item.rel_path}",
@@ -369,17 +387,32 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
                     f"Zdroj se změnil během zmrazení: {item.rel_path}",
                 )
             digest = hashlib.sha256(data).hexdigest()
-            if item.sha256 != digest:
+            if item.uploadable and item.sha256 != digest:
                 raise OrchestrationError(
                     "SOURCE_CHANGED_DURING_FREEZE",
                     f"Hash zdroje se po schválení změnil: {item.rel_path}",
                 )
             media = mimetypes.guess_type(item.rel_path)[0] or "application/octet-stream"
+            decision = "approved"
+            source_kind = "existing_project"
+            if asset_candidate:
+                try:
+                    validate_project_binary_asset(data)
+                except Exception:
+                    rejected.append({
+                        "path": item.rel_path,
+                        "size": item.size,
+                        "reason": "invalid_image_asset",
+                        "sensitive": False,
+                    })
+                    continue
+                decision = "approved_asset"
+                source_kind = "image"
             source_id = f"SRC-PROJECT-{len(inputs):05d}"
             inputs.append(
                 ApprovedInput(
                     source_id,
-                    "existing_project",
+                    source_kind,
                     data,
                     media,
                     "context",
@@ -396,7 +429,7 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
                     "relative_path": item.rel_path,
                     "sha256": digest,
                     "media_type": media,
-                    "policy_decision": "approved",
+                    "policy_decision": decision,
                 },
             )
             approved.append({
@@ -404,6 +437,7 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
                 "size": len(data),
                 "sha256": digest,
                 "media_type": media,
+                "policy_decision": decision,
             })
         log.save_json(
             "manifests",
