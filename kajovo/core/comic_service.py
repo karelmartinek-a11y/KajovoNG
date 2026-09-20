@@ -33,24 +33,19 @@ from .comic_types import (
     validate_story,
     validate_storyboard,
 )
-from .context_pricing import PRICES, observed_image_cost
 from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, source_bytes, validate_image_request
 from .model_registry import model_spec, models_for_usage
 from .orchestration.contracts import canonical_sha256
 from .orchestration.errors import OrchestrationError
-from .orchestration.ledger import (
+from .orchestration.provider_operations import (
+    mark_not_submitted,
     mark_submission,
-    release_reservation,
-    reserve_paid_request,
-    settle_usage,
+    mark_submission_started,
+    prepare_provider_request,
+    record_usage,
 )
 from .orchestration.repository import repository_for_logger
-from .orchestration.run_config import (
-    DEFAULT_MAX_COST_MICROUSD,
-    DEFAULT_MAX_INPUT_TOKENS,
-    DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_PAID_REQUESTS,
-)
+from .orchestration.run_config import build_run_config_v2
 from .orchestration.work_order import freeze_order
 from .orchestration.image_slots import (
     FrozenAssetIndex, FrozenImageAsset, ImageRole, compile_slots, normalization_policy_hash,
@@ -152,16 +147,11 @@ class ComicService:
         return SimpleNamespace(
             mode="COMIC",
             model=IMAGE_MODEL,
+            model_a1="",
+            model_a2="",
+            model_a3="",
             send_as_c=operation["kind"] in ("panels", "edit"),
             maximum_quality=True,
-            max_cost_microusd=DEFAULT_MAX_COST_MICROUSD,
-            max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
-            max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-            max_paid_requests=DEFAULT_MAX_PAID_REQUESTS,
-            # Images API has no Responses input-token preflight equivalent.
-            # The paid effect is therefore explicit token-only and actual usage
-            # is reconciled after provider evidence arrives.
-            unknown_pricing="explicit_token_budget",
             auto_repair="off",
             verification_profile_ids=[],
             stop_after_plan=False,
@@ -186,24 +176,8 @@ class ComicService:
         if repo.has_run(operation["run_id"]):
             return repo
         cfg = self._image_cfg(operation)
-        run_config = {
-            "version": 2,
-            "workflow": "COMIC",
-            "execution": execution,
-            "quality": "maximum",
-            "model_bindings": [
-                {"stage": "COMIC_IMAGE", "model": IMAGE_MODEL}
-            ],
-            "max_cost_microusd": cfg.max_cost_microusd,
-            "max_input_tokens": cfg.max_input_tokens,
-            "max_output_tokens": cfg.max_output_tokens,
-            "max_paid_requests": cfg.max_paid_requests,
-            "unknown_pricing": cfg.unknown_pricing,
-            "auto_repair": cfg.auto_repair,
-            "verification_profile_ids": [],
-            "stop_after_plan": False,
-            "dry_run": False,
-        }
+        cfg.send_as_c = execution == "batch"
+        run_config = build_run_config_v2(cfg)
         repo.register_run(
             operation["run_id"],
             lineage_id=operation["run_id"],
@@ -222,7 +196,7 @@ class ComicService:
         log.update_state({"run_config_v2": run_config})
         return repo
 
-    def _reserve_image_effect(
+    def _prepare_image_effect(
         self,
         operation,
         log,
@@ -240,22 +214,23 @@ class ComicService:
         cfg = self._image_cfg(operation)
         with repo.connect() as db:
             previous = db.execute(
-                "SELECT w.attempt_no,r.state "
-                "FROM work_orders w JOIN reservations r "
-                "ON r.work_order_hash=w.work_order_hash "
+                "SELECT w.attempt_no,p.state "
+                "FROM work_orders w LEFT JOIN provider_operations p "
+                "ON p.work_order_hash=w.work_order_hash "
                 "WHERE w.run_id=? AND w.task_id=? "
                 "ORDER BY w.attempt_no DESC LIMIT 1",
                 (operation["run_id"], task_id),
             ).fetchone()
         attempt_no = 1
         if previous:
-            prior_attempt, prior_state = int(previous[0]), str(previous[1])
-            if prior_state == "released":
+            prior_attempt = int(previous[0])
+            prior_state = str(previous[1] or "")
+            if prior_state == "not_submitted":
                 attempt_no = prior_attempt + 1
                 if attempt_no > 3:
                     raise ComicError(
                         "retry_limit",
-                        "Obrazová operace již vyčerpala tři schválené pokusy.",
+                        "Obrazová operace již vyčerpala tři povolené pokusy.",
                     )
             else:
                 raise SubmissionUnknown(
@@ -297,21 +272,20 @@ class ComicService:
             },
             projection,
         )
-        repo.register_work_order(
+        persisted_hash = repo.register_work_order(
             order,
             body_ref=canonical_sha256(body),
             input_hash=order.input_projection_hash,
         )
-        repo.reserve(
-            reservation_id=order.budget_reservation_id,
-            work_order_hash=order.order_hash,
-            cost_microusd=None,
-            input_limit=0,
-            output_limit=0,
-            max_cost_microusd=cfg.max_cost_microusd,
-            max_input_tokens=cfg.max_input_tokens,
-            max_output_tokens=cfg.max_output_tokens,
-            max_paid_requests=cfg.max_paid_requests,
+        repo.prepare_provider_operation(
+            attempt_id=order.attempt_id,
+            work_order_hash=persisted_hash,
+            endpoint=(
+                "/v1/batches"
+                if route == "image_batch"
+                else str(body.get("endpoint") or "/v1/images/edits")
+            ),
+            request_hash=canonical_sha256(body),
         )
         log.save_json(
             "manifests",
@@ -320,60 +294,43 @@ class ComicService:
         )
         return repo, order
 
-    def _image_reservation_for_task(self, log, task_id):
+    def _image_attempt_for_task(self, log, task_id):
         repo = repository_for_logger(log)
         with repo.connect() as db:
             row = db.execute(
-                "SELECT r.reservation_id "
-                "FROM reservations r JOIN work_orders w "
-                "ON w.work_order_hash=r.work_order_hash "
-                "WHERE w.run_id=? AND w.task_id=? AND w.attempt_no=1",
+                "SELECT p.attempt_id "
+                "FROM provider_operations p JOIN work_orders w "
+                "ON w.work_order_hash=p.work_order_hash "
+                "WHERE w.run_id=? AND w.task_id=? "
+                "ORDER BY w.attempt_no DESC LIMIT 1",
                 (log.run_id, task_id),
             ).fetchone()
         return repo, (str(row[0]) if row else "")
 
-    def _settle_image_usage(
+    def _record_image_usage(
         self,
         log,
-        reservation_id,
+        attempt_id,
         *,
         provider_item_id,
         usage,
-        batch,
     ):
-        if not reservation_id or not isinstance(usage, dict) or not usage:
+        if not attempt_id or not isinstance(usage, dict):
             return
-        cost = observed_image_cost(
-            IMAGE_MODEL, usage, batch=batch
-        )
-        actual = (
-            round(float(cost["usd"]) * 1_000_000)
-            if isinstance(cost, dict)
-            and isinstance(cost.get("usd"), (int, float))
-            else None
-        )
-        repository_for_logger(log).settle(
-            reservation_id,
+        repository_for_logger(log).record_usage(
+            attempt_id,
             provider="openai-image",
             provider_item_id=provider_item_id,
             usage=usage,
-            actual_cost_microusd=actual,
-            price_snapshot_hash=canonical_sha256(
-                {
-                    "model": IMAGE_MODEL,
-                    "batch": batch,
-                    "pricing": (
-                        cost.get("pricing_version")
-                        if isinstance(cost, dict)
-                        else None
-                    ),
-                }
-            ),
+            raw_response_ref="image:" + provider_item_id,
         )
 
     def _text_model(self):
         if self.client is None:
-            raise ComicError("api_unavailable", "Komiksová textová operace vyžaduje API klienta.")
+            raise ComicError(
+                "api_unavailable",
+                "Komiksová textová operace vyžaduje API klienta.",
+            )
         cached = getattr(self, "_text_model_cache", "")
         if cached:
             return cached
@@ -388,15 +345,11 @@ class ComicService:
                 "model_catalog_unavailable",
                 "Nelze bezpečně načíst katalog textových modelů účtu.",
             ) from exc
-        candidates = [
-            model
-            for model in models_for_usage(available, "responses")
-            if model in PRICES
-        ]
+        candidates = models_for_usage(available, "responses")
         if not candidates:
             raise ComicError(
-                "model_pricing_unknown",
-                "Účet nemá pro COMIC dostupný Responses model s doloženou lokální cenou.",
+                "model_unavailable",
+                "Účet nemá pro COMIC kompatibilní Responses model.",
             )
         self._text_model_cache = candidates[0]
         return candidates[0]
@@ -405,13 +358,11 @@ class ComicService:
         return SimpleNamespace(
             mode="COMIC",
             model=model,
+            model_a1="",
+            model_a2="",
+            model_a3="",
             send_as_c=False,
             maximum_quality=False,
-            max_cost_microusd=DEFAULT_MAX_COST_MICROUSD,
-            max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
-            max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-            max_paid_requests=DEFAULT_MAX_PAID_REQUESTS,
-            unknown_pricing="block",
             auto_repair="off",
             verification_profile_ids=[],
             stop_after_plan=False,
@@ -491,9 +442,10 @@ class ComicService:
             },
             projection,
         )
-        reserve_paid_request(
+        prepare_provider_request(
             log, cfg, self.client, body, work_order=order
         )
+        mark_submission_started(log, order)
         try:
             response = ResponseJournal(
                 log, self.settings.response_poll_timeout_s
@@ -526,7 +478,7 @@ class ComicService:
                 in {400, 401, 403, 404, 422, 429}
             )
             if definite_reject:
-                release_reservation(log, order)
+                mark_not_submitted(log, order)
             else:
                 mark_submission(log, order, None, unknown=True)
             raise
@@ -539,7 +491,7 @@ class ComicService:
                 True,
             )
         mark_submission(log, order, provider_id, unknown=False)
-        settle_usage(log, order, response)
+        record_usage(log, order, response)
         return validate_output(response, body), {
             "model": model,
             "parameters": body,
@@ -1029,7 +981,7 @@ class ComicService:
                         for asset in snap["assets"]
                     ],
                 }
-                _repo, image_order = self._reserve_image_effect(
+                _repo, image_order = self._prepare_image_effect(
                     operation,
                     log,
                     task_id="entity-image-" + snap["entity"]["id"],
@@ -1041,6 +993,7 @@ class ComicService:
                     },
                     projection=projection,
                 )
+                mark_submission_started(log, image_order)
                 try:
                     response = self.client.create_image(
                         "/v1/images/edits", body
@@ -1049,7 +1002,7 @@ class ComicService:
                     if getattr(exc, "status_code", None) in (
                         400, 401, 403, 404, 422, 429
                     ) or getattr(exc, "request_sent", None) is False:
-                        release_reservation(log, image_order)
+                        mark_not_submitted(log, image_order)
                         snap["image_submitting"] = False
                         self.update_operation(operation["id"], snapshot=snap)
                         raise
@@ -1078,12 +1031,11 @@ class ComicService:
                     provider_identity,
                     unknown=False,
                 )
-                self._settle_image_usage(
+                self._record_image_usage(
                     log,
-                    image_order.budget_reservation_id,
+                    image_order.budget_attempt_id,
                     provider_item_id=provider_identity,
                     usage=response.get("usage") or {},
-                    batch=False,
                 )
                 archive = self.store.asset(operation["project_id"], gzip.compress(canonical(response).encode(), mtime=0), {"role": "provider_archive", "encoding": "gzip"})
                 snap.update(image_archive=archive, image_parameters=body)
@@ -1276,12 +1228,12 @@ class ComicService:
                     if len(matches) != 1:
                         raise SubmissionUnknown("Neurčitý submit nelze jednoznačně dohledat. Novou dávku neposílám.")
                     self.save_batch(batch["id"], matches[0])
-                    repo, reservation_id = self._image_reservation_for_task(
+                    repo, attempt_id = self._image_attempt_for_task(
                         log, "batch-" + batch["id"]
                     )
-                    if reservation_id:
+                    if attempt_id:
                         repo.mark_submitted(
-                            reservation_id,
+                            attempt_id,
                             str(matches[0].get("id") or ""),
                             unknown=False,
                         )
@@ -1323,7 +1275,7 @@ class ComicService:
                             for row in rows
                         ],
                     }
-                    _repo, batch_order = self._reserve_image_effect(
+                    _repo, batch_order = self._prepare_image_effect(
                         operation,
                         log,
                         task_id="batch-" + batch["id"],
@@ -1336,6 +1288,8 @@ class ComicService:
                         },
                         projection=projection,
                     )
+                    _repo.set_remote_input_file(batch_order.attempt_id, file_id)
+                    mark_submission_started(log, batch_order)
                     self.progress("COMIC_SUBMITTING", detail="Odesílám pracovní dávku")
                     try:
                         payload = self.client.create_image_batch(file_id, rows)
@@ -1343,7 +1297,7 @@ class ComicService:
                         if getattr(exc, "status_code", None) in (
                             400, 401, 403, 404, 422, 429
                         ) or getattr(exc, "request_sent", None) is False:
-                            release_reservation(log, batch_order)
+                            mark_not_submitted(log, batch_order)
                             with self.store.transaction() as db:
                                 db.execute("UPDATE batches SET status='rejected' WHERE id=?", (batch["id"],))
                             raise
@@ -1419,10 +1373,12 @@ class ComicService:
         asset = self.store.asset(operation["project_id"], binary, {"role": "generated_raw"})
         artifact = log.bundle.archive_artifact(self.store.asset_path(asset), role="output", kind="image")
         data[0]["binary_artifact"] = {"asset_id": asset, "artifact_id": artifact["artifact_id"], "encoding": "base64"}
-        from .context_pricing import observed_image_cost
-        cost = observed_image_cost(IMAGE_MODEL, result.get("usage"), batch=operation["kind"] in ("panels", "edit"))
-        log.save_json("responses", "COMIC_IMAGE_" + asset, {"image_evidence_version": 1, "response": result, "cost": cost})
-        return {"asset_id": asset, "response": result, "cost": cost}
+        log.save_json(
+            "responses",
+            "COMIC_IMAGE_" + asset,
+            {"image_evidence_version": 1, "response": result},
+        )
+        return {"asset_id": asset, "response": result}
 
     def ingest(self, operation, batch, payload, log):
         items = self.store.rows("batch_items", "batch_id=?", (batch["id"],), order="custom_id")
@@ -1465,20 +1421,19 @@ class ComicService:
             self.check_stop()
             response = row.get("response") or {}
             body = response.get("body") or {}
-            repo, reservation_id = self._image_reservation_for_task(
+            repo, attempt_id = self._image_attempt_for_task(
                 log, "batch-" + batch["id"]
             )
-            if reservation_id and isinstance(body, dict):
-                self._settle_image_usage(
+            if attempt_id and isinstance(body, dict):
+                self._record_image_usage(
                     log,
-                    reservation_id,
+                    attempt_id,
                     provider_item_id=(
                         str(batch.get("provider_id") or payload.get("id") or "")
                         + ":"
                         + str(row["custom_id"])
                     ),
                     usage=body.get("usage") or {},
-                    batch=True,
                 )
             if row.get("error") or response.get("status_code", 200) >= 400:
                 error = row.get("error") or (response.get("body") or {}).get("error") or {"code": "openai_error"}
