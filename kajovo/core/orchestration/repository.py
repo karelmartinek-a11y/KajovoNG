@@ -188,10 +188,12 @@ def _migrate_legacy_economic_schema(db: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS usage_records_v2_migration;
         CREATE TABLE provider_operations_v2_migration(
             attempt_id TEXT PRIMARY KEY,
-            work_order_hash TEXT NOT NULL,
+            work_order_hash TEXT NOT NULL REFERENCES work_orders(work_order_hash),
             endpoint TEXT NOT NULL,
             request_hash TEXT NOT NULL,
-            state TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(
+                state IN ('prepared','submission_unknown','submitted','completed','not_submitted')
+            ),
             provider_id TEXT,
             remote_input_file_id TEXT,
             raw_response_ref TEXT,
@@ -201,8 +203,8 @@ def _migrate_legacy_economic_schema(db: sqlite3.Connection) -> None:
         CREATE TABLE usage_records_v2_migration(
             provider TEXT NOT NULL,
             provider_item_id TEXT NOT NULL,
-            attempt_id TEXT NOT NULL,
-            usage_json TEXT NOT NULL,
+            attempt_id TEXT NOT NULL REFERENCES provider_operations_v2_migration(attempt_id),
+            usage_json TEXT NOT NULL CHECK(json_valid(usage_json)),
             PRIMARY KEY(provider,provider_item_id)
         );
         """
@@ -296,6 +298,14 @@ def _migrate_legacy_economic_schema(db: sqlite3.Connection) -> None:
                 new_attempt,
                 row["usage_json"],
             ),
+        )
+        db.execute(
+            """
+            UPDATE provider_operations_v2_migration
+            SET state='completed',updated_at=?
+            WHERE attempt_id=?
+            """,
+            (_now(), new_attempt),
         )
 
     if _table_exists(db, "usage_records"):

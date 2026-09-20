@@ -1016,11 +1016,19 @@ def _prepare_v3_followup(run_dir, state, manifest, *, retry_source=None):
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
-        persisted_hash = repo.register_work_order(
-            order,
-            body_ref=body_hash,
-            input_hash=order.input_projection_hash,
-        )
+        import sqlite3
+
+        try:
+            persisted_hash = repo.register_work_order(
+                order,
+                body_ref=body_hash,
+                input_hash=order.input_projection_hash,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ContractError(
+                "Pracovní pokus nelze zaregistrovat; ověřte stav "
+                "souběžné operace před dalším odesláním."
+            ) from exc
         repo.prepare_provider_operation(
             attempt_id=order.attempt_id,
             work_order_hash=persisted_hash,
