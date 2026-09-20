@@ -22,7 +22,7 @@ from ..progress import ProgressEvent
 from ..structured_output import (
     text_format,
 )
-from ..utils import ensure_dir, ts_code
+from ..utils import ensure_dir, safe_join_under_root, sha256_file, ts_code
 from .observability import record_event
 from .polling import VectorStorePollingContext, wait_vector_store_files
 
@@ -201,30 +201,75 @@ def _prepare_response_runtime(self: RunContext, client):
     self._runtime_diag_file_ids = diag_file_ids
 
 
+def _approved_project_items(self: RunContext, root: str):
+    root_path = Path(root).resolve()
+    run_root = Path(self.log.paths.run_dir).resolve()
+    rows = []
+    is_junction = getattr(os.path, "isjunction", lambda value: False)
+    for artifact in self.log.bundle.artifacts():
+        if artifact.get("role") != "in_project_file":
+            continue
+        metadata = artifact.get("metadata") or {}
+        if metadata.get("policy_decision") not in {None, "approved"}:
+            continue
+        rel = str(
+            metadata.get("relative_path")
+            or artifact.get("reconstruction_role")
+            or ""
+        )
+        expected = str(metadata.get("sha256") or artifact.get("sha256") or "")
+        bundle_rel = str(artifact.get("path_in_bundle") or "")
+        if not rel or not expected or not bundle_rel:
+            raise ContractError("SOURCE_PACK obsahuje neúplný schválený záznam.")
+        current = Path(safe_join_under_root(str(root_path), rel))
+        if current.is_symlink() or is_junction(str(current)) or not current.is_file():
+            raise ContractError(f"Schválený zdroj změnil typ nebo chybí: {rel}")
+        if sha256_file(str(current)) != expected:
+            raise ContractError(f"IN se od schváleného SourcePacku změnil: {rel}")
+        frozen = (run_root / bundle_rel).resolve()
+        try:
+            frozen.relative_to(run_root)
+        except ValueError as exc:
+            raise ContractError(f"SourcePack artifact uniká z RunBundle: {rel}") from exc
+        if not frozen.is_file() or sha256_file(str(frozen)) != expected:
+            raise ContractError(f"Immutable SourcePack artifact je poškozen: {rel}")
+        rows.append(SimpleNamespace(
+            rel_path=rel,
+            abs_path=str(current),
+            frozen_path=str(frozen),
+            size=current.stat().st_size,
+            sha256=expected,
+            uploadable=True,
+            reason="approved_source_pack",
+            sensitive=False,
+        ))
+    rows.sort(key=lambda item: item.rel_path)
+    return rows
+
+
 def _zip_in_dir(self: RunContext, root: str) -> str:
     root = os.path.abspath(root)
     ensure_dir(self.log.paths.files_dir)
     zip_path = os.path.join(self.log.paths.files_dir, f"in_dir_{ts_code()}.txt")
-    policy = self.settings.security
-    items = scan_tree(root, os.path.basename(root), [".git", "venv", ".venv", "LOG", "cache", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache"],
-                      policy.deny_extensions_in, policy.allow_extensions_in,
-                      policy.deny_globs_in, policy.allow_globs_in,
-                      allow_sensitive=policy.allow_upload_sensitive)
+    items = _approved_project_items(self, root)
     with open(zip_path, "w", encoding="utf-8", newline="\n") as bundle:
         for item in items:
             self._check_stop()
-            if not item.uploadable:
+            content = Path(item.frozen_path).read_bytes()
+            try:
+                decoded = content.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
                 continue
-            import hashlib
-            with open(item.abs_path, "rb") as source:
-                content = source.read(10 * 1024 * 1024 + 1)
-            if hashlib.sha256(content).hexdigest() != item.sha256:
-                raise RuntimeError(f"Vstupní soubor se změnil během přípravy: {item.rel_path}")
-            bundle.write(json.dumps({"path": item.rel_path, "content": content.decode("utf-8")}, ensure_ascii=False) + "\n")
+            bundle.write(
+                json.dumps(
+                    {"path": item.rel_path, "sha256": item.sha256, "content": decoded},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
             if bundle.tell() > 40 * 1024 * 1024:
                 raise ValueError("Textový balíček IN překračuje limit 40 MiB.")
     return zip_path
-
 
 def _prepare_in_dir_upload(self: RunContext, client: OpenAIClient) -> dict[str, Any] | None:
     in_dir = (self.cfg.in_dir or "").strip()
@@ -407,136 +452,60 @@ def _in_dir_fallback_note(self: RunContext) -> str:
     return f"IN adresář je přiložen jako textový balíček (file_id={self._in_dir_info['file_id']}). Každý řádek JSON obsahuje cestu a obsah souboru."
 
 def prepare_modify_inputs(self: RunContext, client: OpenAIClient, diag_file_ids: list[str]):
-    self._set(8, 0, "Skenuji a nahrávám vstupní projekt IN…", stage="Vstupní data")
+    """Připraví MODIFY výhradně ze schváleného SourcePacku a explicitních příloh."""
+    self._set(8, 0, "Ověřuji zmrazený vstupní projekt IN…", stage="Vstupní data")
     root = self.cfg.in_dir
-    context_path = self.log.find_json("manifests", "response_modify_context") if self._response_journal else None
-    tools: list[dict[str, Any]] | None
-    supports_fs: bool
-    vs_id: str | None
-    if context_path:
-        context = json.loads(Path(context_path).read_text(encoding="utf-8"))
-        items = [SimpleNamespace(**item) for item in context["items"]]
-        up_items = [item for item in items if item.uploadable]
-        tools, supports_fs, vs_id = context["tools"], context["supports_fs"], context["vs_id"]
-        b_text, b_input_files, b_input_images = context["text"], context["input_files"], context["input_images"]
-        self._file_name_cache.update(context["file_names"])
-        self._fs_tools = tools
-    else:
-        root_name = os.path.basename(os.path.abspath(root))
+    items = _approved_project_items(self, root)
+    up_items = list(items)
 
-        items = scan_tree(
-            root,
-            root_name,
-            deny_dirs=[".git", "venv", ".venv", "LOG", "cache", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache"],
-            deny_exts=self.settings.security.deny_extensions_in,
-            allow_exts=self.settings.security.allow_extensions_in,
-            deny_globs=self.settings.security.deny_globs_in,
-            allow_globs=self.settings.security.allow_globs_in,
-            allow_sensitive=self.settings.security.allow_upload_sensitive,
-        )
-        manifest = build_manifest(root, items, extra={"project": self.cfg.project})
-        manifest_path = os.path.join(self.log.paths.manifests_dir, f"mirror_manifest_{ts_code()}.json")
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
+    tools = list(self._fs_tools or []) or None
+    supports_fs = bool(
+        tools and self._preparation_cap("supports_file_search")
+    )
+    vs_id = (
+        str(self._in_dir_info.get("vector_store_id") or "")
+        if self._in_dir_info
+        else ""
+    ) or None
 
-        mf_up = client.upload_file(manifest_path, purpose='user_data')
-        manifest_file_id = mf_up["id"]
-        self._remember_file_name(manifest_file_id, os.path.basename(manifest_path))
-        self._log_debug(f"Mirror manifest uploaded: {manifest_file_id}")
+    b_text = self.cfg.prompt or ""
+    if self.cfg.recovery_instruction:
+        b_text += self._recovery_suffix()
 
-        uploaded: list[tuple[str, str]] = []
-        up_items = [it for it in items if it.uploadable]
-        for i, it in enumerate(up_items):
-            self._check_stop()
-            self._progress_stage = "Upload"
-            self.progress_event.emit(ProgressEvent("Upload", completed=i, total=len(up_items), unit="souborů", detail=it.rel_path))
-            self._log_debug(f"Upload mirror file: {it.rel_path}")
-            up = client.upload_file(it.abs_path, purpose='user_data')
-            uploaded.append((it.rel_path, up["id"]))
-            self.subprogress.emit(int((i + 1) * 100 / max(1, len(up_items))))
-            self.progress_event.emit(ProgressEvent("Upload", completed=i + 1, total=len(up_items), unit="souborů", detail=it.rel_path))
-            self._remember_file_name(up["id"], os.path.basename(it.abs_path))
-            try:
-                self.log.event("upload.mirror", {"path": it.rel_path, "abs": it.abs_path, "file_id": up["id"], "bytes": it.size})
-            except Exception as evidence_error:
-                logging.getLogger(__name__).warning(
-                    "Zápis pomocné evidence selhal: %s", evidence_error
-                )
+    explicit_ids = self._input_file_ids() + list(diag_file_ids or [])
+    b_input_files, b_input_images = self._build_input_attachments(
+        client, explicit_ids
+    )
+    references = self._files_with_in_dir(
+        list(self.cfg.attached_file_ids or [])
+        + list(diag_file_ids or [])
+    )
+    b_text = self._with_diag_text(self._append_io_reference(b_text, references))
 
-        self.log.save_json("manifests", "mirror_manifest", {"manifest_file_id": manifest_file_id, "uploaded": uploaded, "manifest": manifest})
+    self.log.save_json(
+        "manifests",
+        "response_modify_context",
+        {
+            "approved_paths": [
+                {"path": item.rel_path, "sha256": item.sha256, "size": item.size}
+                for item in items
+            ],
+            "tools": tools,
+            "supports_fs": supports_fs,
+            "vs_id": vs_id,
+            "input_files": b_input_files,
+            "input_images": b_input_images,
+        },
+    )
+    return (
+        root,
+        items,
+        up_items,
+        tools,
+        supports_fs,
+        vs_id,
+        b_text,
+        b_input_files,
+        b_input_images,
+    )
 
-        tools = None
-        vs_id = None
-        vs_ids: list[str] = list(self._vector_store_ids or [])
-        supports_fs = bool(self.cfg.model_caps.get("supports_file_search", False)) and bool(self.cfg.use_file_search)
-
-        if supports_fs:
-            try:
-                self._set(18, 0, "Vytvářím a indexuji vector store pro file_search…", stage="Indexace")
-                vs = client.create_vector_store(f"{(self.cfg.project or root_name)}{ts_code()}")
-                vs_id = vs.get("id")
-                if vs_id:
-                    vs_file_ids: list[str] = []
-                    for rel, fid in uploaded[:2000]:
-                        self._check_stop()
-                        vs_file = client.add_file_to_vector_store(vs_id, fid, attributes={'source_path': os.path.join(root, rel)})
-                        try:
-                            vs_file_id = str(vs_file.get("id") or "")
-                            if vs_file_id:
-                                vs_file_ids.append(vs_file_id)
-                        except Exception:
-                            pass
-                    mf_vs_file = client.add_file_to_vector_store(vs_id, manifest_file_id, attributes={'source': 'mirror_manifest'})
-                    try:
-                        mf_vs_id = str(mf_vs_file.get("id") or "")
-                        if mf_vs_id:
-                            vs_file_ids.append(mf_vs_id)
-                    except Exception:
-                        pass
-                    if vs_file_ids:
-                        self._wait_vector_store_files(client, vs_id, vs_file_ids)
-                    vs_ids.append(vs_id)
-                    self._vector_store_ids.append(vs_id)
-            except SubmissionOutcomeUnknown:
-                raise
-            except Exception as e:
-                supports_fs = bool(vs_ids)
-                tools = None
-                vs_id = None
-                try:
-                    self.log.exception("vector_store", e)
-                    self.log.update_state({"modify_context": {
-                        "new_vector_store": "failed", "direct_inputs": True,
-                        "existing_vector_stores": list(vs_ids), "error": str(e),
-                    }})
-                except Exception as evidence_error:
-                    logging.getLogger(__name__).warning("Zápis evidence indexace selhal: %s", type(evidence_error).__name__)
-                self.progress_event.emit(ProgressEvent(
-                    "Indexace", detail="Nová indexace selhala; aktuální IN zůstává připojen přímo jako vstupní soubory."
-                ))
-
-        if supports_fs and vs_ids:
-            seen = set()
-            uniq_ids: list[str] = []
-            for vid in vs_ids:
-                if vid and vid not in seen:
-                    uniq_ids.append(vid)
-                    seen.add(vid)
-            tools = [{"type": "file_search", "vector_store_ids": uniq_ids}]
-            if tools:
-                self._fs_tools = tools
-
-        b_text = self.cfg.prompt or ""
-        if self.cfg.recovery_instruction:
-            b_text += self._recovery_suffix()
-        b_ref_files = self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids + [manifest_file_id] + [fid for _, fid in uploaded])
-        b_input_files, b_input_images = self._build_input_attachments(
-            client, self._input_file_ids() + [manifest_file_id] + [fid for _, fid in uploaded])
-        b_text = self._with_diag_text(self._append_io_reference(b_text, b_ref_files))
-        if self._response_journal:
-            self.log.save_json("manifests", "response_modify_context", {
-                "items": [vars(item) for item in items], "tools": tools, "supports_fs": supports_fs,
-                "vs_id": vs_id, "text": b_text, "input_files": b_input_files,
-                "input_images": b_input_images, "file_names": self._file_name_cache,
-            })
-    return root, items, up_items, tools, supports_fs, vs_id, b_text, b_input_files, b_input_images
