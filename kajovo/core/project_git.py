@@ -215,7 +215,7 @@ class ProjectGit:
             "included_paths": sorted(candidates),
             "excluded_policy": "allowed_file",
         }
-        directory = self._milestone_dir()
+        self._milestone_dir()
         atomic_write_text(
             str(self._milestone_meta_path(name)),
             json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
