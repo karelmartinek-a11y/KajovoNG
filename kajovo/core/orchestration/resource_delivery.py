@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 import tempfile
@@ -10,9 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice
-from PySide6.QtGui import QImage, QPainter
-from PySide6.QtSvg import QSvgRenderer
+from PIL import Image, ImageOps
 
 from ..comic_types import IMAGE_MODEL
 from ..contracts import ContractError
@@ -155,21 +154,18 @@ def validate_resource_plan(worker, graph: dict[str, Any]) -> None:
                     f"{path}: image_workflow podporuje PNG/JPEG/WebP."
                 )
         elif producer == "local_renderer":
-            generated = files.get(source)
             known = _known_source(worker, source)
-            source_name = (
-                str((generated or {}).get("path") or "")
-                if generated is not None
-                else str((known or {}).get("filename") or "")
-            )
-            if generated is not None and source not in set(target.get("dependencies", [])):
+            if known is None:
                 raise ContractError(
-                    f"{path}: plánovaný renderer source {source} není deklarovaná dependency."
+                    f"{path}: local_renderer vyžaduje schválený raster SourcePack: {source}"
                 )
-            if Path(source_name).suffix.lower() != ".svg" or suffix != ".png":
+            source_name = str(known.get("filename") or "")
+            if (
+                Path(source_name).suffix.lower() not in _SUPPORTED_IMAGE_SUFFIXES
+                or suffix != ".png"
+            ):
                 raise ContractError(
-                    f"{path}: podporovaný local_renderer je pouze SVG -> PNG "
-                    "ze schváleného nebo plánovaného SVG."
+                    f"{path}: local_renderer podporuje schválený PNG/JPEG/WebP -> PNG."
                 )
         elif producer == "manual_input":
             pass
@@ -211,30 +207,19 @@ def _bundle_source_bytes(worker, identifier: str) -> tuple[bytes, str]:
     raise ContractError(f"Resource source nebyl nalezen v immutable SourcePacku: {identifier}")
 
 
-def _render_svg_png(data: bytes) -> bytes:
-    renderer = QSvgRenderer(QByteArray(data))
-    if not renderer.isValid():
-        raise ContractError("local_renderer: zdroj není platné SVG.")
-    size = renderer.defaultSize()
-    width = int(size.width())
-    height = int(size.height())
-    if width <= 0 or height <= 0:
-        raise ContractError("local_renderer: SVG nemá platnou výchozí velikost.")
-    if width * height > 64_000_000 or max(width, height) > 8192:
-        raise ContractError("local_renderer: SVG přesahuje bezpečný render limit.")
-    image = QImage(width, height, QImage.Format.Format_ARGB32)
-    image.fill(0)
-    painter = QPainter(image)
-    try:
-        renderer.render(painter)
-    finally:
-        painter.end()
-    buffer = QBuffer()
-    if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
-        raise ContractError("local_renderer: nelze otevřít PNG buffer.")
-    if not image.save(buffer, "PNG"):
-        raise ContractError("local_renderer: PNG render selhal.")
-    result = bytes(buffer.data())
+def _render_local_png(data: bytes) -> bytes:
+    """Deterministically normalize an approved raster asset to metadata-free PNG."""
+    inspect_image(data)
+    with Image.open(io.BytesIO(data)) as source:
+        oriented = ImageOps.exif_transpose(source)
+        transparent = (
+            "A" in oriented.getbands() or "transparency" in oriented.info
+        )
+        pixels = oriented.convert("RGBA" if transparent else "RGB")
+        image = Image.frombytes(pixels.mode, pixels.size, pixels.tobytes())
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+    result = output.getvalue()
     inspect_image(result)
     return result
 
@@ -642,7 +627,7 @@ def prepare_production_scope(
     for path, row in selected.items():
         blocked = {
             dep
-            for dep in row.get("dependencies", [])
+            for dep in row.get("content_dependencies", [])
             if dep in production and dep not in selected and dep not in completed
         }
         if blocked:
@@ -682,8 +667,6 @@ def dispatch_resource_target(
         raise ContractError(f"{path}: chybí resource target nebo producer.")
     producer = str(delivery["producer"])
     source_id = str(delivery["source_or_task_id"])
-    generated_text = generated_text or {}
-
     if producer == "manual_input":
         states = dict(getattr(worker, "_resource_states", {}) or {})
         states[path] = {
@@ -707,11 +690,8 @@ def dispatch_resource_target(
     if producer == "existing_asset":
         data, _name = _bundle_source_bytes(worker, source_id)
     elif producer == "local_renderer":
-        if source_id in generated_text:
-            data = generated_text[source_id].encode("utf-8")
-        else:
-            data, _name = _bundle_source_bytes(worker, source_id)
-        data = _render_svg_png(data)
+        data, _name = _bundle_source_bytes(worker, source_id)
+        data = _render_local_png(data)
     elif producer == "image_workflow":
         data = _generate_image(worker, client, graph, target, delivery)
     else:
@@ -874,7 +854,7 @@ def advance_batch_resources(
         ready = sorted(
             path
             for path in pending
-            if set(files[path].get("dependencies", [])) <= completed
+            if set(files[path].get("content_dependencies", [])) <= completed
         )
         if not ready:
             break
