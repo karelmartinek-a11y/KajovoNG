@@ -171,26 +171,28 @@ def measure_request(
     fit_count = exact_input_tokens if exact_input_tokens is not None else upper
     window = int(spec.get("context_window") or 0)
     output = payload.get("max_output_tokens")
-    output_value = int(output) if type(output) is int else 0
+    provider_output = int(spec.get("max_output_tokens") or 0)
+    output_value = int(output) if type(output) is int else provider_output
     warnings: list[str] = []
     blockers: list[str] = []
+
+    if not provider_output:
+        blockers.append("Model nemá doložený technický výstupní limit.")
+    elif output is not None and (
+        type(output) is not int or int(output) <= 0 or int(output) > provider_output
+    ):
+        blockers.append("max_output_tokens překračuje technickou capability modelu.")
 
     if not window:
         blockers.append("Model nemá doložené technické context window.")
     elif fit_count + output_value > window:
         blockers.append(
-            "Vstup a maximální výstup překračují technické context window modelu."
+            "Vstup a maximální technický výstup překračují context window modelu."
         )
 
     max_input = int(spec.get("max_input_tokens") or 0)
     if max_input and fit_count > max_input:
         blockers.append("Vstup překračuje samostatný technický vstupní limit modelu.")
-
-    provider_output = int(spec.get("max_output_tokens") or 0)
-    if output is None:
-        blockers.append("Požadavek nemá explicitní max_output_tokens.")
-    elif provider_output and output_value > provider_output:
-        blockers.append("max_output_tokens překračuje technickou capability modelu.")
 
     if unresolved and exact_input_tokens is None:
         warnings.append(
@@ -206,6 +208,7 @@ def measure_request(
         "input_tokens_exact": exact_input_tokens is not None,
         "input_token_upper_bound": fit_count,
         "output_limit": output,
+        "effective_output_limit": output_value or None,
         "context_window": window or None,
         "context_fraction": (count / window) if window else None,
         "context_breakdown": breakdown,
