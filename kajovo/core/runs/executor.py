@@ -23,6 +23,7 @@ from ..orchestration.run_config import build_run_config_v2, run_scope_hash
 from ..orchestration.source_pack import freeze_run_sources, source_context
 from ..progress import ProgressEvent
 from ..request_rules import validate_run_options
+from ..safe_config import safe_ui_state
 from ..response_journal import (
     ResponseCancelled,
     ResponseJournal,
@@ -124,7 +125,7 @@ class RunExecutor(RunContext):
             )
             self.log.update_state(
                 {
-                    "ui_state": self.cfg.__dict__,
+                    "ui_state": safe_ui_state(self.cfg),
                     "run_config_v2": run_config_v2,
                     "run_scope_hash": scope_hash,
                     "source_pack_hash": source_pack.hash,
