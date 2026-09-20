@@ -226,7 +226,6 @@ def _build_manifest_v3(
         for row in structure["spine"]["files"]
         if row["kind"] == "text" and row["action"] in production_actions
     }
-    compiler = ContextCompiler(snapshot)
     requested = set(paths) if paths is not None else set(production)
     approved_scope = (
         set(approved_paths) if approved_paths is not None else set(requested)
@@ -249,6 +248,7 @@ def _build_manifest_v3(
     snapshot["expected_target_hashes"] = {
         path: expected_target_hashes[path] for path in sorted(approved_scope)
     }
+    compiler = ContextCompiler(snapshot)
 
     wave_index = {
         path: index
