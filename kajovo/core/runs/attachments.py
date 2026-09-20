@@ -15,7 +15,6 @@ from ..compat import (
 from ..contracts import (
     ContractError,
 )
-from ..filescan import build_manifest, scan_tree
 from ..openai_client import OpenAIClient
 from ..openai_transport import OpenAIError, SubmissionOutcomeUnknown
 from ..progress import ProgressEvent
