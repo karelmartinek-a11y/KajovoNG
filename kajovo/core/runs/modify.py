@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -41,8 +40,6 @@ def _run_v3_modify_production(
         dispatch_resource_target,
         prepare_production_scope,
     )
-    from ..orchestration.waves import build_execution_dag
-
     selected, completed, excluded = prepare_production_scope(self, struct)
     files_by_path = {
         str(row["path"]): row for row in struct["spine"]["files"]
@@ -84,8 +81,6 @@ def _run_v3_modify_production(
     self._delivery_verified_artifacts = {}
     generated_text: dict[str, str] = {}
     resource_pending: list[dict[str, Any]] = []
-    dag = build_execution_dag(struct)
-    del dag  # validation/order is expressed by the explicit dependency sets below.
 
     if self.cfg.send_as_c:
         pending_resources = {
