@@ -912,6 +912,8 @@ def validate_graph(
             "IMPLEMENTATION_GRAPH_V3 nelze ověřit bez kanonických requirements a plan."
         )
     validate_spine_v1(graph["mode"], requirements, plan, graph["spine"])
+    from .resource_delivery import validate_resource_plan
+    validate_resource_plan(worker, graph)
     specs = {row["path"]: row["spec"] for row in graph["file_specs"]}
     if len(specs) != len(graph["file_specs"]):
         raise ContractError("IMPLEMENTATION_GRAPH_V3 má duplicitní file_specs.")
