@@ -60,3 +60,50 @@ def create_execution_authorization(
         expires_at=expires.isoformat(),
         repair_allowed=run_config["auto_repair"] == "within_approval",
     )
+
+
+
+@dataclass(frozen=True)
+class TargetedExecutionAuthorization:
+    version: int
+    approval_id: str
+    run_id: str
+    scope_hash: str
+    purpose: str
+    target_paths: tuple[str, ...]
+    source_manifest_hash: str
+    expires_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["target_paths"] = list(self.target_paths)
+        return value
+
+
+def create_targeted_retry_authorization(
+    run_id: str,
+    scope_hash: str,
+    target_paths: list[str] | tuple[str, ...] | set[str],
+    source_manifest_hash: str,
+    *,
+    lifetime_hours: int = 2,
+) -> TargetedExecutionAuthorization:
+    targets = tuple(sorted({str(path) for path in target_paths if str(path)}))
+    seed = {
+        "run_id": run_id,
+        "scope_hash": scope_hash,
+        "purpose": "manual_retry",
+        "target_paths": targets,
+        "source_manifest_hash": source_manifest_hash,
+    }
+    expires = datetime.now(timezone.utc) + timedelta(hours=lifetime_hours)
+    return TargetedExecutionAuthorization(
+        version=1,
+        approval_id="RETRY-" + canonical_sha256(seed)[:32],
+        run_id=run_id,
+        scope_hash=scope_hash,
+        purpose="manual_retry",
+        target_paths=targets,
+        source_manifest_hash=source_manifest_hash,
+        expires_at=expires.isoformat(),
+    )
