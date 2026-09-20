@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..contracts import ContractError, validate_paths
-from ..orchestration.verification import technical_staging_report
+from ..orchestration.verification import candidate_verification_report
 from ..progress import ProgressEvent
 from ..utils import atomic_write_text, ensure_dir, safe_join_under_root, sha256_file
 from .config import UiRunConfig
@@ -243,9 +243,12 @@ def save_out_files(
     if cfg.mode == "MODIFY":
         atomic_write_text(str(staging_root / "changes.diff"), diff_text)
 
-    verification = technical_staging_report(
-        generated_root,
+    verification = candidate_verification_report(
+        run_root,
+        combined_staged,
+        mode=cfg.mode,
         target_id=f"{context.log.run_id}:{cfg.mode}",
+        profile_ids=list(cfg.verification_profile_ids or []),
     )
     atomic_write_text(
         str(staging_root / "verification.json"),
