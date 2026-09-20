@@ -171,6 +171,10 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
         record_usage,
     )
     work_order = _work_order_for_payload(self, transport_payload, attempt)
+    resume_existing = (
+        self._response_journal is not None
+        and self._response_journal.has_entry(payload)
+    )
     measurement = prepare_provider_request(
         self.log,
         self.cfg,
@@ -178,6 +182,7 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
         transport_payload,
         measurement=measurement,
         work_order=work_order,
+        allow_existing=resume_existing,
     )
     self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
     self.progress_event.emit(
@@ -193,7 +198,8 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
     if self.lifecycle_status is RunStatus.PREPARING:
         self.transition(RunStatus.REMOTE_WORK)
 
-    mark_submission_started(self.log, work_order)
+    if not resume_existing:
+        mark_submission_started(self.log, work_order)
     try:
         try:
             if self._response_journal is not None:
