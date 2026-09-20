@@ -32,20 +32,15 @@ from .model_registry import model_spec
 from .openai_client import OpenAIClient
 from .openai_transport import SubmissionOutcomeUnknown
 from .orchestration.contracts import canonical_sha256
-from .orchestration.ledger import (
+from .orchestration.provider_operations import (
+    mark_not_submitted,
     mark_submission,
-    release_reservation,
-    reserve_paid_request,
-    settle_usage,
+    mark_submission_started,
+    prepare_provider_request,
+    record_usage,
 )
 from .orchestration.repository import repository_for_logger
-from .orchestration.run_config import (
-    DEFAULT_MAX_COST_MICROUSD,
-    DEFAULT_MAX_INPUT_TOKENS,
-    DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_PAID_REQUESTS,
-    validate_run_config_v2,
-)
+from .orchestration.run_config import validate_run_config_v2
 from .orchestration.work_order import freeze_order
 from .progress import ProgressEvent
 from .request_rules import validate_response_payload
@@ -143,11 +138,6 @@ class CascadeRunConfig:
     resume_snapshot: dict[str, Any] | None = None
     recovery_instruction: str = ""
     lineage: dict[str, Any] | None = None
-    max_cost_microusd: int | None = DEFAULT_MAX_COST_MICROUSD
-    max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS
-    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
-    max_paid_requests: int = DEFAULT_MAX_PAID_REQUESTS
-    unknown_pricing: str = "block"
     execution_approval_id: str = ""
 
 
@@ -189,7 +179,7 @@ class CascadeRunExecutor:
         if self.logger is None:
             raise RuntimeError("Cascade logger není inicializovaný.")
         run_id = str(self.cfg.run_id or self.logger.run_id)
-        ledger_cfg = self._ledger_cfg(step.model, self.cfg.execution_approval_id)
+        operation_cfg = self._operation_cfg(step.model, self.cfg.execution_approval_id)
         task_id = f"{step.id}:schema"
         projection = {
             "cascade_name": self.cfg.cascade.name,
@@ -201,7 +191,7 @@ class CascadeRunExecutor:
         }
         wire_format = (payload.get("text") or {}).get("format") or {}
         order = freeze_order(
-            ledger_cfg,
+            operation_cfg,
             {
                 "run_id": run_id,
                 "step_id": str(getattr(self, "_current_step_record_id", step.id)),
@@ -228,13 +218,14 @@ class CascadeRunExecutor:
             },
             projection,
         )
-        reserve_paid_request(
+        prepare_provider_request(
             self.logger,
-            ledger_cfg,
+            operation_cfg,
             client,
             payload,
             work_order=order,
         )
+        mark_submission_started(self.logger, order)
         try:
             response = client.create_response(payload)
         except OutputContractError as exc:
@@ -249,7 +240,7 @@ class CascadeRunExecutor:
                 or getattr(exc, "status_code", None)
                 in {400, 401, 403, 404, 422, 429}
             ):
-                release_reservation(self.logger, order)
+                mark_not_submitted(self.logger, order)
             else:
                 mark_submission(self.logger, order, None, unknown=True)
             raise
@@ -262,7 +253,7 @@ class CascadeRunExecutor:
                 "/v1/responses",
             )
         mark_submission(self.logger, order, provider_id, unknown=False)
-        settle_usage(self.logger, order, response)
+        record_usage(self.logger, order, response)
         self.logger.save_json(
             "responses",
             f"cascade_schema_{idx:02d}_attempt_{attempt_no}",
@@ -271,17 +262,12 @@ class CascadeRunExecutor:
         )
         return response
 
-    def _ledger_cfg(self, model: str, approval_id: str):
+    def _operation_cfg(self, model: str, approval_id: str):
         return SimpleNamespace(
             mode="CASCADE",
             model=model,
             send_as_c=False,
             maximum_quality=False,
-            max_cost_microusd=self.cfg.max_cost_microusd,
-            max_input_tokens=self.cfg.max_input_tokens,
-            max_output_tokens=self.cfg.max_output_tokens,
-            max_paid_requests=self.cfg.max_paid_requests,
-            unknown_pricing=self.cfg.unknown_pricing,
             auto_repair="within_approval",
             verification_profile_ids=[],
             stop_after_plan=False,
@@ -301,7 +287,7 @@ class CascadeRunExecutor:
             response_id="",
         )
 
-    def _register_ledger_run(
+    def _register_operation_run(
         self,
         run_id: str,
         approval_id: str,
@@ -318,11 +304,6 @@ class CascadeRunExecutor:
                 {"stage": step.id, "model": step.model}
                 for step in self.cfg.cascade.steps
             ],
-            "max_cost_microusd": self.cfg.max_cost_microusd,
-            "max_input_tokens": self.cfg.max_input_tokens,
-            "max_output_tokens": self.cfg.max_output_tokens,
-            "max_paid_requests": self.cfg.max_paid_requests,
-            "unknown_pricing": self.cfg.unknown_pricing,
             "auto_repair": "within_approval",
             "verification_profile_ids": [],
             "stop_after_plan": False,
@@ -1163,7 +1144,7 @@ class CascadeRunExecutor:
             )
             self.cfg.execution_approval_id = approval_id
             self.cfg.run_id = run_id
-            self._register_ledger_run(
+            self._register_operation_run(
                 run_id, approval_id, input_artifacts
             )
             start_index = 0
@@ -1323,7 +1304,7 @@ class CascadeRunExecutor:
                         "requests", f"cascade_step_{idx:02d}_attempt_{repair_attempt + 1}",
                         payload, step_id=current_step_record_id,
                     )
-                    ledger_cfg = self._ledger_cfg(
+                    operation_cfg = self._operation_cfg(
                         step.model,
                         self.cfg.execution_approval_id,
                     )
@@ -1341,7 +1322,7 @@ class CascadeRunExecutor:
                         "format"
                     ) or {}
                     order = freeze_order(
-                        ledger_cfg,
+                        operation_cfg,
                         {
                             "run_id": run_id,
                             "step_id": current_step_record_id,
@@ -1372,13 +1353,14 @@ class CascadeRunExecutor:
                         },
                         projection,
                     )
-                    reserve_paid_request(
+                    prepare_provider_request(
                         self.logger,
-                        ledger_cfg,
+                        operation_cfg,
                         client,
                         payload,
                         work_order=order,
                     )
+                    mark_submission_started(self.logger, order)
                     try:
                         response = client.create_response(payload)
                     except OutputContractError as exc:
@@ -1412,7 +1394,7 @@ class CascadeRunExecutor:
                             or getattr(exc, "status_code", None)
                             in {400, 401, 403, 404, 422, 429}
                         ):
-                            release_reservation(
+                            mark_not_submitted(
                                 self.logger, order
                             )
                         else:
@@ -1466,7 +1448,7 @@ class CascadeRunExecutor:
                         provider_id,
                         unknown=False,
                     )
-                    settle_usage(
+                    record_usage(
                         self.logger, order, response
                     )
                     self.logger.save_json(

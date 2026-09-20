@@ -1033,7 +1033,7 @@ class ComicService:
                 )
                 self._record_image_usage(
                     log,
-                    image_order.budget_attempt_id,
+                    image_order.attempt_id,
                     provider_item_id=provider_identity,
                     usage=response.get("usage") or {},
                 )
