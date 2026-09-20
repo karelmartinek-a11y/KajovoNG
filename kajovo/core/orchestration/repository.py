@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS usage_records(
     provider_item_id TEXT NOT NULL,
     attempt_id TEXT NOT NULL REFERENCES provider_operations(attempt_id),
     usage_json TEXT NOT NULL CHECK(json_valid(usage_json)),
-    PRIMARY KEY(provider,provider_item_id)
+    PRIMARY KEY(provider,provider_item_id,attempt_id)
 );
 CREATE TABLE IF NOT EXISTS task_events(
     event_id TEXT PRIMARY KEY,
@@ -205,7 +205,7 @@ def _migrate_legacy_economic_schema(db: sqlite3.Connection) -> None:
             provider_item_id TEXT NOT NULL,
             attempt_id TEXT NOT NULL REFERENCES provider_operations_v2_migration(attempt_id),
             usage_json TEXT NOT NULL CHECK(json_valid(usage_json)),
-            PRIMARY KEY(provider,provider_item_id)
+            PRIMARY KEY(provider,provider_item_id,attempt_id)
         );
         """
     )
@@ -649,13 +649,13 @@ class OrchestrationRepository:
                     raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
                 current = db.execute(
                     """
-                    SELECT attempt_id,usage_json FROM usage_records
-                    WHERE provider=? AND provider_item_id=?
+                    SELECT usage_json FROM usage_records
+                    WHERE provider=? AND provider_item_id=? AND attempt_id=?
                     """,
-                    (provider, provider_item_id),
+                    (provider, provider_item_id, attempt_id),
                 ).fetchone()
                 if current:
-                    if current != (attempt_id, usage_json):
+                    if current[0] != usage_json:
                         raise OrchestrationError("USAGE_CONFLICT", provider_item_id)
                     db.commit()
                     return False
