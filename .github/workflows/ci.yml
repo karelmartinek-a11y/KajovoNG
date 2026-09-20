@@ -91,6 +91,8 @@ jobs:
             tests/test_orchestration_repository.py \
             tests/test_delivery_pipeline.py \
             tests/test_batch_completion.py \
+            tests/test_batch_recovery_boundaries.py \
+            tests/test_response_policy.py \
             tests/test_photo_studio.py \
             tests/test_comic_domain.py \
             tests/test_cascade.py \

@@ -241,7 +241,8 @@ def test_known_contracts_are_native_for_gpt52(tmp_path):
     worker, client, responder = scenario(tmp_path, "MODIFY", stop_after_plan=True)
     worker.cfg.model = "gpt-5.2"
     worker.cfg.available_models = ["gpt-5.2"]
-    assert worker.cfg.max_output_tokens == 500_000
+    from kajovo.core.model_registry import model_spec
+    assert model_spec("gpt-5.2")["max_output_tokens"] == 128_000
     results, errors = run(worker, client)
     assert not errors
     assert results[0]["status"] == "plan_ready"
@@ -249,8 +250,7 @@ def test_known_contracts_are_native_for_gpt52(tmp_path):
     assert format_names(responder) == ["B0R_REQUIREMENTS_V2", "B1_PLAN_V2", "B2_SPINE_V1", "B2_FILE_SPEC_V1"]
     from pathlib import Path
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
-    assert state["budget_ledger_summary"]["output_tokens_reserved"] == 200
-    assert state["budget_ledger_summary"]["paid_requests_reserved"] == 4
+    assert "budget_ledger_summary" not in state
     assert all(call.kwargs.get("purpose") != "batch" for call in client.upload_file.call_args_list)
     client.create_batch.assert_not_called()
     for recorded in calls:
