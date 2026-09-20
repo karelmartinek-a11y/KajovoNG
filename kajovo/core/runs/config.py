@@ -55,15 +55,10 @@ class UiRunConfig:
     available_models: list[str] | None = None
     maximum_quality: bool = False
 
-    # Kanonický per-run RUN_CONFIG_V2. Tyto hodnoty nejsou globální
-    # nastavení a musí být součástí persistence, checkpointů a run-scope hash.
+    # Kanonický per-run RUN_CONFIG_V2. Obsahuje záměr operace a ověřovací politiku;
+    # technické limity modelu pocházejí výhradně z capability registry.
     stop_after_plan: bool = False
     dry_run: bool = False
-    max_cost_microusd: int | None = 25_000_000
-    max_input_tokens: int = 2_000_000
-    max_output_tokens: int = 500_000
-    max_paid_requests: int = 200
-    unknown_pricing: str = "block"
     auto_repair: str = "off"
     verification_profile_ids: list[str] | None = None
     # Runtime autorizace vzniká až po zmrazení SourcePacku; není uživatelským

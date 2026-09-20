@@ -15,11 +15,6 @@
         "additionalProperties": false
       }
     },
-    "max_cost_microusd": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
-    "max_input_tokens": {"type": "integer"},
-    "max_output_tokens": {"type": "integer"},
-    "max_paid_requests": {"type": "integer"},
-    "unknown_pricing": {"type": "string", "enum": ["block", "explicit_token_budget"]},
     "auto_repair": {"type": "string", "enum": ["off", "within_approval"]},
     "verification_profile_ids": {"type": "array", "items": {"type": "string"}},
     "stop_after_plan": {"type": "boolean"},
@@ -27,9 +22,7 @@
   },
   "required": [
     "version", "workflow", "execution", "quality", "model_bindings",
-    "max_cost_microusd", "max_input_tokens", "max_output_tokens",
-    "max_paid_requests", "unknown_pricing", "auto_repair",
-    "verification_profile_ids", "stop_after_plan", "dry_run"
+    "auto_repair", "verification_profile_ids", "stop_after_plan", "dry_run"
   ],
   "additionalProperties": false
 }

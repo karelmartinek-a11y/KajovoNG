@@ -6,43 +6,44 @@ from typing import Any
 
 import jsonschema
 
-DEFAULT_MAX_COST_MICROUSD = 25_000_000
-DEFAULT_MAX_INPUT_TOKENS = 2_000_000
-DEFAULT_MAX_OUTPUT_TOKENS = 500_000
-DEFAULT_MAX_PAID_REQUESTS = 200
-
 RUN_CONFIG_V2_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "properties": {
         "version": {"type": "integer", "enum": [2]},
-        "workflow": {"type": "string", "enum": ["GENERATE", "MODIFY", "QA", "QFILE", "CASCADE", "PHOTO", "COMIC"]},
+        "workflow": {
+            "type": "string",
+            "enum": ["GENERATE", "MODIFY", "QA", "QFILE", "CASCADE", "PHOTO", "COMIC"],
+        },
         "execution": {"type": "string", "enum": ["live", "batch"]},
         "quality": {"type": "string", "enum": ["standard", "maximum"]},
         "model_bindings": {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"stage": {"type": "string"}, "model": {"type": "string"}},
+                "properties": {
+                    "stage": {"type": "string"},
+                    "model": {"type": "string"},
+                },
                 "required": ["stage", "model"],
                 "additionalProperties": False,
             },
         },
-        "max_cost_microusd": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
-        "max_input_tokens": {"type": "integer"},
-        "max_output_tokens": {"type": "integer"},
-        "max_paid_requests": {"type": "integer"},
-        "unknown_pricing": {"type": "string", "enum": ["block", "explicit_token_budget"]},
         "auto_repair": {"type": "string", "enum": ["off", "within_approval"]},
         "verification_profile_ids": {"type": "array", "items": {"type": "string"}},
         "stop_after_plan": {"type": "boolean"},
         "dry_run": {"type": "boolean"},
     },
     "required": [
-        "version", "workflow", "execution", "quality", "model_bindings",
-        "max_cost_microusd", "max_input_tokens", "max_output_tokens",
-        "max_paid_requests", "unknown_pricing", "auto_repair",
-        "verification_profile_ids", "stop_after_plan", "dry_run",
+        "version",
+        "workflow",
+        "execution",
+        "quality",
+        "model_bindings",
+        "auto_repair",
+        "verification_profile_ids",
+        "stop_after_plan",
+        "dry_run",
     ],
     "additionalProperties": False,
 }
@@ -62,7 +63,11 @@ def _model_bindings(cfg: Any) -> list[dict[str, str]]:
         stage_models = [(stage, cfg.model) for stage in ("B0R", "B1", "B2", "B2Q", "B3")]
     else:
         stage_models = [(mode, cfg.model)]
-    return [{"stage": stage, "model": str(model)} for stage, model in stage_models if model]
+    return [
+        {"stage": stage, "model": str(model)}
+        for stage, model in stage_models
+        if model
+    ]
 
 
 def build_run_config_v2(cfg: Any) -> dict[str, Any]:
@@ -73,11 +78,6 @@ def build_run_config_v2(cfg: Any) -> dict[str, Any]:
         "execution": "batch" if bool(getattr(cfg, "send_as_c", False)) else "live",
         "quality": "maximum" if bool(getattr(cfg, "maximum_quality", False)) else "standard",
         "model_bindings": _model_bindings(cfg),
-        "max_cost_microusd": getattr(cfg, "max_cost_microusd", DEFAULT_MAX_COST_MICROUSD),
-        "max_input_tokens": int(getattr(cfg, "max_input_tokens", DEFAULT_MAX_INPUT_TOKENS)),
-        "max_output_tokens": int(getattr(cfg, "max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)),
-        "max_paid_requests": int(getattr(cfg, "max_paid_requests", DEFAULT_MAX_PAID_REQUESTS)),
-        "unknown_pricing": str(getattr(cfg, "unknown_pricing", "block")),
         "auto_repair": str(getattr(cfg, "auto_repair", "off")),
         "verification_profile_ids": list(profiles or []),
         "stop_after_plan": bool(getattr(cfg, "stop_after_plan", False)),
@@ -96,11 +96,6 @@ def validate_run_config_v2(value: dict[str, Any]) -> None:
         raise ValueError("stop_after_plan lze použít pouze pro GENERATE nebo MODIFY.")
     if value["workflow"] != "MODIFY" and value["dry_run"]:
         raise ValueError("dry_run lze použít pouze pro MODIFY.")
-    for key in ("max_input_tokens", "max_output_tokens", "max_paid_requests"):
-        if value[key] <= 0:
-            raise ValueError(f"RUN_CONFIG_V2: {key} musí být kladné celé číslo.")
-    if value["max_cost_microusd"] is not None and value["max_cost_microusd"] <= 0:
-        raise ValueError("RUN_CONFIG_V2: max_cost_microusd musí být kladné nebo null.")
 
 
 def run_scope_hash(cfg: Any) -> str:
@@ -113,18 +108,28 @@ def run_scope_hash(cfg: Any) -> str:
         "out_dir": str(getattr(cfg, "out_dir", "")),
         "attached_file_ids": list(getattr(cfg, "attached_file_ids", []) or []),
         "input_file_ids": list(getattr(cfg, "input_file_ids", []) or []),
-        "attached_vector_store_ids": list(getattr(cfg, "attached_vector_store_ids", []) or []),
+        "attached_vector_store_ids": list(
+            getattr(cfg, "attached_vector_store_ids", []) or []
+        ),
         "qfile_output_path": str(getattr(cfg, "qfile_output_path", "")),
         "qfile_output_format": str(getattr(cfg, "qfile_output_format", "")),
         "qfile_suggest_path": bool(getattr(cfg, "qfile_suggest_path", False)),
-        "qa_continue_conversation": bool(getattr(cfg, "qa_continue_conversation", False)),
+        "qa_continue_conversation": bool(
+            getattr(cfg, "qa_continue_conversation", False)
+        ),
         "response_id": (
             str(getattr(cfg, "response_id", ""))
             if bool(getattr(cfg, "qa_continue_conversation", False))
             else ""
         ),
     }
-    raw = json.dumps(scope, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    raw = json.dumps(
+        scope,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 

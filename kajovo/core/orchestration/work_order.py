@@ -1,4 +1,4 @@
-"""Immutable WorkOrder V2 used as the trusted identity of paid work."""
+"""Immutable WorkOrder V2 used as the trusted identity of provider work."""
 from __future__ import annotations
 
 import copy
@@ -21,7 +21,13 @@ WORK_ORDER_V2_SCHEMA: dict[str, Any] = {
         "stage": {"type": "string"},
         "route": {
             "type": "string",
-            "enum": ["local", "responses_live", "responses_batch", "image_live", "image_batch"],
+            "enum": [
+                "local",
+                "responses_live",
+                "responses_batch",
+                "image_live",
+                "image_batch",
+            ],
         },
         "target_id": {"type": "string"},
         "target_path": {"anyOf": [{"type": "string"}, {"type": "null"}]},
@@ -34,15 +40,31 @@ WORK_ORDER_V2_SCHEMA: dict[str, Any] = {
         "model_capability_hash": {"type": "string"},
         "policy_hash": {"type": "string"},
         "source_snapshot_hash": {"type": "string"},
-        "budget_reservation_id": {"type": "string"},
+        "attempt_id": {"type": "string"},
         "approval_id": {"type": "string"},
         "attempt_no": {"type": "integer", "minimum": 1, "maximum": 3},
     },
     "required": [
-        "version", "run_id", "step_id", "task_id", "stage", "route", "target_id",
-        "target_path", "expected_target_hash", "input_projection_hash", "contract_name",
-        "schema_hash", "prompt_hash", "model", "model_capability_hash", "policy_hash",
-        "source_snapshot_hash", "budget_reservation_id", "approval_id", "attempt_no",
+        "version",
+        "run_id",
+        "step_id",
+        "task_id",
+        "stage",
+        "route",
+        "target_id",
+        "target_path",
+        "expected_target_hash",
+        "input_projection_hash",
+        "contract_name",
+        "schema_hash",
+        "prompt_hash",
+        "model",
+        "model_capability_hash",
+        "policy_hash",
+        "source_snapshot_hash",
+        "attempt_id",
+        "approval_id",
+        "attempt_no",
     ],
     "additionalProperties": False,
 }
@@ -67,7 +89,7 @@ class WorkOrder:
     model_capability_hash: str
     policy_hash: str
     source_snapshot_hash: str
-    budget_reservation_id: str
+    attempt_id: str
     approval_id: str
     attempt_no: int
 
@@ -89,10 +111,21 @@ def validate_work_order_v2(value: dict[str, Any]) -> None:
     if not 1 <= value["attempt_no"] <= 3:
         raise ValueError("WORK_ORDER_V2.attempt_no musí být v rozsahu 1 až 3.")
     for key in (
-        "run_id", "step_id", "task_id", "stage", "target_id",
-        "input_projection_hash", "contract_name", "schema_hash", "prompt_hash",
-        "model", "model_capability_hash", "policy_hash", "source_snapshot_hash",
-        "budget_reservation_id", "approval_id",
+        "run_id",
+        "step_id",
+        "task_id",
+        "stage",
+        "target_id",
+        "input_projection_hash",
+        "contract_name",
+        "schema_hash",
+        "prompt_hash",
+        "model",
+        "model_capability_hash",
+        "policy_hash",
+        "source_snapshot_hash",
+        "attempt_id",
+        "approval_id",
     ):
         if not value[key]:
             raise ValueError(f"WORK_ORDER_V2.{key} nesmí být prázdné.")
@@ -102,12 +135,28 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
-def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrder:
-    """Freeze a canonical V2 order before transport.
+def attempt_identity(run_id: str, task_id: str, attempt_no: int) -> str:
+    return "ATTEMPT-" + _hash(
+        {"run_id": run_id, "task_id": task_id, "attempt_no": attempt_no}
+    )[:32]
 
-    The target identity/path/action comes only from trusted local task data.
-    Provider responses can never mutate these fields.
-    """
+
+def work_order_from_mapping(raw_value: dict[str, Any]) -> WorkOrder:
+    """Načte aktuální WorkOrder a minimálně adaptuje historický V2 záznam."""
+    value = {key: item for key, item in dict(raw_value).items() if key != "order_hash"}
+    if "attempt_id" not in value:
+        value["attempt_id"] = attempt_identity(
+            str(value["run_id"]),
+            str(value["task_id"]),
+            int(value["attempt_no"]),
+        )
+    # LEGACY-DATA-READER: starý V2 záznam může obsahovat odstraněný finanční identifikátor.
+    value.pop("budget_reservation_id", None)
+    return WorkOrder(**value)
+
+
+def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrder:
+    """Zmrazí kanonický V2 WorkOrder před transportem."""
     stage = str(task["stage"])
     target_path = task.get("target_path")
     target_id = str(task.get("target_id") or target_path or stage)
@@ -124,46 +173,58 @@ def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrde
     source_snapshot = task.get("source_snapshot") or {}
     capability = task.get("model_capability") or {}
     policy = {
-        "quality": getattr(config, "maximum_quality", False),
-        "auto_repair": getattr(config, "auto_repair", "off"),
-        "unknown_pricing": getattr(config, "unknown_pricing", "block"),
-        "max_cost_microusd": getattr(config, "max_cost_microusd", None),
-        "max_input_tokens": getattr(config, "max_input_tokens", None),
-        "max_output_tokens": getattr(config, "max_output_tokens", None),
-        "max_paid_requests": getattr(config, "max_paid_requests", None),
+        "quality": bool(getattr(config, "maximum_quality", False)),
+        "auto_repair": str(getattr(config, "auto_repair", "off")),
+        "verification_profile_ids": list(
+            getattr(config, "verification_profile_ids", None) or []
+        ),
+        "stop_after_plan": bool(getattr(config, "stop_after_plan", False)),
+        "dry_run": bool(getattr(config, "dry_run", False)),
+        "execution": "batch" if bool(getattr(config, "send_as_c", False)) else "live",
     }
-    reservation_seed = {
-        "run_id": task["run_id"],
-        "stage": stage,
-        "target_id": target_id,
-        "projection_hash": _hash(projection),
-        "schema_hash": _hash(schema),
-        "prompt_hash": _hash(prompt),
-        "model": model,
-        "attempt_no": attempt_no,
-    }
+    projection_hash = _hash(projection)
+    schema_hash = _hash(schema)
+    prompt_hash = _hash(prompt)
+    task_id = str(
+        task.get("task_id")
+        or (
+            "TASK-"
+            + _hash(
+                {
+                    "run_id": task["run_id"],
+                    "stage": stage,
+                    "target_id": target_id,
+                    "projection_hash": projection_hash,
+                    "schema_hash": schema_hash,
+                    "prompt_hash": prompt_hash,
+                    "model": model,
+                }
+            )[:24]
+        )
+    )
     order = WorkOrder(
         version=2,
         run_id=str(task["run_id"]),
         step_id=str(task["step_id"]),
-        task_id=str(task.get("task_id") or ("TASK-" + _hash(reservation_seed)[:24])),
+        task_id=task_id,
         stage=stage,
         route=route,
         target_id=target_id,
         target_path=str(target_path) if target_path is not None else None,
         expected_target_hash=(
             str(task["expected_target_hash"])
-            if task.get("expected_target_hash") is not None else None
+            if task.get("expected_target_hash") is not None
+            else None
         ),
-        input_projection_hash=_hash(projection),
+        input_projection_hash=projection_hash,
         contract_name=str(task["contract_name"]),
-        schema_hash=_hash(schema),
-        prompt_hash=_hash(prompt),
+        schema_hash=schema_hash,
+        prompt_hash=prompt_hash,
         model=model,
         model_capability_hash=_hash(capability),
         policy_hash=_hash(policy),
         source_snapshot_hash=_hash(source_snapshot),
-        budget_reservation_id="RES-" + _hash(reservation_seed)[:32],
+        attempt_id=attempt_identity(str(task["run_id"]), task_id, attempt_no),
         approval_id=approval_id,
         attempt_no=attempt_no,
     )

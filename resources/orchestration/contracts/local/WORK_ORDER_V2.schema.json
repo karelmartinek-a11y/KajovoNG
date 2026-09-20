@@ -19,7 +19,7 @@
     "model_capability_hash": {"type": "string"},
     "policy_hash": {"type": "string"},
     "source_snapshot_hash": {"type": "string"},
-    "budget_reservation_id": {"type": "string"},
+    "attempt_id": {"type": "string"},
     "approval_id": {"type": "string"},
     "attempt_no": {"type": "integer", "minimum": 1, "maximum": 3}
   },
@@ -27,7 +27,7 @@
     "version", "run_id", "step_id", "task_id", "stage", "route", "target_id",
     "target_path", "expected_target_hash", "input_projection_hash", "contract_name",
     "schema_hash", "prompt_hash", "model", "model_capability_hash", "policy_hash",
-    "source_snapshot_hash", "budget_reservation_id", "approval_id", "attempt_no"
+    "source_snapshot_hash", "attempt_id", "approval_id", "attempt_no"
   ],
   "additionalProperties": false
 }
