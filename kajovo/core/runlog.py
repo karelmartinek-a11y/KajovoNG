@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .run_bundle import RunBundle, TERMINAL_STATUSES
+from .safe_config import redact_evidence
 from .utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
 
 _KIND_DIRS = {
@@ -285,7 +286,7 @@ class RunLogger:
         )
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-                json.dump(payload, stream, ensure_ascii=False, indent=2, default=str)
+                json.dump(self._redact(payload), stream, ensure_ascii=False, indent=2, default=str)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
@@ -297,8 +298,7 @@ class RunLogger:
                     pass
 
     def _redact(self, data: Any) -> Any:
-        """Kompatibilní název metody; evidence se záměrně obsahově nemění."""
-        return data
+        return redact_evidence(data)
 
     def _write_state(self, state: Dict[str, Any]) -> None:
         self._atomic_write_json(self.state_path, state)
@@ -558,6 +558,7 @@ class RunLogger:
     def update_state(self, patch: Dict[str, Any]) -> None:
         from .recoverable_artifacts import STATE_ARTIFACTS, save_artifact
 
+        patch = self._redact(patch)
         for key in STATE_ARTIFACTS & patch.keys():
             save_artifact(self.paths.run_dir, "state/" + key, patch[key])
         state = {}
@@ -610,6 +611,7 @@ class RunLogger:
             )
 
     def event(self, typ: str, data: Dict[str, Any]) -> None:
+        data = self._redact(data)
         severity = (
             "error"
             if typ.startswith("error.") or typ.endswith("_error")
@@ -681,6 +683,7 @@ class RunLogger:
     def save_json(self, kind: str, name: str, obj: Any, *, step_id: str = "") -> str:
         from .recoverable_artifacts import save_artifact
 
+        obj = self._redact(obj)
         save_artifact(self.paths.run_dir, kind + "/" + name, obj)
         path = self._json_path(kind, name)
         self._atomic_write_json(path, obj)
@@ -778,13 +781,13 @@ class RunLogger:
             self.update_state({"failure_detail": detail})
         self.bundle.append_event(
             "error.exception",
-            {
+            self._redact({
                 "where": where,
                 "type": type(ex).__name__,
                 "msg": str(ex),
                 "trace": traceback.format_exc(),
                 "failure_detail": detail,
-            },
+            }),
             step_id=step_id,
             severity="error",
             source_module="runlog",
