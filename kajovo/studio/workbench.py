@@ -385,10 +385,16 @@ class Workbench(QWidget):
                     "QFILE: návrh cesty je připraven. Zkontrolujte jej a znovu klikněte "
                     "Spustit práci; tím cestu výslovně potvrdíte před výrobou souboru."
                 )
-            if value.get("status", "completed") == "completed" and not value.get("batch_id") and not value.get("dry_run"):
-                for enabled, remote in ((cfg.diag_windows_out, False), (cfg.diag_ssh_out, True)):
-                    if enabled:
-                        self.offer_repair(cfg, remote)
+            if (
+                value.get("status") == "completed_unverified"
+                and value.get("published_files")
+                and not value.get("dry_run")
+            ):
+                self.offer_repair_from_publish(
+                    self.context.settings.log_dir + "/" + run_id,
+                    value,
+                    cfg,
+                )
             if record.dialog.notification.isChecked():
                 from kajovo.core.notifications import send_smtp_notification
                 from .operations import STATES
@@ -404,12 +410,41 @@ class Workbench(QWidget):
         self.pending_lineage = None
         return record
 
-    def offer_repair(self, cfg, remote):
+    def offer_repair_from_publish(self, run_dir, state, cfg=None):
+        from kajovo.core.repair_execution import claim_published_repair_offer
+
+        if cfg is None:
+            ui = state.get("ui_state") if isinstance(state, dict) else {}
+            ui = ui if isinstance(ui, dict) else {}
+            merged = {**default_state(self.context.settings), **ui}
+            runtime = self.state(secrets=True)
+            identity = ("ssh_user", "ssh_host", "ssh_key")
+            if all(str(runtime.get(key) or "") == str(merged.get(key) or "") for key in identity):
+                merged["ssh_password"] = str(runtime.get("ssh_password") or "")
+            cfg = UiRunConfig(**{
+                field.name: copy.deepcopy(merged.get(field.name))
+                for field in fields(UiRunConfig)
+            })
+        for enabled, remote in (
+            (bool(getattr(cfg, "diag_windows_out", False)), False),
+            (bool(getattr(cfg, "diag_ssh_out", False)), True),
+        ):
+            if not enabled:
+                continue
+            artifact = claim_published_repair_offer(run_dir, state, remote)
+            if artifact:
+                self.offer_repair(
+                    cfg, remote, expected_digest=artifact["sha256"]
+                )
+
+    def offer_repair(self, cfg, remote, expected_digest=""):
         from kajovo.core.repair_execution import execute_repair, prepare_repair
         from PySide6.QtWidgets import QDialog
 
         try:
-            proposal = prepare_repair(cfg.out_dir, remote)
+            proposal = prepare_repair(
+                cfg.out_dir, remote, expected_digest=expected_digest
+            )
         except (ValueError, OSError) as error:
             self.validation.setText(str(error))
             return
