@@ -69,6 +69,28 @@ def test_provider_operation_prevents_duplicate_submit(tmp_path):
         )
 
 
+def test_confirmed_provider_submit_cannot_be_reopened(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-1")
+    order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
+    work_hash = repo.register_work_order(
+        order, body_ref="body", input_hash=order.input_projection_hash
+    )
+    repo.prepare_provider_operation(
+        attempt_id=order.attempt_id,
+        work_order_hash=work_hash,
+        endpoint="/v1/responses",
+        request_hash="request",
+    )
+    repo.mark_submission_started(order.attempt_id)
+    repo.mark_submitted(order.attempt_id, "resp-1", unknown=False)
+
+    with pytest.raises(OrchestrationError, match="PROVIDER_OPERATION_STATE"):
+        repo.mark_not_submitted(order.attempt_id)
+    with pytest.raises(OrchestrationError, match="PROVIDER_OPERATION_STATE"):
+        repo.mark_submission_started(order.attempt_id)
+
+
 def test_raw_usage_is_idempotent_and_operation_completes(tmp_path):
     repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
     _run(repo, "RUN-1")
