@@ -7,17 +7,12 @@ from pathlib import Path
 import uuid
 
 from .model_registry import model_spec
-from .orchestration.ledger import (
+from .orchestration.provider_operations import (
+    mark_not_submitted,
     mark_submission,
-    release_reservation,
-    reserve_paid_request,
-    settle_usage,
-)
-from .orchestration.run_config import (
-    DEFAULT_MAX_COST_MICROUSD,
-    DEFAULT_MAX_INPUT_TOKENS,
-    DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_PAID_REQUESTS,
+    mark_submission_started,
+    prepare_provider_request,
+    record_usage,
 )
 from .orchestration.work_order import freeze_order
 from .runlog import RunLogger
@@ -93,11 +88,6 @@ def professionalize_prompt(
         model=model,
         send_as_c=False,
         maximum_quality=False,
-        max_cost_microusd=DEFAULT_MAX_COST_MICROUSD,
-        max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
-        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-        max_paid_requests=DEFAULT_MAX_PAID_REQUESTS,
-        unknown_pricing="block",
         auto_repair="off",
         verification_profile_ids=[],
         stop_after_plan=False,
@@ -143,7 +133,7 @@ def professionalize_prompt(
         },
         projection,
     )
-    reserve_paid_request(
+    prepare_provider_request(
         log, cfg, client, payload, work_order=order
     )
     log.save_json(
@@ -155,6 +145,7 @@ def professionalize_prompt(
         reporter("Připravuji pracovní požadavek Responses API.")
         reporter(f"Model: {model}")
         reporter("Odesílám zadání do OpenAI Responses API.")
+    mark_submission_started(log, order)
     try:
         response = client.create_response(payload)
     except Exception as exc:
@@ -164,7 +155,7 @@ def professionalize_prompt(
             in {400, 401, 403, 404, 422, 429}
         )
         if definite_reject:
-            release_reservation(log, order)
+            mark_not_submitted(log, order)
         else:
             mark_submission(log, order, None, unknown=True)
             log.update_state({"status": "submission_unknown"})
@@ -177,7 +168,7 @@ def professionalize_prompt(
             "PHOTO_PLAN Responses submit nemá potvrzené response ID; nový submit je zablokován."
         )
     mark_submission(log, order, provider_id, unknown=False)
-    settle_usage(log, order, response)
+    record_usage(log, order, response)
     log.save_json("responses", "photo_plan_response", response)
     if reporter:
         reporter("Odpověď Responses API přijata; ověřuji výstupní kontrakt.")
