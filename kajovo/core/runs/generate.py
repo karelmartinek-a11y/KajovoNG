@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -32,13 +31,10 @@ def _run_v3_generate_production(
         dispatch_resource_target,
         prepare_production_scope,
     )
-    from ..orchestration.waves import build_execution_dag
-
     selected, completed, excluded = prepare_production_scope(self, struct)
     files_by_path = {
         str(row["path"]): row for row in struct["spine"]["files"]
     }
-    dag = build_execution_dag(struct)
     self._delivery_verified_artifacts = {}
     generated_text: dict[str, str] = {}
     resource_pending: list[dict[str, Any]] = []
