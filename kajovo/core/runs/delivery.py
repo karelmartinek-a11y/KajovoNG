@@ -34,6 +34,7 @@ class DeliveryContext:
     overwrite_guard_enabled: bool
     overwrite_hashes: Mapping[str, str | None] | None = None
     expected_target_hashes: Mapping[str, str | None] | None = None
+    additional_staged: Mapping[str, dict[str, Any]] | None = None
 
 
 def _expected_target_hash(
@@ -207,6 +208,20 @@ def save_out_files(
         )
         context.subprogress_emit(int(index * 100 / max(1, len(files))))
 
+    additional = {
+        str(path): dict(row)
+        for path, row in (context.additional_staged or {}).items()
+    }
+    combined = dict(additional)
+    for row in staged:
+        path = str(row["path"])
+        if path in combined and combined[path].get("sha256") != row.get("sha256"):
+            raise ContractError(
+                f"Staging obsahuje kolidující resource/text artefakt: {path}"
+            )
+        combined[path] = row
+    combined_staged = [combined[path] for path in sorted(combined)]
+
     diff_text = "".join(diff_parts)
     manifest = {
         "version": 2,
@@ -219,7 +234,7 @@ def save_out_files(
             else "awaiting_verification_or_explicit_take"
         ),
         "staging_root": staging_root.relative_to(run_root).as_posix(),
-        "files": staged,
+        "files": combined_staged,
     }
     atomic_write_text(
         str(staging_root / "manifest.json"),
@@ -250,7 +265,7 @@ def save_out_files(
         {
             "dry_run": dry_run,
             "written_files": [],
-            "staged_files": staged,
+            "staged_files": combined_staged,
             "staging_root": manifest["staging_root"],
             "verification_evidence": verification,
             "publication_state": manifest["publication"],
@@ -260,12 +275,12 @@ def save_out_files(
     context.finish_delivery(
         files,
         saved=[],
-        staged=staged,
+        staged=combined_staged,
         dry_run=dry_run,
     )
     return {
         "saved": [],
-        "staged": staged,
+        "staged": combined_staged,
         "published": False,
         "dry_run": dry_run,
         "diff": diff_text,
