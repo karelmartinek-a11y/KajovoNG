@@ -35,7 +35,7 @@ def _work_orders(manifest: dict[str, Any]) -> dict[str, WorkOrder]:
             ):
                 raise ContractError(f"BATCH {custom_id}: WorkOrder hash nesouhlasí.")
             result[str(custom_id)] = order
-        except (TypeError, ValueError) as exc:
+        except (KeyError, TypeError, ValueError) as exc:
             raise ContractError(f"BATCH {custom_id}: neplatný WORK_ORDER_V2.") from exc
     if set(result) != {str(row["custom_id"]) for row in manifest.get("requests", [])}:
         raise ContractError("BATCH WorkOrder mapování neodpovídá pracovním položkám.")
