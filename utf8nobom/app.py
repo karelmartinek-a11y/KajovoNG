@@ -93,15 +93,47 @@ def is_zip_path(path: Path) -> bool:
     return path.suffix.lower() == ".zip"
 
 
+class AmbiguousEncodingError(ValueError):
+    """Text-like bytes without a deterministic encoding are not rewritten."""
+
+
+_BOMS = (
+    (b"\x00\x00\xfe\xff", "utf-32-be"),
+    (b"\xff\xfe\x00\x00", "utf-32-le"),
+    (b"\xfe\xff", "utf-16-be"),
+    (b"\xff\xfe", "utf-16-le"),
+    (b"\xef\xbb\xbf", "utf-8-sig"),
+)
+
+
+def _bom_encoding(data: bytes) -> str | None:
+    # UTF-32 must be checked before UTF-16 because LE BOM prefixes overlap.
+    for marker, encoding in _BOMS:
+        if data.startswith(marker):
+            return encoding
+    return None
+
+
 def detect_text_bytes(data: bytes, suffix: str) -> bool:
-    if suffix.lower() in TEXT_EXTENSIONS:
-        return True
     if not data:
         return True
+    if _bom_encoding(data):
+        return True
+    # A text-looking extension is only a hint; NUL-heavy binary data must not
+    # be decoded merely because it is named .txt/.json/etc.
     if b"\x00" in data:
         return False
-    printable = sum((32 <= byte <= 126) or byte in (9, 10, 13) for byte in data)
-    return printable / len(data) >= 0.75
+    try:
+        data.decode("utf-8", errors="strict")
+        return True
+    except UnicodeDecodeError:
+        pass
+    printable = sum(
+        (32 <= byte <= 126) or byte in (9, 10, 13) or byte >= 0x80
+        for byte in data
+    )
+    textlike = printable / len(data) >= 0.90
+    return textlike and suffix.lower() in TEXT_EXTENSIONS
 
 
 def score_text_quality(text: str) -> int:
@@ -114,6 +146,7 @@ def score_text_quality(text: str) -> int:
 
 
 def repair_mojibake_text(text: str) -> str:
+    """Explicit content repair helper; never called by encoding conversion."""
     best = text
     best_score = score_text_quality(text)
     queue_texts = [text]
@@ -141,20 +174,32 @@ def repair_mojibake_text(text: str) -> str:
     return best
 
 
+def normalize_line_endings_text(text: str) -> str:
+    """Separate opt-in transformation; encoding conversion does not call it."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def normalize_text_bytes(data: bytes) -> tuple[bytes, bool]:
-    decoded = None
-    for encoding in ("utf-8-sig", "utf-8", "cp1250", "cp1252", "latin1"):
-        try:
-            decoded = data.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-    if decoded is None:
-        decoded = data.decode("utf-8", errors="replace")
-    repaired = repair_mojibake_text(decoded)
-    normalized = repaired.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
-    changed = normalized != data
-    return normalized, changed
+    """Convert only deterministic Unicode encodings to UTF-8 without BOM.
+
+    BOM-less invalid UTF-8 is ambiguous (e.g. cp1250 vs cp1252) and is skipped
+    instead of being guessed or decoded with errors=replace.
+    """
+    encoding = _bom_encoding(data)
+    if encoding:
+        decoded = data.decode(encoding, errors="strict")
+        # Explicit endian codecs keep BOM as U+FEFF; utf-8-sig removes it.
+        if decoded.startswith("\ufeff"):
+            decoded = decoded[1:]
+        normalized = decoded.encode("utf-8", errors="strict")
+        return normalized, normalized != data
+    try:
+        data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise AmbiguousEncodingError(
+            "Vstup nemá BOM a není validní UTF-8; kódování nelze bezpečně určit."
+        ) from exc
+    return data, False
 
 
 class ProgressTracker:
@@ -319,7 +364,16 @@ def rewrite_zip_if_needed(path: Path, tracker: ProgressTracker, logger: RunLogge
                 raw = source.read(info)
                 processed_entries += 1
                 if detect_text_bytes(raw[:4096], Path(info.filename).suffix):
-                    normalized, entry_changed = normalize_text_bytes(raw)
+                    try:
+                        normalized, entry_changed = normalize_text_bytes(raw)
+                    except (AmbiguousEncodingError, UnicodeDecodeError) as exc:
+                        normalized, entry_changed = raw, False
+                        logger.write(
+                            "zip_entry_skipped_encoding",
+                            zip_path=str(path),
+                            entry=info.filename,
+                            reason=str(exc),
+                        )
                 else:
                     normalized, entry_changed = raw, False
                 if entry_changed:
@@ -328,9 +382,9 @@ def rewrite_zip_if_needed(path: Path, tracker: ProgressTracker, logger: RunLogge
                     logger.write("zip_entry_fixed", zip_path=str(path), entry=info.filename)
                 staged.append((info, normalized))
                 tracker.advance(max(info.file_size, 1), "ZIP", f"{path.name} -> {info.filename}")
-    except zipfile.BadZipFile:
+    except zipfile.BadZipFile as exc:
         logger.write("zip_invalid", zip_path=str(path))
-        return 0, 0
+        raise ValueError(f"Poškozený ZIP nelze bezpečně zkontrolovat: {path}") from exc
 
     if not changed:
         return processed_entries, 0
@@ -366,7 +420,20 @@ def process_regular_file(path: Path, tracker: ProgressTracker, logger: RunLogger
     if not detect_text_bytes(raw[:4096], path.suffix):
         tracker.advance(max(len(raw), 1), "Soubor", f"Přeskočen binární soubor: {path}")
         return False
-    normalized, changed = normalize_text_bytes(raw)
+    try:
+        normalized, changed = normalize_text_bytes(raw)
+    except (AmbiguousEncodingError, UnicodeDecodeError) as exc:
+        logger.write(
+            "file_skipped_encoding",
+            path=str(path),
+            reason=str(exc),
+        )
+        tracker.advance(
+            max(len(raw), 1),
+            "Soubor",
+            f"Přeskočeno – nejisté nebo poškozené kódování: {path}",
+        )
+        return False
     if changed:
         fd, temporary = tempfile.mkstemp(prefix=".utf8nobom_", dir=path.parent)
         try:
