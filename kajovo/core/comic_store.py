@@ -446,13 +446,12 @@ class ComicStore:
                     "id,project_id,name,position,revision,prompt_id,format,overlays,"
                     "active_version,deleted,created_at,updated_at,storyboard_id,"
                     "storyboard_position"
-                    ") VALUES(?,?,?,?,2,?,?,?,NULL,0,?,?,?,?)",
+                    ") VALUES(?,?,?,?,2,NULL,?,?,NULL,0,?,?,?,?)",
                     (
                         panel_id,
                         project_id,
                         name,
                         next_position + offset,
-                        prompt_id,
                         canonical(fmt),
                         canonical(overlays),
                         stamp,
@@ -468,6 +467,10 @@ class ComicStore:
                 db.executemany(
                     "INSERT INTO bindings(prompt_id,entity_id) VALUES(?,?)",
                     [(prompt_id, entity_id) for entity_id in sorted(bindings)],
+                )
+                db.execute(
+                    "UPDATE panels SET prompt_id=? WHERE id=?",
+                    (prompt_id, panel_id),
                 )
                 created.append(panel_id)
 
