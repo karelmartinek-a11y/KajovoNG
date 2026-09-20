@@ -79,6 +79,12 @@ jobs:
             tests/test_run_polling.py \
             tests/test_response_journal.py \
             tests/test_context_compiler.py \
+            tests/test_context_limits.py \
+            tests/test_no_runtime_economics.py \
+            tests/test_live_acceptance.py \
+            tests/test_orchestration_legacy_migration.py \
+            tests/test_generate_batch.py \
+            tests/test_generate_batch_waves.py \
             tests/test_model_catalog.py \
             tests/test_workflows.py \
             tests/test_contracts.py \
