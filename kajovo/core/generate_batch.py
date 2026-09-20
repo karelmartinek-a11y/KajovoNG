@@ -176,6 +176,7 @@ def _build_manifest_v3(
     expected_target_hashes=None,
     verified_artifacts=None,
     approved_paths=None,
+    completed_targets=None,
 ):
     """Build exactly one ready production wave from IMPLEMENTATION_GRAPH_V3."""
     import jsonschema
@@ -218,6 +219,7 @@ def _build_manifest_v3(
         if isinstance(artifact, dict)
         and artifact.get("validation_status") == "verified"
     }
+    completed_targets = set(completed_targets or ()) | verified_targets
     production_actions = (
         {"generate"} if mode == "GENERATE" else {"add", "modify"}
     )
@@ -263,7 +265,10 @@ def _build_manifest_v3(
     eligible = {
         path
         for path in candidates
-        if set(dag.content_dependencies.get(path, ())) <= verified_targets
+        if (
+            set(dag.content_dependencies.get(path, ()))
+            | set(dag.contract_dependencies.get(path, ()))
+        ) <= completed_targets
     }
     if not eligible:
         remaining_content = {
@@ -420,6 +425,7 @@ def _build_manifest_v3(
         "excluded_paths": sorted(production - approved_scope),
         "deferred_paths": deferred,
         "blocked_requested_paths": blocked_requested,
+        "completed_dependency_targets": sorted(completed_targets),
         "verified_dependency_artifacts": {
             path: verified_artifacts[path]
             for path in sorted(verified_targets)
@@ -444,7 +450,8 @@ def _build_manifest_v3(
 def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=None, *,
                    requirements=None, maximum_quality=False, mode="GENERATE", originals=None,
                    recovery_instruction="", run_config=None, expected_target_hashes=None,
-                   verified_artifacts=None, approved_paths=None):
+                   verified_artifacts=None, approved_paths=None,
+                   completed_targets=None):
     if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
         return _build_manifest_v3(
             run_id,
@@ -463,6 +470,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
             expected_target_hashes=expected_target_hashes,
             verified_artifacts=verified_artifacts,
             approved_paths=approved_paths,
+            completed_targets=completed_targets,
         )
 
     from .requirements import apply_quality, stage_instructions, validate_traceability
@@ -1120,6 +1128,11 @@ def _submit_v3_followup_wave(
         expected_target_hashes=expected_target_hashes,
         verified_artifacts=verified_artifacts,
         approved_paths=source_manifest.get("approved_paths") or deferred,
+        completed_targets=(
+            set(source_manifest.get("completed_dependency_targets") or [])
+            | set(verified_artifacts)
+            | set(state.get("resource_completed_paths") or [])
+        ),
     )
     next_manifest["dry_run"] = bool(source_manifest.get("dry_run"))
     next_manifest["source_manifest_hash"] = digest(source_manifest)
@@ -1773,6 +1786,11 @@ def _repeat_v3_batch(
         expected_target_hashes=expected_target_hashes,
         verified_artifacts=verified_artifacts,
         approved_paths=selected,
+        completed_targets=(
+            set(source.get("completed_dependency_targets") or [])
+            | set(verified_artifacts)
+            | set(state.get("resource_completed_paths") or [])
+        ),
     )
     # A repair is terminal for exactly the explicitly selected targets; it must
     # not accidentally continue unrelated deferred tasks from the source batch.
