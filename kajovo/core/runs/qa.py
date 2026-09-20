@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..contracts import ContractError
 from ..openai_client import OpenAIClient
+from ..safe_config import safe_ui_state
 from ..structured_output import qa_answer_format, validate_output
 from ..utils import ts_code
 
@@ -59,7 +60,7 @@ def _run_qa(
         f"QA_request_{ts_code()}",
         {
             "payload": payload,
-            "ui_state": self.cfg.__dict__,
+            "ui_state": safe_ui_state(self.cfg),
             "conversation_continuity": bool(self.cfg.qa_continue_conversation),
         },
     )
