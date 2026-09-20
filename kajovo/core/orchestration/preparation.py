@@ -774,14 +774,7 @@ def _compile_source_attachments(worker, client, stage: str, model: str):
 def _request(worker, client, stage: str, input_value: dict[str, Any], model: str,
              semantic, *, tools=None) -> tuple[dict[str, Any], str]:
     fmt = FORMATS[stage]
-    runtime = getattr(worker, "_preparation_runtime_inputs", {}) or {}
-    runtime_text = str(runtime.get("text") or "")
-    prompt = str(getattr(worker.cfg, "prompt", "") or "")
-    if runtime_text.startswith(prompt):
-        runtime_text = runtime_text[len(prompt):].strip()
     request_text = json.dumps(input_value, ensure_ascii=False)
-    if runtime_text:
-        request_text += "\n\nRUNTIME_CONTEXT:\n" + runtime_text
     source_files, source_images = _compile_source_attachments(
         worker, client, stage, model
     )
@@ -817,8 +810,6 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
                     "instruction": "Oprav pouze uvedené porušení kontraktu; nevymýšlej chybějící data.",
                 },
             }, ensure_ascii=False)
-            if runtime_text:
-                repair_text += "\n\nRUNTIME_CONTEXT:\n" + runtime_text
             working["input"] = worker._input_parts(
                 repair_text, source_files, source_images
             )
