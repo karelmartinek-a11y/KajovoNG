@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import difflib
 import mimetypes
 from pathlib import Path
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QLabel, QPlainTextEdit, QStackedWidget, QTableWidget, QTableWidgetItem, QWidget,
 )
 
+from kajovo.core.safe_config import redact_evidence
 from kajovo.core.utils import safe_join_under_root
 
 from .components import action, actions, caption, vertical
@@ -26,8 +28,54 @@ TEXT_PREVIEW_LIMIT = 1024 * 1024
 TEXT_DIFF_LIMIT = 5 * 1024 * 1024
 
 
+def _redacted_export_bytes(path: Path) -> tuple[bytes, bool]:
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return raw, False
+
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            redacted = redact_evidence(text)
+        else:
+            redacted = json.dumps(
+                redact_evidence(value),
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+    elif suffix == ".jsonl":
+        lines = []
+        for line in text.splitlines():
+            if not line.strip():
+                lines.append("")
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                lines.append(str(redact_evidence(line)))
+            else:
+                lines.append(
+                    json.dumps(
+                        redact_evidence(value),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+        redacted = "\n".join(lines)
+        if text.endswith("\n"):
+            redacted += "\n"
+    else:
+        redacted = str(redact_evidence(text))
+    encoded = redacted.encode("utf-8")
+    return encoded, encoded != raw
+
+
 def export_run_bundle(adapter, destination):
-    """Ověřený export se zveřejní až po úplném dopsání archivu."""
+    """Create a derived redacted ZIP; the immutable source bundle is never rewritten."""
     root, target = adapter.root.resolve(), Path(destination).resolve()
     if target == root or root in target.parents:
         raise ValueError("Export nesmí přepsat zdrojový Run Bundle.")
@@ -37,16 +85,69 @@ def export_run_bundle(adapter, destination):
     for record in adapter.artifacts():
         if record.get("available_local") is not False and record.get("sha256"):
             guard.resolve(record)
+
     target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=".run-export-", suffix=".zip", dir=target.parent)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=".run-export-",
+        suffix=".zip",
+        dir=target.parent,
+    )
     os.close(descriptor)
+    changed: list[str] = []
+    exported: list[dict[str, object]] = []
+    archive_root = root.name + "_REDACTED"
     try:
-        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in root.rglob("*"):
-                if path.is_file():
-                    if root not in path.resolve().parents:
-                        raise ValueError("Souborový odkaz vede mimo zdrojový Run Bundle.")
-                    archive.write(path, path.relative_to(root.parent))
+        with zipfile.ZipFile(
+            temporary,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for path in sorted(root.rglob("*")):
+                if not path.is_file():
+                    continue
+                resolved = path.resolve()
+                if root not in resolved.parents:
+                    raise ValueError(
+                        "Souborový odkaz vede mimo zdrojový Run Bundle."
+                    )
+                relative = path.relative_to(root).as_posix()
+                payload, was_changed = _redacted_export_bytes(path)
+                if was_changed:
+                    changed.append(relative)
+                exported.append(
+                    {
+                        "path": relative,
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "bytes": len(payload),
+                        "redacted": was_changed,
+                    }
+                )
+                archive.writestr(
+                    f"{archive_root}/{relative}",
+                    payload,
+                )
+            manifest = {
+                "version": 1,
+                "kind": "derived_redacted_run_export",
+                "source_run_id": root.name,
+                "source_bundle_unchanged": True,
+                "canonical_source_integrity_checked": bool(adapter.bundle),
+                "redacted_paths": changed,
+                "files": exported,
+                "notice": (
+                    "Tento ZIP je odvozený redigovaný export. Jeho hashe "
+                    "popisují exportované bytes, nikoli kanonický původní RunBundle."
+                ),
+            }
+            archive.writestr(
+                f"{archive_root}/DERIVED_REDACTED_EXPORT.json",
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+            )
         os.replace(temporary, target)
     finally:
         Path(temporary).unlink(missing_ok=True)
