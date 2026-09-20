@@ -17,10 +17,9 @@ _SAFE_PROJECT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 def project_binary_asset_candidate(item) -> bool:
     return bool(
-        not item.uploadable
-        and item.reason == "binary"
-        and not item.sensitive
+        not item.sensitive
         and Path(item.rel_path).suffix.lower() in _SAFE_PROJECT_IMAGE_EXTS
+        and (item.uploadable or item.reason == "binary")
     )
 
 
