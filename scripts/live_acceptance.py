@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any
 
@@ -25,6 +26,8 @@ AUTHORIZATION = "KAJOVONG-LIVE-ACCEPTANCE-2026-09-20-MAX-USD-1.00"
 MODEL = "gpt-5.6-luna"
 MAX_TOTAL_USD = 1.00
 CASES = ("generate-live", "generate-batch", "photo-batch", "comic-panels")
+TEXT_CASE_MAX_USD = {"generate-live": 0.40, "generate-batch": 0.20}
+IMAGE_CASE_MAX_USD: dict[str, float | None] = {"photo-batch": None, "comic-panels": None}
 
 
 class Blocked(RuntimeError):
@@ -88,14 +91,14 @@ class Budget:
         self.image_items = 0
         self.unknown: list[str] = []
         self.seen_usage: set[str] = set()
+        self.committed_cost = 0.0
 
     def before(self, *, known_max: float | None, label: str) -> None:
         if self.unknown:
             raise Blocked("BLOCKED_BUDGET")
         if known_max is None:
-            self.unknown.append(label)
-            return
-        if self.cost + known_max > self.limit:
+            raise Blocked("BLOCKED_BUDGET_MODEL")
+        if self.cost + self.committed_cost + known_max > self.limit:
             raise Blocked("BLOCKED_BUDGET")
 
     def add(self, usd: float | None, *, text=False, batch=False, images=0) -> None:
@@ -107,8 +110,78 @@ class Budget:
             self.unknown.append("provider usage/cena nebyla úplná")
         else:
             self.cost += usd
-        if self.cost > self.limit:
+        if self.cost + self.committed_cost > self.limit:
             raise Blocked("BLOCKED_BUDGET")
+
+    def commit_pending(self, usd: float | None, label: str) -> None:
+        if usd is None:
+            self.unknown.append(f"{label}: pending liability není doložitelná")
+            raise Blocked("BLOCKED_BUDGET_MODEL")
+        self.committed_cost += usd
+        if self.cost + self.committed_cost > self.limit:
+            raise Blocked("BLOCKED_BUDGET")
+
+
+def ensure_workspace(root: Path, main_sha: str) -> dict[str, Any]:
+    path = root / "acceptance_state.json"
+    state = read_checkpoint(path)
+    if state:
+        if state.get("authorization") != AUTHORIZATION or state.get("authorization_ceiling_usd") != MAX_TOTAL_USD:
+            raise Blocked("BLOCKED_CHECKPOINT_MISMATCH")
+        if state.get("program_sha") not in {None, "", main_sha}:
+            raise Blocked("BLOCKED_CHECKPOINT_MISMATCH")
+    else:
+        state = {
+            "schema_version": 1,
+            "authorization": AUTHORIZATION,
+            "authorization_ceiling_usd": MAX_TOTAL_USD,
+            "program_sha": main_sha,
+            "cases": {},
+        }
+        write_checkpoint(path, state)
+    return state
+
+
+def acceptance_run_dir(root: Path, case: str) -> Path:
+    return root / "_runtime" / "LOG" / ("RUN_LIVE_ACCEPTANCE_" + case.replace("-", "_"))
+
+
+def rehydrate_budget(root: Path, limit: float, main_sha: str) -> Budget:
+    """Obnoví rozpočet z konkrétních run/job adresářů a checkpointů."""
+    budget = Budget(limit)
+    roots = {
+        "generate-live": acceptance_run_dir(root, "generate-live"),
+        "generate-batch": acceptance_run_dir(root, "generate-batch"),
+        "photo-batch": root / "_runtime" / "LOG" / "PHOTO",
+        "comic-panels": root / "comic-panels" / "LOG",
+    }
+    for case, evidence_root in roots.items():
+        if not evidence_root.exists():
+            continue
+        report = _base_report(case, main_sha, MODEL)
+        report["execution"] = "batch" if case != "generate-live" else "live"
+        if case == "photo-batch":
+            checkpoint = read_checkpoint(root / case / "acceptance_state.json")
+            if checkpoint.get("job_id"):
+                evidence_root = evidence_root / checkpoint["job_id"]
+        settle_evidence(evidence_root, budget, report, image_model=report.get("models") if case == "photo-batch" else None)
+    for case in ("photo-batch", "comic-panels"):
+        checkpoint = read_checkpoint(root / case / "acceptance_state.json")
+        if checkpoint.get("status") in {"preparing", "in_progress", "response_pending", "submission_unknown", "batch_pending"}:
+            budget.commit_pending(checkpoint.get("liability_usd"), case)
+    for case in ("generate-live", "generate-batch"):
+        state = read_checkpoint(acceptance_run_dir(root, case) / "run_state.json")
+        if state.get("status") in {"response_pending", "submission_unknown", "running", "remote_work", "batch_pending"}:
+            budget.commit_pending(TEXT_CASE_MAX_USD[case], case)
+    return budget
+
+
+def case_needs_new_submit(root: Path, case: str) -> bool:
+    """Rozliší nový placený submit od bezpečného obnovení existující práce."""
+    if case in {"generate-live", "generate-batch"}:
+        state = read_checkpoint(acceptance_run_dir(root, case) / "run_state.json")
+        return not state
+    return not read_checkpoint(root / case / "acceptance_state.json")
 
 
 def _empty_cfg_values() -> dict[str, Any]:
@@ -125,7 +198,7 @@ def _empty_cfg_values() -> dict[str, Any]:
     return result
 
 
-def make_run_config(*, batch: bool, prompt: str, out: Path):
+def make_run_config(*, batch: bool, prompt: str, out: Path, max_cost_microusd: int, max_paid_requests: int):
     from kajovo.core.runs.config import UiRunConfig
 
     values = _empty_cfg_values()
@@ -165,10 +238,10 @@ def make_run_config(*, batch: bool, prompt: str, out: Path):
         maximum_quality=False,
         stop_after_plan=False,
         dry_run=False,
-        max_cost_microusd=1_000_000,
+        max_cost_microusd=max_cost_microusd,
         max_input_tokens=100_000,
         max_output_tokens=20_000,
-        max_paid_requests=8,
+        max_paid_requests=max_paid_requests,
         unknown_pricing="block",
         auto_repair="off",
         verification_profile_ids=[],
@@ -334,7 +407,7 @@ def _state_report(report: dict[str, Any], budget: Budget, *, cost_before: float 
     report["unknown_cost_items"] = list(budget.unknown)
 
 
-def run_generate(case: str, root: Path, client, key: str, settings, budget: Budget, main_sha: str, batch: bool) -> dict[str, Any]:
+def _removed_generate_legacy(case: str, root: Path, client, key: str, settings, budget: Budget, main_sha: str, batch: bool) -> dict[str, Any]:
     from kajovo.core.runlog import RunLogger
     from kajovo.core.batch_completion import complete_saved_batch, read_state
 
@@ -405,6 +478,117 @@ def run_generate(case: str, root: Path, client, key: str, settings, budget: Budg
     finally:
         report["finished_at"] = now()
     return report
+
+
+def run_generate(case: str, root: Path, client, key: str, settings, budget: Budget, main_sha: str, batch: bool) -> dict[str, Any]:
+    """Idempotentní GENERATE resume; stav bez batch_id nesmí znamenat nový LIVE submit."""
+    from kajovo.core.batch_completion import complete_saved_batch, read_state
+    from kajovo.core.runlog import RunLogger
+
+    out = root / case / "OUT"
+    out.mkdir(parents=True, exist_ok=True)
+    run_dir = acceptance_run_dir(root, case)
+    state = read_state(run_dir) if run_dir.exists() else {}
+    report = _base_report(case, main_sha, MODEL)
+    report["execution"] = "batch" if batch else "live"
+    name, function, literal = (
+        ("batch_answer.py", "batch_answer", 7) if batch
+        else ("answer.py", "answer", 42)
+    )
+    completed_statuses = {"completed", "files_complete_unverified"}
+    try:
+        artifact = _generated_path(run_dir, out, name) if state.get("status") in completed_statuses else None
+        if not batch and state.get("status") in completed_statuses:
+            report["artifact_sha256"] = [_validate_generated(artifact, function, literal)]
+            report["status"] = "passed"
+            return report
+        if not batch and state.get("status") in {"response_pending", "submission_unknown", "running", "remote_work"}:
+            write_checkpoint(root / case / "acceptance_state.json", {
+                "case": case, "status": state.get("status"),
+                "liability_usd": TEXT_CASE_MAX_USD[case],
+            })
+            report["status"] = "pending"
+            report["errors"] = [str(state.get("status"))]
+            raise RemotePending(str(state.get("status")))
+        if state.get("status") in completed_statuses and artifact is None:
+            raise Blocked("BLOCKED_CHECKPOINT_MISMATCH")
+        if batch and state.get("status") in completed_statuses and artifact is not None:
+            report["artifact_sha256"] = [_validate_generated(artifact, function, literal)]
+            report["batch_ids"] = [state.get("batch_id")] if state.get("batch_id") else []
+            report["status"] = "passed"
+            return report
+        if batch and state.get("status") in {"submission_unknown", "response_pending", "running"} and not state.get("batch_id"):
+            report["status"] = "pending"
+            report["errors"] = [str(state.get("status"))]
+            raise RemotePending(str(state.get("status")))
+        prompt = (
+            "Create exactly one file named answer.py. The file must define one top-level function answer() with no parameters. The function must return the integer literal 42. Do not create any other project files."
+            if not batch else
+            "Create exactly one file named batch_answer.py. It must define one top-level function batch_answer() with no parameters. The function must return the integer literal 7. Do not create any other project files."
+        )
+        logger = RunLogger(settings.log_dir, run_dir.name, project_name="KájovoNG live acceptance", resume=bool(state))
+        if not state.get("batch_id"):
+            remaining = max(0.0, budget.limit - budget.cost - budget.committed_cost)
+            case_limit = TEXT_CASE_MAX_USD[case]
+            cfg = make_run_config(
+                batch=batch, prompt=prompt, out=out,
+                max_cost_microusd=max(1, int(min(remaining, case_limit) * 1_000_000)),
+                max_paid_requests=8,
+            )
+            result, error = _run_executor(cfg, settings, key, logger)
+            state = read_state(run_dir)
+            if error:
+                if state.get("status") in {"response_pending", "submission_unknown"}:
+                    write_checkpoint(root / case / "acceptance_state.json", {
+                        "case": case, "status": state["status"],
+                        "liability_usd": TEXT_CASE_MAX_USD[case],
+                    })
+                    report["status"] = "pending"
+                    report["errors"] = [state["status"]]
+                    raise RemotePending(state["status"])
+                raise RuntimeError(error)
+            result = result or {}
+            report["provider_response_ids"] = [x for x in (result.get("response_id"), result.get("last_response_id")) if x]
+            if batch:
+                batch_id = str(result.get("batch_id") or state.get("batch_id") or "")
+                if not batch_id:
+                    raise RuntimeError("GENERATE BATCH nevrátil batch_id")
+                report["batch_ids"] = [batch_id]
+                report["input_file_ids"] = [result.get("input_file_id")] if result.get("input_file_id") else []
+                write_checkpoint(root / case / "acceptance_state.json", {
+                    "case": case, "batch_id": batch_id, "input_file_id": result.get("input_file_id", ""),
+                    "status": "batch_pending", "liability_usd": TEXT_CASE_MAX_USD[case],
+                })
+            else:
+                artifact = _generated_path(run_dir, out, name)
+                report["artifact_sha256"] = [_validate_generated(artifact, function, literal)]
+                report["status"] = "passed"
+                write_checkpoint(root / case / "acceptance_state.json", {
+                    "case": case, "status": "completed", "artifact_sha256": report["artifact_sha256"],
+                })
+                return report
+        if batch:
+            state = read_state(run_dir)
+            batch_id = str(state.get("batch_id") or read_checkpoint(root / case / "acceptance_state.json").get("batch_id") or "")
+            if not batch_id:
+                raise RemotePending("batch_without_reconstructable_id")
+            completed = complete_saved_batch(client, str(run_dir), batch_id, settings)
+            if completed.get("status") == "batch_pending":
+                raise RemotePending(batch_id)
+            if completed.get("status") not in completed_statuses:
+                raise RuntimeError(json.dumps(completed, ensure_ascii=False))
+            artifact = _generated_path(run_dir, out, name)
+            report["artifact_sha256"] = [_validate_generated(artifact, function, literal)]
+            report["batch_ids"] = [batch_id]
+            report["status"] = "passed"
+            write_checkpoint(root / case / "acceptance_state.json", {
+                **read_checkpoint(root / case / "acceptance_state.json"),
+                "status": "completed", "batch_id": batch_id,
+                "artifact_sha256": report["artifact_sha256"],
+            })
+        return report
+    finally:
+        report["finished_at"] = now()
 
 
 def _synthetic_png(path: Path) -> None:
@@ -520,7 +704,7 @@ def run_photo(root: Path, client, settings, budget: Budget, main_sha: str, avail
     return report
 
 
-def run_comic_legacy(root: Path, client, settings, budget: Budget, main_sha: str, available: list[str]) -> dict[str, Any]:
+def _unused_comic_implementation(root: Path, client, settings, budget: Budget, main_sha: str, available: list[str]) -> dict[str, Any]:
     from kajovo.core.comic_service import ComicService
     from kajovo.core.config import AppSettings
 
@@ -712,10 +896,18 @@ def main(argv: list[str] | None = None) -> int:
     root.mkdir(parents=True, exist_ok=True)
     settings = AppSettings(log_dir=str(root / "_runtime" / "LOG"), cache_dir=str(root / "_runtime" / "cache"))
     client = OpenAIClient(key, timeout_s=600)
-    main_sha = os.environ.get("KAJOVONG_MAIN_SHA", "unknown")
+    main_sha = os.environ.get("KAJOVONG_MAIN_SHA", "")
+    if not main_sha:
+        try:
+            main_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.SubprocessError):
+            main_sha = "unknown"
     try:
+        ensure_workspace(root, main_sha)
+        budget = rehydrate_budget(root, args.max_total_usd, main_sha)
         available = _model_check(client)
-        budget = Budget(args.max_total_usd)
         reports: list[dict[str, Any]] = []
         for case in cases:
             before = {
@@ -724,20 +916,24 @@ def main(argv: list[str] | None = None) -> int:
                 "image": budget.image_items,
             }
             if case == "generate-live":
-                budget.before(known_max=0.20, label=case)
+                if case_needs_new_submit(root, case):
+                    budget.before(known_max=TEXT_CASE_MAX_USD[case], label=case)
                 report = run_generate(case, root, client, key, settings, budget, main_sha, False)
                 settle_evidence(root / "_runtime" / "LOG" / "RUN_LIVE_ACCEPTANCE_generate_live", budget, report)
             elif case == "generate-batch":
-                budget.before(known_max=0.10, label=case)
+                if case_needs_new_submit(root, case):
+                    budget.before(known_max=TEXT_CASE_MAX_USD[case], label=case)
                 report = run_generate(case, root, client, key, settings, budget, main_sha, True)
                 settle_evidence(root / "_runtime" / "LOG" / "RUN_LIVE_ACCEPTANCE_generate_batch", budget, report)
             elif case == "photo-batch":
                 choose_image_model(available)
-                budget.before(known_max=0.50, label=case)
+                if case_needs_new_submit(root, case):
+                    budget.before(known_max=IMAGE_CASE_MAX_USD[case], label=case)
                 report = run_photo(root, client, settings, budget, main_sha, available)
                 settle_evidence(Path(settings.log_dir) / "PHOTO" / str(report.get("job_id") or ""), budget, report, image_model=report["models"])
             else:
-                budget.before(known_max=0.50, label=case)
+                if case_needs_new_submit(root, case):
+                    budget.before(known_max=IMAGE_CASE_MAX_USD[case], label=case)
                 report = run_comic(root, client, settings, budget, main_sha, available)
                 settle_evidence(root / "comic-panels", budget, report, image_model="gpt-image-2.5-sunburst-2026-09-08")
             _state_report(
@@ -746,6 +942,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             enrich_ids(root, report)
             reports.append(report)
+            root_state = read_checkpoint(root / "acceptance_state.json")
+            root_state.setdefault("cases", {})[case] = {
+                "status": report.get("status"),
+                "identity": report.get("batch_ids") or report.get("provider_response_ids") or report.get("job_id"),
+            }
+            write_checkpoint(root / "acceptance_state.json", root_state)
             write_evidence(root, reports, budget, main_sha)
         cleanup_remote_inputs(client, reports)
         write_evidence(root, reports, budget, main_sha)
