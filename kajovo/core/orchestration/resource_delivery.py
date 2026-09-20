@@ -508,6 +508,98 @@ def _stage_resource(worker, path: str, data: bytes, producer: str) -> dict[str, 
     return row
 
 
+def prepare_production_scope(
+    worker,
+    graph: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], set[str], list[dict[str, Any]]]:
+    """Freeze approved production targets and reject dependency gaps caused by skips."""
+    mode = str(graph.get("mode") or "")
+    production_actions = {"generate"} if mode == "GENERATE" else {"add", "modify"}
+    all_files = {
+        str(row["path"]): row
+        for row in graph["spine"]["files"]
+    }
+    production = {
+        path: row
+        for path, row in all_files.items()
+        if row.get("action") in production_actions
+    }
+    selected: dict[str, dict[str, Any]] = {}
+    skipped: list[dict[str, Any]] = []
+    completed: set[str] = {
+        path
+        for path, row in all_files.items()
+        if row.get("action") == "preserve"
+    }
+    source_artifacts = {
+        str((artifact.get("metadata") or {}).get("relative_path")
+            or artifact.get("reconstruction_role")
+            or ""): artifact
+        for artifact in worker.log.bundle.artifacts()
+        if artifact.get("role") == "in_project_file"
+    }
+
+    for path, row in production.items():
+        suffix = Path(path).suffix.lower()
+        excluded = (
+            path in (worker.cfg.skip_paths or [])
+            or suffix in (worker.cfg.skip_exts or [])
+        )
+        if not excluded:
+            selected[path] = row
+            continue
+        approved_original = source_artifacts.get(path)
+        completed_hash = (worker.cfg.completed_hashes or {}).get(path)
+        suitable = False
+        if approved_original is not None:
+            metadata = approved_original.get("metadata") or {}
+            expected = str(metadata.get("sha256") or approved_original.get("sha256") or "")
+            current = Path(safe_join_under_root(worker.cfg.in_dir, path)) if worker.cfg.in_dir else None
+            suitable = bool(
+                current
+                and current.is_file()
+                and expected
+                and sha256_file(str(current)) == expected
+            )
+        if not suitable and completed_hash and worker.cfg.out_dir:
+            output = Path(safe_join_under_root(worker.cfg.out_dir, path))
+            suitable = output.is_file() and sha256_file(str(output)) == completed_hash
+        if suitable:
+            completed.add(path)
+        skipped.append({
+            "path": path,
+            "reason": (
+                "skip_path"
+                if path in (worker.cfg.skip_paths or [])
+                else f"skip_ext:{suffix}"
+            ),
+            "approved_original_available": suitable,
+        })
+
+    for path, row in selected.items():
+        blocked = {
+            dep
+            for dep in row.get("dependencies", [])
+            if dep in production and dep not in selected and dep not in completed
+        }
+        if blocked:
+            raise ContractError(
+                f"{path}: přeskočené dependency nemají schválený originál: "
+                + ", ".join(sorted(blocked))
+            )
+
+    expected: dict[str, str | None] = {}
+    for path in selected:
+        destination = Path(safe_join_under_root(worker.cfg.out_dir, path))
+        expected[path] = (
+            sha256_file(str(destination)) if destination.is_file() else None
+        )
+    worker._delivery_expected_target_hashes = expected
+    worker._resource_staged_files = {}
+    worker._resource_states = {}
+    return selected, completed, skipped
+
+
 def dispatch_resource_target(
     worker,
     client,
