@@ -391,7 +391,7 @@ class Workbench(QWidget):
                 and not value.get("dry_run")
             ):
                 self.offer_repair_from_publish(
-                    self.context.settings.log_dir + "/" + run_id,
+                    str(Path(self.context.settings.log_dir).resolve() / run_id),
                     value,
                     cfg,
                 )
