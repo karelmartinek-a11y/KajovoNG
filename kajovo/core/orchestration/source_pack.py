@@ -19,7 +19,10 @@ def project_binary_asset_candidate(item) -> bool:
     return bool(
         not item.sensitive
         and Path(item.rel_path).suffix.lower() in _SAFE_PROJECT_IMAGE_EXTS
-        and (item.uploadable or item.reason == "binary")
+        and (
+            item.uploadable
+            or item.reason in {"binary", "denied_extension"}
+        )
     )
 
 
