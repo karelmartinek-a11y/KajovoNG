@@ -1797,7 +1797,23 @@ def _repeat_v3_batch(
         raise ContractError(
             "Neznámý submit musí být dohledán před novým odesláním."
         )
-    from .orchestration.authorization import create_targeted_retry_authorization
+    from .orchestration.authorization import (
+        create_targeted_retry_authorization,
+        validate_execution_authorization,
+    )
+
+    try:
+        root_authorization = validate_execution_authorization(
+            state.get("execution_authorization") or {},
+            run_id=Path(run_dir).name,
+            run_config=state.get("run_config_v2") or {},
+            scope_hash=str(state.get("run_scope_hash") or ""),
+            require_repair=True,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ContractError(
+            "Ruční retry vyžaduje platnou explicitní autorizaci opravy."
+        ) from exc
 
     approved = set(
         source.get("approved_paths") or source.get("expected", {}).values()
@@ -1807,8 +1823,8 @@ def _repeat_v3_batch(
             "Ruční retry se pokouší rozšířit původní schválený scope."
         )
     manual_authorization = create_targeted_retry_authorization(
-        Path(run_dir).name,
-        str(state.get("run_scope_hash") or ""),
+        root_authorization.run_id,
+        root_authorization.scope_hash,
         selected,
         digest(source),
     )
