@@ -475,6 +475,7 @@ class OrchestrationRepository:
         work_order_hash: str,
         endpoint: str,
         request_hash: str,
+        allow_existing: bool = False,
     ) -> bool:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -491,6 +492,9 @@ class OrchestrationRepository:
                     db.rollback()
                     raise OrchestrationError("PROVIDER_OPERATION_CONFLICT", attempt_id)
                 if row[3] in {"submitted", "submission_unknown", "completed"}:
+                    if allow_existing:
+                        db.commit()
+                        return False
                     db.rollback()
                     raise OrchestrationError(
                         "DUPLICATE_SUBMIT_BLOCKED",
@@ -534,7 +538,7 @@ class OrchestrationRepository:
             if row[0] == "completed":
                 db.commit()
                 return
-            if row[0] not in {"prepared", "not_submitted", "submission_unknown"}:
+            if row[0] not in {"prepared", "not_submitted"}:
                 db.rollback()
                 raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
             db.execute(
