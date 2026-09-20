@@ -49,7 +49,7 @@ def _run_v3_generate_production(
             ready = sorted(
                 path
                 for path in pending_resources
-                if set(files_by_path[path].get("dependencies", [])) <= completed
+                if set(files_by_path[path].get("content_dependencies", [])) <= completed
             )
             if not ready:
                 break
@@ -94,7 +94,7 @@ def _run_v3_generate_production(
         ready_text = {
             path
             for path in text_scope
-            if set(files_by_path[path].get("dependencies", [])) <= completed
+            if set(files_by_path[path].get("content_dependencies", [])) <= completed
         }
         if not ready_text:
             saved_map = self._save_out_files([])
@@ -168,7 +168,7 @@ def _run_v3_generate_production(
         ready = sorted(
             path
             for path in pending
-            if set(files_by_path[path].get("dependencies", [])) <= completed
+            if set(files_by_path[path].get("content_dependencies", [])) <= completed
         )
         if not ready:
             break
