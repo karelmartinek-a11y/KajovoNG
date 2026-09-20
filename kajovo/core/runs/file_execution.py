@@ -40,7 +40,7 @@ def _gen_file_chunks(
     model_override: str | None = None,
 ) -> tuple[str, str]:
     """Vytvoří jeden úplný soubor; technické dělení výstupu model neřídí."""
-    from ..context_budget import checked_measurement, configure_file_request
+    from ..context_limits import checked_measurement, configure_file_request
     from ..context_compiler import ContextCompiler, canonical
 
     if not getattr(self, "_delivery_snapshot", None):
@@ -130,7 +130,7 @@ def _gen_file_chunks(
             detail=(
                 f"{path} · vstup ~{report['input_tokens']:,} tokenů · {step_model} · "
                 f"reasoning {working.get('reasoning', {}).get('effort', 'bez reasoning')} · "
-                f"výstupní rozpočet {working['max_output_tokens']:,} · "
+                f"max. výstup {working['max_output_tokens']:,} · "
                 + " ".join(report["warnings"])
             ),
         ))

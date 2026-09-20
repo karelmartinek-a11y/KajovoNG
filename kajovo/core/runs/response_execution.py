@@ -146,35 +146,54 @@ def _work_order_for_payload(self: RunContext, payload: dict[str, Any], attempt: 
 
 
 def _create_response(self: RunContext, client, payload, *, attempt=0, measurement=None):
-    from ..cost_context_report import CostContextReport
     if attempt:
         payload = copy.deepcopy(payload)
         payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
     prepare_payload(payload)
     if self._response_journal is not None:
         apply_quality(payload, self.cfg.maximum_quality)
-    cost_report = CostContextReport(self.log.paths.run_dir)
-    cost_payload = {**payload, "background": True, "store": True} if self._response_journal is not None else payload
+    transport_payload = (
+        {**payload, "background": True, "store": True}
+        if self._response_journal is not None
+        else payload
+    )
     if measurement is not None:
         from ..context_compiler import content_hash
-        measurement = {**measurement, "request_hash": content_hash(cost_payload)}
-    from ..orchestration.ledger import reserve_paid_request
-    work_order = _work_order_for_payload(self, cost_payload, attempt)
-    measurement = reserve_paid_request(
+        measurement = {
+            **measurement,
+            "request_hash": content_hash(transport_payload),
+        }
+    from ..orchestration.provider_operations import (
+        mark_not_submitted,
+        mark_submission,
+        mark_submission_started,
+        prepare_provider_request,
+        record_usage,
+    )
+    work_order = _work_order_for_payload(self, transport_payload, attempt)
+    measurement = prepare_provider_request(
         self.log,
         self.cfg,
         client,
-        cost_payload,
+        transport_payload,
         measurement=measurement,
         work_order=work_order,
     )
-    cost_report.record(cost_payload, measurement=measurement, status="submitting")
     self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
-    self.progress_event.emit(ProgressEvent(self._progress_stage, "waiting", detail="Čekám na dokončení odpovědi v OpenAI Responses API.", source="api"))
+    self.progress_event.emit(
+        ProgressEvent(
+            self._progress_stage,
+            "waiting",
+            detail="Čekám na dokončení odpovědi v OpenAI Responses API.",
+            source="api",
+        )
+    )
     if self.lifecycle_status is RunStatus.CREATED:
         self.transition(RunStatus.PREPARING)
     if self.lifecycle_status is RunStatus.PREPARING:
         self.transition(RunStatus.REMOTE_WORK)
+
+    mark_submission_started(self.log, work_order)
     try:
         try:
             if self._response_journal is not None:
@@ -206,7 +225,6 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
                 raise
     except Exception as exc:
         from ..openai_transport import SubmissionOutcomeUnknown
-        from ..orchestration.ledger import mark_submission, release_reservation
         from ..response_journal import SubmissionUnknown
 
         confirmed_id = (
@@ -215,9 +233,6 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
             else ""
         )
         if confirmed_id:
-            # Polling may stop or a terminal remote failure may be raised after
-            # the provider already returned a durable Response ID. That is a
-            # known submission, never submission_unknown.
             mark_submission(
                 self.log,
                 work_order,
@@ -228,26 +243,35 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
             mark_submission(self.log, work_order, None, unknown=True)
         elif (
             getattr(exc, "request_sent", None) is False
-            or getattr(exc, "status_code", None) in {400, 401, 403, 404, 422, 429}
+            or getattr(exc, "status_code", None)
+            in {400, 401, 403, 404, 422, 429}
         ):
-            release_reservation(self.log, work_order)
+            mark_not_submitted(self.log, work_order)
         else:
             mark_submission(self.log, work_order, None, unknown=True)
         raise
 
-    from ..orchestration.ledger import mark_submission, settle_usage
     provider_id = str(response.get("id") or "")
     if provider_id:
         mark_submission(self.log, work_order, provider_id, unknown=False)
-        settle_usage(self.log, work_order, response)
+        record_usage(self.log, work_order, response)
     else:
         mark_submission(self.log, work_order, None, unknown=True)
         raise ContractError(
-            "Provider nepotvrdil ID placené operace; automatický nový submit je zablokován."
+            "Provider nepotvrdil ID operace; automatický nový submit je zablokován."
         )
-    cost_report.record(cost_payload, response=response)
-    self.progress_event.emit(ProgressEvent(self._progress_stage, detail="Odpověď přijata z OpenAI Responses API; lokálně ověřuji výsledek.", source="api"))
-    self.log.save_json("responses", f"received_{response.get('id', 'NOID')}", response)
+    self.progress_event.emit(
+        ProgressEvent(
+            self._progress_stage,
+            detail="Odpověď přijata z OpenAI Responses API; lokálně ověřuji výsledek.",
+            source="api",
+        )
+    )
+    self.log.save_json(
+        "responses",
+        f"received_{response.get('id', 'NOID')}",
+        response,
+    )
     if response.get("error"):
         from ..contracts import RemoteResponseError
         raise RemoteResponseError(response)
@@ -259,9 +283,13 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
         from ..contracts import RemoteResponseError
         raise RemoteResponseError(response)
     if classified.kind == "refusal":
-        raise ContractError("Provider odmítl pracovní požadavek; výstup nebyl přijat.")
+        raise ContractError(
+            "Provider odmítl pracovní požadavek; výstup nebyl přijat."
+        )
     if classified.kind == "tool_calls":
-        raise ContractError("TOOL_CALL_UNHANDLED: task vyžaduje explicitní tool-dispatch pokračování.")
+        raise ContractError(
+            "TOOL_CALL_UNHANDLED: task vyžaduje explicitní tool-dispatch pokračování."
+        )
     self.transition(RunStatus.PROCESSING_RESPONSE)
     validate_output(response, payload)
     return response
