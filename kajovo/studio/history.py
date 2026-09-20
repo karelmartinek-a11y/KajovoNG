@@ -442,10 +442,15 @@ class HistoryPage(QWidget):
             self.notice.setText(str(error))
             return
         root = str(self.adapter.root)
+        def received(_value):
+            current = read_state(root)
+            self.workbench.offer_repair_from_publish(root, current)
+            self.refresh()
+
         self.context.operations.start(
             "Převzetí neověřených staged artefaktů",
             lambda task: publish_staged_run(root),
-            lambda _value: self.refresh(),
+            received,
             output_dir=output,
             identifier=f"publish.staged:{self.adapter.run_id}",
         )
