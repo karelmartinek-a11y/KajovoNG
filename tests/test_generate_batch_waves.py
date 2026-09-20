@@ -64,12 +64,15 @@ def import_batch(worker, client, batch_id, manifest, progress=None):
     )
 
 
-def reservation(worker, order):
-    repo = OrchestrationRepository(Path(worker.log.paths.run_dir).parent / "orchestration.sqlite3")
+def provider_operation(worker, order):
+    repo = OrchestrationRepository(
+        Path(worker.log.paths.run_dir).parent / "orchestration.sqlite3"
+    )
     with repo.connect() as db:
         return db.execute(
-            "SELECT state,provider_id,work_order_hash FROM reservations WHERE reservation_id=?",
-            (order.budget_reservation_id,),
+            "SELECT state,provider_id,work_order_hash "
+            "FROM provider_operations WHERE attempt_id=?",
+            (order.attempt_id,),
         ).fetchone()
 
 
@@ -122,7 +125,7 @@ def test_wave_end_to_end_preserves_identity_hashes_and_idempotent_import(wave_ru
     assert v4["state"] == "submitted" and v4["wave_no"] == 1
     assert v4["rows"][0]["work_order_hash"] == order.order_hash
     assert v4["rows"][0]["body_hash"] == generate_batch.digest(request["body"])
-    assert reservation(worker, order) == ("submitted", "batch_wave2", order.order_hash)
+    assert provider_operation(worker, order) == ("submitted", "batch_wave2", order.order_hash)
     assert any("dependency-wave" in event.detail for event in events) or len(events) >= 2
     assert import_batch(worker, client, state["batch_id"], primary)["status"] == "batch_pending"
     client.create_batch.assert_called_once()
@@ -173,13 +176,13 @@ def test_wave_submit_failure_retains_recovery_evidence(wave_run, failure):
     assert "batch_wave2" not in saved.get("generate_batches", {})
     v4 = saved["batch_manifests_v4"][pending["manifest_v4_id"]]
     order = work_order(manifest)
-    status, provider, order_hash = reservation(worker, order)
+    status, provider, order_hash = provider_operation(worker, order)
     assert order_hash == order.order_hash
     if failure in {"not_sent", "rejected"}:
         assert v4["state"] == "failed" and saved["submission_unknown"] is False
-        assert status == "released" and provider is None
+        assert status == "not_submitted" and provider is None
     else:
-        assert status == "unknown"
+        assert status == "submission_unknown"
         assert v4["state"] == saved["status"] == "submission_unknown"
         assert saved["submission_unknown"] is True and provider is None
         with pytest.raises(ContractError, match="Neznámý submit"):

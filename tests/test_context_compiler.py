@@ -8,9 +8,8 @@ import pytest
 from delivery_fixtures import implementation_fixture
 from test_generate_batch import specification
 from kajovo.core.context_compiler import ContextCompiler, content_hash, dependency_groups
-from kajovo.core.context_budget import BudgetPolicy, configure_file_request, enforce_budget, measure_request
+from kajovo.core.context_limits import configure_file_request, ensure_technical_limits, measure_request
 from kajovo.core.contracts import ContractError
-from kajovo.core.cost_context_report import CostContextReport
 from kajovo.core.recoverable_artifacts import artifact_path, save_artifact
 
 
@@ -124,38 +123,63 @@ def test_legacy_does_not_silently_compile():
         ContextCompiler(source)
 
 
-@pytest.mark.parametrize("tokens,warning,blocked", [(1000, False, False), (90000, True, False),
-                                                     (160000, True, True), (210000, True, True)])
-def test_soft_hard_and_justification(tokens, warning, blocked):
-    body = {"model": "gpt-4.1", "input": "nekrátit", "max_output_tokens": 1000}
-    before = deepcopy(body)
-    report = measure_request(body, exact_input_tokens=tokens)
-    assert bool(report["warnings"]) is warning
-    assert bool(report["blockers"]) is blocked
-    if blocked:
-        with pytest.raises(ContractError):
-            enforce_budget(report)
-    else:
-        enforce_budget(report)
-    assert body == before
+def test_context_window_is_a_technical_gate():
+    from kajovo.core.model_registry import model_spec
 
-
-def test_model_context_safety_and_long_context_threshold():
     body = {"model": "gpt-4.1", "input": "data", "max_output_tokens": 1000}
-    report = measure_request(body, policy=BudgetPolicy(long_context_threshold=10000), exact_input_tokens=11000)
-    assert report["long_context_exceeded"] and report["blockers"]
-    report = measure_request(body, exact_input_tokens=1000000, justification="Ověřená široká analýza")
-    assert any("rezerva" in error for error in report["blockers"])
+    spec = model_spec("gpt-4.1")
+    window = int(spec["context_window"])
+    ok = measure_request(
+        body,
+        exact_input_tokens=max(0, window - body["max_output_tokens"]),
+    )
+    ensure_technical_limits(ok)
+    blocked = measure_request(
+        body,
+        exact_input_tokens=window - body["max_output_tokens"] + 1,
+    )
+    assert blocked["blockers"]
+    with pytest.raises(ContractError):
+        ensure_technical_limits(blocked)
+
+
+def test_provider_output_capability_is_enforced():
+    from kajovo.core.model_registry import model_spec
+
+    spec = model_spec("gpt-4.1")
+    body = {
+        "model": "gpt-4.1",
+        "input": "data",
+        "max_output_tokens": int(spec["max_output_tokens"]) + 1,
+    }
+    report = measure_request(body, exact_input_tokens=1)
+    assert report["status"] == "blocked"
+    assert any("max_output_tokens" in item for item in report["blockers"])
 
 
 def test_unknown_external_input_is_explicit():
-    report = measure_request({"model": "gpt-4.1", "input": [{"role": "user", "content": [
-        {"type": "input_file", "file_id": "file_ref"}]}], "previous_response_id": "resp_ref"})
-    assert set(report["unknown_components"]) == {"input_file", "serverová historie"}
-    assert report["projected_cost"] is None
+    report = measure_request(
+        {
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_file", "file_id": "file_ref"}],
+                }
+            ],
+            "previous_response_id": "resp_ref",
+            "max_output_tokens": 1000,
+        }
+    )
+    assert set(report["unknown_components"]) == {
+        "input_file",
+        "serverová historie",
+    }
+    assert "projected_cost" not in report
+    assert "pricing_status" not in report
 
 
-def test_complexity_and_output_budget_preserve_model():
+def test_complexity_and_output_limit_preserve_model():
     compiled = ContextCompiler(snapshot()).compile("maths.py")
     payload = {"model": "gpt-5.2", "input": "data", "temperature": 0.2}
     routing = configure_file_request(payload, compiled, maximum_quality=True)
@@ -164,19 +188,17 @@ def test_complexity_and_output_budget_preserve_model():
     assert payload["max_output_tokens"] > 16384
     assert payload["truncation"] == "disabled"
     assert routing["score"] > 0
+    assert "output_limit" in routing
 
 
-def test_cost_report_reimport_does_not_double_usage(tmp_path):
-    report = CostContextReport(tmp_path)
-    payload = {"model": "gpt-4.1", "input": "data", "max_output_tokens": 1000}
-    response = {"id": "resp_1", "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
-                "usage": {"input_tokens": 100, "output_tokens": 30, "output_tokens_details": {"reasoning_tokens": 20}}}
-    for _ in range(2):
-        report.record(payload, custom_id="task_1", response=response)
-    data = json.loads(report.path.read_text("utf-8"))
-    assert data["summary"]["actual_input_tokens"] == 100
-    assert data["summary"]["actual_reasoning_tokens"] == 20
-    assert data["summary"]["incomplete"] == ["task_1"]
+def test_context_report_has_no_economic_fields():
+    report = measure_request(
+        {"model": "gpt-4.1", "input": "data", "max_output_tokens": 1000},
+        exact_input_tokens=10,
+    )
+    assert set(report).isdisjoint(
+        {"projected_cost", "actual_cost", "pricing_status", "price_snapshot_hash"}
+    )
 
 
 def test_exact_artifact_is_not_redacted_and_tamper_blocks(tmp_path):

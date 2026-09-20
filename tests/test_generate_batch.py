@@ -446,7 +446,7 @@ def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_or
     original_order = next(value for value in m["work_orders"].values() if value["target_path"] == "maths.py")
     assert order["task_id"] == original_order["task_id"]
     assert order["attempt_no"] == 2
-    assert order["budget_reservation_id"] != original_order["budget_reservation_id"]
+    assert order["attempt_id"] != original_order["attempt_id"]
     assert retry["snapshot_hash"] == m["snapshot_hash"]
     context = json.loads(retry["requests"][0]["body"]["input"])
     assert context["recovery_instruction"] == "Fix sum"
@@ -477,8 +477,8 @@ def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_or
     third_order = next(iter(third["work_orders"].values()))
     assert third_order["attempt_no"] == 3
     assert third_order["task_id"] == original_order["task_id"]
-    assert third_order["budget_reservation_id"] not in {
-        order["budget_reservation_id"], original_order["budget_reservation_id"],
+    assert third_order["attempt_id"] not in {
+        order["attempt_id"], original_order["attempt_id"],
     }
     assert third["snapshot"] == retry["snapshot"] == m["snapshot"]
     assert state["generate_batch"] == m
