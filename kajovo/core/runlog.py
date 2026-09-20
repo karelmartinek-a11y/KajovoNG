@@ -203,6 +203,7 @@ class RunLogger:
         *,
         resume: bool = False,
         comic_operation_id: str = "",
+        resume_import: bool = False,
     ):
         root_dir = os.path.abspath(os.curdir)
         if not base_log_dir:
@@ -226,10 +227,13 @@ class RunLogger:
             )
             resumable_comic = bool(comic_operation_id) and state.get("mode") == "COMIC" and state.get("comic_operation_id") == comic_operation_id
             if (
-                (not state.get("generate_batch") and not resumable_response)
-                or state.get("batch_id")
-                or state.get("submission_unknown")
-            ) and not resumable_comic:
+                (
+                    (not state.get("generate_batch") and not resumable_response)
+                    or (state.get("batch_id") and not resume_import)
+                    or state.get("submission_unknown")
+                )
+                and not resumable_comic
+            ):
                 raise ValueError("Běh nemá dávku bezpečně připravenou k pokračování.")
         else:
             os.makedirs(run_dir, exist_ok=False)
