@@ -32,17 +32,17 @@ from .model_registry import model_spec
 from .openai_client import OpenAIClient
 from .openai_transport import SubmissionOutcomeUnknown
 from .orchestration.contracts import canonical_sha256
-from .orchestration.publish import (
-    commit_publish,
-    prepare_publish,
-    recover_publish_journal,
-)
 from .orchestration.provider_operations import (
     mark_not_submitted,
     mark_submission,
     mark_submission_started,
     prepare_provider_request,
     record_usage,
+)
+from .orchestration.publish import (
+    commit_publish,
+    prepare_publish,
+    recover_publish_journal,
 )
 from .orchestration.repository import repository_for_logger
 from .orchestration.run_config import validate_run_config_v2
@@ -821,7 +821,7 @@ class CascadeRunExecutor:
                 }
             )
         manifest_paths = [row["path"] for row in normalized_manifest]
-        if len(manifest_paths) != len(set(os.path.normcase(path) for path in manifest_paths)):
+        if len(manifest_paths) != len({os.path.normcase(path) for path in manifest_paths}):
             raise RuntimeError(
                 f"Krok {idx}: manifest obsahuje duplicitní/case-collision cestu."
             )
