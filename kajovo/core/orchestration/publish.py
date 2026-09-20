@@ -133,7 +133,7 @@ class _TargetPublishLock:
                     raise OrchestrationError(
                         "PUBLISH_LOCKED",
                         f"Cílový kořen právě publikuje jiný proces (pid={owner}).",
-                    )
+                    ) from None
                 with contextlib.suppress(FileNotFoundError):
                     self.path.unlink()
                 _fsync_directory(self.target_root)
