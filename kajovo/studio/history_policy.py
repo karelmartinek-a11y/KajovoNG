@@ -51,9 +51,14 @@ class ActionAvailabilityPolicy:
         mode = str(run.get("mode") or state.get("mode") or (ui or {}).get("mode") or "")
         step_status = str((selected_step or {}).get("status") or "")
         has_error = is_error_state(status) or is_error_state(step_status)
+        plan_ready = (
+            status == "plan_ready"
+            and mode in {"GENERATE", "MODIFY"}
+            and any(row.get("checkpoint_type") == "plan_ready" for row in safe)
+        )
         nonterminal = status in {
             "created", "preparing", "running", "response_pending", "stopped", "cancelled"
-        }
+        } or plan_ready
         staged = state.get("staged_files") if isinstance(state.get("staged_files"), list) else []
         publishable_staged = bool(
             staged
@@ -84,7 +89,14 @@ class ActionAvailabilityPolicy:
             ),
             "continue": ActionDecision(
                 direct_ok and nonterminal,
-                direct_reason or ("Dokončený běh nemá smysluplné pokračování." if not nonterminal else "Pokračuje v nové větvi."), mode in DIRECT_MODES and nonterminal,
+                direct_reason or (
+                    "Dokončený běh nemá smysluplné pokračování."
+                    if not nonterminal
+                    else "Pokračuje z ověřeného plánu bez opakování přípravy."
+                    if plan_ready
+                    else "Pokračuje v nové větvi."
+                ),
+                mode in DIRECT_MODES and nonterminal,
             ),
             "edit_branch": ActionDecision(
                 direct_ok and mode == "QA" and any(row.get("checkpoint_type") == "input_ready" for row in safe),
