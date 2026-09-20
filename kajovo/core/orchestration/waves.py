@@ -49,7 +49,12 @@ def build_execution_dag(graph: dict) -> ExecutionDag:
         content[path] = cdeps
         contract[path] = deps - cdeps
 
-    pending = {path: set(values) for path, values in content.items()}
+    # Execution order is over every declared dependency, not only verified-content
+    # edges. Content-vs-contract semantics remain separate for context compilation.
+    pending = {
+        path: set(content[path]) | set(contract[path])
+        for path in by_path
+    }
     waves: list[tuple[str, ...]] = []
     while pending:
         ready = tuple(sorted(path for path, deps in pending.items() if not deps))
