@@ -1078,7 +1078,6 @@ def _submit_v3_followup_wave(
     if state.get("submission_unknown") or state.get("pending_batch_submission"):
         raise ContractError("Neznámý submit musí být dohledán před novým odesláním.")
 
-    ui = dict(state.get("ui_state") or {})
     cfg = _v3_cfg_namespace(state)
     originals = {}
     bundle = RunBundle(Path(run_dir))
@@ -1863,6 +1862,28 @@ def _repeat_v3_batch(
         except UnicodeDecodeError:
             continue
 
+    frozen_original_hashes = dict(
+        source["snapshot"].get("original_hashes") or {}
+    )
+    originals = {
+        path: content
+        for path, content in originals.items()
+        if path in frozen_original_hashes
+    }
+    if set(originals) != set(frozen_original_hashes):
+        missing = sorted(set(frozen_original_hashes) - set(originals))
+        raise ContractError(
+            "Oprava nemá úplný původní SourcePack pro: " + ", ".join(missing)
+        )
+    if any(
+        hashlib.sha256(content.encode("utf-8")).hexdigest()
+        != frozen_original_hashes[path]
+        for path, content in originals.items()
+    ):
+        raise ContractError(
+            "Oprava nemá shodný původní obsah se zmrazeným snapshotem."
+        )
+
     expected_target_hashes = dict(source["snapshot"].get("expected_target_hashes") or {})
     if not selected <= expected_target_hashes.keys():
         raise ContractError("Oprava nemá zmrazené původní hashe cílových souborů.")
@@ -1876,7 +1897,7 @@ def _repeat_v3_batch(
     )
     manifest = build_manifest(
         Path(run_dir).name,
-        str(ui.get("prompt") or source["snapshot"].get("prompt") or ""),
+        str(source["snapshot"].get("prompt") or ""),
         source["snapshot"]["plan"],
         source["snapshot"]["structure"],
         model,
@@ -1890,13 +1911,19 @@ def _repeat_v3_batch(
         run_config=cfg,
         expected_target_hashes=expected_target_hashes,
         verified_artifacts=verified_artifacts,
-        approved_paths=selected,
+        approved_paths=approved,
         completed_targets=(
             set(source.get("completed_dependency_targets") or [])
             | set(verified_artifacts)
             | set(state.get("resource_completed_paths") or [])
         ),
     )
+    # Targeted retry narrows execution, never the canonical preparation snapshot.
+    if manifest["snapshot_hash"] != source["snapshot_hash"]:
+        raise ContractError(
+            "Targeted retry změnil zmrazený snapshot; odeslání je zablokováno."
+        )
+
     # A repair is terminal for exactly the explicitly selected targets; it must
     # not accidentally continue unrelated deferred tasks from the source batch.
     manifest["deferred_paths"] = []
