@@ -93,7 +93,7 @@ def create_targeted_retry_authorization(
         "run_id": run_id,
         "scope_hash": scope_hash,
         "purpose": "manual_retry",
-        "target_paths": targets,
+        "target_paths": list(targets),
         "source_manifest_hash": source_manifest_hash,
     }
     expires = datetime.now(timezone.utc) + timedelta(hours=lifetime_hours)
