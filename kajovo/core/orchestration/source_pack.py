@@ -16,9 +16,17 @@ _SAFE_PROJECT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def project_binary_asset_candidate(item) -> bool:
+    rel = str(item.rel_path or "")
+    name = Path(rel).name.lower()
+    sensitive_name = (
+        name in {".env", ".env.local", ".env.prod", ".pypirc", "id_rsa", "id_ed25519"}
+        or name.startswith(".env.")
+        or rel.lower().endswith(".env")
+    )
     return bool(
         not item.sensitive
-        and Path(item.rel_path).suffix.lower() in _SAFE_PROJECT_IMAGE_EXTS
+        and not sensitive_name
+        and Path(rel).suffix.lower() in _SAFE_PROJECT_IMAGE_EXTS
         and (
             item.uploadable
             or item.reason in {"binary", "denied_extension"}
