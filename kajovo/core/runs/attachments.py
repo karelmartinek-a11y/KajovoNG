@@ -17,15 +17,15 @@ from ..contracts import (
 )
 from ..openai_client import OpenAIClient
 from ..openai_transport import OpenAIError, SubmissionOutcomeUnknown
+from ..orchestration.source_pack import (
+    project_binary_asset_candidate,
+    validate_project_binary_asset,
+)
 from ..progress import ProgressEvent
 from ..structured_output import (
     text_format,
 )
 from ..utils import ensure_dir, safe_join_under_root, sha256_file, ts_code
-from ..orchestration.source_pack import (
-    project_binary_asset_candidate,
-    validate_project_binary_asset,
-)
 from .observability import record_event
 from .polling import VectorStorePollingContext, wait_vector_store_files
 
