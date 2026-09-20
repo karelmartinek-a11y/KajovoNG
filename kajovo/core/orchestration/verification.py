@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..utils import safe_join_under_root, sha256_file
 from .contracts import canonical_sha256
 from .errors import OrchestrationError
 
@@ -384,6 +385,143 @@ def run_checks(plan: VerificationPlan, sandbox=None) -> dict[str, Any]:
         format_result=format_result,
         functional_result=functional_result,
     )
+
+
+def build_verification_candidate(
+    run_dir: str | Path,
+    staged: list[dict[str, Any]],
+    *,
+    mode: str,
+) -> Path:
+    """Materialize the exact candidate tree without reopening the user project."""
+    run_root = Path(run_dir).resolve()
+    candidate = run_root / "staging" / "verification_candidate" / "generated"
+    controlled_root = run_root / "staging" / "verification_candidate"
+    if controlled_root.exists():
+        shutil.rmtree(controlled_root)
+    candidate.mkdir(parents=True, exist_ok=True)
+
+    seen: set[str] = set()
+
+    def copy_checked(relative: str, source: Path, expected_hash: str) -> None:
+        key = os.path.normcase(relative.replace("\\", "/"))
+        if key in seen:
+            raise OrchestrationError(
+                "VERIFY_PATH_COLLISION",
+                f"Kolize kandidátní cesty: {relative}",
+            )
+        seen.add(key)
+        try:
+            source = source.resolve(strict=True)
+            source.relative_to(run_root)
+        except (OSError, ValueError) as exc:
+            raise OrchestrationError(
+                "VERIFY_SOURCE_ESCAPE", relative
+            ) from exc
+        if not source.is_file() or sha256_file(str(source)) != expected_hash:
+            raise OrchestrationError(
+                "VERIFY_SOURCE_HASH", relative
+            )
+        destination = Path(
+            safe_join_under_root(str(candidate), relative)
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        if sha256_file(str(destination)) != expected_hash:
+            raise OrchestrationError(
+                "VERIFY_COPY_HASH", relative
+            )
+
+    if mode == "MODIFY":
+        from ..run_bundle import RunBundle
+
+        bundle = RunBundle(run_root)
+        baseline: list[tuple[str, Path, str]] = []
+        for artifact in bundle.artifacts():
+            if artifact.get("role") != "in_project_file":
+                continue
+            metadata = artifact.get("metadata") or {}
+            if metadata.get("policy_decision") not in {None, "approved"}:
+                continue
+            relative = str(
+                metadata.get("relative_path")
+                or artifact.get("reconstruction_role")
+                or ""
+            )
+            expected = str(
+                metadata.get("sha256")
+                or artifact.get("sha256")
+                or ""
+            )
+            bundle_path = str(artifact.get("path_in_bundle") or "")
+            if not relative or not expected or not bundle_path:
+                raise OrchestrationError(
+                    "VERIFY_BASELINE_INVALID",
+                    "Approved SourcePack evidence is incomplete.",
+                )
+            baseline.append(
+                (relative, run_root / bundle_path, expected)
+            )
+        for relative, source, expected in sorted(baseline):
+            copy_checked(relative, source, expected)
+
+    # Overlay staged targets. A changed path deliberately replaces its approved
+    # baseline copy, while a case-collision is rejected.
+    staged_seen: set[str] = set()
+    for row in staged:
+        if not isinstance(row, dict):
+            raise OrchestrationError("VERIFY_STAGING_INVALID", "Neplatný staged záznam.")
+        relative = str(row.get("path") or "")
+        staged_path = str(row.get("staged_path") or "")
+        expected = str(row.get("sha256") or "")
+        if not relative or not staged_path or not expected:
+            raise OrchestrationError("VERIFY_STAGING_INVALID", relative or "unknown")
+        key = os.path.normcase(relative.replace("\\", "/"))
+        if key in staged_seen:
+            raise OrchestrationError("VERIFY_PATH_COLLISION", relative)
+        staged_seen.add(key)
+        source = run_root / staged_path
+        try:
+            source = source.resolve(strict=True)
+            source.relative_to(run_root)
+        except (OSError, ValueError) as exc:
+            raise OrchestrationError("VERIFY_STAGING_ESCAPE", relative) from exc
+        if not source.is_file() or sha256_file(str(source)) != expected:
+            raise OrchestrationError("VERIFY_STAGING_HASH", relative)
+        destination = Path(safe_join_under_root(str(candidate), relative))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        if sha256_file(str(destination)) != expected:
+            raise OrchestrationError("VERIFY_COPY_HASH", relative)
+        seen.add(key)
+
+    return candidate
+
+
+def candidate_verification_report(
+    run_dir: str | Path,
+    staged: list[dict[str, Any]],
+    *,
+    mode: str,
+    target_id: str,
+    profile_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    candidate = build_verification_candidate(run_dir, staged, mode=mode)
+    report = technical_staging_report(
+        candidate,
+        target_id=target_id,
+        profile_ids=profile_ids,
+    )
+    report["candidate_mode"] = mode
+    report["candidate_root"] = candidate.relative_to(
+        Path(run_dir).resolve()
+    ).as_posix()
+    report["candidate_scope"] = (
+        "approved_source_pack_plus_staged"
+        if mode == "MODIFY"
+        else "staged_outputs"
+    )
+    return report
 
 
 def technical_staging_report(
