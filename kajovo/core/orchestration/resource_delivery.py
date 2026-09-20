@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -161,6 +162,10 @@ def validate_resource_plan(worker, graph: dict[str, Any]) -> None:
                 if generated is not None
                 else str((known or {}).get("filename") or "")
             )
+            if generated is not None and source not in set(target.get("dependencies", [])):
+                raise ContractError(
+                    f"{path}: plánovaný renderer source {source} není deklarovaná dependency."
+                )
             if Path(source_name).suffix.lower() != ".svg" or suffix != ".png":
                 raise ContractError(
                     f"{path}: podporovaný local_renderer je pouze SVG -> PNG "
@@ -232,6 +237,58 @@ def _render_svg_png(data: bytes) -> bytes:
     result = bytes(buffer.data())
     inspect_image(result)
     return result
+
+
+def _resource_image_response_name(path: str) -> str:
+    return "RESOURCE_IMAGE_RAW_" + hashlib.sha256(path.encode("utf-8")).hexdigest()[:24]
+
+
+def _decode_resource_image_response(
+    response: dict[str, Any],
+    *,
+    target_path: str,
+) -> bytes:
+    items = response.get("data")
+    if (
+        not isinstance(items, list)
+        or len(items) != 1
+        or not isinstance(items[0], dict)
+        or not items[0].get("b64_json")
+    ):
+        raise ContractError(
+            f"{target_path}: image_workflow nevrátil jeden úplný obraz."
+        )
+    try:
+        binary = base64.b64decode(items[0]["b64_json"], validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ContractError(
+            f"{target_path}: image_workflow vrátil poškozený base64 obraz."
+        ) from exc
+    info = inspect_image(binary, IMAGE_MODEL)
+    expected = _SUPPORTED_IMAGE_SUFFIXES[Path(target_path).suffix.lower()]
+    actual = str(info.get("format") or "").lower()
+    aliases = {"jpg": "jpeg"}
+    if aliases.get(actual, actual) != aliases.get(expected, expected):
+        raise ContractError(
+            f"{target_path}: provider vrátil {actual or 'unknown'} místo {expected}."
+        )
+    return binary
+
+
+def _load_saved_resource_image(worker, path: str) -> dict[str, Any] | None:
+    saved = worker.log.find_json("responses", _resource_image_response_name(path))
+    if not saved:
+        return None
+    try:
+        payload = json.loads(Path(saved).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise ContractError(
+            f"{path}: uložená provider odpověď je poškozená."
+        ) from exc
+    response = payload.get("response")
+    if not isinstance(response, dict):
+        raise ContractError(f"{path}: uložená provider odpověď chybí.")
+    return response
 
 
 def _image_prompt(worker, graph: dict[str, Any], target: dict[str, Any], task_id: str) -> str:
@@ -345,6 +402,12 @@ def _prepare_image_order(worker, path: str, body: dict[str, Any], projection: di
 def _generate_image(worker, client, graph, target, delivery) -> bytes:
     suffix = Path(target["path"]).suffix.lower()
     output_format = _SUPPORTED_IMAGE_SUFFIXES[suffix]
+    saved_response = _load_saved_resource_image(worker, target["path"])
+    if saved_response is not None:
+        return _decode_resource_image_response(
+            saved_response,
+            target_path=target["path"],
+        )
     body = {
         "model": IMAGE_MODEL,
         "prompt": _image_prompt(
@@ -395,6 +458,15 @@ def _generate_image(worker, client, graph, target, delivery) -> bytes:
         )
     )
     repo.mark_submitted(order.attempt_id, provider_id, unknown=False)
+    worker.log.save_json(
+        "responses",
+        _resource_image_response_name(target["path"]),
+        {
+            "provider_id": provider_id,
+            "target_path": target["path"],
+            "response": response,
+        },
+    )
     repo.record_usage(
         order.attempt_id,
         provider="openai-image",
@@ -406,23 +478,11 @@ def _generate_image(worker, client, graph, target, delivery) -> bytes:
         ),
         raw_response_ref="image-response:" + provider_id,
     )
-    items = response.get("data")
-    if (
-        not isinstance(items, list)
-        or len(items) != 1
-        or not isinstance(items[0], dict)
-        or not items[0].get("b64_json")
-    ):
-        raise ContractError(
-            f"{target['path']}: image_workflow nevrátil jeden úplný obraz."
-        )
-    try:
-        binary = base64.b64decode(items[0]["b64_json"], validate=True)
-    except (ValueError, TypeError) as exc:
-        raise ContractError(
-            f"{target['path']}: image_workflow vrátil poškozený base64 obraz."
-        ) from exc
-    inspect_image(binary, IMAGE_MODEL)
+    binary = _decode_resource_image_response(
+        response,
+        target_path=target["path"],
+    )
+    items = response["data"]
     evidence = dict(response)
     evidence["data"] = [
         {
