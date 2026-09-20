@@ -40,8 +40,8 @@ def _gen_file_chunks(
     model_override: str | None = None,
 ) -> tuple[str, str]:
     """Vytvoří jeden úplný soubor; technické dělení výstupu model neřídí."""
-    from ..context_limits import checked_measurement, configure_file_request
     from ..context_compiler import ContextCompiler, canonical
+    from ..context_limits import checked_measurement, configure_file_request
 
     if not getattr(self, "_delivery_snapshot", None):
         raise ContractError("Souborová generace vyžaduje úplnou kanonickou přípravu FileContext.")
