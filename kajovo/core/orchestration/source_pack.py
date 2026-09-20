@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
@@ -118,7 +119,16 @@ def freeze_sources(inputs: Sequence[ApprovedInput], store=None) -> SourcePack:
             raise OrchestrationError("SOURCE_KIND", f"Neznámý druh zdroje: {item.kind}")
         digest = hashlib.sha256(item.data).hexdigest()
         segments: tuple[SourceSegment, ...] = ()
-        if item.media_type.startswith("text/") or item.kind == "user_text":
+        textual = item.kind == "user_text" or item.media_type.startswith("text/")
+        if not textual and item.kind != "image" and b"\x00" not in item.data:
+            try:
+                decoded = item.data.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                decoded = ""
+            if decoded:
+                printable = sum(ch.isprintable() or ch in "\r\n\t" for ch in decoded)
+                textual = printable / max(1, len(decoded)) >= 0.85
+        if textual:
             segments = segment_text_bytes(
                 item.data,
                 prefix=f"SEG-{index:04d}",
@@ -311,23 +321,58 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
             policy.allow_globs_in,
             allow_sensitive=policy.allow_upload_sensitive,
         )
+        rejected: list[dict] = []
+        approved: list[dict] = []
+        is_junction = getattr(os.path, "isjunction", lambda value: False)
         for item in items:
-            path = Path(item.abs_path)
-            if not path.is_file() or path.is_symlink():
+            if not item.uploadable:
+                rejected.append({
+                    "path": item.rel_path,
+                    "size": item.size,
+                    "reason": item.reason,
+                    "sensitive": bool(item.sensitive),
+                })
                 continue
-            before = path.stat()
-            data = path.read_bytes()
-            after = path.stat()
-            if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+            path = Path(item.abs_path)
+            try:
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(root_path)
+            except (OSError, ValueError) as exc:
+                raise OrchestrationError(
+                    "SOURCE_PATH_ESCAPE",
+                    f"Schválený zdroj uniká z kořene projektu: {item.rel_path}",
+                ) from exc
+            if path.is_symlink() or is_junction(str(path)) or not resolved.is_file():
+                raise OrchestrationError(
+                    "SOURCE_PATH_UNSAFE",
+                    f"Schválený zdroj změnil typ nebo je odkaz: {item.rel_path}",
+                )
+            if not item.sha256:
+                raise OrchestrationError(
+                    "SOURCE_APPROVAL_HASH_MISSING",
+                    f"Schválený zdroj nemá hash politiky: {item.rel_path}",
+                )
+            before = resolved.stat()
+            if before.st_size != item.size:
+                raise OrchestrationError(
+                    "SOURCE_CHANGED_DURING_FREEZE",
+                    f"Velikost zdroje se po schválení změnila: {item.rel_path}",
+                )
+            data = resolved.read_bytes()
+            after = resolved.stat()
+            if (
+                before.st_size != after.st_size
+                or before.st_mtime_ns != after.st_mtime_ns
+            ):
                 raise OrchestrationError(
                     "SOURCE_CHANGED_DURING_FREEZE",
                     f"Zdroj se změnil během zmrazení: {item.rel_path}",
                 )
             digest = hashlib.sha256(data).hexdigest()
-            if item.sha256 and item.sha256 != digest:
+            if item.sha256 != digest:
                 raise OrchestrationError(
                     "SOURCE_CHANGED_DURING_FREEZE",
-                    f"Hash zdroje se změnil během zmrazení: {item.rel_path}",
+                    f"Hash zdroje se po schválení změnil: {item.rel_path}",
                 )
             media = mimetypes.guess_type(item.rel_path)[0] or "application/octet-stream"
             source_id = f"SRC-PROJECT-{len(inputs):05d}"
@@ -341,21 +386,35 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
                     item.rel_path,
                 )
             )
-            try:
-                log.bundle.archive_artifact(
-                    path,
-                    role="in_project_file",
-                    kind="source_pack_input",
-                    reconstruction_role=item.rel_path,
-                    metadata={
-                        "source_id": source_id,
-                        "relative_path": item.rel_path,
-                        "sha256": digest,
-                        "media_type": media,
-                    },
-                )
-            except (OSError, ValueError):
-                raise
+            log.bundle.archive_artifact(
+                resolved,
+                role="in_project_file",
+                kind="source_pack_input",
+                reconstruction_role=item.rel_path,
+                metadata={
+                    "source_id": source_id,
+                    "relative_path": item.rel_path,
+                    "sha256": digest,
+                    "media_type": media,
+                    "policy_decision": "approved",
+                },
+            )
+            approved.append({
+                "path": item.rel_path,
+                "size": len(data),
+                "sha256": digest,
+                "media_type": media,
+            })
+        log.save_json(
+            "manifests",
+            "source_policy_v1",
+            {
+                "version": 1,
+                "root_name": root_path.name,
+                "approved": approved,
+                "rejected": rejected,
+            },
+        )
     pack = freeze_sources(inputs)
     log.save_json("manifests", "source_pack_v1", pack.to_dict())
     log.update_state({"source_pack": pack.to_dict(), "source_pack_hash": pack.hash})
@@ -384,6 +443,8 @@ def source_context(log, pack: SourcePack) -> dict:
 
     segments: list[dict] = []
     image_slots: list[dict] = []
+    attachments: list[dict] = []
+    provider_inputs: list[dict] = []
     root = Path(log.paths.run_dir).resolve()
     for source in pack.sources:
         artifact = by_source.get(source.id)
@@ -403,6 +464,13 @@ def source_context(log, pack: SourcePack) -> dict:
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != source.sha256:
             raise OrchestrationError("SOURCE_HASH_MISMATCH", source.id)
+        metadata = artifact.get("metadata") or {}
+        filename = str(
+            metadata.get("filename")
+            or metadata.get("relative_path")
+            or artifact.get("reconstruction_role")
+            or source.id
+        )
         if source.segments:
             for segment in source.segments:
                 chunk = data[segment.start_byte:segment.end_byte]
@@ -416,10 +484,30 @@ def source_context(log, pack: SourcePack) -> dict:
                     "sha256": segment.sha256,
                     "text": chunk.decode("utf-8", errors="strict"),
                 })
-        elif source.media_type.startswith("image/"):
+            continue
+        descriptor = {
+            "source_id": source.id,
+            "kind": source.kind,
+            "filename": filename,
+            "media_type": source.media_type,
+            "sha256": source.sha256,
+            "byte_length": source.byte_length,
+        }
+        attachments.append(descriptor)
+        if source.media_type.startswith("image/"):
             image_slots.append({
                 "slot_id": source.id,
                 "role": "source_image",
                 "asset_hash": source.sha256,
             })
-    return {"segments": segments, "image_slots": image_slots}
+        provider_inputs.append({
+            **descriptor,
+            "path_in_bundle": path_in_bundle,
+            "provider_file_id": str(metadata.get("provider_file_id") or ""),
+        })
+    return {
+        "segments": segments,
+        "image_slots": image_slots,
+        "attachments": attachments,
+        "_provider_inputs": provider_inputs,
+    }
