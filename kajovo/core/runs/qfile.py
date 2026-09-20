@@ -212,6 +212,9 @@ def _run_qfile(
     target = safe_join_under_root(self.cfg.out_dir, target_path)
     if Path(target).is_file():
         expected_target_hash = sha256_file(target)
+    self._delivery_expected_target_hashes = {
+        target_path: expected_target_hash
+    }
     projection = {
         "plan": plan,
         "request": prompt,
