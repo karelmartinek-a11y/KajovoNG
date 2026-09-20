@@ -22,6 +22,10 @@ from ..structured_output import (
     text_format,
 )
 from ..utils import ensure_dir, safe_join_under_root, sha256_file, ts_code
+from ..orchestration.source_pack import (
+    project_binary_asset_candidate,
+    validate_project_binary_asset,
+)
 from .observability import record_event
 from .polling import VectorStorePollingContext, wait_vector_store_files
 
@@ -246,27 +250,30 @@ def _approved_project_items(self: RunContext, root: str):
         if not rel or not expected or not bundle_rel:
             raise ContractError("SOURCE_PACK obsahuje neúplný schválený záznam.")
 
-        if decision and decision != "approved":
+        if decision and decision not in {"approved", "approved_asset"}:
             continue
-        if decision != "approved":
+        if decision not in {"approved", "approved_asset"}:
             current_policy = legacy_policy_item(rel)
             if current_policy is None:
                 raise ContractError(
                     f"Starý SourcePack nemá doložitelné schválení zdroje: {rel}"
                 )
-            if not current_policy.uploadable:
+            binary_asset = project_binary_asset_candidate(current_policy)
+            if not current_policy.uploadable and not binary_asset:
                 raise ContractError(
                     f"Starý SourcePack nelze znovu použít: {rel} "
                     f"je nyní odmítnut politikou ({current_policy.reason})."
                 )
+            current_sha = sha256_file(str(Path(current_policy.abs_path)))
             if (
-                not current_policy.sha256
-                or current_policy.sha256 != expected
+                current_sha != expected
                 or current_policy.size != int(metadata.get("size") or current_policy.size)
             ):
                 raise ContractError(
                     f"Starý SourcePack nelze znovu schválit se stejným obsahem: {rel}"
                 )
+            if binary_asset:
+                validate_project_binary_asset(Path(current_policy.abs_path).read_bytes())
             legacy_reapproved.append(
                 {
                     "path": rel,
@@ -298,7 +305,7 @@ def _approved_project_items(self: RunContext, root: str):
             uploadable=True,
             reason=(
                 "approved_source_pack"
-                if decision == "approved"
+                if decision in {"approved", "approved_asset"}
                 else "legacy_policy_reapproved"
             ),
             sensitive=False,
