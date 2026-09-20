@@ -461,7 +461,7 @@ def build_verification_candidate(
                 continue
             metadata = artifact.get("metadata") or {}
             decision = str(metadata.get("policy_decision") or "")
-            if decision and decision != "approved":
+            if decision and decision not in {"approved", "approved_asset"}:
                 continue
             relative = str(
                 metadata.get("relative_path")
@@ -473,7 +473,10 @@ def build_verification_candidate(
                 or artifact.get("sha256")
                 or ""
             )
-            if decision != "approved" and legacy_reapproved.get(relative) != expected:
+            if (
+                decision not in {"approved", "approved_asset"}
+                and legacy_reapproved.get(relative) != expected
+            ):
                 raise OrchestrationError(
                     "VERIFY_BASELINE_UNAPPROVED",
                     f"Legacy SourcePack nemá aktuální policy reapproval: {relative}",
