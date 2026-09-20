@@ -289,3 +289,112 @@ def test_comic_panel_pending_resume_reuses_operation(tmp_path, monkeypatch):
     assert Service.panel_starts_total == 1
     assert Service.panel_runs_total == 2
     assert result["status"] == "technical_pass_human_pending"
+
+
+def _write_generate_state(tmp_path: Path, case: str, *, status: str, artifact_name: str | None = None, batch_id: str = "") -> Path:
+    run_dir = live_acceptance.acceptance_run_dir(tmp_path, case)
+    run_dir.mkdir(parents=True)
+    if artifact_name:
+        artifact = run_dir / "staging" / "candidate" / "generated" / artifact_name
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text(
+            "def answer():\n    return 42\n" if artifact_name == "answer.py" else "def batch_answer():\n    return 7\n",
+            encoding="utf-8",
+        )
+    state = {"status": status}
+    if batch_id:
+        state["batch_id"] = batch_id
+    (run_dir / "run_state.json").write_text(json.dumps(state), encoding="utf-8")
+    return run_dir
+
+
+def test_generate_live_completed_rerun_has_zero_new_paid_submits(tmp_path, monkeypatch):
+    _write_generate_state(tmp_path, "generate-live", status="files_complete_unverified", artifact_name="answer.py")
+    calls = {"executor": 0}
+    monkeypatch.setattr(live_acceptance, "_run_executor", lambda *args: calls.__setitem__("executor", calls["executor"] + 1))
+    settings = SimpleNamespace(log_dir=str(tmp_path / "_runtime" / "LOG"))
+    budget = live_acceptance.Budget(1.0)
+    first = live_acceptance.run_generate("generate-live", tmp_path, object(), "key", settings, budget, "sha", False)
+    second = live_acceptance.run_generate("generate-live", tmp_path, object(), "key", settings, budget, "sha", False)
+    assert first["artifact_sha256"] == second["artifact_sha256"]
+    assert calls["executor"] == 0
+    assert live_acceptance.case_needs_new_submit(tmp_path, "generate-live") is False
+
+
+@pytest.mark.parametrize("status", ["response_pending", "submission_unknown"])
+def test_generate_live_unresolved_rerun_never_creates_second_response(tmp_path, monkeypatch, status):
+    _write_generate_state(tmp_path, "generate-live", status=status)
+    calls = {"executor": 0}
+    monkeypatch.setattr(live_acceptance, "_run_executor", lambda *args: calls.__setitem__("executor", calls["executor"] + 1))
+    settings = SimpleNamespace(log_dir=str(tmp_path / "_runtime" / "LOG"))
+    with pytest.raises(live_acceptance.RemotePending):
+        live_acceptance.run_generate("generate-live", tmp_path, object(), "key", settings, live_acceptance.Budget(1.0), "sha", False)
+    with pytest.raises(live_acceptance.RemotePending):
+        live_acceptance.run_generate("generate-live", tmp_path, object(), "key", settings, live_acceptance.Budget(1.0), "sha", False)
+    assert calls["executor"] == 0
+
+
+def test_generate_batch_completed_rerun_never_creates_second_batch(tmp_path, monkeypatch):
+    _write_generate_state(tmp_path, "generate-batch", status="completed", artifact_name="batch_answer.py", batch_id="batch-1")
+    calls = {"executor": 0}
+    monkeypatch.setattr(live_acceptance, "_run_executor", lambda *args: calls.__setitem__("executor", calls["executor"] + 1))
+    monkeypatch.setattr("kajovo.core.batch_completion.complete_saved_batch", lambda *args: (_ for _ in ()).throw(AssertionError("batch must not be polled after import")))
+    settings = SimpleNamespace(log_dir=str(tmp_path / "_runtime" / "LOG"))
+    result = live_acceptance.run_generate("generate-batch", tmp_path, object(), "key", settings, live_acceptance.Budget(1.0), "sha", True)
+    again = live_acceptance.run_generate("generate-batch", tmp_path, object(), "key", settings, live_acceptance.Budget(1.0), "sha", True)
+    assert result["batch_ids"] == again["batch_ids"] == ["batch-1"]
+    assert calls["executor"] == 0
+
+
+def test_workspace_budget_rehydrates_prior_usage_for_selected_case(tmp_path):
+    live_acceptance.ensure_workspace(tmp_path, "sha")
+    evidence = live_acceptance.acceptance_run_dir(tmp_path, "generate-live") / "responses"
+    evidence.mkdir(parents=True)
+    (evidence / "usage.json").write_text(json.dumps({
+        "response_id": "response-1", "model": live_acceptance.MODEL,
+        "usage": {"input_tokens": 2_000_000, "output_tokens": 0},
+    }), encoding="utf-8")
+    budget = live_acceptance.rehydrate_budget(tmp_path, 1.0, "sha")
+    assert budget.cost == pytest.approx(0.8)
+    with pytest.raises(live_acceptance.Blocked, match="BLOCKED_BUDGET"):
+        budget.before(known_max=0.5, label="comic-panels")
+
+
+def test_pending_liability_is_rehydrated_not_zero(tmp_path):
+    live_acceptance.ensure_workspace(tmp_path, "sha")
+    checkpoint = tmp_path / "photo-batch" / "acceptance_state.json"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text(json.dumps({"case": "photo-batch", "status": "batch_pending", "liability_usd": 0.4}), encoding="utf-8")
+    budget = live_acceptance.rehydrate_budget(tmp_path, 1.0, "sha")
+    assert budget.committed_cost == pytest.approx(0.4)
+    with pytest.raises(live_acceptance.Blocked, match="BLOCKED_BUDGET"):
+        budget.before(known_max=0.61, label="comic-panels")
+
+
+def test_generate_run_cost_ceiling_is_remaining_budget(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(live_acceptance, "make_run_config", lambda **kwargs: captured.update(kwargs) or object())
+    assert live_acceptance.make_run_config(batch=False, prompt="x", out=tmp_path, max_cost_microusd=123_456, max_paid_requests=2) is not None
+    assert 123_456 == captured["max_cost_microusd"]
+    assert captured["max_paid_requests"] == 2
+
+
+def test_image_unknown_upper_bound_blocks_before_submit():
+    budget = live_acceptance.Budget(1.0)
+    with pytest.raises(live_acceptance.Blocked, match="BLOCKED_BUDGET_MODEL"):
+        budget.before(known_max=None, label="photo-batch")
+
+
+def test_existing_pending_image_can_resume_without_new_upper_bound(tmp_path):
+    checkpoint = tmp_path / "photo-batch" / "acceptance_state.json"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text(json.dumps({"case": "photo-batch", "status": "batch_pending", "job_id": "job-1"}), encoding="utf-8")
+    assert live_acceptance.case_needs_new_submit(tmp_path, "photo-batch") is False
+
+
+def test_workspace_authorization_mismatch_blocks(tmp_path):
+    (tmp_path / "acceptance_state.json").write_text(json.dumps({
+        "schema_version": 1, "authorization": "wrong", "authorization_ceiling_usd": 1.0,
+    }), encoding="utf-8")
+    with pytest.raises(live_acceptance.Blocked, match="BLOCKED_CHECKPOINT_MISMATCH"):
+        live_acceptance.ensure_workspace(tmp_path, "sha")
