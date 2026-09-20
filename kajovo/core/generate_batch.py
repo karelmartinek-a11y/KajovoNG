@@ -1295,7 +1295,10 @@ def _process_saved_batch_v3(
     """Import one V3 wave into immutable staging and advance the DAG."""
     from .orchestration.batch_manifest import transition as transition_batch_manifest
     from .orchestration.repository import OrchestrationRepository
-    from .orchestration.verification import technical_staging_report
+    from .orchestration.verification import (
+        candidate_verification_report,
+        technical_staging_report,
+    )
     from .orchestration.work_order import work_order_from_mapping
 
     run_root = Path(run_dir).resolve()
@@ -1433,11 +1436,43 @@ def _process_saved_batch_v3(
         for row in state.get("staged_files", [])
         if isinstance(row, dict) and row.get("path")
     }
+    state["generated_hashes"] = {
+        path: row["sha256"] for path, row in merged.items()
+    }
+    aggregate_verification = candidate_verification_report(
+        run_root,
+        state.get("staged_files", []),
+        mode=str(manifest["mode"]),
+        target_id=f"{Path(run_dir).name}:batch-candidate",
+        profile_ids=list(
+            (state.get("run_config_v2") or {}).get(
+                "verification_profile_ids"
+            )
+            or []
+        ),
+    )
+    state.setdefault("verification_reports", {})[
+        f"{batch_id}:aggregate"
+    ] = aggregate_verification
+    state["verification_evidence"] = aggregate_verification
+    aggregate_path = (
+        run_root / "staging" / "verification_candidate"
+        / "verification.json"
+    )
+    atomic_write_text(
+        str(aggregate_path),
+        json.dumps(
+            aggregate_verification,
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+    )
 
     result["published"] = False
     result["written"] = []
-    result["staged_files"] = staged
-    result["verification"] = verification
+    result["staged_files"] = state.get("staged_files", [])
+    result["verification"] = aggregate_verification
     result["dry_run"] = bool(manifest.get("dry_run"))
     result["usage"] = batch_usage
 
