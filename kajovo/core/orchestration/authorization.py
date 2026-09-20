@@ -80,6 +80,58 @@ class TargetedExecutionAuthorization:
         return value
 
 
+def validate_execution_authorization(
+    authorization: dict[str, Any],
+    *,
+    run_id: str,
+    run_config: dict[str, Any],
+    scope_hash: str,
+    require_repair: bool = False,
+) -> ExecutionAuthorization:
+    """Validate the frozen root Start authorization without extending its scope."""
+    if not isinstance(authorization, dict):
+        raise ValueError("execution_authorization missing")
+    expected = create_execution_authorization(
+        run_id,
+        run_config,
+        scope_hash,
+    )
+    stable = expected.to_dict()
+    for key in (
+        "version",
+        "approval_id",
+        "run_id",
+        "scope_hash",
+        "model_bindings_hash",
+        "policy_hash",
+        "network_allowlist",
+        "repair_allowed",
+    ):
+        if authorization.get(key) != stable[key]:
+            raise ValueError(f"execution_authorization mismatch: {key}")
+    try:
+        expires = datetime.fromisoformat(str(authorization["expires_at"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("execution_authorization expiry invalid") from exc
+    if expires.tzinfo is None:
+        raise ValueError("execution_authorization expiry must be timezone-aware")
+    if expires <= datetime.now(timezone.utc):
+        raise ValueError("execution_authorization expired")
+    if require_repair and authorization.get("repair_allowed") is not True:
+        raise ValueError("execution_authorization does not allow repair")
+    return ExecutionAuthorization(
+        version=int(authorization["version"]),
+        approval_id=str(authorization["approval_id"]),
+        run_id=str(authorization["run_id"]),
+        scope_hash=str(authorization["scope_hash"]),
+        model_bindings_hash=str(authorization["model_bindings_hash"]),
+        policy_hash=str(authorization["policy_hash"]),
+        network_allowlist=tuple(authorization["network_allowlist"]),
+        expires_at=str(authorization["expires_at"]),
+        repair_allowed=bool(authorization["repair_allowed"]),
+    )
+
+
 def create_targeted_retry_authorization(
     run_id: str,
     scope_hash: str,
