@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from ..contracts import ContractError
 from ..image_runtime import inspect_image, validate_image_request
 from ..model_registry import model_spec
 from ..openai_transport import SubmissionOutcomeUnknown
-from ..utils import atomic_write_bytes, ensure_dir, safe_join_under_root, sha256_file
+from ..utils import ensure_dir, safe_join_under_root, sha256_file
 from .contracts import canonical_sha256
 from .repository import repository_for_logger
 from .work_order import freeze_order
@@ -29,6 +30,20 @@ _SUPPORTED_IMAGE_SUFFIXES = {
     ".jpeg": "jpeg",
     ".webp": "webp",
 }
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".kajovo_resource_", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
 
 
 def resource_delivery_index(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -444,7 +459,7 @@ def _stage_resource(worker, path: str, data: bytes, producer: str) -> dict[str, 
                 f"{path}: immutable staging již obsahuje jiný resource."
             )
     else:
-        atomic_write_bytes(str(destination), data)
+        _atomic_write_bytes(destination, data)
     if sha256_file(str(destination)) != digest:
         raise ContractError(f"{path}: staged resource změnil hash.")
     artifact = worker.log.bundle.archive_artifact(
