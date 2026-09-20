@@ -1136,6 +1136,22 @@ def _submit_v3_followup_wave(
         ),
     )
     next_manifest["dry_run"] = bool(source_manifest.get("dry_run"))
+    next_manifest["resource_completed_paths"] = list(
+        state.get("resource_completed_paths")
+        or source_manifest.get("resource_completed_paths")
+        or []
+    )
+    next_manifest["resource_pending_paths"] = list(
+        state.get("resource_pending_paths")
+        or source_manifest.get("resource_pending_paths")
+        or []
+    )
+    next_manifest["resource_expected_target_hashes"] = dict(
+        source_manifest.get("resource_expected_target_hashes") or {}
+    )
+    next_manifest["excluded_scope"] = list(
+        source_manifest.get("excluded_scope") or []
+    )
     next_manifest["source_manifest_hash"] = digest(source_manifest)
     repo, orders = _prepare_v3_followup(run_dir, state, next_manifest)
     data = encode_requests(next_manifest)
@@ -1273,6 +1289,7 @@ def _process_saved_batch_v3(
     batch,
     raw_files,
     batch_usage,
+    settings,
     progress=None,
 ):
     """Import one V3 wave into immutable staging and advance the DAG."""
@@ -1402,6 +1419,21 @@ def _process_saved_batch_v3(
     if manifest.get("dry_run"):
         state["dry_run"] = True
 
+    # Persist imported text bytes before any newly-ready image/resource submit.
+    atomic_write_text(
+        str(run_root / "run_state.json"),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+    from .orchestration.resource_delivery import advance_batch_resources
+    state = advance_batch_resources(
+        client, run_dir, state, manifest, settings
+    )
+    merged = {
+        str(row["path"]): row
+        for row in state.get("staged_files", [])
+        if isinstance(row, dict) and row.get("path")
+    }
+
     result["published"] = False
     result["written"] = []
     result["staged_files"] = staged
@@ -1474,7 +1506,23 @@ def _process_saved_batch_v3(
         for row in (state.get("generate_batches") or {}).values()
         if isinstance(row, dict)
     )
-    if manifest.get("deferred_paths") and not submitted_followup:
+    graph_for_ready = manifest["snapshot"]["structure"]
+    from .orchestration.waves import build_execution_dag
+    dag_for_ready = build_execution_dag(graph_for_ready)
+    completed_for_ready = (
+        set(manifest.get("completed_dependency_targets") or [])
+        | set(verified_artifacts)
+        | set(state.get("resource_completed_paths") or [])
+    )
+    ready_deferred = {
+        path
+        for path in (manifest.get("deferred_paths") or [])
+        if (
+            set(dag_for_ready.content_dependencies.get(path, ()))
+            | set(dag_for_ready.contract_dependencies.get(path, ()))
+        ) <= completed_for_ready
+    }
+    if ready_deferred and not submitted_followup:
         atomic_write_text(
             str(run_root / "run_state.json"),
             json.dumps(state, ensure_ascii=False, indent=2),
@@ -1522,8 +1570,18 @@ def _process_saved_batch_v3(
         )
         not in {"files_complete_unverified", "partial", "dry_run"}
     }
+    resource_pending = list(state.get("resource_pending_paths") or [])
     if pending:
         state["status"] = "batch_pending"
+    elif resource_pending:
+        manual = any(
+            (state.get("resource_states") or {}).get(path, {}).get("status")
+            == "waiting_manual"
+            for path in resource_pending
+        )
+        state["status"] = (
+            "waiting_manual_resource" if manual else "partial"
+        )
     elif missing:
         state["status"] = "partial"
     elif manifest.get("dry_run"):
@@ -1599,6 +1657,7 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
             batch,
             raw_files,
             batch_usage,
+            settings,
             progress=progress,
         )
     target = state.get("out_dir")
