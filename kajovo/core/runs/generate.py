@@ -292,93 +292,218 @@ def _run_v3_generate_production(
     }
 
 
-def _run_a_generate(self: RunContext, client: OpenAIClient, diag_file_ids: list[str], base_prev_id: str | None) -> dict[str, Any]:
-    # ReRun se známou strukturou přeskočí A1 a A2.
+def _run_a_generate(
+    self: RunContext,
+    client: OpenAIClient,
+    diag_file_ids: list[str],
+    base_prev_id: str | None,
+) -> dict[str, Any]:
     plan: dict[str, Any] = {}
-    struct: dict[str, Any]
     a3_model = self._generate_model("A3")
-    files: list[dict[str, Any]] = []
-    skipped_a3_deliverables: list[dict[str, Any]] = []
-    auto_skip_image_exts = {".png", ".jpg", ".jpeg"}
+
+    # Legacy read path: it can replay the historical text-only structure but
+    # must not pretend to understand the new resource producer contract.
     if self.cfg.resume_files and not self.cfg.preparation_snapshot:
-        return _run_v3_generate_production(
-            self,
-            client,
-            diag_file_ids,
-            plan,
-            struct,
-            resp2_id,
-            a3_model,
+        if self.cfg.send_as_c:
+            raise ContractError(
+                "Starý ReRun neobsahuje společnou V3 specifikaci. "
+                "Opakujte dávku v panelu BATCH nebo spusťte novou přípravu."
+            )
+        self._set(
+            10,
+            0,
+            "ReRun: používám uloženou legacy strukturu A2; A1/A2 se neopakují.",
+            stage="ReRun",
         )
-
-    from ..context_compiler import ContextCompiler
-    compiler = ContextCompiler(self._delivery_snapshot)
-    wave_rank = {
-        path: wave_index
-        for wave_index, wave in enumerate(compiler.graph.get("waves") or [])
-        for path in wave
-    }
-    files.sort(key=lambda row: (wave_rank.get(row["path"], 10**9), row["path"]))
-    self._delivery_verified_artifacts = {}
-    self._delivery_expected_target_hashes = {}
-    for row in files:
-        target = safe_join_under_root(self.cfg.out_dir, row["path"])
-        self._delivery_expected_target_hashes[row["path"]] = (
-            sha256_file(target) if os.path.isfile(target) else None
+        struct: dict[str, Any] = {
+            "contract": "A2_STRUCTURE",
+            "files": self.cfg.resume_files,
+        }
+        resp2_id = self.cfg.resume_prev_id or self.cfg.response_id or None
+        self.log.save_json(
+            "manifests",
+            f"resume_structure_{ts_code()}",
+            {
+                "resume_files": self.cfg.resume_files,
+                "resume_prev_id": resp2_id,
+                "legacy_text_only": True,
+            },
         )
+        if self.cfg.stop_after_plan:
+            return {
+                "mode": "GENERATE",
+                "plan": plan,
+                "structure": struct,
+                "status": "plan_ready",
+                "checkpoint": "plan_ready",
+                "response_id": resp2_id,
+                "last_response_id": self._final_response_id or resp2_id,
+            }
 
-    total_files = len(files)
-    base_a3_prev_id = ""
-    out_files: list[dict[str, Any]] = []
-    for idx, f in enumerate(files, start=1):
-        self._check_stop()
-        path = f.get("path")
-        if not isinstance(path, str) or not path:
-            continue
-        self._progress_stage = "A3"
-        self.progress_event.emit(ProgressEvent("A3", completed=idx - 1, total=total_files, unit="souborů", detail=str(path)))
-        self._set(30 + int(45 * (idx - 1) / max(1, len(files))), 0, f"A3: generuji soubor {path} ({idx}/{total_files})")
-        content, _last_resp_id = self._gen_file_chunks(
-            client,
-            prev_id=base_a3_prev_id,
-            contract="A3_FILE",
-            path=path,
-            action=None,
-            diag_file_ids=diag_file_ids,
-            tools=self._fs_tools,
-            model_override=a3_model,
+        files_raw = list(struct.get("files") or [])
+        if not files_raw:
+            raise ContractError(
+                "GENERATE ReRun: uložená struktura neobsahuje žádný výstupní soubor."
+            )
+        validate_paths(files_raw)
+        files: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for row in files_raw:
+            path = str(row.get("path") or "")
+            if not path:
+                continue
+            suffix = os.path.splitext(path)[1].lower()
+            if path in (self.cfg.skip_paths or []) or suffix in (self.cfg.skip_exts or []):
+                skipped.append(
+                    {
+                        "path": path,
+                        "purpose": row.get("purpose", ""),
+                        "reason": "explicitně vynecháno uživatelem",
+                    }
+                )
+                continue
+            if row.get("kind") != "text":
+                skipped.append(
+                    {
+                        "path": path,
+                        "purpose": row.get("purpose", ""),
+                        "reason": (
+                            "legacy struktura nemá doložený resource producer; "
+                            "netextový cíl nelze bezpečně vyrobit"
+                        ),
+                    }
+                )
+                continue
+            files.append(row)
+
+        # Legacy FileContext is already frozen by recovery code when this path is
+        # allowed. Target state is nevertheless captured before the first A3 call.
+        self._delivery_expected_target_hashes = {}
+        for row in files:
+            target = safe_join_under_root(self.cfg.out_dir, row["path"])
+            self._delivery_expected_target_hashes[row["path"]] = (
+                sha256_file(target) if os.path.isfile(target) else None
+            )
+        self._delivery_verified_artifacts = {}
+
+        out_files: list[dict[str, Any]] = []
+        for index, row in enumerate(files, 1):
+            path = row["path"]
+            self._check_stop()
+            self.progress_event.emit(
+                ProgressEvent(
+                    "A3",
+                    completed=index - 1,
+                    total=len(files),
+                    unit="souborů",
+                    detail=path,
+                )
+            )
+            content_value, _response_id = self._gen_file_chunks(
+                client,
+                prev_id="",
+                contract="A3_FILE",
+                path=path,
+                action=None,
+                diag_file_ids=diag_file_ids,
+                tools=self._fs_tools,
+                model_override=a3_model,
+            )
+            out_files.append(
+                {
+                    "path": path,
+                    "content": content_value,
+                    "purpose": row.get("purpose", ""),
+                }
+            )
+
+        self._verify_completed_files()
+        saved_map = self._save_out_files(out_files)
+        missing_report = self._write_missing_files_report(skipped)
+        missing = [row["path"] for row in skipped]
+        return {
+            "mode": "GENERATE",
+            "plan": plan,
+            "structure": struct,
+            "saved": saved_map,
+            "status": "partial" if missing else "files_complete_unverified",
+            "no_changes": not out_files and not missing,
+            "response_id": resp2_id,
+            "last_response_id": self._final_response_id or resp2_id,
+            "missing_files_report": missing_report,
+            "missing_deliverables": missing,
+        }
+
+    a1_text = self.cfg.prompt or ""
+    if self.cfg.recovery_instruction:
+        a1_text += self._recovery_suffix()
+    a1_text = self._with_diag_text(
+        self._append_io_reference(
+            a1_text,
+            self._files_with_in_dir(
+                self.cfg.attached_file_ids + diag_file_ids
+            ),
         )
-        out_files.append({"path": path, "content": content, "purpose": f.get("purpose", "")})
-        self.subprogress.emit(int(idx * 100 / max(1, total_files)))
-        self.progress_event.emit(ProgressEvent("A3", completed=idx, total=total_files, unit="souborů", detail=str(path)))
+    )
+    note = self._in_dir_fallback_note()
+    if note:
+        a1_text += "\n\n" + note
+    input_files, input_images = self._build_input_attachments(
+        client, self._input_file_ids()
+    )
+    plan, struct, resp2_id = prepare_delivery(
+        self,
+        client,
+        "GENERATE",
+        base_prev_id,
+        a1_text,
+        input_files,
+        input_images,
+        self._fs_tools,
+    )
+    if self.cfg.stop_after_plan:
+        self.progress_event.emit(
+            ProgressEvent(
+                "A2Q" if self.cfg.maximum_quality else "A2",
+                detail="Ověřená příprava je hotová; A3 nebylo spuštěno.",
+            )
+        )
+        return {
+            "mode": "GENERATE",
+            "plan": plan,
+            "structure": struct,
+            "status": "plan_ready",
+            "checkpoint": "plan_ready",
+            "response_id": resp2_id,
+            "last_response_id": self._final_response_id or resp2_id,
+        }
 
-    self._verify_completed_files()
-    saved_map = self._save_out_files(out_files)
-    missing_report = self._write_missing_files_report(skipped_a3_deliverables)
-    missing_deliverables = [item.get("path") for item in skipped_a3_deliverables if item.get("path")]
-    no_changes = not out_files and not missing_deliverables
-    if missing_deliverables:
-        self.log.update_state({"missing_deliverables": missing_deliverables})
-    elif no_changes:
-        self.log.update_state({"no_changes": True, "written_files": []})
-    return {
-        "mode": "GENERATE",
-        "plan": plan,
-        "structure": struct,
-        "saved": saved_map,
-        "status": "partial" if missing_deliverables else "files_complete_unverified",
-        "no_changes": no_changes,
-        "response_id": resp2_id,
-        "last_response_id": self._final_response_id or resp2_id,
-        "missing_files_report": missing_report,
-        "missing_deliverables": missing_deliverables,
-    }
-
-# Odeslání souborových úloh po živé přípravě.
+    self.log.save_json(
+        "manifests",
+        f"resume_structure_{ts_code()}",
+        {
+            "resume_files": list((struct.get("spine") or {}).get("files") or []),
+            "resume_prev_id": resp2_id,
+        },
+    )
+    return _run_v3_generate_production(
+        self,
+        client,
+        diag_file_ids,
+        plan,
+        struct,
+        resp2_id,
+        a3_model,
+    )
 
 
 class GenerateExecutor:
     """Samostatné workflow GENERATE nad společnými službami běhu."""
 
     def execute(self, context: RunContext) -> dict[str, Any]:
-        return _run_a_generate(context, context.client, context.diag_file_ids, context.base_prev_id)
+        return _run_a_generate(
+            context,
+            context.client,
+            context.diag_file_ids,
+            context.base_prev_id,
+        )
