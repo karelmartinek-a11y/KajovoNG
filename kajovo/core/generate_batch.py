@@ -175,6 +175,7 @@ def _build_manifest_v3(
     run_config=None,
     expected_target_hashes=None,
     verified_artifacts=None,
+    approved_paths=None,
 ):
     """Build exactly one ready production wave from IMPLEMENTATION_GRAPH_V3."""
     import jsonschema
@@ -225,15 +226,29 @@ def _build_manifest_v3(
         for row in structure["spine"]["files"]
         if row["kind"] == "text" and row["action"] in production_actions
     }
-    snapshot["expected_target_hashes"] = {
-        path: expected_target_hashes.get(path) for path in sorted(production)
-    }
     compiler = ContextCompiler(snapshot)
-    requested = set(paths) if paths is not None else production
-    if not requested <= production:
+    requested = set(paths) if paths is not None else set(production)
+    approved_scope = (
+        set(approved_paths) if approved_paths is not None else set(requested)
+    )
+    if not requested <= production or not approved_scope <= production:
         raise ContractError(
-            f"BATCH výběr obsahuje neprodukční nebo neznámé cesty: {sorted(requested - production)}"
+            "BATCH výběr obsahuje neprodukční nebo neznámé cesty: "
+            + str(sorted((requested | approved_scope) - production))
         )
+    if not requested <= approved_scope:
+        raise ContractError(
+            "BATCH wave se pokouší rozšířit zmrazený schválený scope."
+        )
+    missing_expectations = approved_scope - expected_target_hashes.keys()
+    if missing_expectations:
+        raise ContractError(
+            "Schválený BATCH scope nemá původní stav cíle: "
+            + str(sorted(missing_expectations))
+        )
+    snapshot["expected_target_hashes"] = {
+        path: expected_target_hashes[path] for path in sorted(approved_scope)
+    }
 
     wave_index = {
         path: index
@@ -382,7 +397,7 @@ def _build_manifest_v3(
         work_orders.append({**order.to_dict(), "order_hash": order.order_hash})
 
     selected_set = set(selected_paths)
-    deferred = sorted(production - selected_set - verified_targets)
+    deferred = sorted(approved_scope - selected_set - verified_targets)
     manifest = {
         "version": 3,
         "graph_version": 3,
@@ -401,6 +416,8 @@ def _build_manifest_v3(
             },
         },
         "wave_paths": selected_paths,
+        "approved_paths": sorted(approved_scope),
+        "excluded_paths": sorted(production - approved_scope),
         "deferred_paths": deferred,
         "blocked_requested_paths": blocked_requested,
         "verified_dependency_artifacts": {
@@ -427,7 +444,7 @@ def _build_manifest_v3(
 def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=None, *,
                    requirements=None, maximum_quality=False, mode="GENERATE", originals=None,
                    recovery_instruction="", run_config=None, expected_target_hashes=None,
-                   verified_artifacts=None):
+                   verified_artifacts=None, approved_paths=None):
     if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
         return _build_manifest_v3(
             run_id,
@@ -445,6 +462,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
             run_config=run_config,
             expected_target_hashes=expected_target_hashes,
             verified_artifacts=verified_artifacts,
+            approved_paths=approved_paths,
         )
 
     from .requirements import apply_quality, stage_instructions, validate_traceability
@@ -1101,7 +1119,9 @@ def _submit_v3_followup_wave(
         run_config=cfg,
         expected_target_hashes=expected_target_hashes,
         verified_artifacts=verified_artifacts,
+        approved_paths=source_manifest.get("approved_paths") or deferred,
     )
+    next_manifest["dry_run"] = bool(source_manifest.get("dry_run"))
     next_manifest["source_manifest_hash"] = digest(source_manifest)
     repo, orders = _prepare_v3_followup(run_dir, state, next_manifest)
     data = encode_requests(next_manifest)
@@ -1440,7 +1460,7 @@ def _process_saved_batch_v3(
         for row in (state.get("generate_batches") or {}).values()
         if isinstance(row, dict)
     )
-    if manifest.get("deferred_paths") and not manifest.get("dry_run") and not submitted_followup:
+    if manifest.get("deferred_paths") and not submitted_followup:
         atomic_write_text(
             str(run_root / "run_state.json"),
             json.dumps(state, ensure_ascii=False, indent=2),
@@ -1464,11 +1484,14 @@ def _process_saved_batch_v3(
     production_actions = (
         {"generate"} if graph["mode"] == "GENERATE" else {"add", "modify"}
     )
-    expected_paths = {
-        row["path"]
-        for row in graph["spine"]["files"]
-        if row["kind"] == "text" and row["action"] in production_actions
-    }
+    expected_paths = set(
+        root_manifest.get("approved_paths")
+        or {
+            row["path"]
+            for row in graph["spine"]["files"]
+            if row["kind"] == "text" and row["action"] in production_actions
+        }
+    )
     staged_paths = set(merged)
     missing = sorted(expected_paths - staged_paths)
     result["missing"] = missing
@@ -1672,35 +1695,28 @@ def _repeat_v3_batch(
         raise ContractError(
             "Neznámý submit musí být dohledán před novým odesláním."
         )
-    from datetime import datetime, timezone
-    from .orchestration.authorization import create_execution_authorization
+    from .orchestration.authorization import create_targeted_retry_authorization
 
-    authorization = state.get("execution_authorization") or {}
-    config = state.get("run_config_v2") or {}
-    try:
-        expected = create_execution_authorization(
-            Path(run_dir).name, config, state["run_scope_hash"]
-        ).to_dict()
-        expires = datetime.fromisoformat(authorization["expires_at"])
-        authorized = (
-            authorization.get("repair_allowed") is True
-            and expires > datetime.now(timezone.utc)
-            and all(authorization.get(key) == value for key, value in expected.items() if key != "expires_at")
-            and all(order.get("approval_id") == authorization["approval_id"]
-                    for order in source["work_orders"].values())
+    approved = set(
+        source.get("approved_paths") or source.get("expected", {}).values()
+    )
+    if not selected <= approved:
+        raise ContractError(
+            "Ruční retry se pokouší rozšířit původní schválený scope."
         )
-    except (KeyError, TypeError, ValueError):
-        authorized = False
-    if not authorized:
-        raise ContractError("Oprava vyžaduje platnou explicitní autorizaci within_approval pro tento běh.")
+    manual_authorization = create_targeted_retry_authorization(
+        Path(run_dir).name,
+        str(state.get("run_scope_hash") or ""),
+        selected,
+        digest(source),
+    )
+    state.setdefault("manual_retry_authorizations", {})[
+        manual_authorization.approval_id
+    ] = manual_authorization.to_dict()
     staged_files = list(state.get("staged_files") or [])
     verified_artifacts = _v3_verified_artifacts(
         run_dir, source, staged_files
     )
-    if not selected <= set(verified_artifacts):
-        raise ContractError(
-            "Targeted repair vyžaduje existující validovaný staged artefakt."
-        )
 
     originals = {}
     bundle = RunBundle(Path(run_dir))
@@ -1734,6 +1750,7 @@ def _repeat_v3_batch(
         raise ContractError("Oprava nemá zmrazené původní hashe cílových souborů.")
     ui = dict(state.get("ui_state") or {})
     cfg = _v3_cfg_namespace(state)
+    cfg.execution_approval_id = manual_authorization.approval_id
     model = str(source["requests"][0]["body"]["model"])
     temperature = source["requests"][0]["body"].get("temperature")
     repair_instruction = str(feedback or "").strip() or (
@@ -1755,6 +1772,7 @@ def _repeat_v3_batch(
         run_config=cfg,
         expected_target_hashes=expected_target_hashes,
         verified_artifacts=verified_artifacts,
+        approved_paths=selected,
     )
     # A repair is terminal for exactly the explicitly selected targets; it must
     # not accidentally continue unrelated deferred tasks from the source batch.
