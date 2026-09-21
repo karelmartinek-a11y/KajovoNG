@@ -43,8 +43,8 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
-def parse_json_strict(text: str) -> dict[str, Any]:
-    """Přijme jediný objekt; nevyhledává JSON uvnitř prózy ani markdownu."""
+def parse_json_value_strict(text: str) -> Any:
+    """Přijme právě jednu JSON hodnotu bez duplicitních klíčů a non-finite čísel."""
     def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in items:
@@ -63,8 +63,14 @@ def parse_json_strict(text: str) -> dict[str, Any]:
     except OrchestrationError:
         raise
     except (ValueError, RecursionError) as exc:
-        raise OrchestrationError("INVALID_JSON", "Odpověď není úplný platný JSON.") from exc
+        raise OrchestrationError("INVALID_JSON", "Vstup není právě jedna úplná platná JSON hodnota.") from exc
+    canonical_bytes(parsed)
+    return parsed
+
+
+def parse_json_strict(text: str) -> dict[str, Any]:
+    """Přijme jediný objekt; nevyhledává JSON uvnitř prózy ani markdownu."""
+    parsed = parse_json_value_strict(text)
     if not isinstance(parsed, dict):
         raise OrchestrationError("ROOT_NOT_OBJECT", "Kořen JSON musí být objekt.")
-    canonical_bytes(parsed)
     return parsed
