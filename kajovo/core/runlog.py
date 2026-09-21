@@ -61,10 +61,13 @@ def json_artifact_path(
 
 def _read_json_dict(path: Path) -> Dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError, TypeError):
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         return {}
+    try:
+        return parse_json_strict(text)
+    except ContractError as exc:
+        raise ValueError(f"Nekanonický JSON evidence: {path}") from exc
 
 
 def _read_current_state(path: Path) -> Dict[str, Any]:
