@@ -31,10 +31,6 @@ def image_batch_submit_payload(
         "input_file_id": input_file_id,
         "endpoint": endpoint,
         "completion_window": "24h",
-        "output_expires_after": {
-            "anchor": "created_at",
-            "seconds": 2592000,
-        },
     }
 
 
@@ -478,12 +474,19 @@ class OpenAIClient:
         return self._req("POST", "/batches", json_body=body)
 
     def validate_batch_data(self, data):
+        from .orchestration.contracts import parse_json_strict
         from .structured_output import prepare_payload
 
         if not isinstance(data, bytes) or not data or len(data) > 200_000_000:
             raise ValueError("Neplatná velikost dávky.")
+        try:
+            text = data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Dávkový JSONL musí být platné UTF-8 bez náhrady znaků.") from exc
         rows = [
-            json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()
+            parse_json_strict(line)
+            for line in text.splitlines()
+            if line.strip()
         ]
         if not 1 <= len(rows) <= 50000:
             raise ValueError("Dávka vyžaduje 1 až 50000 požadavků.")
