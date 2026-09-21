@@ -148,13 +148,16 @@ def preflight_ids(state):
 
 def read_batch_statuses(log_dir):
     """Samostatný snímek serveru nesmí přepisovat stav souběžně běžícího pracovníka."""
-    try:
-        value = json.loads(
-            (Path(log_dir) / "batch_status.json").read_text(encoding="utf-8")
-        )
-        return {bid: record for bid, record in value.items() if isinstance(record, dict)}
-    except (OSError, ValueError, AttributeError):
+    path = Path(log_dir) / "batch_status.json"
+    if not path.is_file():
         return {}
+    try:
+        value = parse_json_strict(path.read_text(encoding="utf-8"))
+    except (OSError, ContractError) as exc:
+        raise ContractError("Batch status evidence obsahuje nekanonický JSON.") from exc
+    if any(not isinstance(bid, str) or not isinstance(record, dict) for bid, record in value.items()):
+        raise ContractError("Batch status evidence má neplatnou strukturu.")
+    return dict(value)
 
 
 def save_batch_statuses(log_dir, records):
@@ -169,7 +172,7 @@ def save_batch_statuses(log_dir, records):
             }
     atomic_write_text(
         str(Path(log_dir) / "batch_status.json"),
-        json.dumps(saved, ensure_ascii=False),
+        json.dumps(saved, ensure_ascii=False, allow_nan=False),
     )
 
 
