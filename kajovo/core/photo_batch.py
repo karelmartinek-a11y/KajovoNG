@@ -511,6 +511,7 @@ def _photo_work_order(job, rows):
             "task_id": "PHOTO_BATCH_SUBMIT",
             "stage": "PHOTO",
             "route": "image_batch",
+            "provider_endpoint": "/v1/batches",
             "target_id": job.job_id,
             "target_path": None,
             "expected_target_hash": None,
@@ -560,7 +561,7 @@ def _prepare_photo_submit(job, rows, log_dir):
     repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
         work_order_hash=persisted_hash,
-        endpoint="/v1/batches",
+        endpoint=order.provider_endpoint,
         request_hash=canonical_sha256(rows),
     )
     if job.input_file_id:
