@@ -11,6 +11,8 @@ import json
 import tempfile
 from pathlib import Path
 
+from .orchestration.contracts import parse_json_strict
+from .orchestration.errors import OrchestrationError
 from .utils import atomic_write_text, safe_join_under_root
 
 
@@ -241,8 +243,10 @@ class ProjectGit:
         meta_path = self._milestone_meta_path(name)
         if meta_path.is_file():
             try:
-                metadata = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
+                metadata = parse_json_strict(
+                    meta_path.read_text(encoding="utf-8")
+                )
+            except (OSError, OrchestrationError) as exc:
                 raise ValueError("Metadata milníku jsou poškozená.") from exc
             if (
                 metadata.get("version") != 2
