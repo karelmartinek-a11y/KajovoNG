@@ -649,7 +649,7 @@ def encode_requests(manifest):
         validate_response_payload(row["body"], batch=True if v3_graph else False)
         if row["method"] != "POST" or row["url"] != "/v1/responses" or row["body"].get("previous_response_id"):
             raise ContractError("Souborová úloha musí být samostatný požadavek Responses.")
-        context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
+        context = parse_json_strict(row["body"]["input"])
         if manifest.get("version") == 3:
             compiled = context.get("file_context", {})
             original_sources = {s["path"]: s["content"] for s in
@@ -790,7 +790,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
                 contents.pop(cid)
                 raise ContractError("Prázdný historický výsledek nemá výslovné oprávnění; vyžaduje posouzení.")
             if manifest.get("version") == 3:
-                context, _ = json.JSONDecoder().raw_decode(request_body["input"])
+                context = parse_json_strict(request_body["input"])
                 allow_empty = context["file_context"]["working_context"]["implementation_contract"]["allow_empty"]
                 if not payload["content"].strip() and not allow_empty:
                     contents.pop(cid)
