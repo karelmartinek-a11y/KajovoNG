@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .orchestration.contracts import canonical_bytes
+from .orchestration.contracts import canonical_bytes, parse_json_strict
 from .run_bundle import RunBundle, TERMINAL_STATUSES
 from .safe_config import persist_evidence, redact_evidence
 from .utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
@@ -65,6 +65,13 @@ def _read_json_dict(path: Path) -> Dict[str, Any]:
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError, TypeError):
         return {}
+
+
+def _read_current_state(path: Path) -> Dict[str, Any]:
+    value = parse_json_strict(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"Stav běhu není JSON objekt: {path}")
+    return value
 
 
 def _saved_entries(record: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -220,8 +227,7 @@ class RunLogger:
 
         run_dir = os.path.join(self.base_log_dir, run_id)
         if resume:
-            with open(os.path.join(run_dir, "run_state.json"), encoding="utf-8") as source:
-                state = json.load(source)
+            state = _read_current_state(Path(run_dir) / "run_state.json")
             resumable_response = (
                 state.get("response_transport") == "background"
                 and state.get("status") != "submission_unknown"
@@ -559,13 +565,11 @@ class RunLogger:
         patch = persist_evidence(patch)
         for key in STATE_ARTIFACTS & patch.keys():
             save_artifact(self.paths.run_dir, "state/" + key, patch[key])
-        state = {}
-        try:
-            if os.path.exists(self.state_path):
-                with open(self.state_path, "r", encoding="utf-8") as stream:
-                    state = json.load(stream)
-        except Exception:
-            state = {"status": "corrupt_state"}
+        state = (
+            _read_current_state(Path(self.state_path))
+            if os.path.exists(self.state_path)
+            else {}
+        )
         state.update(patch)
         # Archivace musí předcházet checkpointu, aby checkpoint mohl uvést
         # přesné kanonické ArtifactRecord závislosti.
@@ -589,13 +593,11 @@ class RunLogger:
             self.bundle.seal()
 
     def clear_state_keys(self, *keys: str) -> None:
-        state = {}
-        try:
-            if os.path.exists(self.state_path):
-                with open(self.state_path, "r", encoding="utf-8") as stream:
-                    state = json.load(stream)
-        except Exception:
-            state = {"status": "corrupt_state"}
+        state = (
+            _read_current_state(Path(self.state_path))
+            if os.path.exists(self.state_path)
+            else {}
+        )
         removed = {}
         for key in keys:
             if key in state:
