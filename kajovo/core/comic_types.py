@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import copy
-import json
 import math
 import re
 from dataclasses import dataclass
 
 from .structured_output import array, obj
+from .orchestration.contracts import canonical_bytes
 
 IMAGE_MODEL = "gpt-image-2.5-sunburst-2026-09-08"
 TEXT_MODEL = "gpt-6-astra"
@@ -87,7 +87,7 @@ class ComicError(ValueError):
 
 
 def canonical(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return canonical_bytes(value).decode("utf-8")
 
 
 def checked_text(value, label, maximum=30000, required=False):
