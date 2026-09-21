@@ -31,6 +31,7 @@ WORK_ORDER_V2_SCHEMA: dict[str, Any] = {
                 "image_batch",
             ],
         },
+        "provider_endpoint": {"type": "string"},
         "target_id": {"type": "string"},
         "target_path": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "expected_target_hash": {"anyOf": [{"type": "string"}, {"type": "null"}]},
@@ -53,6 +54,7 @@ WORK_ORDER_V2_SCHEMA: dict[str, Any] = {
         "task_id",
         "stage",
         "route",
+        "provider_endpoint",
         "target_id",
         "target_path",
         "expected_target_hash",
@@ -80,6 +82,7 @@ class WorkOrder:
     task_id: str
     stage: str
     route: str
+    provider_endpoint: str
     target_id: str
     target_path: str | None
     expected_target_hash: str | None
@@ -117,6 +120,7 @@ def validate_work_order_v2(value: dict[str, Any]) -> None:
         "step_id",
         "task_id",
         "stage",
+        "provider_endpoint",
         "target_id",
         "input_projection_hash",
         "contract_name",
@@ -146,6 +150,17 @@ def validate_work_order_v2(value: dict[str, Any]) -> None:
         raise ValueError("WORK_ORDER_V2: hash cíle bez cílové cesty.")
     if value["contract_name"] == "FILE_CONTENT_V1" and path is None:
         raise ValueError("WORK_ORDER_V2: souborový kontrakt vyžaduje cílovou cestu.")
+    allowed_endpoints = {
+        "local": {"local"},
+        "responses_live": {"/v1/responses"},
+        "responses_batch": {"/v1/batches"},
+        "image_live": {"/v1/images/edits", "/v1/images/generations"},
+        "image_batch": {"/v1/batches"},
+    }
+    if value["provider_endpoint"] not in allowed_endpoints[value["route"]]:
+        raise ValueError(
+            "WORK_ORDER_V2.provider_endpoint neodpovídá zvolené provider route."
+        )
     if type(value["attempt_no"]) is not int or value["attempt_id"] != attempt_identity(value["run_id"], value["task_id"], value["attempt_no"]):
         raise ValueError("WORK_ORDER_V2.attempt_id neodpovídá běhu, úloze a pokusu.")
 
@@ -160,9 +175,31 @@ def attempt_identity(run_id: str, task_id: str, attempt_no: int) -> str:
     )[:32]
 
 
+def _default_provider_endpoint(route: str, contract_name: str = "") -> str:
+    if route == "responses_live":
+        return "/v1/responses"
+    if route in {"responses_batch", "image_batch"}:
+        return "/v1/batches"
+    if route == "image_live":
+        return (
+            "/v1/images/generations"
+            if contract_name == "PROJECT_IMAGE_RESOURCE_V1"
+            else "/v1/images/edits"
+        )
+    if route == "local":
+        return "local"
+    raise ValueError("WORK_ORDER_V2.route nemá známý provider endpoint.")
+
+
 def work_order_from_mapping(raw_value: dict[str, Any]) -> WorkOrder:
     """Načte aktuální WorkOrder a minimálně adaptuje historický V2 záznam."""
     value = {key: item for key, item in dict(raw_value).items() if key != "order_hash"}
+    legacy_endpoint = "provider_endpoint" not in value
+    if legacy_endpoint:
+        value["provider_endpoint"] = _default_provider_endpoint(
+            str(value.get("route") or ""),
+            str(value.get("contract_name") or ""),
+        )
     if "attempt_id" not in value:
         value["attempt_id"] = attempt_identity(
             str(value["run_id"]),
@@ -174,7 +211,12 @@ def work_order_from_mapping(raw_value: dict[str, Any]) -> WorkOrder:
     order = WorkOrder(**value)
     validate_work_order_v2(order.to_dict())
     supplied = raw_value.get("order_hash")
-    if "attempt_id" in raw_value and supplied is not None and supplied != order.order_hash:
+    if (
+        "attempt_id" in raw_value
+        and not legacy_endpoint
+        and supplied is not None
+        and supplied != order.order_hash
+    ):
         raise ValueError("WORK_ORDER_V2.order_hash neodpovídá obsahu.")
     return order
 
@@ -190,6 +232,10 @@ def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrde
     prompt = str(task["prompt"])
     model = str(task["model"])
     route = str(task.get("route") or "responses_live")
+    provider_endpoint = str(
+        task.get("provider_endpoint")
+        or _default_provider_endpoint(route, str(task.get("contract_name") or ""))
+    )
     attempt_no = task.get("attempt_no", 1)
     if type(attempt_no) is not int:
         raise ValueError("WORK_ORDER_V2.attempt_no musí být celé číslo.")
@@ -237,6 +283,7 @@ def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrde
         task_id=task_id,
         stage=stage,
         route=route,
+        provider_endpoint=provider_endpoint,
         target_id=target_id,
         target_path=str(target_path) if target_path is not None else None,
         expected_target_hash=(
