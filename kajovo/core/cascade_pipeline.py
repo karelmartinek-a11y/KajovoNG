@@ -31,7 +31,7 @@ from .contracts import ContractError, parse_json_strict, validate_paths
 from .model_registry import model_spec
 from .openai_client import OpenAIClient
 from .openai_transport import SubmissionOutcomeUnknown
-from .orchestration.contracts import canonical_sha256
+from .orchestration.contracts import canonical_bytes, canonical_sha256
 from .orchestration.provider_operations import (
     mark_not_submitted,
     mark_submission,
@@ -440,7 +440,7 @@ class CascadeRunExecutor:
         state["updated_at"] = time.time()
         atomic_write_text(
             self._runtime_path(),
-            json.dumps(state, ensure_ascii=False, indent=2, allow_nan=False),
+            canonical_bytes(state).decode("utf-8"),
         )
 
     def _resolve_text(self, text: str | None, context: dict[str, Any]) -> str:
