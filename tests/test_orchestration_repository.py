@@ -53,13 +53,13 @@ def test_provider_operation_prevents_duplicate_submit(tmp_path):
     _run(repo, "RUN-1")
     order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
     work_hash = repo.register_work_order(
-        order, body_ref="request", input_hash=order.input_projection_hash
+        order, body_ref=canonical_sha256("request"), input_hash=order.input_projection_hash
     )
     assert repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
         work_order_hash=work_hash,
         endpoint="/v1/responses",
-        request_hash="request",
+        request_hash=canonical_sha256("request"),
     )
     repo.mark_submission_started(order.attempt_id)
     with pytest.raises(OrchestrationError, match="DUPLICATE_SUBMIT_BLOCKED"):
@@ -67,7 +67,7 @@ def test_provider_operation_prevents_duplicate_submit(tmp_path):
             attempt_id=order.attempt_id,
             work_order_hash=work_hash,
             endpoint="/v1/responses",
-            request_hash="request",
+            request_hash=canonical_sha256("request"),
         )
 
 
@@ -76,13 +76,13 @@ def test_confirmed_provider_submit_cannot_be_reopened(tmp_path):
     _run(repo, "RUN-1")
     order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
     work_hash = repo.register_work_order(
-        order, body_ref="request", input_hash=order.input_projection_hash
+        order, body_ref=canonical_sha256("request"), input_hash=order.input_projection_hash
     )
     repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
         work_order_hash=work_hash,
         endpoint="/v1/responses",
-        request_hash="request",
+        request_hash=canonical_sha256("request"),
     )
     repo.mark_submission_started(order.attempt_id)
     repo.mark_submitted(order.attempt_id, "resp-1", unknown=False)
@@ -98,13 +98,13 @@ def test_raw_usage_is_idempotent_and_operation_completes(tmp_path):
     _run(repo, "RUN-1")
     order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
     work_hash = repo.register_work_order(
-        order, body_ref="request", input_hash=order.input_projection_hash
+        order, body_ref=canonical_sha256("request"), input_hash=order.input_projection_hash
     )
     repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
         work_order_hash=work_hash,
         endpoint="/v1/responses",
-        request_hash="request",
+        request_hash=canonical_sha256("request"),
     )
     repo.mark_submission_started(order.attempt_id)
     repo.mark_submitted(order.attempt_id, "resp-1", unknown=False)
