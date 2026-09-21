@@ -227,6 +227,7 @@ def _run_qfile(
             "step_id": step_id,
             "stage": "QFILE",
             "route": "responses_live",
+            "provider_endpoint": "/v1/responses",
             "target_id": target_path,
             "target_path": target_path,
             "expected_target_hash": expected_target_hash,
