@@ -439,7 +439,7 @@ class CascadeRunExecutor:
         state["updated_at"] = time.time()
         atomic_write_text(
             self._runtime_path(),
-            json.dumps(state, ensure_ascii=False, indent=2, default=str),
+            json.dumps(state, ensure_ascii=False, indent=2, allow_nan=False),
         )
 
     def _resolve_text(self, text: str | None, context: dict[str, Any]) -> str:
