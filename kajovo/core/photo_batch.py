@@ -606,6 +606,50 @@ def _photo_operation_present(job, log_dir):
     ).is_file()
 
 
+def _verify_photo_operation_binding(job, rows, log_dir) -> None:
+    if not _photo_operation_present(job, log_dir):
+        return
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    repo = _photo_repo(log_dir)
+    expected_request_hash = canonical_sha256(
+        image_edit_batch_submit_payload(job.input_file_id)
+    )
+    with repo.connect() as db:
+        row = db.execute(
+            """
+            SELECT w.work_order_hash,w.provider_endpoint,p.endpoint,p.request_hash,
+                   p.remote_input_file_id,p.provider_id,p.state
+            FROM work_orders w
+            JOIN provider_operations p ON p.work_order_hash=w.work_order_hash
+            WHERE p.attempt_id=?
+            """,
+            (order.attempt_id,),
+        ).fetchone()
+    if not row:
+        raise ValueError("Photo Batch nemá centrální provider-operation kontrakt.")
+    (
+        work_hash,
+        work_endpoint,
+        operation_endpoint,
+        request_hash,
+        remote_file,
+        provider_id,
+        state,
+    ) = row
+    if (
+        work_hash != order.order_hash
+        or work_endpoint != "/v1/batches"
+        or operation_endpoint != "/v1/batches"
+        or request_hash != expected_request_hash
+        or remote_file != job.input_file_id
+    ):
+        raise ValueError("Photo Batch fyzický provider kontrakt neodpovídá jobu.")
+    if job.batch_id and provider_id and provider_id != job.batch_id:
+        raise ValueError("Photo Batch centrální a lokální provider ID se liší.")
+    if state in {"submitted", "completed"} and not (provider_id or job.batch_id):
+        raise ValueError("Photo Batch potvrzený submit nemá provider ID.")
+
+
 def _mark_photo_submission_started(job, rows, log_dir):
     if not _photo_operation_present(job, log_dir):
         return
@@ -743,6 +787,7 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
     _mark_photo_submission(
         job, rows, log_dir, job.batch_id, unknown=False
     )
+    _verify_photo_operation_binding(job, rows, log_dir)
     save_job(job, log_dir)
     report(f"BATCH vytvořen: {job.batch_id}", 100)
     return job
@@ -826,7 +871,21 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
             _mark_photo_submission(
                 job, rows, log_dir, job.batch_id, unknown=False
             )
+            _verify_photo_operation_binding(job, rows, log_dir)
     apply_batch_status(job, client.retrieve_batch(job.batch_id))
+    if job.schema_version >= 2 and _photo_operation_present(job, log_dir):
+        rows = [
+            image_edit_row(
+                item,
+                model=job.image_model,
+                prompt=job.final_prompt,
+                quality=job.quality,
+                size=job.size,
+                output_format=job.output_format,
+            )
+            for item in job.items
+        ]
+        _verify_photo_operation_binding(job, rows, log_dir)
     save_job(job, log_dir)
     return job
 
