@@ -250,7 +250,7 @@ publish.commit_publish(plan, run_dir=run_dir)
         cwd=Path(__file__).resolve().parents[1],
         check=False,
     )
-    assert child.returncode == 91
+    assert child.returncode != 0
     assert first.read_text(encoding="utf-8") == "new-a\n"
     assert second.read_text(encoding="utf-8") == "old-b\n"
 

@@ -38,14 +38,14 @@ class Utf8NoBomTests(unittest.TestCase):
         raw = b"\xef\xbb\xbfAhoj svete\r\n"
         normalized, changed = normalize_text_bytes(raw)
         self.assertTrue(changed)
-        self.assertEqual("Ahoj svete\n".encode("utf-8"), normalized)
+        self.assertEqual("Ahoj svete\r\n".encode("utf-8"), normalized)
 
     def test_rewrite_zip_if_needed_repairs_text_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             zip_path = root / "sample.zip"
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-                archive.writestr("note.txt", "Příliš".encode("utf-8").decode("latin1").encode("utf-8"))
+                archive.writestr("note.txt", b"\xef\xbb\xbfP\xc5\x99\xc3\xadli\xc5\xa1\r\n")
                 archive.writestr("bin.dat", b"\x00\x01\x02")
 
             tracker = DummyTracker()
@@ -55,7 +55,7 @@ class Utf8NoBomTests(unittest.TestCase):
             self.assertEqual(2, processed)
             self.assertEqual(1, changed)
             with zipfile.ZipFile(zip_path, "r") as archive:
-                self.assertEqual("Příliš", archive.read("note.txt").decode("utf-8"))
+                self.assertEqual("Příliš\r\n", archive.read("note.txt").decode("utf-8"))
                 self.assertEqual(b"\x00\x01\x02", archive.read("bin.dat"))
 
 

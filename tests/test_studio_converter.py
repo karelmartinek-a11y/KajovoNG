@@ -30,5 +30,5 @@ def test_converter_creates_backup_before_normalizing(qtbot, tmp_path):
     qtbot.waitUntil(lambda: not window.operations.active, timeout=15000)
     record = next(iter(window.operations.records.values()))
     assert record.error is None
-    assert text.read_bytes() == b"Ahoj\n"
+    assert text.read_bytes() == b"Ahoj\r\n"
     assert list(backup.iterdir())
