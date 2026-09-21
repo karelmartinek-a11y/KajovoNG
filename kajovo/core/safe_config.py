@@ -80,6 +80,23 @@ _DIAGNOSTIC_FIELDS = frozenset({
 })
 
 
+def _looks_like_json_schema(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if "$schema" in value or "$ref" in value or "$defs" in value:
+        return True
+    kind = value.get("type")
+    return kind in {
+        "object", "array", "string", "number", "integer", "boolean", "null"
+    } and any(
+        key in value
+        for key in (
+            "properties", "items", "required", "additionalProperties",
+            "enum", "anyOf",
+        )
+    )
+
+
 def persist_evidence(value: Any) -> Any:
     """Bezpečný metadatový zápis, který zachová kanonické kontrakty bitově.
 
@@ -88,6 +105,8 @@ def persist_evidence(value: Any) -> Any:
     ztrátovou redakci. Odvozené historické exporty zůstávají redigované.
     """
     if isinstance(value, dict):
+        if _looks_like_json_schema(value):
+            return copy.deepcopy(value)
         result = {}
         for key, item in value.items():
             name = str(key).strip().casefold().replace("-", "_")
