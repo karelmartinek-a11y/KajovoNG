@@ -20,7 +20,17 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply exact source edits in isolated checkout
-        run: python tools/_contract_patch.py
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          script = Path('tools/_contract_patch.py')
+          source = script.read_text(encoding='utf-8')
+          anchor = 'comic = "kajovo/core/comic_service.py"'
+          comment = '        # Polling/resume is not a new provider submit. A journal entry is the\n        # durable authority for whether this exact payload was already sent.\n'
+          assert source.count(anchor) == 1
+          source = source.replace(anchor, anchor + '\nTEXT[comic] = TEXT[comic].replace(' + repr(comment) + ', "")', 1)
+          exec(compile(source, str(script), 'exec'), {'__file__': str(script.resolve()), '__name__': '__main__'})
+          PY
       - name: Validate Python syntax of all changed files
         run: |
           python - <<'PY'
