@@ -157,7 +157,8 @@
       "type": "string",
       "enum": [
         "GENERATE",
-        "MODIFY"
+        "MODIFY",
+        "QFILE"
       ]
     },
     "candidate_root": {
