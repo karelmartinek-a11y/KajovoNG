@@ -12,6 +12,7 @@ from test_workflows import make_worker
 
 from kajovo.core.openai_client import OpenAIClient, OpenAIError
 from kajovo.core.request_rules import validate_response_payload
+from kajovo.core.contracts import ContractError
 from kajovo.core.response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
 from kajovo.core.runlog import RunLogger
 from kajovo.core.runs.executor import RunExecutor as RunWorker
@@ -275,6 +276,15 @@ def test_second_instance_does_not_change_run_state(tmp_path):
         assert Path(worker.log.state_path).read_bytes() == before
     finally:
         lock.unlock()
+
+
+def test_response_journal_rejects_duplicate_json_keys(tmp_path):
+    path = tmp_path / "duplicate_journal.json"
+    path.write_text('{"version":1,"version":1,"entries":{}}', encoding="utf-8")
+    logger = Mock()
+    logger.find_json.return_value = str(path)
+    with pytest.raises(ContractError, match="Duplicit"):
+        ResponseJournal(logger)
 
 
 def test_corrupted_journal_cannot_submit_new_request(journal):
