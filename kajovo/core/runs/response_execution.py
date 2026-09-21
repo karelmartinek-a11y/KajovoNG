@@ -111,6 +111,7 @@ def _work_order_for_payload(self: RunContext, payload: dict[str, Any], attempt: 
             "task_id": f"{stage}:{task_hash[:20]}",
             "stage": stage,
             "route": "responses_live",
+            "provider_endpoint": "/v1/responses",
             "target_id": stage,
             "target_path": None,
             "expected_target_hash": None,

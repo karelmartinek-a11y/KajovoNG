@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -302,6 +303,30 @@ def validate_image_edit_rows(rows: Iterable[dict]) -> list[dict]:
     return rows
 
 
+PHOTO_BATCH_CREATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "input_file_id": {"type": "string"},
+        "endpoint": {"type": "string", "enum": [IMAGE_EDIT_ENDPOINT]},
+        "completion_window": {"type": "string", "enum": ["24h"]},
+    },
+    "required": ["input_file_id", "endpoint", "completion_window"],
+    "additionalProperties": False,
+}
+
+
+def image_edit_batch_submit_payload(input_file_id: str) -> dict:
+    if not isinstance(input_file_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]+", input_file_id
+    ):
+        raise ValueError("Image Edit BATCH vyžaduje platné input_file_id.")
+    return {
+        "input_file_id": input_file_id,
+        "endpoint": IMAGE_EDIT_ENDPOINT,
+        "completion_window": "24h",
+    }
+
+
 class ImageEditBatchAdapter:
     """Lokálně ověřený endpointový adaptér; právě jeden pracovní POST /batches."""
 
@@ -316,11 +341,7 @@ class ImageEditBatchAdapter:
         return self.client._req(
             "POST",
             "/batches",
-            json_body={
-                "input_file_id": input_file_id,
-                "endpoint": IMAGE_EDIT_ENDPOINT,
-                "completion_window": "24h",
-            },
+            json_body=image_edit_batch_submit_payload(input_file_id),
             max_attempts=1,
         )
 
@@ -511,15 +532,12 @@ def _photo_work_order(job, rows):
             "task_id": "PHOTO_BATCH_SUBMIT",
             "stage": "PHOTO",
             "route": "image_batch",
+            "provider_endpoint": "/v1/batches",
             "target_id": job.job_id,
             "target_path": None,
             "expected_target_hash": None,
             "contract_name": "PHOTO_BATCH_V1",
-            "schema": {
-                "endpoint": IMAGE_EDIT_ENDPOINT,
-                "row_count": len(rows),
-                "photo_plan_sha256": job.photo_plan_sha256,
-            },
+            "schema": copy.deepcopy(PHOTO_BATCH_CREATE_SCHEMA),
             "prompt": job.final_prompt,
             "model": job.image_model,
             "model_capability": model_spec(job.image_model),
@@ -552,19 +570,24 @@ def _prepare_photo_submit(job, rows, log_dir):
         approval_id=order.approval_id,
         status="running",
     )
+    submit_payload = image_edit_batch_submit_payload(job.input_file_id)
+    submit_hash = canonical_sha256(submit_payload)
     persisted_hash = repo.register_work_order(
         order,
-        body_ref=canonical_sha256(rows),
+        body_ref=submit_hash,
         input_hash=order.input_projection_hash,
     )
     repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
         work_order_hash=persisted_hash,
-        endpoint="/v1/batches",
-        request_hash=canonical_sha256(rows),
+        endpoint=order.provider_endpoint,
+        request_hash=submit_hash,
     )
-    if job.input_file_id:
-        repo.set_remote_input_file(order.attempt_id, job.input_file_id)
+    repo.bind_physical_request(
+        order.attempt_id,
+        physical_request_hash=submit_hash,
+        remote_input_file_id=job.input_file_id,
+    )
     root = save_job(job, log_dir)
     atomic_write_text(
         str(root / "work_order_v2.json"),
@@ -585,6 +608,50 @@ def _photo_operation_present(job, log_dir):
         / job.job_id
         / "work_order_v2.json"
     ).is_file()
+
+
+def _verify_photo_operation_binding(job, rows, log_dir) -> None:
+    if not _photo_operation_present(job, log_dir):
+        return
+    _cfg, order, _projection = _photo_work_order(job, rows)
+    repo = _photo_repo(log_dir)
+    expected_request_hash = canonical_sha256(
+        image_edit_batch_submit_payload(job.input_file_id)
+    )
+    with repo.connect() as db:
+        row = db.execute(
+            """
+            SELECT w.work_order_hash,w.provider_endpoint,p.endpoint,p.request_hash,
+                   p.remote_input_file_id,p.provider_id,p.state
+            FROM work_orders w
+            JOIN provider_operations p ON p.work_order_hash=w.work_order_hash
+            WHERE p.attempt_id=?
+            """,
+            (order.attempt_id,),
+        ).fetchone()
+    if not row:
+        raise ValueError("Photo Batch nemá centrální provider-operation kontrakt.")
+    (
+        work_hash,
+        work_endpoint,
+        operation_endpoint,
+        request_hash,
+        remote_file,
+        provider_id,
+        state,
+    ) = row
+    if (
+        work_hash != order.order_hash
+        or work_endpoint != "/v1/batches"
+        or operation_endpoint != "/v1/batches"
+        or request_hash != expected_request_hash
+        or remote_file != job.input_file_id
+    ):
+        raise ValueError("Photo Batch fyzický provider kontrakt neodpovídá jobu.")
+    if job.batch_id and provider_id and provider_id != job.batch_id:
+        raise ValueError("Photo Batch centrální a lokální provider ID se liší.")
+    if state in {"submitted", "completed"} and not (provider_id or job.batch_id):
+        raise ValueError("Photo Batch potvrzený submit nemá provider ID.")
 
 
 def _mark_photo_submission_started(job, rows, log_dir):
@@ -724,20 +791,50 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
     _mark_photo_submission(
         job, rows, log_dir, job.batch_id, unknown=False
     )
+    _verify_photo_operation_binding(job, rows, log_dir)
     save_job(job, log_dir)
     report(f"BATCH vytvořen: {job.batch_id}", 100)
     return job
 
 
 def apply_batch_status(job: PhotoBatchJob, payload: dict) -> PhotoBatchJob:
-    job.status = str(payload.get("status") or job.status)
-    job.batch_id = str(payload.get("id") or job.batch_id)
+    if not isinstance(payload, dict):
+        raise ValueError("Image Edit BATCH odpověď musí být objekt.")
+    provider_id = str(payload.get("id") or "")
+    if job.batch_id and provider_id and provider_id != job.batch_id:
+        raise ValueError("Image Edit BATCH provider ID se změnilo.")
+    response_input = str(payload.get("input_file_id") or "")
+    if response_input and response_input != job.input_file_id:
+        raise ValueError("Image Edit BATCH odpověď odkazuje na jiné input_file_id.")
+    response_endpoint = str(payload.get("endpoint") or "")
+    if response_endpoint and response_endpoint != IMAGE_EDIT_ENDPOINT:
+        raise ValueError("Image Edit BATCH odpověď odkazuje na jiný endpoint.")
+    status = str(payload.get("status") or job.status)
+    allowed = {
+        "preparing", "submission_unknown", "validating", "in_progress",
+        "finalizing", "cancelling", "completed", "failed", "expired",
+        "cancelled",
+    }
+    if status not in allowed:
+        raise ValueError("Image Edit BATCH vrátil neznámý stav.")
+    counts = payload.get("request_counts") or {}
+    if not isinstance(counts, dict):
+        raise ValueError("Image Edit BATCH request_counts musí být objekt.")
+    total = int(counts.get("total") or job.request_total or len(job.items))
+    if total != len(job.items):
+        raise ValueError("Image Edit BATCH počet provider položek neodpovídá jobu.")
+    completed = int(counts.get("completed") or 0)
+    failed = int(counts.get("failed") or 0)
+    if min(completed, failed) < 0 or completed + failed > total:
+        raise ValueError("Image Edit BATCH request_counts jsou nekonzistentní.")
+    job.status = status
+    if provider_id:
+        job.batch_id = provider_id
     job.output_file_id = str(payload.get("output_file_id") or job.output_file_id)
     job.error_file_id = str(payload.get("error_file_id") or job.error_file_id)
-    counts = payload.get("request_counts") or {}
-    job.request_total = int(counts.get("total") or job.request_total or len(job.items))
-    job.request_completed = int(counts.get("completed") or 0)
-    job.request_failed = int(counts.get("failed") or 0)
+    job.request_total = total
+    job.request_completed = completed
+    job.request_failed = failed
     return job
 
 
@@ -778,7 +875,21 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
             _mark_photo_submission(
                 job, rows, log_dir, job.batch_id, unknown=False
             )
+            _verify_photo_operation_binding(job, rows, log_dir)
     apply_batch_status(job, client.retrieve_batch(job.batch_id))
+    if job.schema_version >= 2 and _photo_operation_present(job, log_dir):
+        rows = [
+            image_edit_row(
+                item,
+                model=job.image_model,
+                prompt=job.final_prompt,
+                quality=job.quality,
+                size=job.size,
+                output_format=job.output_format,
+            )
+            for item in job.items
+        ]
+        _verify_photo_operation_binding(job, rows, log_dir)
     save_job(job, log_dir)
     return job
 

@@ -249,8 +249,11 @@ publish.commit_publish(plan, run_dir=run_dir)
         [sys.executable, "-c", script, str(run_dir), str(out_dir)],
         cwd=Path(__file__).resolve().parents[1],
         check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
-    assert child.returncode != 0
+    assert child.returncode == 91, (child.stdout, child.stderr)
     assert first.read_text(encoding="utf-8") == "new-a\n"
     assert second.read_text(encoding="utf-8") == "old-b\n"
 

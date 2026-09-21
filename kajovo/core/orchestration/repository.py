@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS work_orders(
     prompt_hash TEXT NOT NULL,
     model TEXT NOT NULL,
     route TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    provider_endpoint TEXT NOT NULL,
+    work_order_json TEXT NOT NULL CHECK(json_valid(work_order_json)),
     UNIQUE(run_id,task_id,attempt_no)
 );
 CREATE TABLE IF NOT EXISTS provider_operations(
@@ -46,6 +49,7 @@ CREATE TABLE IF NOT EXISTS provider_operations(
     work_order_hash TEXT NOT NULL REFERENCES work_orders(work_order_hash),
     endpoint TEXT NOT NULL,
     request_hash TEXT NOT NULL,
+    physical_request_hash TEXT,
     state TEXT NOT NULL CHECK(
         state IN ('prepared','submission_unknown','submitted','completed','not_submitted')
     ),
@@ -130,11 +134,54 @@ def _columns(db: sqlite3.Connection, name: str) -> set[str]:
 
 
 def _route_endpoint(route: str) -> str:
-    if route == "responses_batch":
+    if route in {"responses_batch", "image_batch"}:
         return "/v1/batches"
-    if route in {"image_live", "image_batch"}:
+    if route == "responses_live":
+        return "/v1/responses"
+    if route == "image_live":
         return "/v1/images/edits"
-    return "/v1/responses"
+    raise OrchestrationError(
+        "WORK_ORDER_ROUTE_UNKNOWN",
+        f"Legacy WorkOrder má neznámou route: {route}",
+    )
+
+
+def _migrate_work_order_contract(db: sqlite3.Connection) -> None:
+    """Additive V3 persistence for exact canonical WorkOrder identity."""
+    if not _table_exists(db, "work_orders"):
+        return
+    columns = _columns(db, "work_orders")
+    additions = {
+        "attempt_id": "TEXT",
+        "provider_endpoint": "TEXT",
+        "work_order_json": "TEXT",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            db.execute(f"ALTER TABLE work_orders ADD COLUMN {name} {declaration}")
+    db.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_work_orders_attempt_id
+        ON work_orders(attempt_id) WHERE attempt_id IS NOT NULL
+        """
+    )
+
+
+def _migrate_provider_operation_contract(db: sqlite3.Connection) -> None:
+    if not _table_exists(db, "provider_operations"):
+        return
+    columns = _columns(db, "provider_operations")
+    if "physical_request_hash" not in columns:
+        db.execute(
+            "ALTER TABLE provider_operations ADD COLUMN physical_request_hash TEXT"
+        )
+    db.execute(
+        """
+        UPDATE provider_operations
+        SET physical_request_hash=request_hash
+        WHERE physical_request_hash IS NULL AND endpoint != '/v1/batches'
+        """
+    )
 
 
 def _migrate_legacy_economic_schema(db: sqlite3.Connection) -> None:
@@ -330,8 +377,14 @@ class OrchestrationRepository:
             db.execute("PRAGMA foreign_keys=OFF")
             _migrate_legacy_economic_schema(db)
             db.executescript(_SCHEMA)
+            _migrate_work_order_contract(db)
+            _migrate_provider_operation_contract(db)
             db.execute(
                 "INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(2,?)",
+                (_now(),),
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(3,?)",
                 (_now(),),
             )
             db.commit()
@@ -405,25 +458,51 @@ class OrchestrationRepository:
     def register_work_order(self, order, *, body_ref: str, input_hash: str) -> str:
         value = order.to_dict() if hasattr(order, "to_dict") else dict(order)
         order_hash = getattr(order, "order_hash", None) or canonical_sha256(value)
+        for label, digest in (("body_ref", body_ref), ("input_hash", input_hash)):
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+            ):
+                raise OrchestrationError(
+                    "WORK_ORDER_DIGEST_INVALID",
+                    f"{label} musí být kanonický SHA-256.",
+                )
+        if input_hash != value["input_projection_hash"]:
+            raise OrchestrationError(
+                "WORK_ORDER_INPUT_HASH_MISMATCH",
+                str(value.get("attempt_id") or order_hash),
+            )
+        work_order_json = json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        if canonical_sha256(json.loads(work_order_json)) != order_hash:
+            raise OrchestrationError("WORK_ORDER_HASH_MISMATCH", order_hash)
+        expected = (
+            value["run_id"],
+            value["task_id"],
+            value["attempt_no"],
+            body_ref,
+            input_hash,
+            value["schema_hash"],
+            value["prompt_hash"],
+            value["model"],
+            value["route"],
+            value["attempt_id"],
+            value["provider_endpoint"],
+            work_order_json,
+        )
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 """
-                SELECT run_id,task_id,attempt_no,input_hash,schema_hash,prompt_hash,model,route
+                SELECT run_id,task_id,attempt_no,body_ref,input_hash,schema_hash,
+                       prompt_hash,model,route,attempt_id,provider_endpoint,
+                       work_order_json
                 FROM work_orders WHERE work_order_hash=?
                 """,
                 (order_hash,),
             ).fetchone()
-            expected = (
-                value["run_id"],
-                value["task_id"],
-                value["attempt_no"],
-                input_hash,
-                value["schema_hash"],
-                value["prompt_hash"],
-                value["model"],
-                value["route"],
-            )
             if row:
                 if tuple(row) != expected:
                     db.rollback()
@@ -433,13 +512,41 @@ class OrchestrationRepository:
 
             legacy = db.execute(
                 """
-                SELECT work_order_hash,input_hash,schema_hash,prompt_hash,model,route
+                SELECT work_order_hash,body_ref,input_hash,schema_hash,prompt_hash,
+                       model,route,attempt_id,provider_endpoint,work_order_json
                 FROM work_orders WHERE run_id=? AND task_id=? AND attempt_no=?
                 """,
                 (value["run_id"], value["task_id"], value["attempt_no"]),
             ).fetchone()
             if legacy:
-                if tuple(legacy[1:]) != expected[3:]:
+                # Historické V2 řádky neměly úplný kanonický JSON. Ty lze
+                # pouze konzervativně znovu otevřít; novější řádek musí být
+                # shodný bitově ve všech uložených kontraktech.
+                if legacy[9] is not None:
+                    current = (
+                        value["run_id"],
+                        value["task_id"],
+                        value["attempt_no"],
+                        legacy[1],
+                        legacy[2],
+                        legacy[3],
+                        legacy[4],
+                        legacy[5],
+                        legacy[6],
+                        legacy[7],
+                        legacy[8],
+                        legacy[9],
+                    )
+                    if current != expected:
+                        db.rollback()
+                        raise OrchestrationError("WORK_ORDER_CONFLICT", str(legacy[0]))
+                elif tuple(legacy[2:7]) != (
+                    input_hash,
+                    value["schema_hash"],
+                    value["prompt_hash"],
+                    value["model"],
+                    value["route"],
+                ) or legacy[1] != body_ref:
                     db.rollback()
                     raise OrchestrationError("WORK_ORDER_CONFLICT", str(legacy[0]))
                 db.commit()
@@ -449,8 +556,9 @@ class OrchestrationRepository:
                 """
                 INSERT INTO work_orders(
                     work_order_hash,run_id,task_id,attempt_no,body_ref,input_hash,
-                    schema_hash,prompt_hash,model,route
-                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    schema_hash,prompt_hash,model,route,attempt_id,
+                    provider_endpoint,work_order_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     order_hash,
@@ -463,6 +571,9 @@ class OrchestrationRepository:
                     value["prompt_hash"],
                     value["model"],
                     value["route"],
+                    value["attempt_id"],
+                    value["provider_endpoint"],
+                    work_order_json,
                 ),
             )
             db.commit()
@@ -479,9 +590,37 @@ class OrchestrationRepository:
     ) -> bool:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            work = db.execute(
+                """
+                SELECT body_ref,attempt_id,provider_endpoint,work_order_json
+                FROM work_orders WHERE work_order_hash=?
+                """,
+                (work_order_hash,),
+            ).fetchone()
+            if not work:
+                db.rollback()
+                raise OrchestrationError("WORK_ORDER_UNKNOWN", work_order_hash)
+            if work[0] != request_hash:
+                db.rollback()
+                raise OrchestrationError(
+                    "PROVIDER_REQUEST_HASH_MISMATCH",
+                    attempt_id,
+                )
+            if work[1] is not None and work[1] != attempt_id:
+                db.rollback()
+                raise OrchestrationError(
+                    "PROVIDER_ATTEMPT_MISMATCH",
+                    attempt_id,
+                )
+            if work[2] is not None and work[2] != endpoint:
+                db.rollback()
+                raise OrchestrationError(
+                    "PROVIDER_ENDPOINT_MISMATCH",
+                    attempt_id,
+                )
             row = db.execute(
                 """
-                SELECT work_order_hash,endpoint,request_hash,state
+                SELECT work_order_hash,endpoint,request_hash,state,physical_request_hash
                 FROM provider_operations WHERE attempt_id=?
                 """,
                 (attempt_id,),
@@ -509,14 +648,16 @@ class OrchestrationRepository:
             db.execute(
                 """
                 INSERT INTO provider_operations(
-                    attempt_id,work_order_hash,endpoint,request_hash,state,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?)
+                    attempt_id,work_order_hash,endpoint,request_hash,
+                    physical_request_hash,state,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)
                 """,
                 (
                     attempt_id,
                     work_order_hash,
                     endpoint,
                     request_hash,
+                    request_hash if endpoint != "/v1/batches" else None,
                     "prepared",
                     _now(),
                     _now(),
@@ -525,11 +666,69 @@ class OrchestrationRepository:
             db.commit()
             return True
 
+    def bind_physical_request(
+        self,
+        attempt_id: str,
+        *,
+        physical_request_hash: str,
+        remote_input_file_id: str | None = None,
+    ) -> None:
+        if (
+            not isinstance(physical_request_hash, str)
+            or len(physical_request_hash) != 64
+            or any(ch not in "0123456789abcdef" for ch in physical_request_hash)
+        ):
+            raise OrchestrationError("PHYSICAL_REQUEST_HASH_INVALID", attempt_id)
+        if remote_input_file_id is not None and (
+            not isinstance(remote_input_file_id, str)
+            or not remote_input_file_id.strip()
+        ):
+            raise OrchestrationError("REMOTE_INPUT_FILE_INVALID", attempt_id)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """
+                SELECT endpoint,state,physical_request_hash,remote_input_file_id
+                FROM provider_operations WHERE attempt_id=?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if not row:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+            endpoint, state, current_hash, current_file = row
+            if state not in {"prepared", "not_submitted", "submission_unknown", "submitted"}:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
+            if current_hash and current_hash != physical_request_hash:
+                db.rollback()
+                raise OrchestrationError("PHYSICAL_REQUEST_HASH_CONFLICT", attempt_id)
+            if current_file and remote_input_file_id and current_file != remote_input_file_id:
+                db.rollback()
+                raise OrchestrationError("REMOTE_INPUT_FILE_CONFLICT", attempt_id)
+            if endpoint == "/v1/batches" and not (remote_input_file_id or current_file):
+                db.rollback()
+                raise OrchestrationError("REMOTE_INPUT_FILE_REQUIRED", attempt_id)
+            db.execute(
+                """
+                UPDATE provider_operations
+                SET physical_request_hash=?,
+                    remote_input_file_id=COALESCE(remote_input_file_id,?),
+                    updated_at=?
+                WHERE attempt_id=?
+                """,
+                (physical_request_hash, remote_input_file_id, _now(), attempt_id),
+            )
+            db.commit()
+
     def mark_submission_started(self, attempt_id: str) -> None:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT state FROM provider_operations WHERE attempt_id=?",
+                """
+                SELECT state,endpoint,physical_request_hash,remote_input_file_id
+                FROM provider_operations WHERE attempt_id=?
+                """,
                 (attempt_id,),
             ).fetchone()
             if not row:
@@ -538,6 +737,12 @@ class OrchestrationRepository:
             if row[0] == "completed":
                 db.commit()
                 return
+            if not row[2] or (row[1] == "/v1/batches" and not row[3]):
+                db.rollback()
+                raise OrchestrationError(
+                    "PHYSICAL_REQUEST_NOT_BOUND",
+                    attempt_id,
+                )
             if row[0] not in {"prepared", "not_submitted"}:
                 db.rollback()
                 raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
@@ -614,7 +819,27 @@ class OrchestrationRepository:
             db.commit()
 
     def set_remote_input_file(self, attempt_id: str, file_id: str) -> None:
+        if not isinstance(file_id, str) or not file_id.strip():
+            raise OrchestrationError("REMOTE_INPUT_FILE_INVALID", attempt_id)
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """
+                SELECT remote_input_file_id,state
+                FROM provider_operations WHERE attempt_id=?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if not row:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+            current_file, state = row
+            if current_file and current_file != file_id:
+                db.rollback()
+                raise OrchestrationError("REMOTE_INPUT_FILE_CONFLICT", attempt_id)
+            if state == "completed" and current_file != file_id:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
             db.execute(
                 """
                 UPDATE provider_operations
@@ -623,6 +848,7 @@ class OrchestrationRepository:
                 """,
                 (file_id, _now(), attempt_id),
             )
+            db.commit()
 
     def record_usage(
         self,
@@ -647,6 +873,12 @@ class OrchestrationRepository:
                 ).fetchone()
                 if not operation:
                     raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+                state, provider_id = operation
+                if state not in {"submitted", "completed"} or not provider_id:
+                    raise OrchestrationError(
+                        "PROVIDER_OPERATION_NOT_CONFIRMED",
+                        attempt_id,
+                    )
                 current = db.execute(
                     """
                     SELECT usage_json FROM usage_records

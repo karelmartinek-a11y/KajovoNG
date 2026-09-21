@@ -35,6 +35,7 @@ from .comic_types import (
 )
 from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, source_bytes, validate_image_request
 from .model_registry import model_spec, models_for_usage
+from .openai_client import image_batch_submit_payload
 from .orchestration.contracts import canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.provider_operations import (
@@ -245,6 +246,11 @@ class ComicService:
                 "task_id": task_id,
                 "stage": "COMIC_IMAGE",
                 "route": route,
+                "provider_endpoint": (
+                    "/v1/batches"
+                    if route == "image_batch"
+                    else str(body.get("endpoint") or "/v1/images/edits")
+                ),
                 "target_id": target_id,
                 "target_path": None,
                 "expected_target_hash": None,
@@ -280,11 +286,7 @@ class ComicService:
         repo.prepare_provider_operation(
             attempt_id=order.attempt_id,
             work_order_hash=persisted_hash,
-            endpoint=(
-                "/v1/batches"
-                if route == "image_batch"
-                else str(body.get("endpoint") or "/v1/images/edits")
-            ),
+            endpoint=order.provider_endpoint,
             request_hash=canonical_sha256(body),
         )
         log.save_json(
@@ -306,6 +308,56 @@ class ComicService:
                 (log.run_id, task_id),
             ).fetchone()
         return repo, (str(row[0]) if row else "")
+
+    def _verify_batch_operation_binding(
+        self,
+        log,
+        batch,
+        *,
+        provider_id: str | None = None,
+    ) -> str:
+        repo = repository_for_logger(log)
+        task_id = "batch-" + str(batch["id"])
+        with repo.connect() as db:
+            row = db.execute(
+                """
+                SELECT p.attempt_id,w.route,w.provider_endpoint,p.endpoint,
+                       p.remote_input_file_id,p.provider_id,p.state
+                FROM provider_operations p
+                JOIN work_orders w ON w.work_order_hash=p.work_order_hash
+                WHERE w.run_id=? AND w.task_id=?
+                ORDER BY w.attempt_no DESC LIMIT 1
+                """,
+                (log.run_id, task_id),
+            ).fetchone()
+        if not row:
+            raise ComicError(
+                "batch_binding_missing",
+                "COMIC batch nemá centrální provider-operation kontrakt.",
+            )
+        attempt_id, route, work_endpoint, operation_endpoint, remote_file, recorded_provider, state = row
+        if route != "image_batch" or work_endpoint != "/v1/batches" or operation_endpoint != "/v1/batches":
+            raise ComicError(
+                "batch_binding_mismatch",
+                "COMIC batch má neplatnou fyzickou cestu provider operace.",
+            )
+        if not batch.get("input_file_id") or remote_file != batch.get("input_file_id"):
+            raise ComicError(
+                "batch_binding_mismatch",
+                "COMIC batch nemá shodné vzdálené input_file_id v obou databázových kontraktech.",
+            )
+        local_provider = str(provider_id or batch.get("provider_id") or "")
+        if recorded_provider and local_provider and recorded_provider != local_provider:
+            raise ComicError(
+                "batch_binding_mismatch",
+                "COMIC batch má rozdílné provider_id v lokální a centrální evidenci.",
+            )
+        if state == "completed" and not (recorded_provider or local_provider):
+            raise ComicError(
+                "batch_binding_mismatch",
+                "Dokončená COMIC provider operace nemá provider_id.",
+            )
+        return str(attempt_id)
 
     def _record_image_usage(
         self,
@@ -423,6 +475,7 @@ class ComicService:
                 "task_id": operation["id"],
                 "stage": "COMIC",
                 "route": "responses_live",
+                "provider_endpoint": "/v1/responses",
                 "target_id": str(
                     operation.get("target_id")
                     or operation["project_id"]
@@ -442,15 +495,14 @@ class ComicService:
             },
             projection,
         )
+        journal = ResponseJournal(log, self.settings.response_poll_timeout_s)
+        resume_existing = journal.has_entry(body)
+        transport_body = {**body, "background": True, "store": True}
         prepare_provider_request(
-            log, cfg, self.client, body, work_order=order
+            log, cfg, self.client, transport_body, work_order=order,
+            allow_existing=resume_existing,
         )
-        journal = ResponseJournal(
-            log, self.settings.response_poll_timeout_s
-        )
-        # Polling/resume is not a new provider submit. A journal entry is the
-        # durable authority for whether this exact payload was already sent.
-        if not journal.has_entry(body):
+        if not resume_existing:
             mark_submission_started(log, order)
         try:
             response = journal.execute(
@@ -1260,16 +1312,29 @@ class ComicService:
                     matches = exact_batch_matches(self.client.list_batches(), batch["input_file_id"], batch["endpoint"])
                     if len(matches) != 1:
                         raise SubmissionUnknown("Neurčitý submit nelze jednoznačně dohledat. Novou dávku neposílám.")
-                    self.save_batch(batch["id"], matches[0])
+                    provider_id = str(matches[0].get("id") or "")
+                    if not provider_id:
+                        raise SubmissionUnknown(
+                            "Dohledaná COMIC dávka nemá provider ID."
+                        )
                     repo, attempt_id = self._image_attempt_for_task(
                         log, "batch-" + batch["id"]
                     )
-                    if attempt_id:
-                        repo.mark_submitted(
-                            attempt_id,
-                            str(matches[0].get("id") or ""),
-                            unknown=False,
+                    if not attempt_id:
+                        raise ComicError(
+                            "batch_binding_missing",
+                            "Dohledaná COMIC dávka nemá centrální provider operaci.",
                         )
+                    repo.mark_submitted(
+                        attempt_id,
+                        provider_id,
+                        unknown=False,
+                    )
+                    self.save_batch(batch["id"], matches[0])
+                    recovered_batch = self.store.get("batches", batch["id"])
+                    self._verify_batch_operation_binding(
+                        log, recovered_batch, provider_id=provider_id
+                    )
                 else:
                     if not allow_submit:
                         continue
@@ -1321,7 +1386,13 @@ class ComicService:
                         },
                         projection=projection,
                     )
-                    _repo.set_remote_input_file(batch_order.attempt_id, file_id)
+                    _repo.bind_physical_request(
+                        batch_order.attempt_id,
+                        physical_request_hash=canonical_sha256(
+                            image_batch_submit_payload(file_id, batch["endpoint"])
+                        ),
+                        remote_input_file_id=file_id,
+                    )
                     mark_submission_started(log, batch_order)
                     self.progress("COMIC_SUBMITTING", detail="Odesílám pracovní dávku")
                     try:
@@ -1367,6 +1438,10 @@ class ComicService:
                     )
                     self.save_batch(batch["id"], payload)
             batch = self.store.get("batches", batch["id"])
+            if batch["provider_id"]:
+                self._verify_batch_operation_binding(
+                    log, batch, provider_id=str(batch["provider_id"])
+                )
             payload = batch["payload"] if batch["status"] in TERMINAL and batch["payload"].get("_local_results") else self.client.retrieve_batch(batch["provider_id"])
             if payload.get("id") != batch["provider_id"] or payload.get("status") not in TERMINAL | {"validating", "in_progress", "finalizing", "cancelling"}:
                 raise ComicError("invalid_batch_response", "OpenAI vrátilo jiné ID dávky nebo neznámý stav.")
@@ -1386,13 +1461,49 @@ class ComicService:
         log.bundle.update_run({"related_batch_ids": [b["provider_id"] for b in records if b["provider_id"]]})
 
     def save_batch(self, identifier, payload):
+        if not isinstance(payload, dict):
+            raise ComicError("invalid_batch_response", "Provider batch odpověď musí být objekt.")
         payload = copy.deepcopy(payload)
-        previous = self.store.get("batches", identifier)["payload"]
+        current = self.store.get("batches", identifier)
+        provider_id = str(payload.get("id") or "")
+        status = str(payload.get("status") or "")
+        allowed_statuses = TERMINAL | {
+            "validating", "in_progress", "finalizing", "cancelling"
+        }
+        if not provider_id or status not in allowed_statuses:
+            raise ComicError(
+                "invalid_batch_response",
+                "Provider batch odpověď nemá platné ID nebo stav.",
+            )
+        if current["provider_id"] and current["provider_id"] != provider_id:
+            raise ComicError(
+                "batch_binding_mismatch",
+                "Provider batch ID se liší od již uložené identity dávky.",
+            )
+        response_input = str(payload.get("input_file_id") or "")
+        if response_input and response_input != str(current["input_file_id"] or ""):
+            raise ComicError(
+                "batch_binding_mismatch",
+                "Provider batch odpověď odkazuje na jiné input_file_id.",
+            )
+        response_endpoint = str(payload.get("endpoint") or "")
+        if response_endpoint and response_endpoint != str(current["endpoint"] or ""):
+            raise ComicError(
+                "batch_binding_mismatch",
+                "Provider batch odpověď odkazuje na jiný řádkový endpoint.",
+            )
+        previous = current["payload"]
         if previous.get("_local_results"):
             payload["_local_results"] = previous["_local_results"]
         with self.store.transaction() as db:
-            db.execute("UPDATE batches SET provider_id=?,status=?,payload=?,updated_at=? WHERE id=?", (payload["id"], payload["status"], canonical(payload), now(), identifier))
-            db.execute("UPDATE batch_items SET status='submitted' WHERE batch_id=? AND status='prepared'", (identifier,))
+            db.execute(
+                "UPDATE batches SET provider_id=?,status=?,payload=?,updated_at=? WHERE id=?",
+                (provider_id, status, canonical(payload), now(), identifier),
+            )
+            db.execute(
+                "UPDATE batch_items SET status='submitted' WHERE batch_id=? AND status='prepared'",
+                (identifier,),
+            )
 
     def capture_image(self, operation, response, log):
         result = copy.deepcopy(response)

@@ -345,6 +345,7 @@ def _prepare_image_order(worker, path: str, body: dict[str, Any], projection: di
             "task_id": task_id,
             "stage": "RESOURCE_IMAGE",
             "route": "image_live",
+            "provider_endpoint": "/v1/images/generations",
             "target_id": path,
             "target_path": path,
             "expected_target_hash": expected[path],
@@ -373,7 +374,7 @@ def _prepare_image_order(worker, path: str, body: dict[str, Any], projection: di
     repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
         work_order_hash=persisted,
-        endpoint="/v1/images/generations",
+        endpoint=order.provider_endpoint,
         request_hash=canonical_sha256(body),
     )
     worker.log.save_json(

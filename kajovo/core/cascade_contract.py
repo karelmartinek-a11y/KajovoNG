@@ -12,6 +12,7 @@ from .cascade_types import (
     CascadeOutput,
     CascadeStep,
 )
+from .structured_output import validate_schema
 
 
 class CascadeValidationError(ValueError):
@@ -124,6 +125,32 @@ def _validate_output(step: CascadeStep, output: CascadeOutput, step_number: int)
                 raise CascadeValidationError(
                     f"Krok {step_number}: režim upravit lze použít jen nad souborovým vstupem."
                 )
+    elif output.kind == "json":
+        if not isinstance(output.json_schema, dict):
+            raise CascadeValidationError(
+                f"Krok {step_number}: strukturovaný výstup „{output.name}“ nemá explicitní JSON Schema masku."
+            )
+        try:
+            validate_schema(output.json_schema)
+        except (ValueError, TypeError) as exc:
+            raise CascadeValidationError(
+                f"Krok {step_number}: JSON maska výstupu „{output.name}“ není strict schema: {exc}"
+            ) from exc
+
+        def contains_local_ref(node: Any) -> bool:
+            if isinstance(node, dict):
+                return "$ref" in node or "$defs" in node or any(
+                    contains_local_ref(value) for value in node.values()
+                )
+            if isinstance(node, list):
+                return any(contains_local_ref(value) for value in node)
+            return False
+
+        if contains_local_ref(output.json_schema):
+            raise CascadeValidationError(
+                f"Krok {step_number}: JSON maska výstupu „{output.name}“ nesmí obsahovat $ref/$defs; "
+                "vnořená maska musí být úplná a samostatná."
+            )
     elif output.kind == "decision":
         if len(output.decision_options) < 2:
             raise CascadeValidationError(
@@ -381,14 +408,13 @@ def runtime_schema_for_step(step: CascadeStep) -> Dict[str, Any]:
                 "description": f"Výstup „{output.name}“.",
             }
         elif output.kind == "json":
-            # Strict Structured Outputs require a closed object. Wrap arbitrary JSON as text
-            # and parse it after validation so the wire contract remains deterministic.
-            properties[key] = {
-                "type": "string",
-                "description": (
-                    f"Výstup „{output.name}“ jako validní JSON serializovaný do jednoho textového řetězce."
-                ),
-            }
+            if not isinstance(output.json_schema, dict):
+                raise CascadeValidationError(
+                    f"Strukturovaný výstup „{output.name}“ nemá explicitní JSON Schema masku."
+                )
+            properties[key] = json.loads(
+                json.dumps(output.json_schema, ensure_ascii=False)
+            )
         elif output.kind == "decision":
             properties[key] = {
                 "type": "string",

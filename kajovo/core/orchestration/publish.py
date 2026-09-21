@@ -1,7 +1,6 @@
 """Recoverable conflict-safe publication from immutable staging into OUT."""
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import os
@@ -12,7 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from ..utils import ensure_dir, safe_join_under_root, sha256_file
+from ..utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
 from .contracts import canonical_sha256
 from .errors import OrchestrationError
 
@@ -47,9 +46,10 @@ class PublishPlan:
 def _assert_no_link_boundary(root: Path, relative: str) -> None:
     current = root
     is_junction = getattr(os.path, "isjunction", lambda value: False)
-    for part in relative.split("/")[:-1]:
+    validate_relative_path(relative)
+    for part in relative.replace("\\", "/").split("/"):
         current = current / part
-        if current.exists() and (current.is_symlink() or is_junction(str(current))):
+        if current.is_symlink() or is_junction(str(current)):
             raise OrchestrationError(
                 "PUBLISH_LINK_BOUNDARY",
                 f"Publikace odmítá odkaz v cílové cestě: {relative}",
@@ -96,68 +96,86 @@ def _hash_if_file(path: Path) -> str | None:
     return sha256_file(str(path)) if path.is_file() else None
 
 
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return True
-    return True
+def _validate_journal_plan(journal: dict[str, Any], run_root: Path) -> None:
+    plan = journal.get("plan")
+    entries = journal.get("entries")
+    if not isinstance(plan, dict) or not isinstance(entries, list) or not entries:
+        raise OrchestrationError("PUBLISH_JOURNAL_INVALID", str(run_root))
+    planned = plan.get("entries")
+    if not isinstance(planned, list) or len(planned) != len(entries):
+        raise OrchestrationError("PUBLISH_JOURNAL_INVALID", "Neúplná sada položek.")
+    fields = {"path", "staged_path", "expected_old_hash", "new_hash", "backup_ref"}
+    normalized = []
+    for row, original in zip(entries, planned, strict=True):
+        if not isinstance(row, dict) or not isinstance(original, dict) or set(original) != fields:
+            raise OrchestrationError("PUBLISH_JOURNAL_INVALID", "Neplatná položka.")
+        if {key: row.get(key) for key in fields} != original:
+            raise OrchestrationError("PUBLISH_JOURNAL_INVALID", "Položka změnila zmrazený plán.")
+        for field in ("path", "staged_path"):
+            validate_relative_path(original[field])
+        for field in ("staged_path", "backup_ref"):
+            if original[field] is not None:
+                path = (run_root / original[field]).resolve()
+                try:
+                    path.relative_to(run_root)
+                except ValueError as exc:
+                    raise OrchestrationError("PUBLISH_JOURNAL_ESCAPE", str(original[field])) from exc
+        normalized.append(os.path.normcase(original["path"].replace("\\", "/")))
+    if len(normalized) != len(set(normalized)):
+        raise OrchestrationError("PUBLISH_PATH_COLLISION", "Journal obsahuje duplicitní cestu.")
+    seed = {"target_root": plan["target_root"], "entries": planned}
+    if plan.get("plan_id") != "PUBLISH-" + canonical_sha256(seed)[:32]:
+        raise OrchestrationError("PUBLISH_JOURNAL_HASH", str(run_root))
 
 
 class _TargetPublishLock:
+    """Procesový zámek OS; pád uvolní handle bez mazání souboru jiného procesu."""
     def __init__(self, target_root: Path):
-        self.target_root = target_root
-        self.path = target_root / ".kajovo_publish.lock"
-        self.pid = os.getpid()
-        self.acquired = False
+        self.target_root = target_root.resolve()
+        key = hashlib.sha256(os.path.normcase(str(self.target_root)).encode("utf-8")).hexdigest()
+        directory = Path(tempfile.gettempdir()) / "kajovo-publish-locks"
+        if directory.is_symlink():
+            raise OrchestrationError("PUBLISH_LOCK_UNSAFE", str(directory))
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.path = directory / (key + ".lock")
+        self.handle = None
 
     def acquire(self) -> None:
-        self.target_root.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"pid": self.pid, "created_at": time.time()}).encode("utf-8")
-        for _attempt in range(2):
-            try:
-                fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            except FileExistsError:
-                try:
-                    row = json.loads(self.path.read_text(encoding="utf-8"))
-                    owner = int(row.get("pid") or 0)
-                except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                    owner = 0
-                if owner and _pid_alive(owner):
-                    raise OrchestrationError(
-                        "PUBLISH_LOCKED",
-                        f"Cílový kořen právě publikuje jiný proces (pid={owner}).",
-                    ) from None
-                with contextlib.suppress(FileNotFoundError):
-                    self.path.unlink()
-                _fsync_directory(self.target_root)
-                continue
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-            _fsync_directory(self.target_root)
-            self.acquired = True
-            return
-        raise OrchestrationError("PUBLISH_LOCKED", str(self.target_root))
+        if self.path.is_symlink() or getattr(os.path, "isjunction", lambda p: False)(str(self.path)):
+            raise OrchestrationError("PUBLISH_LOCK_UNSAFE", str(self.path))
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(self.path), flags, 0o600)
+        handle = os.fdopen(fd, "r+b", buffering=0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                if os.fstat(fd).st_size == 0:
+                    handle.write(b"0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            raise OrchestrationError("PUBLISH_LOCKED", str(self.target_root)) from exc
+        self.handle = handle
 
     def release(self) -> None:
-        if not self.acquired:
+        handle, self.handle = self.handle, None
+        if handle is None:
             return
         try:
-            row = json.loads(self.path.read_text(encoding="utf-8"))
-            if int(row.get("pid") or 0) == self.pid:
-                self.path.unlink()
-                _fsync_directory(self.target_root)
-        except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
-            pass
-        self.acquired = False
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
     def __enter__(self):
         self.acquire()
@@ -225,14 +243,14 @@ def prepare_publish(
 
         backup_ref = None
         if destination.is_file():
-            backup_path = undo_root / relative
-            backup_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(destination, backup_path)
-            with backup_path.open("rb") as handle:
-                os.fsync(handle.fileno())
-            _fsync_directory(backup_path.parent)
-            backup_hash = sha256_file(str(backup_path))
-            if backup_hash != current_hash:
+            # Záloha je obsahově adresovaná a nelze ji přepsat jiným plánem.
+            original = destination.read_bytes()
+            if hashlib.sha256(original).hexdigest() != current_hash:
+                raise OrchestrationError("PUBLISH_CONFLICT", relative)
+            backup_path = undo_root / (str(current_hash) + ".bin")
+            if not backup_path.exists():
+                _write_bytes_atomic(backup_path, original)
+            if not backup_path.is_file() or sha256_file(str(backup_path)) != current_hash:
                 raise OrchestrationError("PUBLISH_BACKUP_HASH", relative)
             backup_ref = backup_path.relative_to(run_root).as_posix()
 
@@ -298,7 +316,13 @@ def _restore_old(run_root: Path, target_root: Path, row: dict[str, Any]) -> None
             raise OrchestrationError("PUBLISH_BACKUP_ESCAPE", row["path"]) from exc
         if not backup.is_file():
             raise OrchestrationError("PUBLISH_BACKUP_MISSING", row["path"])
-        _write_bytes_atomic(destination, backup.read_bytes())
+        original = backup.read_bytes()
+        if hashlib.sha256(original).hexdigest() != row["expected_old_hash"]:
+            raise OrchestrationError("PUBLISH_BACKUP_HASH", row["path"])
+        _assert_no_link_boundary(target_root, row["path"])
+        if _hash_if_file(destination) != row["new_hash"]:
+            raise OrchestrationError("PUBLISH_RECOVERY_CONFLICT", row["path"])
+        _write_bytes_atomic(destination, original)
         if _hash_if_file(destination) != row["expected_old_hash"]:
             raise OrchestrationError("PUBLISH_ROLLBACK_HASH", row["path"])
     elif destination.exists():
@@ -313,9 +337,16 @@ def _recover_journal_locked(
 ) -> dict[str, Any]:
     if journal.get("version") != 2 or not isinstance(journal.get("plan"), dict):
         raise OrchestrationError("PUBLISH_JOURNAL_VERSION", str(journal_path))
+    _validate_journal_plan(journal, run_root)
     target_root = Path(journal["plan"]["target_root"]).resolve()
     state = str(journal.get("state") or "")
     if state in {"committed", "rolled_back"}:
+        field = "new_hash" if state == "committed" else "expected_old_hash"
+        for row in journal["entries"]:
+            _assert_no_link_boundary(target_root, row["path"])
+            destination = Path(safe_join_under_root(str(target_root), row["path"]))
+            if _hash_if_file(destination) != row[field]:
+                raise OrchestrationError("PUBLISH_RECOVERY_CONFLICT", row["path"])
         return _journal_report(journal, journal_path, run_root)
     if state == "conflict":
         raise OrchestrationError("PUBLISH_RECOVERY_CONFLICT", str(target_root))

@@ -65,3 +65,71 @@ def redact_evidence(value: Any) -> Any:
     if isinstance(value, str):
         return _redact_string(value)
     return value
+
+
+# Kanonická data jsou již vybraná vstupní politikou a typovaným konfigurátorem.
+# Diagnostická redakce nesmí pozměnit jejich obsah až po výpočtu hashů.
+_CANONICAL_FIELDS = frozenset({
+    "payload", "schema", "file_context", "projection", "source_snapshot",
+    "preparation_snapshot", "graph", "plan", "requirements", "response",
+    "prompt", "instructions", "input", "output", "output_text", "content",
+    "text", "recovery_instruction", "repair_instruction",
+})
+_DIAGNOSTIC_FIELDS = frozenset({
+    "error", "failure_detail", "last_error", "trace", "exception", "headers", "http_headers",
+})
+
+
+def _looks_like_json_schema(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if "$schema" in value or "$ref" in value or "$defs" in value:
+        return True
+    kind = value.get("type")
+    return kind in {
+        "object", "array", "string", "number", "integer", "boolean", "null"
+    } and any(
+        key in value
+        for key in (
+            "properties", "items", "required", "additionalProperties",
+            "enum", "anyOf",
+        )
+    )
+
+
+def persist_evidence(value: Any) -> Any:
+    """Bezpečný metadatový zápis, který zachová kanonické kontrakty bitově.
+
+    Runtime credentials nepatří do provider payloadu ani do schémat. ui_state
+    se vždy znovu promítá explicitním whitelistem; diagnostika používá oddělenou
+    ztrátovou redakci. Odvozené historické exporty zůstávají redigované.
+    """
+    if isinstance(value, dict):
+        if _looks_like_json_schema(value):
+            return copy.deepcopy(value)
+        result = {}
+        for key, item in value.items():
+            name = str(key).strip().casefold().replace("-", "_")
+            if name == "ui_state" and isinstance(item, dict):
+                result[key] = {field: copy.deepcopy(item[field]) for field in SAFE_UI_FIELDS if field in item}
+                result[key]["runtime_credentials"] = {"ssh_password": "runtime-only"}
+            elif name in {secret.replace("-", "_") for secret in _SECRET_KEYS}:
+                result[key] = "[REDACTED]"
+            elif name in _DIAGNOSTIC_FIELDS:
+                result[key] = redact_evidence(item)
+            elif name in _CANONICAL_FIELDS:
+                if name == "payload" and isinstance(item, dict):
+                    forbidden = {str(k).casefold().replace("-", "_") for k in item} & {"authorization", "api_key", "ssh_password", "password", "headers"}
+                    if forbidden:
+                        raise ValueError("Runtime credentials/HTTP hlavičky nesmějí být v kanonickém payloadu.")
+                result[key] = copy.deepcopy(item)
+            else:
+                result[key] = persist_evidence(item)
+        return result
+    if isinstance(value, list):
+        return [persist_evidence(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(persist_evidence(item) for item in value)
+    if isinstance(value, str):
+        return _redact_string(value)
+    return value
