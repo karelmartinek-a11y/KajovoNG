@@ -74,11 +74,13 @@ def _validate_runtime_manifest(runtime):
         raise ContractError("Recovery runtime: _in_dir_info musí být objekt nebo null.")
     _string_list(attributes["_vector_store_ids"], "_vector_store_ids")
     _string_list(attributes["_diag_vector_store_ids"], "_diag_vector_store_ids")
-    if attributes["_fs_tools"] is not None:
-        if not isinstance(attributes["_fs_tools"], list) or any(
-            not isinstance(item, dict) for item in attributes["_fs_tools"]
-        ):
-            raise ContractError("Recovery runtime: _fs_tools musí být seznam objektů nebo null.")
+    if attributes["_fs_tools"] is not None and (
+        not isinstance(attributes["_fs_tools"], list)
+        or any(not isinstance(item, dict) for item in attributes["_fs_tools"])
+    ):
+        raise ContractError(
+            "Recovery runtime: _fs_tools musí být seznam objektů nebo null."
+        )
     if not isinstance(attributes["_diag_zip_path"], str):
         raise ContractError("Recovery runtime: _diag_zip_path musí být řetězec.")
     _string_map(attributes["_input_kind_cache"], "_input_kind_cache")
