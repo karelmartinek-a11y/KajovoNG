@@ -22,3 +22,19 @@ def test_input_references_select_real_previous_outputs(qtbot):
     assert dialog.form.fields["source_output_id"].currentData() == output.id
     dialog.submit()
     assert dialog.record.to_dict() == record.to_dict()
+
+
+
+def test_json_output_editor_preserves_exact_mask(qtbot):
+    mask = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+        "additionalProperties": False,
+    }
+    record = CascadeOutput(name="Data", kind="json", json_schema=mask)
+    dialog = CascadeItemDialog(record, [])
+    qtbot.addWidget(dialog)
+    dialog.submit()
+    assert dialog.record.kind == "json"
+    assert dialog.record.json_schema == mask
