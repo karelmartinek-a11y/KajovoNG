@@ -906,7 +906,13 @@ def _jsonl(data: bytes, name: str) -> list[dict]:
         try:
             row = parse_json_strict(line)
         except ContractError as exc:
-            raise ValueError(f"{name}: nekanonický JSON na řádku {no}.") from exc
+            if exc.code == "ROOT_NOT_OBJECT":
+                message = "JSON řádek musí být JSON objekt"
+            elif exc.code == "INVALID_JSON":
+                message = "neplatný JSON"
+            else:
+                message = "nekanonický JSON"
+            raise ValueError(f"{name}: {message} na řádku {no}.") from exc
         rows.append(row)
     return rows
 
