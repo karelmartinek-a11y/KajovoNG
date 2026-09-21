@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from kajovo.core.contracts import parse_json_strict as read_legacy_json
+from kajovo.core.contracts import ContractError, parse_json_strict as read_core_json
 from kajovo.core.orchestration.contracts import canonical_bytes, canonical_sha256, parse_json_strict
 from kajovo.core.orchestration.errors import OrchestrationError
 from kajovo.core.structured_output import OutputContractError, response_format, validate_output
@@ -85,9 +85,10 @@ def test_recursive_container_and_invalid_input_are_typed_failures():
         parse_json_strict('{"x":' + '[' * 2000 + '0' + ']' * 2000 + '}')
 
 
-def test_legacy_reader_is_not_relabelled_as_new_strict_contract():
+def test_all_runtime_json_readers_reject_embedded_markdown():
     text = '```json\n{"historical":1}\n```'
-    assert read_legacy_json(text) == {'historical': 1}
+    with pytest.raises(ContractError):
+        read_core_json(text)
     with pytest.raises(OrchestrationError):
         parse_json_strict(text)
 
