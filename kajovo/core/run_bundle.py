@@ -132,6 +132,33 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _read_json_legacy(path: Path, default: Any = None) -> Any:
+    """Pouze read-only kompatibilita starých běhů; nikdy neřídí nový runtime."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return default
+
+
+def _read_jsonl_legacy(path: Path) -> list[dict[str, Any]]:
+    """Legacy historie smí přeskočit historicky poškozený řádek bez jeho přepsání."""
+    records: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return records
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
 def _safe_name(value: str, limit: int = 120) -> str:
     cleaned = "".join(char if char.isalnum() or char in "._-" else "_" for char in str(value or ""))
     return (cleaned.strip("._") or "artifact")[:limit]
@@ -1146,7 +1173,7 @@ class LegacyRunAdapter:
         return self.bundle is None
 
     def state(self) -> dict[str, Any]:
-        value = _read_json(self.root / "run_state.json", {})
+        value = _read_json_legacy(self.root / "run_state.json", {})
         return value if isinstance(value, dict) else {}
 
     def run_record(self) -> dict[str, Any]:
@@ -1190,7 +1217,7 @@ class LegacyRunAdapter:
         return self.bundle.steps() if self.bundle else []
 
     def events(self) -> list[dict[str, Any]]:
-        records = _read_jsonl(self.root / "events.jsonl")
+        records = _read_jsonl_legacy(self.root / "events.jsonl")
         if not self.legacy:
             return records
         normalized = []
@@ -1211,7 +1238,7 @@ class LegacyRunAdapter:
         records = []
         pattern = "*.json" if self.legacy else "_record_*.json"
         for path in sorted(directory.glob(pattern)):
-            value = _read_json(path, None)
+            value = _read_json_legacy(path, None)
             if isinstance(value, dict) and value.get(key):
                 records.append(value)
             elif self.legacy and isinstance(value, dict):
