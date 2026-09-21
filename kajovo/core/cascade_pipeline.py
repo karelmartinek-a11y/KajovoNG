@@ -27,7 +27,7 @@ from .cascade_contract import (
 )
 from .cascade_log import CascadeLogger
 from .cascade_types import CascadeDefinition, CascadeOutput, CascadeStep
-from .contracts import ContractError, validate_paths
+from .contracts import ContractError, parse_json_strict, validate_paths
 from .model_registry import model_spec
 from .openai_client import OpenAIClient
 from .openai_transport import SubmissionOutcomeUnknown
@@ -425,12 +425,13 @@ class CascadeRunExecutor:
         return str(base / self._cascade_filename(self.cfg.cascade.name))
 
     def _read_runtime_state(self) -> dict[str, Any]:
-        path = self._runtime_path()
-        try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError, TypeError):
+        path = Path(self._runtime_path())
+        if not path.is_file():
             return {}
+        try:
+            return parse_json_strict(path.read_text(encoding="utf-8"))
+        except (OSError, ContractError) as exc:
+            raise ContractError("Kaskádový runtime stav obsahuje nekanonický JSON.") from exc
 
     def _write_runtime_state(self, patch: dict[str, Any]) -> None:
         state = self._read_runtime_state()
@@ -1441,7 +1442,7 @@ class CascadeRunExecutor:
                     "cascade_input_missing": missing_input_artifacts,
                 }
             )
-            initial_state = json.loads(Path(self.logger.state_path).read_text(encoding="utf-8"))
+            initial_state = parse_json_strict(Path(self.logger.state_path).read_text(encoding="utf-8"))
             self.logger.checkpoint(
                 "cascade_input_ready",
                 state_snapshot=initial_state,
@@ -1800,7 +1801,7 @@ class CascadeRunExecutor:
                         "cache": runtime_snapshot,
                     }
                 )
-                checkpoint_state = json.loads(Path(self.logger.state_path).read_text(encoding="utf-8"))
+                checkpoint_state = parse_json_strict(Path(self.logger.state_path).read_text(encoding="utf-8"))
                 checkpoint_state.update(
                     {
                         "cascade_runtime": runtime_snapshot,
