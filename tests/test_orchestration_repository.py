@@ -235,3 +235,51 @@ def test_provider_operation_rejects_physical_binding_mismatch(
             "SELECT 1 FROM provider_operations WHERE work_order_hash=?",
             (work_hash,),
         ).fetchone() is None
+
+
+
+def test_usage_cannot_complete_unconfirmed_provider_operation(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-USAGE-GATE")
+    order = _order("RUN-USAGE-GATE", "TASK-USAGE-GATE", "unused")
+    request_hash = canonical_sha256({"payload": "usage-gate"})
+    work_hash = repo.register_work_order(
+        order,
+        body_ref=request_hash,
+        input_hash=order.input_projection_hash,
+    )
+    repo.prepare_provider_operation(
+        attempt_id=order.attempt_id,
+        work_order_hash=work_hash,
+        endpoint=order.provider_endpoint,
+        request_hash=request_hash,
+    )
+    with pytest.raises(OrchestrationError, match="PROVIDER_OPERATION_NOT_CONFIRMED"):
+        repo.record_usage(
+            order.attempt_id,
+            provider="openai",
+            provider_item_id="resp-unconfirmed",
+            usage={},
+        )
+
+
+def test_remote_input_file_binding_is_idempotent_and_conflict_safe(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-REMOTE-FILE")
+    order = _order("RUN-REMOTE-FILE", "TASK-REMOTE-FILE", "unused")
+    request_hash = canonical_sha256({"payload": "batch"})
+    work_hash = repo.register_work_order(
+        order,
+        body_ref=request_hash,
+        input_hash=order.input_projection_hash,
+    )
+    repo.prepare_provider_operation(
+        attempt_id=order.attempt_id,
+        work_order_hash=work_hash,
+        endpoint=order.provider_endpoint,
+        request_hash=request_hash,
+    )
+    repo.set_remote_input_file(order.attempt_id, "file-1")
+    repo.set_remote_input_file(order.attempt_id, "file-1")
+    with pytest.raises(OrchestrationError, match="REMOTE_INPUT_FILE_CONFLICT"):
+        repo.set_remote_input_file(order.attempt_id, "file-2")
