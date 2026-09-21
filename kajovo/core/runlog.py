@@ -300,14 +300,9 @@ class RunLogger:
             prefix=".tmp_", suffix=".json", dir=os.path.dirname(path) or "."
         )
         try:
+            raw = canonical_bytes(persist_evidence(payload)).decode("utf-8")
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-                json.dump(
-                    persist_evidence(payload),
-                    stream,
-                    ensure_ascii=False,
-                    indent=2,
-                    allow_nan=False,
-                )
+                stream.write(raw + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
