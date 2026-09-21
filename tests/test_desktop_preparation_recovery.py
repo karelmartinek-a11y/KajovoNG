@@ -7,6 +7,7 @@ import pytest
 from kajovo.core.generate_batch import digest
 from kajovo.core.contracts import ContractError
 from kajovo.core.recovery import recover_run
+from kajovo.core.runs.recovery import _validate_runtime_manifest
 from test_requirements import _documents
 
 
@@ -104,3 +105,27 @@ def test_other_modes_keep_response_continuation(tmp_path, mode):
         "last_response_id": "resp_answer",
     }), encoding="utf-8")
     assert recover_run(tmp_path, "run")[1] == "resp_answer"
+
+
+def test_response_runtime_manifest_whitelists_attributes_and_resume_file_objects():
+    runtime = {
+        "attributes": {
+            "_diag_text": "",
+            "_in_dir_info": None,
+            "_vector_store_ids": [],
+            "_diag_vector_store_ids": [],
+            "_fs_tools": None,
+            "_diag_zip_path": "",
+            "_input_kind_cache": {},
+            "_file_name_cache": {},
+        },
+        "diag_file_ids": [],
+        "preparation_snapshot": None,
+        "response_id": "",
+        "resume_files": [{"path": "main.py", "purpose": "entry"}],
+        "resume_prev_id": None,
+    }
+    assert _validate_runtime_manifest(runtime)["resume_files"] == runtime["resume_files"]
+    runtime["attributes"]["unexpected"] = "x"
+    with pytest.raises(ContractError, match="atribut"):
+        _validate_runtime_manifest(runtime)
