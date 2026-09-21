@@ -13,6 +13,7 @@ from kajovo.core.run_bundle import _json_bytes
 from kajovo.core.runlog import RunLogger
 from kajovo.core.runs.recovery import _validate_runtime_manifest
 from kajovo.core.comic_store import ComicStore
+from kajovo.core.comic_types import canonical as comic_canonical
 from test_generate_batch import manifest
 
 
@@ -135,3 +136,12 @@ def test_comic_sqlite_rejects_invalid_json_on_update(tmp_path):
                 "UPDATE projects SET style=? WHERE id=?",
                 ("{invalid", project),
             )
+
+
+
+def test_comic_canonical_maps_only_tuple_sequences_to_json_arrays():
+    assert comic_canonical({"slots": ({"index": 1},)}) == (
+        '{"slots":[{"index":1}]}'
+    )
+    with pytest.raises(OrchestrationError):
+        comic_canonical({"bad": object()})
