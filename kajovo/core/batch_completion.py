@@ -17,6 +17,7 @@ from .generate_batch import encode_requests, process_saved_batch
 from .progress import ProgressEvent
 from .batch_submit import exact_batch_matches
 from .run_bundle import RunBundle
+from .orchestration.contracts import canonical_bytes
 
 TERMINAL = {"completed", "failed", "expired", "cancelled"}
 CANCELLABLE = {"validating", "in_progress", "finalizing"}
@@ -61,21 +62,24 @@ def _sync_bundle_state(run_dir, state, event_type, data=None, *, seal=False):
 
 
 def read_state(run_dir):
-    try:
-        from .recoverable_artifacts import load_run_state
+    from .recoverable_artifacts import load_run_state
 
-        value = load_run_state(run_dir)
-        if not isinstance(value, dict):
-            return {}
-        for key in ("generate_batches", "batch_imports", "batch_records", "ui_state"):
-            if key in value and not isinstance(value[key], dict):
-                return {}
-        for key in ("generate_batches", "batch_imports", "batch_records"):
-            if not all(isinstance(item, dict) for item in value.get(key, {}).values()):
-                return {}
-        return value
-    except (OSError, ValueError):
+    state_path = Path(run_dir) / "run_state.json"
+    if not state_path.is_file():
         return {}
+    try:
+        value = load_run_state(run_dir)
+    except (OSError, ValueError) as exc:
+        raise ContractError("Run state pro BATCH recovery je poškozený.") from exc
+    if not isinstance(value, dict):
+        raise ContractError("Run state pro BATCH recovery musí být objekt.")
+    for key in ("generate_batches", "batch_imports", "batch_records", "ui_state"):
+        if key in value and not isinstance(value[key], dict):
+            raise ContractError(f"Run state má neplatné pole {key}.")
+    for key in ("generate_batches", "batch_imports", "batch_records"):
+        if not all(isinstance(item, dict) for item in value.get(key, {}).values()):
+            raise ContractError(f"Run state má neplatné záznamy {key}.")
+    return value
 
 
 def batch_ids(state):
@@ -120,7 +124,7 @@ def remember_remote_batch_state(run_dir, batch):
     state.setdefault("batch_records", {})[identifier] = batch
     atomic_write_text(
         str(Path(run_dir) / "run_state.json"),
-        json.dumps(state, ensure_ascii=False, indent=2),
+        canonical_bytes(state).decode("utf-8"),
     )
     _sync_bundle_state(
         run_dir,
@@ -148,13 +152,16 @@ def preflight_ids(state):
 
 def read_batch_statuses(log_dir):
     """Samostatný snímek serveru nesmí přepisovat stav souběžně běžícího pracovníka."""
-    try:
-        value = json.loads(
-            (Path(log_dir) / "batch_status.json").read_text(encoding="utf-8")
-        )
-        return {bid: record for bid, record in value.items() if isinstance(record, dict)}
-    except (OSError, ValueError, AttributeError):
+    path = Path(log_dir) / "batch_status.json"
+    if not path.is_file():
         return {}
+    try:
+        value = parse_json_strict(path.read_text(encoding="utf-8"))
+    except (OSError, ContractError) as exc:
+        raise ContractError("Batch status evidence obsahuje nekanonický JSON.") from exc
+    if any(not isinstance(bid, str) or not isinstance(record, dict) for bid, record in value.items()):
+        raise ContractError("Batch status evidence má neplatnou strukturu.")
+    return dict(value)
 
 
 def save_batch_statuses(log_dir, records):
@@ -169,7 +176,7 @@ def save_batch_statuses(log_dir, records):
             }
     atomic_write_text(
         str(Path(log_dir) / "batch_status.json"),
-        json.dumps(saved, ensure_ascii=False),
+        canonical_bytes(saved).decode("utf-8"),
     )
 
 
@@ -227,7 +234,13 @@ def recover_unknown_submission(run_dir, records):
 def local_batches(log_dir):
     records = {}
     for path in sorted(Path(log_dir).glob("RUN_*/run_state.json"), reverse=True):
-        state = read_state(path.parent)
+        try:
+            state = read_state(path.parent)
+        except (ContractError, OSError, ValueError):
+            # Historický index nesmí kvůli jednomu poškozenému běhu
+            # znepřístupnit ostatní dávky. Samotná obnova takového běhu
+            # zůstává fail-closed přes read_state().
+            continue
         work = batch_ids(state)
         for bid in dict.fromkeys([*work, *preflight_ids(state)]):
             info = dict(

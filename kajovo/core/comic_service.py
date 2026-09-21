@@ -4,7 +4,6 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
-import json
 import gzip
 import sqlite3
 from dataclasses import asdict
@@ -13,6 +12,7 @@ from types import SimpleNamespace
 
 from .batch_submit import exact_batch_matches
 from .comic_store import ComicStore, now, uid
+from .contracts import ContractError, parse_json_strict
 from .comic_types import (
     BIBLE_SCHEMA,
     CONTINUITY_SCHEMA,
@@ -1040,7 +1040,17 @@ class ComicService:
         log = self.logger(operation)
         if "image_result" not in snap:
             if snap.get("image_archive"):
-                response = json.loads(gzip.decompress(self.store.asset_path(snap["image_archive"]).read_bytes()))
+                try:
+                    response = parse_json_strict(
+                        gzip.decompress(
+                            self.store.asset_path(snap["image_archive"]).read_bytes()
+                        ).decode("utf-8", errors="strict")
+                    )
+                except (OSError, UnicodeError, ContractError) as exc:
+                    raise ComicError(
+                        "corrupt_image_archive",
+                        "Archiv provider odpovědi obsahuje nekanonický JSON.",
+                    ) from exc
                 body = snap["image_parameters"]
             else:
                 if snap.get("image_submitting"):
@@ -1548,13 +1558,13 @@ class ComicService:
                 for line in raw.decode("utf-8").splitlines():
                     if not line.strip():
                         continue
-                    row = json.loads(line)
+                    row = parse_json_strict(line)
                     cid = row.get("custom_id")
                     if cid not in by_id or cid in seen:
                         raise ComicError("corrupt_output", "Výsledek obsahuje neznámé nebo duplicitní custom_id.")
                     seen.add(cid)
                     rows.append(row)
-            except (UnicodeError, ValueError, AttributeError) as exc:
+            except (UnicodeError, ValueError, AttributeError, ContractError) as exc:
                 if isinstance(exc, ComicError):
                     raise
                 raise ComicError("corrupt_output", "Výsledný JSONL je poškozený.") from exc

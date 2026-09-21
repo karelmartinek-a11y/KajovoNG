@@ -20,7 +20,7 @@ from .contracts import (
 )
 from .request_rules import uses_reasoning_defaults, validate_response_payload
 from .structured_output import file_content_format, validate_output
-from .orchestration.contracts import canonical_sha256
+from .orchestration.contracts import canonical_bytes, canonical_sha256
 from .orchestration.work_order import freeze_order, validate_work_order_v2
 from .utils import atomic_write_text, is_versing_snapshot_dir, safe_join_under_root
 from .batch_submit import response_batch_submit_payload, submit_verified_batch
@@ -649,7 +649,7 @@ def encode_requests(manifest):
         validate_response_payload(row["body"], batch=True if v3_graph else False)
         if row["method"] != "POST" or row["url"] != "/v1/responses" or row["body"].get("previous_response_id"):
             raise ContractError("Souborová úloha musí být samostatný požadavek Responses.")
-        context, _ = json.JSONDecoder().raw_decode(row["body"]["input"])
+        context = parse_json_strict(row["body"]["input"])
         if manifest.get("version") == 3:
             compiled = context.get("file_context", {})
             original_sources = {s["path"]: s["content"] for s in
@@ -705,7 +705,7 @@ def encode_requests(manifest):
                     or properties.get("action", {}).get("enum") != [context["file"]["action"]]
                 ):
                     raise ContractError("Historická MODIFY úloha nemá původní obsah nebo správnou akci.")
-    data = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
+    data = b"".join(canonical_bytes(row) + b"\n" for row in rows)
     if len(data) > 200_000_000:
         raise ContractError("JSONL překračuje 200 MB.")
     return data
@@ -790,7 +790,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
                 contents.pop(cid)
                 raise ContractError("Prázdný historický výsledek nemá výslovné oprávnění; vyžaduje posouzení.")
             if manifest.get("version") == 3:
-                context, _ = json.JSONDecoder().raw_decode(request_body["input"])
+                context = parse_json_strict(request_body["input"])
                 allow_empty = context["file_context"]["working_context"]["implementation_contract"]["allow_empty"]
                 if not payload["content"].strip() and not allow_empty:
                     contents.pop(cid)

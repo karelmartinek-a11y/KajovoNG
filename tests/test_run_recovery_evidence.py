@@ -172,3 +172,18 @@ def test_legacy_manifest_recovers_structure_without_claiming_a_response(tmp_path
     assert restored_ui == ui and restored_files == files
     assert response_id is None
     assert file_snapshot(root) == before
+
+
+
+def test_find_incomplete_run_skips_ambiguous_duplicate_key_state(tmp_path):
+    ambiguous = tmp_path / "RUN_999" / "run_state.json"
+    ambiguous.parent.mkdir(parents=True)
+    ambiguous.write_text(
+        '{"status":"running","status":"completed"}',
+        encoding="utf-8",
+    )
+    write_json(
+        tmp_path / "RUN_998" / "run_state.json",
+        {"status": "response_pending"},
+    )
+    assert find_last_incomplete_run(str(tmp_path)) == "RUN_998"

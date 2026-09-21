@@ -1,3 +1,4 @@
+import sqlite3
 """Regrese knihovny a pracovní pipeline bez sítě a bez provozních dat."""
 import base64
 import io
@@ -153,6 +154,12 @@ def test_project_persistence_trash_and_revision(tmp_path):
     assert store.get("projects", project)["deleted"] == 0
     with store.connect() as db:
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(
+                "UPDATE projects SET style=? WHERE id=?",
+                ('{"line":"a","line":"b"}', project),
+            )
 
 
 def test_bible_explicit_options_always_win():

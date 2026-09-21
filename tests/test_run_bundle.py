@@ -40,6 +40,12 @@ def test_run_bundle_records_monotonic_events_and_exact_evidence(tmp_path):
     ).hexdigest()
 
 
+def test_run_bundle_rejects_non_json_evidence_instead_of_stringifying(tmp_path):
+    bundle = RunBundle(tmp_path / "RUN_STRICT", "RUN_STRICT", create=True)
+    with pytest.raises(ValueError):
+        bundle.append_event("bad", {"value": object()})
+
+
 def test_response_record_preserves_completed_and_incomplete_states(tmp_path):
     logger = RunLogger(str(tmp_path), "RUN_140920260101_TEST", "demo")
     logger.save_json(

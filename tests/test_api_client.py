@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from kajovo.core.openai_client import OpenAIClient, OpenAIError
+from kajovo.core.openai_client import OpenAIClient, OpenAIError, image_batch_submit_payload
 from kajovo.core.openai_transport import SubmissionOutcomeUnknown
 
 
@@ -73,3 +73,27 @@ class OpenAIClientErrorMappingTests(unittest.TestCase):
         client._transport.sleeper = lambda _seconds: None
         out = client._req("GET", "/models")
         self.assertEqual(out, {"data": []})
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"custom_id":"a","custom_id":"b","method":"POST","url":"/v1/responses","body":{}}',
+    b'{"custom_id":"a","method":"POST","url":"/v1/responses","body":{"x":NaN}}',
+    b'{"custom_id":"a","method":"POST","url":"/v1/responses","body":{}} {}',
+])
+def test_batch_jsonl_rejects_ambiguous_json_before_upload(raw):
+    client = OpenAIClient("test")
+    with pytest.raises(ValueError):
+        client.validate_batch_data(raw)
+
+
+def test_image_batch_submit_payload_keeps_documented_output_expiration():
+    payload = image_batch_submit_payload("file_batch", "/v1/images/edits")
+    assert payload == {
+        "input_file_id": "file_batch",
+        "endpoint": "/v1/images/edits",
+        "completion_window": "24h",
+        "output_expires_after": {
+            "anchor": "created_at",
+            "seconds": 2592000,
+        },
+    }

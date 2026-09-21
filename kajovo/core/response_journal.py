@@ -1,10 +1,10 @@
 """Trvalá evidence pracovních odpovědí a obnovitelné sledování generace."""
 
 import copy
-import json
 import time
 from pathlib import Path
 
+from .contracts import parse_json_strict
 from .delivery_preparation import digest
 from .openai_client import OpenAIError
 
@@ -29,7 +29,7 @@ class ResponseJournal:
         self.entries = {}
         path = logger.find_json("manifests", "response_journal")
         if path:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data = parse_json_strict(Path(path).read_text(encoding="utf-8"))
             if data.get("version") != 1 or not isinstance(data.get("entries"), dict):
                 raise ValueError("Neplatná evidence odpovědí; nelze bezpečně pokračovat.")
             self.entries = data["entries"]

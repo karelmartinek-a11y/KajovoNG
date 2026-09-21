@@ -86,3 +86,31 @@ def test_invalid_repository_and_editor_operations(tmp_path):
     child.mkdir()
     with pytest.raises(ValueError, match="kořen"):
         ProjectGit(child).snapshot()
+
+
+
+def test_milestone_restore_rejects_ambiguous_json_metadata(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    service = ProjectGit(root)
+    service.init()
+    service.command("config", "user.name", "Offline test")
+    service.command("config", "user.email", "test@example.invalid")
+    target = root / "tracked.txt"
+    target.write_text("data", encoding="utf-8")
+    service.command("add", ".")
+    service.command("commit", "-m", "base")
+    service.milestone("strict-meta")
+    commit = service.text(
+        "rev-parse", "refs/tags/strict-meta^{commit}"
+    ).strip()
+    service._milestone_meta_path("strict-meta").write_text(
+        (
+            '{"version":2,"version":2,'
+            f'"snapshot_commit":"{commit}"'
+            "}"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Metadata milníku"):
+        service.restore("strict-meta")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import logging
 import os
 import time
@@ -23,6 +22,7 @@ from ..orchestration.repository import repository_for_logger
 from ..orchestration.run_config import build_run_config_v2, run_scope_hash
 from ..orchestration.source_pack import freeze_run_sources, source_context
 from ..progress import ProgressEvent
+from ..recoverable_artifacts import load_run_state
 from ..request_rules import validate_run_options
 from ..response_journal import (
     ResponseCancelled,
@@ -71,7 +71,11 @@ class RunExecutor(RunContext):
             return
         try:
             state_path = Path(self.log.state_path)
-            saved_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
+            saved_state = (
+                load_run_state(self.log.paths.run_dir)
+                if state_path.is_file()
+                else {}
+            )
             recovery = recover_publish_journal(self.log.paths.run_dir)
             if recovery and recovery.get("status") in {"committed", "rolled_back"}:
                 if recovery["status"] == "committed":
@@ -186,7 +190,7 @@ class RunExecutor(RunContext):
                 self._response_journal = ResponseJournal(
                     self.log, self.settings.response_poll_timeout_s
                 )
-                saved_state = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
+                saved_state = load_run_state(self.log.paths.run_dir)
                 self._response_file_ids = saved_state.get("response_file_ids", {})
                 self.log.update_state({"response_transport": "background"})
 
@@ -265,7 +269,7 @@ class RunExecutor(RunContext):
                               "path": e.path, "request_id": e.request_id}
                     self.log.event("run.submission_unknown", detail)
                     self.log.update_state({"unknown_submission": detail})
-                    snapshot = json.loads(Path(self.log.state_path).read_text(encoding="utf-8"))
+                    snapshot = load_run_state(self.log.paths.run_dir)
                     self.log.checkpoint("submission_unknown", state_snapshot=snapshot,
                                         safe_to_continue=False,
                                         reason="Výsledek vzdálené operace je nutné nejdříve dohledat.")

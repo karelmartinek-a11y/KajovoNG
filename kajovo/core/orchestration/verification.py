@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import json
 import os
 import platform
 import shutil
@@ -15,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import safe_join_under_root, sha256_file
-from .contracts import canonical_sha256
+from .contracts import canonical_sha256, parse_json_strict, parse_json_value_strict
 from .errors import OrchestrationError
 
 
@@ -201,7 +200,7 @@ def _static_format_checks(root: Path) -> tuple[list[dict[str, Any]], str]:
             if suffix == ".py":
                 ast.parse(raw.decode("utf-8", errors="strict"), filename=rel)
             elif suffix == ".json":
-                json.loads(raw.decode("utf-8", errors="strict"))
+                parse_json_value_strict(raw.decode("utf-8", errors="strict"))
             elif suffix == ".toml":
                 tomllib.loads(raw.decode("utf-8", errors="strict"))
             elif suffix in {".xml", ".svg"}:
@@ -448,9 +447,14 @@ def build_verification_candidate(
             manifest_path = (run_root / manifest_rel).resolve()
             try:
                 manifest_path.relative_to(run_root)
-                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
+                payload = parse_json_strict(
+                    manifest_path.read_text(encoding="utf-8")
+                )
+            except (OSError, OrchestrationError) as exc:
+                raise OrchestrationError(
+                    "VERIFY_LEGACY_MANIFEST_INVALID",
+                    str(manifest_path),
+                ) from exc
             for row in payload.get("approved") or []:
                 if isinstance(row, dict) and row.get("path") and row.get("sha256"):
                     legacy_reapproved[str(row["path"])] = str(row["sha256"])

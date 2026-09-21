@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import tempfile
 import time
@@ -11,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .orchestration.contracts import canonical_bytes, parse_json_strict
+from .orchestration.errors import OrchestrationError
 from .run_bundle import RunBundle, TERMINAL_STATUSES
 from .safe_config import persist_evidence, redact_evidence
 from .utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
@@ -60,10 +61,20 @@ def json_artifact_path(
 
 def _read_json_dict(path: Path) -> Dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError, TypeError):
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         return {}
+    try:
+        return parse_json_strict(text)
+    except OrchestrationError as exc:
+        raise ValueError(f"Nekanonický JSON evidence: {path}") from exc
+
+
+def _read_current_state(path: Path) -> Dict[str, Any]:
+    value = parse_json_strict(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"Stav běhu není JSON objekt: {path}")
+    return value
 
 
 def _saved_entries(record: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -219,8 +230,7 @@ class RunLogger:
 
         run_dir = os.path.join(self.base_log_dir, run_id)
         if resume:
-            with open(os.path.join(run_dir, "run_state.json"), encoding="utf-8") as source:
-                state = json.load(source)
+            state = _read_current_state(Path(run_dir) / "run_state.json")
             resumable_response = (
                 state.get("response_transport") == "background"
                 and state.get("status") != "submission_unknown"
@@ -289,8 +299,9 @@ class RunLogger:
             prefix=".tmp_", suffix=".json", dir=os.path.dirname(path) or "."
         )
         try:
+            raw = canonical_bytes(persist_evidence(payload)).decode("utf-8")
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-                json.dump(persist_evidence(payload), stream, ensure_ascii=False, indent=2, default=str)
+                stream.write(raw + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
@@ -362,14 +373,9 @@ class RunLogger:
             patch["run_scope_hash"] = state["run_scope_hash"]
         configuration = ui or state.get("configuration_snapshot")
         if configuration:
-            raw = json.dumps(
-                configuration,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-            patch["configuration_snapshot_hash"] = hashlib.sha256(raw).hexdigest()
+            patch["configuration_snapshot_hash"] = hashlib.sha256(
+                canonical_bytes(configuration)
+            ).hexdigest()
         return patch
 
     def _canonical_response_record_ids(self, provider_ids: list[str]) -> list[str]:
@@ -459,15 +465,7 @@ class RunLogger:
         if isinstance(archive, dict) and not archive.get("complete"):
             safe = False
             reason = "Vstupní soubory se nepodařilo úplně archivovat; opakování není bezpečné."
-        state_hash = hashlib.sha256(
-            json.dumps(
-                state,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-        ).hexdigest()
+        state_hash = hashlib.sha256(canonical_bytes(state)).hexdigest()
         for existing in self.bundle.checkpoints():
             if (
                 existing.get("checkpoint_type") == checkpoint_type
@@ -565,13 +563,11 @@ class RunLogger:
         patch = persist_evidence(patch)
         for key in STATE_ARTIFACTS & patch.keys():
             save_artifact(self.paths.run_dir, "state/" + key, patch[key])
-        state = {}
-        try:
-            if os.path.exists(self.state_path):
-                with open(self.state_path, "r", encoding="utf-8") as stream:
-                    state = json.load(stream)
-        except Exception:
-            state = {"status": "corrupt_state"}
+        state = (
+            _read_current_state(Path(self.state_path))
+            if os.path.exists(self.state_path)
+            else {}
+        )
         state.update(patch)
         # Archivace musí předcházet checkpointu, aby checkpoint mohl uvést
         # přesné kanonické ArtifactRecord závislosti.
@@ -595,13 +591,11 @@ class RunLogger:
             self.bundle.seal()
 
     def clear_state_keys(self, *keys: str) -> None:
-        state = {}
-        try:
-            if os.path.exists(self.state_path):
-                with open(self.state_path, "r", encoding="utf-8") as stream:
-                    state = json.load(stream)
-        except Exception:
-            state = {"status": "corrupt_state"}
+        state = (
+            _read_current_state(Path(self.state_path))
+            if os.path.exists(self.state_path)
+            else {}
+        )
         removed = {}
         for key in keys:
             if key in state:
@@ -848,10 +842,13 @@ def find_last_incomplete_run(log_dir: str) -> Optional[str]:
     for run_id in runs[:30]:
         state_path = os.path.join(log_dir, run_id, "run_state.json")
         try:
-            with open(state_path, "r", encoding="utf-8") as stream:
-                state = json.load(stream)
+            state = parse_json_strict(
+                Path(state_path).read_text(encoding="utf-8")
+            )
             if state.get("status") not in TERMINAL_STATUSES:
                 return run_id
-        except Exception:
+        except (OSError, OrchestrationError):
+            # Discovery historie může poškozený běh přeskočit, ale nikdy jej
+            # nepoužije jako zdroj pro runtime obnovu.
             continue
     return None

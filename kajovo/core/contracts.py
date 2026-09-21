@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-import json, re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
 from .utils import validate_relative_path
+from .orchestration.contracts import (
+    parse_json_strict as _orchestration_parse_json_strict,
+    parse_json_value_strict as _orchestration_parse_json_value_strict,
+)
+from .orchestration.errors import OrchestrationError
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -104,31 +108,17 @@ def extract_text_from_response(resp: Dict[str, Any]) -> str:
             return resp[k]
     raise ContractError("Odpověď API neobsahuje textový výsledek.")
 
-_JSON_OBJ_RE = re.compile(r"(\{.*\})", re.DOTALL)
-
-
-def _unique_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ContractError(f"Duplicitní klíč JSON: {key}")
-        result[key] = value
-    return result
-
-
-def _invalid_constant(value):
-    raise ContractError(f"Nepřípustná konstanta JSON: {value}")
+def _translate_json_error(exc: OrchestrationError) -> ContractError:
+    failure = ContractError(str(exc))
+    failure.code = exc.code
+    return failure
 
 
 def _load_json(text):
-    def finite_float(value):
-        import math
-        number = float(value)
-        if not math.isfinite(number):
-            raise ContractError("Číslo JSON překračuje konečný rozsah.")
-        return number
-    return json.loads(text, object_pairs_hook=_unique_object, parse_constant=_invalid_constant, parse_float=finite_float)
-
+    try:
+        return _orchestration_parse_json_value_strict(text)
+    except OrchestrationError as exc:
+        raise _translate_json_error(exc) from exc
 
 def structure_response_format(contract: str) -> Dict[str, Any]:
     """Schéma struktury souborů používané před generováním jejich obsahu."""
@@ -168,29 +158,15 @@ def file_response_format(contract: str, path: str, chunk_index: int, action=None
     schema = {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
     return {"format": {"type": "json_schema", "name": contract, "strict": True, "schema": schema}}
 
+def parse_json_value_strict(text: str) -> Any:
+    return _load_json(text)
+
+
 def parse_json_strict(text: str) -> Dict[str, Any]:
-    text = text.strip()
     try:
-        parsed = _load_json(text)
-    except ContractError:
-        raise
-    except (ValueError, TypeError):
-        parsed = None
-
-    if isinstance(parsed, dict):
-        return parsed
-    if parsed is not None:
-        raise ContractError("Response JSON must be an object.")
-
-    m = _JSON_OBJ_RE.search(text)
-    if m:
-        try:
-            parsed2 = _load_json(m.group(1))
-            if isinstance(parsed2, dict):
-                return parsed2
-        except (ValueError, TypeError):
-            pass
-    raise ContractError("Response is not valid JSON (strict contract violated).")
+        return _orchestration_parse_json_strict(text)
+    except OrchestrationError as exc:
+        raise _translate_json_error(exc) from exc
 
 def validate_paths(files: List[Dict[str, Any]]) -> None:
     if not isinstance(files, list):

@@ -47,3 +47,20 @@ def test_changed_work_order_blocks_recovery_before_upload(tmp_path, field):
     client.upload_file.assert_not_called()
     client.create_batch.assert_not_called()
     assert not (Path(worker.log.paths.run_dir).parent / "orchestration.sqlite3").exists()
+
+
+
+def test_corrupt_current_batch_state_never_resets_to_empty_before_submit(tmp_path):
+    worker = make_worker(tmp_path, "GENERATE")
+    state_path = Path(worker.log.state_path)
+    state_path.write_text(
+        '{"status":"running","status":"batch_pending"}',
+        encoding="utf-8",
+    )
+    client = Mock()
+    saved = manifest()
+    from kajovo.core.contracts import ContractError
+    with pytest.raises(ContractError):
+        worker._submit_generate_batch(client, saved)
+    client.upload_file.assert_not_called()
+    client.create_batch.assert_not_called()

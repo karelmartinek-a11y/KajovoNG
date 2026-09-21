@@ -66,9 +66,9 @@ def test_invalid_generated_json_fails_instead_of_returning_empty_file(tmp_path):
 
 
 class ContractsTests(unittest.TestCase):
-    def test_parse_json_strict_extracts_embedded_object(self):
-        out = parse_json_strict("header\n{\"a\":1}\nfooter")
-        self.assertEqual(out, {"a": 1})
+    def test_parse_json_strict_rejects_embedded_object(self):
+        with self.assertRaises(ContractError):
+            parse_json_strict("header\n{\"a\":1}\nfooter")
 
     def test_parse_json_strict_rejects_array(self):
         with self.assertRaises(ContractError):

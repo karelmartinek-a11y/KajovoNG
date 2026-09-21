@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import sqlite3
 import tempfile
@@ -12,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .comic_types import ComicError, PanelFormat, canonical, checked_text, validate_document, validate_overlays, validate_style
+from .contracts import ContractError, parse_json_value_strict
 
 
 def uid():
@@ -25,14 +25,14 @@ def now():
 SCHEMA = """
 CREATE TABLE migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 CREATE TABLE projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
- style TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1, bible_id TEXT REFERENCES bibles(id),
+ style TEXT NOT NULL CHECK(json_valid(style)), revision INTEGER NOT NULL DEFAULT 1, bible_id TEXT REFERENCES bibles(id),
  deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE assets(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
- path TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL, metadata TEXT NOT NULL, created_at TEXT NOT NULL);
+ path TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL, metadata TEXT NOT NULL CHECK(json_valid(metadata)), created_at TEXT NOT NULL);
 CREATE TABLE style_refs(project_id TEXT NOT NULL REFERENCES projects(id), asset_id TEXT NOT NULL REFERENCES assets(id),
  position INTEGER NOT NULL, PRIMARY KEY(project_id,asset_id));
 CREATE TABLE bibles(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
- input TEXT NOT NULL, result TEXT NOT NULL, provenance TEXT NOT NULL, created_at TEXT NOT NULL);
+ input TEXT NOT NULL CHECK(json_valid(input)), result TEXT NOT NULL CHECK(json_valid(result)), provenance TEXT NOT NULL CHECK(json_valid(provenance)), created_at TEXT NOT NULL);
 CREATE TABLE entities(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
  kind TEXT NOT NULL CHECK(kind IN ('character','environment')), name TEXT NOT NULL, description TEXT NOT NULL,
  revision INTEGER NOT NULL DEFAULT 1, active_revision TEXT REFERENCES entity_revisions(id), archived INTEGER NOT NULL DEFAULT 0,
@@ -44,34 +44,34 @@ CREATE TABLE entity_revisions(id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFER
  provenance TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE panels(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), name TEXT NOT NULL,
  position INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1, prompt_id TEXT REFERENCES prompts(id),
- format TEXT NOT NULL, overlays TEXT NOT NULL, active_version TEXT REFERENCES panel_versions(id), deleted INTEGER NOT NULL DEFAULT 0,
+ format TEXT NOT NULL CHECK(json_valid(format)), overlays TEXT NOT NULL CHECK(json_valid(overlays)), active_version TEXT REFERENCES panel_versions(id), deleted INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  storyboard_id TEXT REFERENCES comic_documents(id), storyboard_position INTEGER);
 CREATE TABLE prompts(id TEXT PRIMARY KEY, panel_id TEXT NOT NULL REFERENCES panels(id),
- document TEXT NOT NULL, created_at TEXT NOT NULL);
+ document TEXT NOT NULL CHECK(json_valid(document)), created_at TEXT NOT NULL);
 CREATE TABLE bindings(prompt_id TEXT NOT NULL REFERENCES prompts(id), entity_id TEXT NOT NULL REFERENCES entities(id),
  PRIMARY KEY(prompt_id,entity_id));
 CREATE TABLE comic_documents(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
  kind TEXT NOT NULL CHECK(kind IN ('story','script','storyboard','continuity')),
- source_id TEXT REFERENCES comic_documents(id), input TEXT NOT NULL, result TEXT NOT NULL,
- provenance TEXT NOT NULL, created_at TEXT NOT NULL);
+ source_id TEXT REFERENCES comic_documents(id), input TEXT NOT NULL CHECK(json_valid(input)), result TEXT NOT NULL CHECK(json_valid(result)),
+ provenance TEXT NOT NULL CHECK(json_valid(provenance)), created_at TEXT NOT NULL);
 CREATE TABLE operations(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
- kind TEXT NOT NULL, target_id TEXT, status TEXT NOT NULL, snapshot TEXT NOT NULL, error TEXT NOT NULL DEFAULT '{}',
+ kind TEXT NOT NULL, target_id TEXT, status TEXT NOT NULL, snapshot TEXT NOT NULL CHECK(json_valid(snapshot)), error TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(error)),
  run_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE batches(id TEXT PRIMARY KEY, operation_id TEXT NOT NULL REFERENCES operations(id), endpoint TEXT NOT NULL,
- status TEXT NOT NULL, input_file_id TEXT, provider_id TEXT, payload TEXT NOT NULL DEFAULT '{}',
+ status TEXT NOT NULL, input_file_id TEXT, provider_id TEXT, payload TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(payload)),
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE batch_items(id TEXT PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES batches(id),
- panel_id TEXT NOT NULL REFERENCES panels(id), custom_id TEXT NOT NULL UNIQUE, snapshot TEXT NOT NULL,
- status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '{}', result TEXT NOT NULL DEFAULT '{}');
+ panel_id TEXT NOT NULL REFERENCES panels(id), custom_id TEXT NOT NULL UNIQUE, snapshot TEXT NOT NULL CHECK(json_valid(snapshot)),
+ status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(error)), result TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(result)));
 CREATE TABLE panel_versions(id TEXT PRIMARY KEY, panel_id TEXT NOT NULL REFERENCES panels(id),
  item_id TEXT UNIQUE REFERENCES batch_items(id), base_version TEXT REFERENCES panel_versions(id),
  asset_id TEXT NOT NULL REFERENCES assets(id), raw_asset_id TEXT NOT NULL REFERENCES assets(id),
- overlays TEXT NOT NULL, provenance TEXT NOT NULL, created_at TEXT NOT NULL);
+ overlays TEXT NOT NULL CHECK(json_valid(overlays)), provenance TEXT NOT NULL CHECK(json_valid(provenance)), created_at TEXT NOT NULL);
 CREATE TABLE uploads(asset_id TEXT NOT NULL REFERENCES assets(id), account TEXT NOT NULL,
  file_id TEXT NOT NULL, PRIMARY KEY(asset_id,account));
 CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT REFERENCES projects(id),
- operation TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
+ operation TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), created_at TEXT NOT NULL);
 CREATE INDEX panels_order ON panels(project_id,deleted,position);
 CREATE UNIQUE INDEX panels_storyboard_position
  ON panels(storyboard_id,storyboard_position)
@@ -115,11 +115,80 @@ CREATE UNIQUE INDEX panels_storyboard_position
  WHERE storyboard_id IS NOT NULL;
 """
 
+_JSON_COLUMNS = {
+    "projects": ("style",),
+    "assets": ("metadata",),
+    "bibles": ("input", "result", "provenance"),
+    "entity_revisions": ("provenance",),
+    "panels": ("format", "overlays"),
+    "prompts": ("document",),
+    "comic_documents": ("input", "result", "provenance"),
+    "operations": ("snapshot", "error"),
+    "batches": ("payload",),
+    "batch_items": ("snapshot", "error", "result"),
+    "panel_versions": ("overlays", "provenance"),
+    "events": ("data",),
+}
+
+
+def _migration_v4_sql() -> str:
+    statements: list[str] = []
+    for table, columns in _JSON_COLUMNS.items():
+        for column in columns:
+            base = f"json_guard_{table}_{column}"
+            statements.append(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS {base}_insert
+                BEFORE INSERT ON {table}
+                WHEN kajovo_strict_json(NEW.{column}) != 1
+                BEGIN SELECT RAISE(ABORT,'Neplatny JSON {table}.{column}'); END;
+                """
+            )
+            statements.append(
+                f"""
+                CREATE TRIGGER IF NOT EXISTS {base}_update
+                BEFORE UPDATE OF {column} ON {table}
+                WHEN kajovo_strict_json(NEW.{column}) != 1
+                BEGIN SELECT RAISE(ABORT,'Neplatny JSON {table}.{column}'); END;
+                """
+            )
+    return "\n".join(statements)
+
+
+MIGRATION_V4 = _migration_v4_sql()
+
+
+def _strict_json_flag(value):
+    if not isinstance(value, str):
+        return 0
+    try:
+        parse_json_value_strict(value)
+    except (ContractError, TypeError, ValueError):
+        return 0
+    return 1
+
+
+def _validate_existing_json(db):
+    for table, columns in _JSON_COLUMNS.items():
+        for column in columns:
+            for rowid, raw in db.execute(f"SELECT rowid,{column} FROM {table}"):
+                if _strict_json_flag(raw) != 1:
+                    raise ComicError(
+                        "invalid_database_json",
+                        f"Databáze obsahuje nekanonický JSON v {table}.{column} (rowid={rowid}).",
+                    )
+
 
 def decoded(row):
     value = dict(row)
     for key in JSON_FIELDS & value.keys():
-        value[key] = json.loads(value[key])
+        try:
+            value[key] = parse_json_value_strict(value[key])
+        except (ContractError, TypeError) as exc:
+            raise ComicError(
+                "invalid_database_json",
+                f"Databáze obsahuje nekanonický JSON ve sloupci {key}.",
+            ) from exc
     return value
 
 
@@ -132,7 +201,7 @@ class ComicStore:
         self.root.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2, 3):
+            if version not in (0, 1, 2, 3, 4):
                 raise ComicError("unsupported_database", "Knihovna vyžaduje jinou verzi aplikace.")
             if version == 0:
                 existing = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -166,10 +235,26 @@ class ComicStore:
                     + "COMMIT;"
                 )
 
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version == 3:
+                # Starou knihovnu nejprve bezeztrátově ověříme. Migrace se
+                # nesmí stát razítkem nad již nekanonickým JSONem.
+                _validate_existing_json(db)
+                db.executescript(
+                    "BEGIN IMMEDIATE;"
+                    + MIGRATION_V4
+                    + "PRAGMA user_version=4;"
+                    + "INSERT INTO migrations VALUES(4,datetime('now'));"
+                    + "COMMIT;"
+                )
+            elif version == 4:
+                _validate_existing_json(db)
+
     @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
+        db.create_function("kajovo_strict_json", 1, _strict_json_flag, deterministic=True)
         db.execute("PRAGMA foreign_keys=ON")
         try:
             yield db
@@ -365,7 +450,7 @@ class ComicStore:
                 or continuity["project_id"] != project_id
                 or continuity["kind"] != "continuity"
                 or continuity["source_id"] != storyboard_id
-                or json.loads(continuity["result"]).get("status") != "pass"
+                or parse_json_value_strict(continuity["result"]).get("status") != "pass"
             ):
                 raise ComicError(
                     "continuity_missing",
@@ -393,7 +478,7 @@ class ComicStore:
             ).fetchone()
             if project is None:
                 raise ComicError("missing_record", "Projekt neexistuje.")
-            style = json.loads(project["style"])
+            style = parse_json_value_strict(project["style"])
             entity_rows = {
                 row["id"]: row
                 for row in db.execute(

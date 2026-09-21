@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .contracts import ContractError, parse_json_value_strict
+from .orchestration.contracts import canonical_bytes
+
 BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_COMPATIBILITY_VERSION = 1
 INDEX_SCHEMA_VERSION = 3
@@ -56,13 +59,7 @@ def _now_iso(timestamp: float | None = None) -> str:
 
 
 def _json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
+    return canonical_bytes(value)
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -92,25 +89,59 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 
 
 def _atomic_json(path: Path, value: Any) -> None:
-    _atomic_bytes(path, json.dumps(value, ensure_ascii=False, indent=2, default=str).encode("utf-8") + b"\n")
+    _atomic_bytes(path, canonical_bytes(value) + b"\n")
 
 
 def _append_jsonl(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(json.dumps(value, ensure_ascii=False, default=str) + "\n")
+        stream.write(canonical_bytes(value).decode("utf-8") + "\n")
         stream.flush()
         os.fsync(stream.fileno())
 
 
 def _read_json(path: Path, default: Any = None) -> Any:
     try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return default
+    try:
+        return parse_json_value_strict(text)
+    except ContractError as exc:
+        raise ValueError(f"Nekanonický JSON evidence: {path}") from exc
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return records
+    for line_no, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            value = parse_json_value_strict(line)
+        except ContractError as exc:
+            raise ValueError(
+                f"Nekanonický JSONL řádek {path}:{line_no}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"JSONL evidence musí obsahovat objekty: {path}:{line_no}")
+        records.append(value)
+    return records
+
+
+def _read_json_legacy(path: Path, default: Any = None) -> Any:
+    """Pouze read-only kompatibilita starých běhů; nikdy neřídí nový runtime."""
+    try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return default
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl_legacy(path: Path) -> list[dict[str, Any]]:
+    """Legacy historie smí přeskočit historicky poškozený řádek bez jeho přepsání."""
     records: list[dict[str, Any]] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -121,7 +152,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             continue
         try:
             value = json.loads(line)
-        except ValueError:
+        except (ValueError, TypeError):
             continue
         if isinstance(value, dict):
             records.append(value)
@@ -160,8 +191,8 @@ def _structured_value(text: str) -> Any:
     if not text.strip():
         return None
     try:
-        return json.loads(text)
-    except ValueError:
+        return parse_json_value_strict(text)
+    except (ContractError, ValueError):
         return None
 
 
@@ -1142,7 +1173,7 @@ class LegacyRunAdapter:
         return self.bundle is None
 
     def state(self) -> dict[str, Any]:
-        value = _read_json(self.root / "run_state.json", {})
+        value = _read_json_legacy(self.root / "run_state.json", {})
         return value if isinstance(value, dict) else {}
 
     def run_record(self) -> dict[str, Any]:
@@ -1186,7 +1217,7 @@ class LegacyRunAdapter:
         return self.bundle.steps() if self.bundle else []
 
     def events(self) -> list[dict[str, Any]]:
-        records = _read_jsonl(self.root / "events.jsonl")
+        records = _read_jsonl_legacy(self.root / "events.jsonl")
         if not self.legacy:
             return records
         normalized = []
@@ -1207,7 +1238,7 @@ class LegacyRunAdapter:
         records = []
         pattern = "*.json" if self.legacy else "_record_*.json"
         for path in sorted(directory.glob(pattern)):
-            value = _read_json(path, None)
+            value = _read_json_legacy(path, None)
             if isinstance(value, dict) and value.get(key):
                 records.append(value)
             elif self.legacy and isinstance(value, dict):
