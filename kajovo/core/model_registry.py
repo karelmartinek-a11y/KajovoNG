@@ -4,12 +4,64 @@ from __future__ import annotations
 from copy import deepcopy
 from functools import lru_cache
 from importlib.resources import files
-import json
+from .contracts import ContractError, parse_json_strict
+
+
+def _validate_matrix(value):
+    if not isinstance(value, dict) or not isinstance(value.get("version"), str):
+        raise ValueError("Modelová matice nemá platnou verzi.")
+    if not isinstance(value.get("checked_at"), str):
+        raise ValueError("Modelová matice nemá checked_at.")
+    if not isinstance(value.get("sources"), dict) or not isinstance(value.get("models"), dict):
+        raise ValueError("Modelová matice nemá sources/models objekt.")
+    for source_name, source in value["sources"].items():
+        if (
+            not isinstance(source_name, str)
+            or not isinstance(source, dict)
+            or not isinstance(source.get("url"), str)
+            or not isinstance(source.get("sha256"), str)
+            or len(source["sha256"]) != 64
+            or set(source["sha256"]) - set("0123456789abcdef")
+        ):
+            raise ValueError(f"Modelová matice má neplatný source záznam: {source_name!r}.")
+    required = {
+        "canonical", "responses", "batch", "features", "max_output_tokens",
+        "reasoning", "reasoning_supported", "sampling", "reasoning_modes",
+        "reasoning_summaries", "cache_retention", "cache_options",
+        "image_details", "deprecated", "endpoints", "service_tiers",
+    }
+    for model, spec in value["models"].items():
+        if not isinstance(model, str) or not isinstance(spec, dict) or not required <= set(spec):
+            raise ValueError(f"Modelová matice má neúplný model: {model!r}.")
+        if spec["canonical"] != model:
+            raise ValueError(f"Model {model} má jinou canonical identitu.")
+        if type(spec["responses"]) is not bool or type(spec["batch"]) is not bool or type(spec["deprecated"]) is not bool:
+            raise ValueError(f"Model {model} má neplatné boolean capability.")
+        for key in (
+            "features", "reasoning", "reasoning_modes", "reasoning_summaries",
+            "cache_retention", "image_details", "service_tiers",
+        ):
+            if not isinstance(spec[key], list) or any(not isinstance(item, str) for item in spec[key]):
+                raise ValueError(f"Model {model} má neplatné {key}.")
+        if not isinstance(spec["endpoints"], list) or any(
+            not isinstance(item, list)
+            or len(item) < 2
+            or not all(isinstance(part, str) for part in item[:2])
+            for item in spec["endpoints"]
+        ):
+            raise ValueError(f"Model {model} má neplatné endpointy.")
+    return value
 
 
 @lru_cache(maxsize=1)
 def _matrix():
-    return json.loads(files("kajovo.core").joinpath("openai_model_matrix.json").read_text(encoding="utf-8"))
+    try:
+        parsed = parse_json_strict(
+            files("kajovo.core").joinpath("openai_model_matrix.json").read_text(encoding="utf-8")
+        )
+    except ContractError as exc:
+        raise ValueError("Modelová matice není kanonický JSON.") from exc
+    return _validate_matrix(parsed)
 
 
 def matrix_version():
