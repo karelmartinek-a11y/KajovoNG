@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import tempfile
 import time
@@ -843,10 +842,13 @@ def find_last_incomplete_run(log_dir: str) -> Optional[str]:
     for run_id in runs[:30]:
         state_path = os.path.join(log_dir, run_id, "run_state.json")
         try:
-            with open(state_path, "r", encoding="utf-8") as stream:
-                state = json.load(stream)
+            state = parse_json_strict(
+                Path(state_path).read_text(encoding="utf-8")
+            )
             if state.get("status") not in TERMINAL_STATUSES:
                 return run_id
-        except Exception:
+        except (OSError, OrchestrationError):
+            # Discovery historie může poškozený běh přeskočit, ale nikdy jej
+            # nepoužije jako zdroj pro runtime obnovu.
             continue
     return None
