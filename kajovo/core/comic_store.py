@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import sqlite3
 import tempfile
@@ -427,7 +426,7 @@ class ComicStore:
                 or continuity["project_id"] != project_id
                 or continuity["kind"] != "continuity"
                 or continuity["source_id"] != storyboard_id
-                or json.loads(continuity["result"]).get("status") != "pass"
+                or parse_json_value_strict(continuity["result"]).get("status") != "pass"
             ):
                 raise ComicError(
                     "continuity_missing",
@@ -455,7 +454,7 @@ class ComicStore:
             ).fetchone()
             if project is None:
                 raise ComicError("missing_record", "Projekt neexistuje.")
-            style = json.loads(project["style"])
+            style = parse_json_value_strict(project["style"])
             entity_rows = {
                 row["id"]: row
                 for row in db.execute(
