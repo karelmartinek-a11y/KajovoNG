@@ -1,0 +1,55 @@
+name: canonical-contract-links
+
+on:
+  push:
+    branches: [main, fix/canonical-contract-links]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-links-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: canonical-contracts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Linux Qt runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install contract test environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: First complete source and physical schema pass
+        run: python tools/verify_contract_links.py --output contract-links-first.json
+      - name: Recovery and physical contract regression
+        run: python -m pytest -q tests/test_orchestration_repository.py tests/test_response_journal.py tests/test_delivery_pipeline.py tests/test_filesystem_boundaries.py tests/test_comic_domain.py tests/test_generate_batch_waves.py tests/test_cascade.py tests/test_cascade_v2.py
+      - name: Independent repeated source and physical schema pass
+        if: always()
+        run: python tools/verify_contract_links.py --output contract-links-second.json --compare contract-links-first.json
+      - name: Preserve contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-links-${{ matrix.os }}-${{ github.sha }}
+          path: contract-links-*.json
+          if-no-files-found: error
