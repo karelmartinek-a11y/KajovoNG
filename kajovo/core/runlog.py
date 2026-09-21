@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .orchestration.contracts import canonical_bytes
 from .run_bundle import RunBundle, TERMINAL_STATUSES
 from .safe_config import persist_evidence, redact_evidence
 from .utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
@@ -290,7 +291,13 @@ class RunLogger:
         )
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-                json.dump(persist_evidence(payload), stream, ensure_ascii=False, indent=2, default=str)
+                json.dump(
+                    persist_evidence(payload),
+                    stream,
+                    ensure_ascii=False,
+                    indent=2,
+                    allow_nan=False,
+                )
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
@@ -362,14 +369,9 @@ class RunLogger:
             patch["run_scope_hash"] = state["run_scope_hash"]
         configuration = ui or state.get("configuration_snapshot")
         if configuration:
-            raw = json.dumps(
-                configuration,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-            patch["configuration_snapshot_hash"] = hashlib.sha256(raw).hexdigest()
+            patch["configuration_snapshot_hash"] = hashlib.sha256(
+                canonical_bytes(configuration)
+            ).hexdigest()
         return patch
 
     def _canonical_response_record_ids(self, provider_ids: list[str]) -> list[str]:
@@ -459,15 +461,7 @@ class RunLogger:
         if isinstance(archive, dict) and not archive.get("complete"):
             safe = False
             reason = "Vstupní soubory se nepodařilo úplně archivovat; opakování není bezpečné."
-        state_hash = hashlib.sha256(
-            json.dumps(
-                state,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-        ).hexdigest()
+        state_hash = hashlib.sha256(canonical_bytes(state)).hexdigest()
         for existing in self.bundle.checkpoints():
             if (
                 existing.get("checkpoint_type") == checkpoint_type
