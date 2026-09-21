@@ -19,7 +19,7 @@ from .batch_submit import exact_batch_matches
 from .comic_types import IMAGE_MODEL, ComicError
 from .contracts import ContractError, parse_json_strict
 from .image_runtime import inspect_image
-from .orchestration.contracts import canonical_sha256
+from .orchestration.contracts import canonical_bytes, canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.image_slots import image_policy
 from .orchestration.repository import OrchestrationRepository
@@ -398,14 +398,7 @@ def new_job(
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     plan = copy_photo_plan(photo_plan or manual_photo_plan(prompt), prompt)
-    plan_hash = hashlib.sha256(
-        json.dumps(
-            plan,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    plan_hash = canonical_sha256(plan)
     stamp = _now()
     items = make_items(source_paths)
     return PhotoBatchJob(
@@ -440,7 +433,7 @@ def save_job(job: PhotoBatchJob, log_dir: str | Path) -> Path:
     job.updated_at = _now()
     atomic_write_text(
         str(root / "photo_job.json"),
-        json.dumps(asdict(job), ensure_ascii=False, indent=2) + "\n",
+        canonical_bytes(asdict(job)).decode("utf-8") + "\n",
     )
     return root
 
@@ -586,11 +579,9 @@ def _prepare_photo_submit(job, rows, log_dir):
     root = save_job(job, log_dir)
     atomic_write_text(
         str(root / "work_order_v2.json"),
-        json.dumps(
-            {**order.to_dict(), "order_hash": order.order_hash},
-            ensure_ascii=False,
-            indent=2,
-        )
+        canonical_bytes(
+            {**order.to_dict(), "order_hash": order.order_hash}
+        ).decode("utf-8")
         + "\n",
     )
     return repo, order
@@ -738,7 +729,7 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
     root = save_job(job, log_dir)
     jsonl = root / "batch_input.jsonl"
     text = "".join(
-        json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+        canonical_bytes(row).decode("utf-8") + "\n"
         for row in rows
     )
     if len(text.encode("utf-8")) > 200_000_000:
