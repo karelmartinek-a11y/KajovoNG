@@ -734,7 +734,27 @@ class OrchestrationRepository:
             db.commit()
 
     def set_remote_input_file(self, attempt_id: str, file_id: str) -> None:
+        if not isinstance(file_id, str) or not file_id.strip():
+            raise OrchestrationError("REMOTE_INPUT_FILE_INVALID", attempt_id)
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """
+                SELECT remote_input_file_id,state
+                FROM provider_operations WHERE attempt_id=?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if not row:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+            current_file, state = row
+            if current_file and current_file != file_id:
+                db.rollback()
+                raise OrchestrationError("REMOTE_INPUT_FILE_CONFLICT", attempt_id)
+            if state == "completed" and current_file != file_id:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
             db.execute(
                 """
                 UPDATE provider_operations
@@ -743,6 +763,7 @@ class OrchestrationRepository:
                 """,
                 (file_id, _now(), attempt_id),
             )
+            db.commit()
 
     def record_usage(
         self,
@@ -767,6 +788,12 @@ class OrchestrationRepository:
                 ).fetchone()
                 if not operation:
                     raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+                state, provider_id = operation
+                if state not in {"submitted", "completed"} or not provider_id:
+                    raise OrchestrationError(
+                        "PROVIDER_OPERATION_NOT_CONFIRMED",
+                        attempt_id,
+                    )
                 current = db.execute(
                     """
                     SELECT usage_json FROM usage_records
