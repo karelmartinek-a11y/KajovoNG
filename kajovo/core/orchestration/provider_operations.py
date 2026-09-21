@@ -140,6 +140,31 @@ def prepare_batch(
         )
 
 
+def bind_physical_request(
+    logger,
+    work_order: WorkOrder,
+    payload: dict[str, Any],
+    *,
+    remote_input_file_id: str | None = None,
+) -> None:
+    if work_order.provider_endpoint != "/v1/batches":
+        raise ContractError(
+            "Explicitní bind fyzického payloadu je určen pro provider BATCH."
+        )
+    if not isinstance(payload, dict):
+        raise ContractError("Fyzický provider payload musí být JSON objekt.")
+    input_file_id = str(payload.get("input_file_id") or "")
+    if not input_file_id or input_file_id != str(remote_input_file_id or ""):
+        raise ContractError(
+            "Fyzický BATCH payload a remote_input_file_id nejsou totožné."
+        )
+    repository_for_logger(logger).bind_physical_request(
+        work_order.attempt_id,
+        physical_request_hash=content_hash(payload),
+        remote_input_file_id=input_file_id,
+    )
+
+
 def mark_submission_started(logger, work_order: WorkOrder) -> None:
     repository_for_logger(logger).mark_submission_started(work_order.attempt_id)
 
