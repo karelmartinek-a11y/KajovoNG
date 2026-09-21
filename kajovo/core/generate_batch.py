@@ -1056,7 +1056,7 @@ def _prepare_v3_followup(run_dir, state, manifest, *, retry_source=None):
         repo.prepare_provider_operation(
             attempt_id=order.attempt_id,
             work_order_hash=persisted_hash,
-            endpoint="/v1/batches",
+            endpoint=order.provider_endpoint,
             request_hash=body_hash,
         )
         orders[custom_id] = order
