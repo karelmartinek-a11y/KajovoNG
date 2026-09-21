@@ -209,3 +209,34 @@ def test_corrupt_backup_never_replaces_our_written_target(tmp_path):
     with pytest.raises(OrchestrationError, match="BACKUP_HASH"):
         _restore_old(run, out, row)
     assert (out / "a.txt").read_bytes() == b"changed\n"
+
+
+
+def test_physical_contract_schemas_match_runtime_definitions():
+    from kajovo.core.orchestration.batch_manifest import BATCH_MANIFEST_V4_SCHEMA
+    from kajovo.core.orchestration.run_config import RUN_CONFIG_V2_SCHEMA
+    from kajovo.core.orchestration.verification import VERIFICATION_REPORT_V3_SCHEMA
+    from kajovo.core.orchestration.work_order import WORK_ORDER_V2_SCHEMA
+    from kajovo.core.structured_output import file_content_format
+
+    root = Path(__file__).resolve().parents[1]
+    contract_root = root / "resources" / "orchestration" / "contracts"
+    expected = {
+        contract_root / "local" / "BATCH_MANIFEST_V4.schema.json": BATCH_MANIFEST_V4_SCHEMA,
+        contract_root / "local" / "RUN_CONFIG_V2.schema.json": RUN_CONFIG_V2_SCHEMA,
+        contract_root / "local" / "VERIFICATION_REPORT_V3.schema.json": VERIFICATION_REPORT_V3_SCHEMA,
+        contract_root / "local" / "WORK_ORDER_V2.schema.json": WORK_ORDER_V2_SCHEMA,
+        contract_root / "wire" / "FILE_CONTENT_V1.schema.json": file_content_format()["format"]["schema"],
+    }
+
+    assert set(contract_root.rglob("*.schema.json")) == set(expected)
+    for schema_path, runtime_schema in expected.items():
+        physical = json.loads(schema_path.read_text(encoding="utf-8"))
+        runtime = copy.deepcopy(runtime_schema)
+        physical.pop("$schema", None)
+        runtime.pop("$schema", None)
+        assert physical == runtime, schema_path.relative_to(root)
+
+    assert not (
+        contract_root / "local" / "VERIFICATION_REPORT_V2.schema.json"
+    ).exists()

@@ -117,12 +117,19 @@ def deny_network(*args, **kwargs):
 def schema_inventory():
     import jsonschema
     from kajovo.core.structured_output import file_content_format, qa_answer_format, qfile_plan_format, text_format, validate_schema
+    from kajovo.core.orchestration.batch_manifest import BATCH_MANIFEST_V4_SCHEMA
+    from kajovo.core.orchestration.contracts import parse_json_strict
+    from kajovo.core.orchestration.run_config import RUN_CONFIG_V2_SCHEMA
+    from kajovo.core.orchestration.verification import VERIFICATION_REPORT_V3_SCHEMA
+    from kajovo.core.orchestration.work_order import WORK_ORDER_V2_SCHEMA
 
     records, errors = [], []
     modules = [
         "kajovo.core.orchestration.preparation",
         "kajovo.core.orchestration.work_order",
         "kajovo.core.orchestration.run_config",
+        "kajovo.core.orchestration.batch_manifest",
+        "kajovo.core.orchestration.verification",
         "kajovo.core.comic_types",
         "kajovo.core.photo_prompt",
         "kajovo.core.cascade_contract",
@@ -156,6 +163,51 @@ def schema_inventory():
         fmt = factory()["format"]
         validate_schema(fmt["schema"])
         records.append({"name": factory.__name__, "contract": fmt["name"], "kind": "provider_mask", "sha256": fingerprint(fmt["schema"]), "status": "passed"})
+    contract_root = ROOT / "resources" / "orchestration" / "contracts"
+    physical_contracts = {
+        contract_root / "local" / "BATCH_MANIFEST_V4.schema.json": BATCH_MANIFEST_V4_SCHEMA,
+        contract_root / "local" / "RUN_CONFIG_V2.schema.json": RUN_CONFIG_V2_SCHEMA,
+        contract_root / "local" / "VERIFICATION_REPORT_V3.schema.json": VERIFICATION_REPORT_V3_SCHEMA,
+        contract_root / "local" / "WORK_ORDER_V2.schema.json": WORK_ORDER_V2_SCHEMA,
+        contract_root / "wire" / "FILE_CONTENT_V1.schema.json": file_content_format()["format"]["schema"],
+    }
+    actual_contracts = set(contract_root.rglob("*.schema.json"))
+    expected_contracts = set(physical_contracts)
+    for path in sorted(actual_contracts - expected_contracts):
+        errors.append({
+            "name": str(path.relative_to(ROOT)),
+            "error": "Fyzická JSON maska nemá kanonickou runtime vazbu.",
+        })
+    for path in sorted(expected_contracts - actual_contracts):
+        errors.append({
+            "name": str(path.relative_to(ROOT)),
+            "error": "Kanonická runtime maska nemá fyzický JSON Schema soubor.",
+        })
+
+    def normalized_schema(value):
+        normalized = json.loads(json.dumps(value, ensure_ascii=False))
+        normalized.pop("$schema", None)
+        return normalized
+
+    for path, runtime_schema in physical_contracts.items():
+        if not path.is_file():
+            continue
+        try:
+            physical_schema = parse_json_strict(path.read_text(encoding="utf-8"))
+            jsonschema.Draft202012Validator.check_schema(physical_schema)
+            if normalized_schema(physical_schema) != normalized_schema(runtime_schema):
+                raise ValueError("Fyzická a runtime JSON maska se liší.")
+            records.append({
+                "name": str(path.relative_to(ROOT)),
+                "kind": "physical_schema_binding",
+                "sha256": fingerprint(normalized_schema(physical_schema)),
+                "status": "passed",
+            })
+        except Exception as exc:
+            errors.append({
+                "name": str(path.relative_to(ROOT)),
+                "error": type(exc).__name__ + ": " + str(exc),
+            })
     return {"schemas": records, "errors": errors}
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import os
 import platform
@@ -9,6 +10,8 @@ import shutil
 import subprocess
 import tomllib
 import xml.etree.ElementTree as ET
+
+import jsonschema
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +19,130 @@ from typing import Any
 from ..utils import safe_join_under_root, sha256_file
 from .contracts import canonical_sha256, parse_json_strict, parse_json_value_strict
 from .errors import OrchestrationError
+
+
+_VERIFICATION_CHECK_V3_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "criterion_id": {"type": "string"},
+        "kind": {
+            "type": "string",
+            "enum": ["deterministic", "model_review", "human"],
+        },
+        "status": {
+            "type": "string",
+            "enum": ["passed", "failed", "skipped", "unsupported", "uncertain"],
+        },
+        "evidence_hashes": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        },
+        "path": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "detail": {"type": "string"},
+    },
+    "required": [
+        "id",
+        "criterion_id",
+        "kind",
+        "status",
+        "evidence_hashes",
+        "path",
+        "detail",
+    ],
+    "additionalProperties": False,
+}
+
+_RUNNER_V3_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "image_digest": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "platform": {"type": "string"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "finished_at": {"type": "string", "format": "date-time"},
+    },
+    "required": ["image_digest", "platform", "started_at", "finished_at"],
+    "additionalProperties": False,
+}
+
+TECHNICAL_VERIFICATION_REPORT_V3_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "version": {"type": "integer", "enum": [3]},
+        "target_id": {"type": "string"},
+        "target_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "profile_id": {"type": "string"},
+        "profile_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "result": {
+            "type": "string",
+            "enum": ["passed", "failed", "unsupported", "needs_human"],
+        },
+        "format_result": {
+            "type": "string",
+            "enum": ["passed", "partial", "failed"],
+        },
+        "functional_result": {
+            "type": "string",
+            "enum": ["not_run", "not_applicable", "unsupported", "passed", "failed"],
+        },
+        "human_result": {
+            "type": "string",
+            "enum": ["unverified", "accepted", "rejected"],
+        },
+        "checks": {
+            "type": "array",
+            "minItems": 1,
+            "items": _VERIFICATION_CHECK_V3_SCHEMA,
+        },
+        "runner": _RUNNER_V3_SCHEMA,
+    },
+    "required": [
+        "version",
+        "target_id",
+        "target_hash",
+        "profile_id",
+        "profile_hash",
+        "result",
+        "format_result",
+        "functional_result",
+        "human_result",
+        "checks",
+        "runner",
+    ],
+    "additionalProperties": False,
+}
+
+VERIFICATION_REPORT_V3_SCHEMA: dict[str, Any] = copy.deepcopy(
+    TECHNICAL_VERIFICATION_REPORT_V3_SCHEMA
+)
+VERIFICATION_REPORT_V3_SCHEMA["properties"].update(
+    {
+        "candidate_mode": {"type": "string", "enum": ["GENERATE", "MODIFY", "QFILE"]},
+        "candidate_root": {"type": "string"},
+        "candidate_scope": {
+            "type": "string",
+            "enum": ["approved_source_pack_plus_staged", "staged_outputs"],
+        },
+    }
+)
+VERIFICATION_REPORT_V3_SCHEMA["required"].extend(
+    ["candidate_mode", "candidate_root", "candidate_scope"]
+)
+
+
+def _validate_verification_report(
+    report: dict[str, Any],
+    schema: dict[str, Any],
+) -> None:
+    try:
+        jsonschema.Draft202012Validator(
+            schema, format_checker=jsonschema.FormatChecker()
+        ).validate(report)
+    except jsonschema.ValidationError as exc:
+        raise OrchestrationError(
+            "VERIFY_REPORT_CONTRACT",
+            f"Verification report porušuje strict V3 kontrakt: {exc.message}",
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -164,7 +291,11 @@ def _report(
     functional_result: str,
     human_result: str = "unverified",
 ) -> dict[str, Any]:
-    return {
+    normalized_checks = [
+        {**check, "path": check.get("path")}
+        for check in checks
+    ]
+    report = {
         "version": 3,
         "target_id": plan.target_id,
         "target_hash": plan.target_hash,
@@ -174,7 +305,7 @@ def _report(
         "format_result": format_result,
         "functional_result": functional_result,
         "human_result": human_result,
-        "checks": checks,
+        "checks": normalized_checks,
         "runner": {
             "image_digest": image_digest,
             "platform": platform.system().lower(),
@@ -182,6 +313,8 @@ def _report(
             "finished_at": finished_at,
         },
     }
+    _validate_verification_report(report, TECHNICAL_VERIFICATION_REPORT_V3_SCHEMA)
+    return report
 
 
 def _static_format_checks(root: Path) -> tuple[list[dict[str, Any]], str]:
@@ -553,6 +686,7 @@ def candidate_verification_report(
         if mode == "MODIFY"
         else "staged_outputs"
     )
+    _validate_verification_report(report, VERIFICATION_REPORT_V3_SCHEMA)
     return report
 
 

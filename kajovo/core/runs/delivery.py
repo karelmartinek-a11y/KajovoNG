@@ -256,7 +256,7 @@ def save_out_files(
     )
     context.log.save_json("manifests", "staged_outputs_v2", manifest)
     context.log.save_json(
-        "manifests", "verification_report_v2", verification
+        "manifests", "verification_report_v3", verification
     )
     if diff_text:
         context.log.save_json(
