@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import shutil
 import tempfile
@@ -86,10 +85,14 @@ def _write_bytes_atomic(path: Path, data: bytes) -> None:
 
 
 def _write_journal(path: Path, journal: dict[str, Any]) -> None:
-    _write_bytes_atomic(
-        path,
-        (json.dumps(journal, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
-    )
+    _write_bytes_atomic(path, canonical_bytes(journal) + b"\n")
+
+
+def _read_journal(path: Path) -> dict[str, Any]:
+    try:
+        return parse_json_strict(path.read_text(encoding="utf-8"))
+    except (OSError, OrchestrationError) as exc:
+        raise OrchestrationError("PUBLISH_JOURNAL_INVALID", str(path)) from exc
 
 
 def _hash_if_file(path: Path) -> str | None:
@@ -416,10 +419,10 @@ def recover_publish_journal(run_dir: str | Path) -> dict[str, Any] | None:
     journal_path = run_root / "manifests" / "publish_journal.json"
     if not journal_path.is_file():
         return None
+    journal = _read_journal(journal_path)
     try:
-        journal = parse_json_strict(journal_path.read_text(encoding="utf-8"))
         target_root = Path(journal["plan"]["target_root"]).resolve()
-    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError) as exc:
         raise OrchestrationError("PUBLISH_JOURNAL_INVALID", str(journal_path)) from exc
     with _TargetPublishLock(target_root):
         return _recover_journal_locked(journal_path, run_root, journal)
@@ -433,7 +436,7 @@ def commit_publish(plan: PublishPlan, *, run_dir: str | Path) -> dict[str, Any]:
 
     with _TargetPublishLock(target_root):
         if journal_path.is_file():
-            existing = parse_json_strict(journal_path.read_text(encoding="utf-8"))
+            existing = _read_journal(journal_path)
             report = _recover_journal_locked(journal_path, run_root, existing)
             if report["status"] == "committed":
                 if existing["plan"]["plan_id"] != plan.plan_id:
