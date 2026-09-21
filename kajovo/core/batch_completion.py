@@ -234,7 +234,13 @@ def recover_unknown_submission(run_dir, records):
 def local_batches(log_dir):
     records = {}
     for path in sorted(Path(log_dir).glob("RUN_*/run_state.json"), reverse=True):
-        state = read_state(path.parent)
+        try:
+            state = read_state(path.parent)
+        except (ContractError, OSError, ValueError):
+            # Historický index nesmí kvůli jednomu poškozenému běhu
+            # znepřístupnit ostatní dávky. Samotná obnova takového běhu
+            # zůstává fail-closed přes read_state().
+            continue
         work = batch_ids(state)
         for bid in dict.fromkeys([*work, *preflight_ids(state)]):
             info = dict(
