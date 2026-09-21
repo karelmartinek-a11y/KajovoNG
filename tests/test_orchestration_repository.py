@@ -18,6 +18,7 @@ def _order(run_id: str, task_id: str, attempt_id: str) -> WorkOrder:
         task_id=task_id,
         stage="TEST",
         route="responses_live",
+        provider_endpoint="/v1/responses",
         target_id=task_id,
         target_path=None,
         expected_target_hash=None,
@@ -52,7 +53,7 @@ def test_provider_operation_prevents_duplicate_submit(tmp_path):
     _run(repo, "RUN-1")
     order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
     work_hash = repo.register_work_order(
-        order, body_ref="body", input_hash=order.input_projection_hash
+        order, body_ref="request", input_hash=order.input_projection_hash
     )
     assert repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
@@ -75,7 +76,7 @@ def test_confirmed_provider_submit_cannot_be_reopened(tmp_path):
     _run(repo, "RUN-1")
     order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
     work_hash = repo.register_work_order(
-        order, body_ref="body", input_hash=order.input_projection_hash
+        order, body_ref="request", input_hash=order.input_projection_hash
     )
     repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
@@ -97,7 +98,7 @@ def test_raw_usage_is_idempotent_and_operation_completes(tmp_path):
     _run(repo, "RUN-1")
     order = _order("RUN-1", "TASK-1", "ATTEMPT-1")
     work_hash = repo.register_work_order(
-        order, body_ref="body", input_hash=order.input_projection_hash
+        order, body_ref="request", input_hash=order.input_projection_hash
     )
     repo.prepare_provider_operation(
         attempt_id=order.attempt_id,
@@ -147,7 +148,18 @@ def test_new_schema_contains_only_nonfinancial_provider_evidence(tmp_path):
         usage_columns = {
             row[1] for row in db.execute("PRAGMA table_info(usage_records)")
         }
+        work_order_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(work_orders)")
+        }
     assert "provider_operations" in tables
+    assert work_order_columns >= {
+        "work_order_hash",
+        "attempt_id",
+        "provider_endpoint",
+        "work_order_json",
+        "body_ref",
+        "input_hash",
+    }
     assert provider_columns >= {
         "attempt_id",
         "work_order_hash",
@@ -162,3 +174,64 @@ def test_new_schema_contains_only_nonfinancial_provider_evidence(tmp_path):
         "attempt_id",
         "usage_json",
     }
+
+
+
+def test_work_order_persists_exact_canonical_json_and_endpoint(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-EXACT")
+    order = _order("RUN-EXACT", "TASK-EXACT", "unused")
+    request_hash = canonical_sha256({"payload": "exact"})
+    work_hash = repo.register_work_order(
+        order,
+        body_ref=request_hash,
+        input_hash=order.input_projection_hash,
+    )
+    with repo.connect() as db:
+        row = db.execute(
+            """
+            SELECT work_order_json,attempt_id,provider_endpoint,body_ref
+            FROM work_orders WHERE work_order_hash=?
+            """,
+            (work_hash,),
+        ).fetchone()
+    assert json.loads(row[0]) == order.to_dict()
+    assert row[1] == order.attempt_id
+    assert row[2] == order.provider_endpoint
+    assert row[3] == request_hash
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("request_hash", "different", "PROVIDER_REQUEST_HASH_MISMATCH"),
+        ("attempt_id", "ATTEMPT-different", "PROVIDER_ATTEMPT_MISMATCH"),
+        ("endpoint", "/v1/batches", "PROVIDER_ENDPOINT_MISMATCH"),
+    ],
+)
+def test_provider_operation_rejects_physical_binding_mismatch(
+    tmp_path, field, value, code
+):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-BIND")
+    order = _order("RUN-BIND", "TASK-BIND", "unused")
+    request_hash = canonical_sha256({"payload": "bound"})
+    work_hash = repo.register_work_order(
+        order,
+        body_ref=request_hash,
+        input_hash=order.input_projection_hash,
+    )
+    args = {
+        "attempt_id": order.attempt_id,
+        "work_order_hash": work_hash,
+        "endpoint": order.provider_endpoint,
+        "request_hash": request_hash,
+    }
+    args[field] = value
+    with pytest.raises(OrchestrationError, match=code):
+        repo.prepare_provider_operation(**args)
+    with repo.connect() as db:
+        assert db.execute(
+            "SELECT 1 FROM provider_operations WHERE work_order_hash=?",
+            (work_hash,),
+        ).fetchone() is None
