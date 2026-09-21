@@ -136,6 +136,7 @@ def test_response_journal_reopens_exact_payload_with_domain_secret_field_names(t
     client.create_response.return_value = response
     journal = ResponseJournal(log, 2)
     assert journal.execute(client, payload, stopped=lambda: False, cancelled=lambda: False, progress=lambda *_: None)["id"] == "resp_domain"
+    log.update_state({"response_transport": "background", "status": "running"})
     restarted_log = RunLogger(str(tmp_path / "log"), "RUN_JOURNAL", "synthetic", resume=True)
     restarted = ResponseJournal(restarted_log, 2)
     assert restarted.has_entry(payload)
