@@ -2,32 +2,118 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "version": {"type": "integer", "enum": [2]},
-    "run_id": {"type": "string"},
-    "step_id": {"type": "string"},
-    "task_id": {"type": "string"},
-    "stage": {"type": "string"},
-    "route": {"type": "string", "enum": ["local", "responses_live", "responses_batch", "image_live", "image_batch"]},
-    "target_id": {"type": "string"},
-    "target_path": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-    "expected_target_hash": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-    "input_projection_hash": {"type": "string"},
-    "contract_name": {"type": "string"},
-    "schema_hash": {"type": "string"},
-    "prompt_hash": {"type": "string"},
-    "model": {"type": "string"},
-    "model_capability_hash": {"type": "string"},
-    "policy_hash": {"type": "string"},
-    "source_snapshot_hash": {"type": "string"},
-    "attempt_id": {"type": "string"},
-    "approval_id": {"type": "string"},
-    "attempt_no": {"type": "integer", "minimum": 1, "maximum": 3}
+    "version": {
+      "type": "integer",
+      "enum": [
+        2
+      ]
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "step_id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "stage": {
+      "type": "string"
+    },
+    "route": {
+      "type": "string",
+      "enum": [
+        "local",
+        "responses_live",
+        "responses_batch",
+        "image_live",
+        "image_batch"
+      ]
+    },
+    "target_id": {
+      "type": "string"
+    },
+    "target_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "expected_target_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "input_projection_hash": {
+      "type": "string"
+    },
+    "contract_name": {
+      "type": "string"
+    },
+    "schema_hash": {
+      "type": "string"
+    },
+    "prompt_hash": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "model_capability_hash": {
+      "type": "string"
+    },
+    "policy_hash": {
+      "type": "string"
+    },
+    "source_snapshot_hash": {
+      "type": "string"
+    },
+    "attempt_id": {
+      "type": "string"
+    },
+    "approval_id": {
+      "type": "string"
+    },
+    "attempt_no": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+    },
+    "provider_endpoint": {
+      "type": "string"
+    }
   },
   "required": [
-    "version", "run_id", "step_id", "task_id", "stage", "route", "target_id",
-    "target_path", "expected_target_hash", "input_projection_hash", "contract_name",
-    "schema_hash", "prompt_hash", "model", "model_capability_hash", "policy_hash",
-    "source_snapshot_hash", "attempt_id", "approval_id", "attempt_no"
+    "version",
+    "run_id",
+    "step_id",
+    "task_id",
+    "stage",
+    "route",
+    "provider_endpoint",
+    "target_id",
+    "target_path",
+    "expected_target_hash",
+    "input_projection_hash",
+    "contract_name",
+    "schema_hash",
+    "prompt_hash",
+    "model",
+    "model_capability_hash",
+    "policy_hash",
+    "source_snapshot_hash",
+    "attempt_id",
+    "approval_id",
+    "attempt_no"
   ],
   "additionalProperties": false
 }

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .contracts import parse_json_strict, parse_json_value_strict
 from .orchestration.contracts import canonical_bytes
+from .orchestration.errors import OrchestrationError
 from .utils import atomic_write_text
 
 
@@ -20,7 +21,10 @@ def save_artifact(run_dir, name, value):
         descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         if target.read_bytes() != raw:
-            raise ValueError("Obnovitelný artefakt byl poškozen; nelze jej přepsat.") from None
+            raise OrchestrationError(
+                "RECOVERY_ARTIFACT_CORRUPT",
+                "Obnovitelný artefakt byl poškozen; nelze jej přepsat.",
+            ) from None
     else:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(raw)
@@ -33,7 +37,10 @@ def save_artifact(run_dir, name, value):
         else {"version": 1, "entries": {}}
     )
     if index.get("version") != 1:
-        raise ValueError("Nepodporovaná verze indexu artefaktů.")
+        raise OrchestrationError(
+            "RECOVERY_INDEX_VERSION",
+            "Nepodporovaná verze indexu artefaktů.",
+        )
     index["entries"][name] = digest
     atomic_write_text(
         str(index_path),
@@ -49,7 +56,10 @@ def artifact_path(run_dir, name):
         return None
     index = parse_json_strict(index_path.read_text("utf-8"))
     if index.get("version") != 1:
-        raise ValueError("Nepodporovaná verze indexu artefaktů.")
+        raise OrchestrationError(
+            "RECOVERY_INDEX_VERSION",
+            "Nepodporovaná verze indexu artefaktů.",
+        )
     digest = index["entries"].get(name)
     if digest is None:
         return None
@@ -58,10 +68,16 @@ def artifact_path(run_dir, name):
         or len(digest) != 64
         or set(digest) - set("0123456789abcdef")
     ):
-        raise ValueError("Neplatná reference artefaktu.")
+        raise OrchestrationError(
+            "RECOVERY_ARTIFACT_REFERENCE",
+            "Neplatná reference artefaktu.",
+        )
     target = root / (digest + ".json")
     if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
-        raise ValueError("Obnovitelný artefakt má neplatný hash; jiná kopie evidence není náhradou.")
+        raise OrchestrationError(
+            "RECOVERY_ARTIFACT_HASH",
+            "Obnovitelný artefakt má neplatný hash; jiná kopie evidence není náhradou.",
+        )
     return str(target)
 
 
