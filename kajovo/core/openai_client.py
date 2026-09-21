@@ -16,6 +16,28 @@ from .openai_transport import (
 )
 
 
+def image_batch_submit_payload(
+    input_file_id: str,
+    endpoint: str,
+) -> dict[str, Any]:
+    if (
+        not isinstance(input_file_id, str)
+        or not re.fullmatch(r"[A-Za-z0-9_-]+", input_file_id)
+    ):
+        raise ValueError("Obrazový BATCH vyžaduje platné input_file_id.")
+    if endpoint not in {"/v1/images/generations", "/v1/images/edits"}:
+        raise ValueError("Obrazový BATCH má nepovolený řádkový endpoint.")
+    return {
+        "input_file_id": input_file_id,
+        "endpoint": endpoint,
+        "completion_window": "24h",
+        "output_expires_after": {
+            "anchor": "created_at",
+            "seconds": 2592000,
+        },
+    }
+
+
 class OpenAIClient:
     @staticmethod
     def _validate_resource_id(identifier: str) -> None:
@@ -93,10 +115,14 @@ class OpenAIClient:
             models.add(row["body"]["model"])
         if len(models) != 1 or len(endpoints) != 1:
             raise ValueError("Dávka musí mít jeden model a endpoint.")
-        return self._req("POST", "/batches", json_body={
-            "input_file_id": input_file_id, "endpoint": next(iter(endpoints)),
-            "completion_window": "24h", "output_expires_after": {"anchor": "created_at", "seconds": 2592000},
-        }, max_attempts=1)
+        return self._req(
+            "POST",
+            "/batches",
+            json_body=image_batch_submit_payload(
+                input_file_id, next(iter(endpoints))
+            ),
+            max_attempts=1,
+        )
 
     def list_models(self) -> List[Dict[str, Any]]:
         data = self._req("GET", "/models")
@@ -442,11 +468,13 @@ class OpenAIClient:
                 isinstance(row, dict) and isinstance(row.get("body"), dict) for row in rows
             ):
                 raise ValueError("Interní work submit vyžaduje již ověřené řádky dávky.")
-        body = {
-            "input_file_id": input_file_id,
-            "endpoint": endpoint,
-            "completion_window": completion_window,
-        }
+        from .batch_submit import response_batch_submit_payload
+
+        body = response_batch_submit_payload(
+            input_file_id,
+            endpoint=endpoint,
+            completion_window=completion_window,
+        )
         return self._req("POST", "/batches", json_body=body)
 
     def validate_batch_data(self, data):
