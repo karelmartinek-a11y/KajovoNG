@@ -171,7 +171,9 @@ def test_live_generate_partial_semantics_are_wired_end_to_end():
     pipeline = Path("kajovo/core/runs/generate.py").read_text(encoding="utf-8")
     from kajovo.studio.operations import STATES
 
-    assert '"status": "partial" if missing_deliverables else "files_complete_unverified"' in pipeline
+    assert '"waiting_manual_resource"' in pipeline
+    assert 'else "partial"' in pipeline
+    assert 'else "files_complete_unverified"' in pipeline
     executor = Path("kajovo/core/runs/executor.py").read_text(encoding="utf-8")
     assert 'final_status in ("completed", "partial", "dry_run", "files_complete_unverified")' in executor
     assert STATES["partial"] == "Dokončeno s chybami"

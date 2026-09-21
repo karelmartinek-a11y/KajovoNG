@@ -1,5 +1,6 @@
 """Integrita přípravy, její obnova a bezpečné ukládání změn."""
 
+import hashlib
 from copy import deepcopy
 from unittest.mock import Mock
 
@@ -126,7 +127,10 @@ def test_modify_write_rejects_user_edit_during_generation(tmp_path):
     target = tmp_path / "out"
     target.mkdir(exist_ok=True)
     original = target / "hello.txt"
-    worker._delivery_overwrite_hashes = {}
+    original.write_text("původní stav", encoding="utf-8")
+    worker._delivery_overwrite_hashes = {
+        "hello.txt": hashlib.sha256(original.read_bytes()).hexdigest()
+    }
     original.write_text("uživatelská změna", encoding="utf-8")
     with pytest.raises(ContractError, match="OUT se během generování změnil"):
         worker._save_out_files([{"path": "hello.txt", "content": "výsledek"}])

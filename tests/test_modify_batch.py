@@ -176,12 +176,15 @@ def test_modify_retry_keeps_source_manifest_and_original_hashes(tmp_path):
     result = complete_saved_batch(client, run, "batch_retry", worker.settings)
     assert result["status"] == "files_complete_unverified"
     assert result["published"] is False
-    assert result["staged_files"][0]["expected_target_hash"] == original_hash
+    staged = next(
+        row for row in result["staged_files"] if row["path"] == "maths.py"
+    )
+    assert staged["expected_target_hash"] == original_hash
     from kajovo.core.orchestration.publish import prepare_publish
     from kajovo.core.orchestration.errors import OrchestrationError
 
     with pytest.raises(OrchestrationError, match="PUBLISH_CONFLICT"):
-        prepare_publish(result["staged_files"], out, {"maths.py": original_hash}, run_dir=run)
+        prepare_publish([staged], out, {"maths.py": original_hash}, run_dir=run)
     assert (out / "maths.py").read_text(encoding="utf-8") == "po odeslání"
     client.create_response.assert_not_called()
 
