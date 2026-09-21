@@ -17,6 +17,7 @@ from typing import Iterable
 
 from .batch_submit import exact_batch_matches
 from .comic_types import IMAGE_MODEL, ComicError
+from .contracts import ContractError, parse_json_strict
 from .image_runtime import inspect_image
 from .orchestration.contracts import canonical_sha256
 from .orchestration.errors import OrchestrationError
@@ -368,9 +369,7 @@ def copy_photo_plan(value, final_prompt: str) -> dict:
             raise ValueError(f"PHOTO_PLAN_V1.{key} musí být seznam neprázdných textů.")
     if not value["edit_actions"] or not value["acceptance_criteria"]:
         raise ValueError("PHOTO_PLAN_V1 vyžaduje edit_actions a acceptance_criteria.")
-    return json.loads(
-        json.dumps(value, ensure_ascii=False, sort_keys=True)
-    )
+    return copy.deepcopy(value)
 
 
 def new_job(
@@ -457,25 +456,21 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
         reverse=True,
     ):
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            for item in data.get("items", []):
+            data = parse_json_strict(path.read_text(encoding="utf-8"))
+            items = data.get("items", [])
+            if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+                raise ValueError("Photo job items musí být seznam objektů.")
+            for item in items:
                 item.setdefault("provider_result_sha256", "")
-            data["items"] = [PhotoBatchItem(**item) for item in data.get("items", [])]
+            data["items"] = [PhotoBatchItem(**item) for item in items]
             data["schema_version"] = max(3, int(data.get("schema_version") or 1))
             if not data.get("photo_plan"):
                 data["photo_plan"] = manual_photo_plan(data.get("final_prompt", ""))
             if not data.get("photo_plan_sha256"):
-                data["photo_plan_sha256"] = hashlib.sha256(
-                    json.dumps(
-                        data["photo_plan"],
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                ).hexdigest()
+                data["photo_plan_sha256"] = canonical_sha256(data["photo_plan"])
             jobs.append(PhotoBatchJob(**data))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            continue
+        except (OSError, ContractError, ValueError, TypeError) as exc:
+            raise ValueError(f"Photo job evidence je poškozená: {path}") from exc
     return jobs
 
 
@@ -918,11 +913,9 @@ def _jsonl(data: bytes, name: str) -> list[dict]:
         if not line.strip():
             continue
         try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{name}: neplatný JSON na řádku {no}: {exc}") from exc
-        if not isinstance(row, dict):
-            raise ValueError(f"{name}: řádek {no} není JSON objekt.")
+            row = parse_json_strict(line)
+        except ContractError as exc:
+            raise ValueError(f"{name}: nekanonický JSON na řádku {no}.") from exc
         rows.append(row)
     return rows
 
