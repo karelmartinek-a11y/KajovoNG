@@ -116,6 +116,17 @@ def test_persistence_preserves_schema_and_separates_runtime_credentials(tmp_path
     assert persist_evidence(stored) == stored
 
 
+
+
+def test_direct_json_schema_evidence_is_not_redacted_by_domain_field_names():
+    schema = obj({
+        "password": {"type": "string"},
+        "token": {"type": "string"},
+        "secret": {"type": "string"},
+    })
+    assert persist_evidence(schema) == schema
+    assert canonical_sha256(persist_evidence(schema)) == canonical_sha256(schema)
+
 def test_response_journal_reopens_exact_payload_with_domain_secret_field_names(tmp_path):
     schema = obj({"token": {"type": "string"}})
     payload = {"model": "gpt-5.6-luna", "input": "Popiš token=length.", "text": response_format("DOMAIN_TOKEN", schema)}
