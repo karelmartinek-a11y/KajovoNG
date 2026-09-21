@@ -35,6 +35,7 @@ from .comic_types import (
 )
 from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, source_bytes, validate_image_request
 from .model_registry import model_spec, models_for_usage
+from .openai_client import image_batch_submit_payload
 from .orchestration.contracts import canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.provider_operations import (
@@ -1385,7 +1386,13 @@ class ComicService:
                         },
                         projection=projection,
                     )
-                    _repo.set_remote_input_file(batch_order.attempt_id, file_id)
+                    _repo.bind_physical_request(
+                        batch_order.attempt_id,
+                        physical_request_hash=canonical_sha256(
+                            image_batch_submit_payload(file_id, batch["endpoint"])
+                        ),
+                        remote_input_file_id=file_id,
+                    )
                     mark_submission_started(log, batch_order)
                     self.progress("COMIC_SUBMITTING", detail="Odesílám pracovní dávku")
                     try:
