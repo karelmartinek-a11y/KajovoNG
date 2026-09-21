@@ -54,8 +54,11 @@ def test_image_batch_submit_payload_contains_only_documented_batch_fields():
         "input_file_id": "file_123",
         "endpoint": "/v1/images/edits",
         "completion_window": "24h",
+        "output_expires_after": {
+            "anchor": "created_at",
+            "seconds": 2592000,
+        },
     }
-    assert "output_expires_after" not in body
 
 
 def test_response_journal_rejects_duplicate_keys(tmp_path):
