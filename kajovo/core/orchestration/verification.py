@@ -117,7 +117,7 @@ VERIFICATION_REPORT_V3_SCHEMA: dict[str, Any] = copy.deepcopy(
 )
 VERIFICATION_REPORT_V3_SCHEMA["properties"].update(
     {
-        "candidate_mode": {"type": "string", "enum": ["GENERATE", "MODIFY"]},
+        "candidate_mode": {"type": "string", "enum": ["GENERATE", "MODIFY", "QFILE"]},
         "candidate_root": {"type": "string"},
         "candidate_scope": {
             "type": "string",
