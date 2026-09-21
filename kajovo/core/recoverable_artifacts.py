@@ -6,19 +6,15 @@ import json
 import os
 from pathlib import Path
 
+from .contracts import parse_json_strict, parse_json_value_strict
+from .orchestration.contracts import canonical_bytes
 from .utils import atomic_write_text
 
 
 def save_artifact(run_dir, name, value):
     root = Path(run_dir) / "artifacts"
     root.mkdir(exist_ok=True, mode=0o700)
-    raw = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
+    raw = canonical_bytes(value)
     digest = hashlib.sha256(raw).hexdigest()
     target = root / (digest + ".json")
     try:
@@ -33,7 +29,7 @@ def save_artifact(run_dir, name, value):
             os.fsync(stream.fileno())
     index_path = root / "index.json"
     index = (
-        json.loads(index_path.read_text("utf-8"))
+        parse_json_strict(index_path.read_text("utf-8"))
         if index_path.exists()
         else {"version": 1, "entries": {}}
     )
@@ -42,7 +38,7 @@ def save_artifact(run_dir, name, value):
     index["entries"][name] = digest
     atomic_write_text(
         str(index_path),
-        json.dumps(index, ensure_ascii=False, sort_keys=True),
+        canonical_bytes(index).decode("utf-8"),
     )
     return str(target)
 
@@ -52,7 +48,7 @@ def artifact_path(run_dir, name):
     index_path = root / "index.json"
     if not index_path.exists():
         return None
-    index = json.loads(index_path.read_text("utf-8"))
+    index = parse_json_strict(index_path.read_text("utf-8"))
     if index.get("version") != 1:
         raise ValueError("Nepodporovaná verze indexu artefaktů.")
     digest = index["entries"].get(name)
@@ -80,10 +76,10 @@ STATE_ARTIFACTS = {
 
 
 def load_run_state(run_dir):
-    state = json.loads((Path(run_dir) / "run_state.json").read_text("utf-8"))
+    state = parse_json_strict((Path(run_dir) / "run_state.json").read_text("utf-8"))
     for name in STATE_ARTIFACTS:
         path = artifact_path(run_dir, "state/" + name)
         # Vymazaný stavový klíč se nesmí obnovit ze staršího artefaktu.
         if path and name in state:
-            state[name] = json.loads(Path(path).read_text("utf-8"))
+            state[name] = parse_json_value_strict(Path(path).read_text("utf-8"))
     return state
