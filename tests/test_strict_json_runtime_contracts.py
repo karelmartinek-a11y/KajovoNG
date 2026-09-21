@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -145,3 +146,37 @@ def test_comic_canonical_maps_only_tuple_sequences_to_json_arrays():
     )
     with pytest.raises(OrchestrationError):
         comic_canonical({"bad": object()})
+
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "kajovo/core/openai_client.py",
+        "kajovo/core/generate_batch.py",
+        "kajovo/core/response_journal.py",
+        "kajovo/core/recoverable_artifacts.py",
+        "kajovo/core/runs/recovery.py",
+        "kajovo/core/runs/executor.py",
+        "kajovo/core/runs/batch_execution.py",
+        "kajovo/core/orchestration/publish.py",
+        "kajovo/core/orchestration/resource_delivery.py",
+        "kajovo/core/photo_batch.py",
+        "kajovo/core/comic_service.py",
+        "kajovo/core/comic_store.py",
+        "kajovo/core/cascade_pipeline.py",
+        "kajovo/core/model_registry.py",
+        "kajovo/core/model_catalog.py",
+        "kajovo/core/project_git.py",
+        "kajovo/core/runlog.py",
+    ],
+)
+def test_canonical_runtime_modules_do_not_reintroduce_tolerant_json(relative):
+    source = (Path(__file__).parents[1] / relative).read_text(encoding="utf-8")
+    forbidden = (
+        "json.loads(",
+        "json.load(",
+        ".raw_decode(",
+        "default=str",
+    )
+    assert not [token for token in forbidden if token in source], relative
