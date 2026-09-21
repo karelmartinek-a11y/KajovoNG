@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
-from .contracts import canonical_sha256
-from .contracts import parse_json_strict
+from .contracts import canonical_bytes, canonical_sha256, parse_json_strict
 from .errors import OrchestrationError
 
 
@@ -513,7 +512,7 @@ def _apply_committed_report_to_state(
     state["publication_state"] = "published_unverified"
     _write_bytes_atomic(
         state_path,
-        (json.dumps(state, ensure_ascii=False, indent=2, default=str) + "\n").encode("utf-8"),
+        canonical_bytes(state) + b"\n",
     )
 
 
