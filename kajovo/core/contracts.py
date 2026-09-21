@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json, re
+import json
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
 from .utils import validate_relative_path
@@ -104,9 +104,6 @@ def extract_text_from_response(resp: Dict[str, Any]) -> str:
             return resp[k]
     raise ContractError("Odpověď API neobsahuje textový výsledek.")
 
-_JSON_OBJ_RE = re.compile(r"(\{.*\})", re.DOTALL)
-
-
 def _unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -168,29 +165,24 @@ def file_response_format(contract: str, path: str, chunk_index: int, action=None
     schema = {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
     return {"format": {"type": "json_schema", "name": contract, "strict": True, "schema": schema}}
 
-def parse_json_strict(text: str) -> Dict[str, Any]:
-    text = text.strip()
+def parse_json_value_strict(text: str) -> Any:
+    if not isinstance(text, str):
+        raise ContractError("JSON input must be a string.")
     try:
-        parsed = _load_json(text)
+        return _load_json(text)
     except ContractError:
         raise
-    except (ValueError, TypeError):
-        parsed = None
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise ContractError(
+            "Response is not exactly one valid JSON value (strict contract violated)."
+        ) from exc
 
-    if isinstance(parsed, dict):
-        return parsed
-    if parsed is not None:
+
+def parse_json_strict(text: str) -> Dict[str, Any]:
+    parsed = parse_json_value_strict(text)
+    if not isinstance(parsed, dict):
         raise ContractError("Response JSON must be an object.")
-
-    m = _JSON_OBJ_RE.search(text)
-    if m:
-        try:
-            parsed2 = _load_json(m.group(1))
-            if isinstance(parsed2, dict):
-                return parsed2
-        except (ValueError, TypeError):
-            pass
-    raise ContractError("Response is not valid JSON (strict contract violated).")
+    return parsed
 
 def validate_paths(files: List[Dict[str, Any]]) -> None:
     if not isinstance(files, list):
