@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import json
 import re
 import time
 import logging
@@ -31,6 +30,10 @@ def image_batch_submit_payload(
         "input_file_id": input_file_id,
         "endpoint": endpoint,
         "completion_window": "24h",
+        "output_expires_after": {
+            "anchor": "created_at",
+            "seconds": 2592000,
+        },
     }
 
 
