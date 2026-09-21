@@ -1,7 +1,7 @@
 import json
 
 from kajovo.core.model_catalog import ModelCatalogCache
-from kajovo.core.model_registry import models_for_usage, recommended_model
+from kajovo.core.model_registry import model_spec, models_for_usage, recommended_model
 
 
 def test_account_catalog_persists_details_without_api_key(tmp_path):
@@ -37,3 +37,8 @@ def test_usage_profiles_filter_account_models_and_choose_recommendation():
     assert recommended_model(available, "generate_file") == "gpt-6-astra"
     assert models_for_usage(available, "photo_edit_batch") == ["gpt-image-2"]
     assert recommended_model(available, "photo_edit_batch") == "gpt-image-2"
+
+
+def test_model_matrix_accepts_documented_dated_alias_identity():
+    spec = model_spec("computer-use-preview-2025-03-11")
+    assert spec["canonical"] == "computer-use-preview"
