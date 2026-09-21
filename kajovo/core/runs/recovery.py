@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from ..contracts import (
     ContractError,
     parse_json_strict,
+    validate_paths,
 )
 from ..delivery_preparation import validate_preparation_snapshot
 from ..openai_client import OpenAIClient
@@ -42,6 +43,15 @@ def _string_map(value, label):
     ):
         raise ContractError(f"Recovery runtime: {label} musí být mapa řetězců.")
     return dict(value)
+
+
+def _resume_files(value):
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ContractError("Recovery runtime: resume_files musí být seznam souborových objektů nebo null.")
+    validate_paths(value)
+    return [dict(item) for item in value]
 
 
 def _validate_runtime_manifest(runtime):
@@ -81,7 +91,7 @@ def _validate_runtime_manifest(runtime):
     for key in ("response_id", "resume_prev_id"):
         if runtime[key] is not None and not isinstance(runtime[key], str):
             raise ContractError(f"Recovery runtime: {key} musí být řetězec nebo null.")
-    _string_list(runtime["resume_files"], "resume_files")
+    runtime["resume_files"] = _resume_files(runtime["resume_files"])
     return runtime
 
 
