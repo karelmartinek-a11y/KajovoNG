@@ -17,6 +17,7 @@ from .generate_batch import encode_requests, process_saved_batch
 from .progress import ProgressEvent
 from .batch_submit import exact_batch_matches
 from .run_bundle import RunBundle
+from .orchestration.contracts import canonical_bytes
 
 TERMINAL = {"completed", "failed", "expired", "cancelled"}
 CANCELLABLE = {"validating", "in_progress", "finalizing"}
@@ -61,21 +62,24 @@ def _sync_bundle_state(run_dir, state, event_type, data=None, *, seal=False):
 
 
 def read_state(run_dir):
-    try:
-        from .recoverable_artifacts import load_run_state
+    from .recoverable_artifacts import load_run_state
 
-        value = load_run_state(run_dir)
-        if not isinstance(value, dict):
-            return {}
-        for key in ("generate_batches", "batch_imports", "batch_records", "ui_state"):
-            if key in value and not isinstance(value[key], dict):
-                return {}
-        for key in ("generate_batches", "batch_imports", "batch_records"):
-            if not all(isinstance(item, dict) for item in value.get(key, {}).values()):
-                return {}
-        return value
-    except (OSError, ValueError):
+    state_path = Path(run_dir) / "run_state.json"
+    if not state_path.is_file():
         return {}
+    try:
+        value = load_run_state(run_dir)
+    except (OSError, ValueError) as exc:
+        raise ContractError("Run state pro BATCH recovery je poškozený.") from exc
+    if not isinstance(value, dict):
+        raise ContractError("Run state pro BATCH recovery musí být objekt.")
+    for key in ("generate_batches", "batch_imports", "batch_records", "ui_state"):
+        if key in value and not isinstance(value[key], dict):
+            raise ContractError(f"Run state má neplatné pole {key}.")
+    for key in ("generate_batches", "batch_imports", "batch_records"):
+        if not all(isinstance(item, dict) for item in value.get(key, {}).values()):
+            raise ContractError(f"Run state má neplatné záznamy {key}.")
+    return value
 
 
 def batch_ids(state):
@@ -120,7 +124,7 @@ def remember_remote_batch_state(run_dir, batch):
     state.setdefault("batch_records", {})[identifier] = batch
     atomic_write_text(
         str(Path(run_dir) / "run_state.json"),
-        json.dumps(state, ensure_ascii=False, indent=2),
+        canonical_bytes(state).decode("utf-8"),
     )
     _sync_bundle_state(
         run_dir,
@@ -172,7 +176,7 @@ def save_batch_statuses(log_dir, records):
             }
     atomic_write_text(
         str(Path(log_dir) / "batch_status.json"),
-        json.dumps(saved, ensure_ascii=False, allow_nan=False),
+        canonical_bytes(saved).decode("utf-8"),
     )
 
 
