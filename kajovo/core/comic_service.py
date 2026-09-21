@@ -245,6 +245,11 @@ class ComicService:
                 "task_id": task_id,
                 "stage": "COMIC_IMAGE",
                 "route": route,
+                "provider_endpoint": (
+                    "/v1/batches"
+                    if route == "image_batch"
+                    else str(body.get("endpoint") or "/v1/images/edits")
+                ),
                 "target_id": target_id,
                 "target_path": None,
                 "expected_target_hash": None,
@@ -280,11 +285,7 @@ class ComicService:
         repo.prepare_provider_operation(
             attempt_id=order.attempt_id,
             work_order_hash=persisted_hash,
-            endpoint=(
-                "/v1/batches"
-                if route == "image_batch"
-                else str(body.get("endpoint") or "/v1/images/edits")
-            ),
+            endpoint=order.provider_endpoint,
             request_hash=canonical_sha256(body),
         )
         log.save_json(
@@ -423,6 +424,7 @@ class ComicService:
                 "task_id": operation["id"],
                 "stage": "COMIC",
                 "route": "responses_live",
+                "provider_endpoint": "/v1/responses",
                 "target_id": str(
                     operation.get("target_id")
                     or operation["project_id"]
