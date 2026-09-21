@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .orchestration.contracts import canonical_bytes, parse_json_strict
+from .orchestration.errors import OrchestrationError
 from .run_bundle import RunBundle, TERMINAL_STATUSES
 from .safe_config import persist_evidence, redact_evidence
 from .utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
@@ -66,7 +67,7 @@ def _read_json_dict(path: Path) -> Dict[str, Any]:
         return {}
     try:
         return parse_json_strict(text)
-    except ContractError as exc:
+    except OrchestrationError as exc:
         raise ValueError(f"Nekanonický JSON evidence: {path}") from exc
 
 
