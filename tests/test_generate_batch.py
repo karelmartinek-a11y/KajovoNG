@@ -276,6 +276,13 @@ def test_request_context_and_map_must_match():
         encode_requests(m)
 
 
+def test_request_context_rejects_trailing_json():
+    m = manifest()
+    m["requests"][0]["body"]["input"] += " {}"
+    with pytest.raises(ContractError):
+        encode_requests(m)
+
+
 def test_invalid_preparation_never_submits_batch(tmp_path):
     from change_v2_fixtures import format_names, run, scenario
 
