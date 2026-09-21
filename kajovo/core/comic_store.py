@@ -119,6 +119,7 @@ _JSON_COLUMNS = {
     "projects": ("style",),
     "assets": ("metadata",),
     "bibles": ("input", "result", "provenance"),
+    "entity_revisions": ("provenance",),
     "panels": ("format", "overlays"),
     "prompts": ("document",),
     "comic_documents": ("input", "result", "provenance"),
@@ -139,7 +140,7 @@ def _migration_v4_sql() -> str:
                 f"""
                 CREATE TRIGGER IF NOT EXISTS {base}_insert
                 BEFORE INSERT ON {table}
-                WHEN json_valid(NEW.{column}) = 0
+                WHEN kajovo_strict_json(NEW.{column}) != 1
                 BEGIN SELECT RAISE(ABORT,'Neplatny JSON {table}.{column}'); END;
                 """
             )
@@ -147,7 +148,7 @@ def _migration_v4_sql() -> str:
                 f"""
                 CREATE TRIGGER IF NOT EXISTS {base}_update
                 BEFORE UPDATE OF {column} ON {table}
-                WHEN json_valid(NEW.{column}) = 0
+                WHEN kajovo_strict_json(NEW.{column}) != 1
                 BEGIN SELECT RAISE(ABORT,'Neplatny JSON {table}.{column}'); END;
                 """
             )
@@ -155,6 +156,27 @@ def _migration_v4_sql() -> str:
 
 
 MIGRATION_V4 = _migration_v4_sql()
+
+
+def _strict_json_flag(value):
+    if not isinstance(value, str):
+        return 0
+    try:
+        parse_json_value_strict(value)
+    except (ContractError, TypeError, ValueError):
+        return 0
+    return 1
+
+
+def _validate_existing_json(db):
+    for table, columns in _JSON_COLUMNS.items():
+        for column in columns:
+            for rowid, raw in db.execute(f"SELECT rowid,{column} FROM {table}"):
+                if _strict_json_flag(raw) != 1:
+                    raise ComicError(
+                        "invalid_database_json",
+                        f"Databáze obsahuje nekanonický JSON v {table}.{column} (rowid={rowid}).",
+                    )
 
 
 def decoded(row):
@@ -188,12 +210,10 @@ class ComicStore:
                 db.executescript(
                     "BEGIN IMMEDIATE;"
                     + SCHEMA
-                    + MIGRATION_V4
-                    + "PRAGMA user_version=4;"
+                    + "PRAGMA user_version=3;"
                     + "INSERT INTO migrations VALUES(1,datetime('now'));"
                     + "INSERT INTO migrations VALUES(2,datetime('now'));"
                     + "INSERT INTO migrations VALUES(3,datetime('now'));"
-                    + "INSERT INTO migrations VALUES(4,datetime('now'));"
                     + "COMMIT;"
                 )
             elif version == 1:
@@ -201,24 +221,25 @@ class ComicStore:
                     "BEGIN IMMEDIATE;"
                     + MIGRATION_V2
                     + MIGRATION_V3
-                    + MIGRATION_V4
-                    + "PRAGMA user_version=4;"
+                    + "PRAGMA user_version=3;"
                     + "INSERT INTO migrations VALUES(2,datetime('now'));"
                     + "INSERT INTO migrations VALUES(3,datetime('now'));"
-                    + "INSERT INTO migrations VALUES(4,datetime('now'));"
                     + "COMMIT;"
                 )
             elif version == 2:
                 db.executescript(
                     "BEGIN IMMEDIATE;"
                     + MIGRATION_V3
-                    + MIGRATION_V4
-                    + "PRAGMA user_version=4;"
+                    + "PRAGMA user_version=3;"
                     + "INSERT INTO migrations VALUES(3,datetime('now'));"
-                    + "INSERT INTO migrations VALUES(4,datetime('now'));"
                     + "COMMIT;"
                 )
-            elif version == 3:
+
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version == 3:
+                # Starou knihovnu nejprve bezeztrátově ověříme. Migrace se
+                # nesmí stát razítkem nad již nekanonickým JSONem.
+                _validate_existing_json(db)
                 db.executescript(
                     "BEGIN IMMEDIATE;"
                     + MIGRATION_V4
@@ -226,11 +247,14 @@ class ComicStore:
                     + "INSERT INTO migrations VALUES(4,datetime('now'));"
                     + "COMMIT;"
                 )
+            elif version == 4:
+                _validate_existing_json(db)
 
     @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
+        db.create_function("kajovo_strict_json", 1, _strict_json_flag, deterministic=True)
         db.execute("PRAGMA foreign_keys=ON")
         try:
             yield db
