@@ -6,6 +6,23 @@ from typing import Any, Iterable
 from .request_rules import validate_response_payload
 
 
+def response_batch_submit_payload(
+    input_file_id: str,
+    *,
+    endpoint: str = "/v1/responses",
+    completion_window: str = "24h",
+) -> dict[str, Any]:
+    if not isinstance(input_file_id, str) or not input_file_id:
+        raise ValueError("Pracovní BATCH vyžaduje neprázdné input_file_id.")
+    if endpoint != "/v1/responses" or completion_window != "24h":
+        raise ValueError("Program podporuje pouze Batch Responses s oknem 24h.")
+    return {
+        "input_file_id": input_file_id,
+        "endpoint": endpoint,
+        "completion_window": completion_window,
+    }
+
+
 def submit_verified_batch(
     client,
     input_file_id: str,
@@ -22,8 +39,11 @@ def submit_verified_batch(
     Transport `_req` má pro pracovní POST /batches právě jeden pokus.
     """
     client._validate_resource_id(input_file_id)
-    if endpoint != "/v1/responses" or completion_window != "24h":
-        raise ValueError("Program podporuje pouze Batch Responses s oknem 24h.")
+    submit_payload = response_batch_submit_payload(
+        input_file_id,
+        endpoint=endpoint,
+        completion_window=completion_window,
+    )
     verified_rows = list(rows)
     if not verified_rows:
         raise ValueError("Pracovní dávka neobsahuje žádný lokálně ověřený požadavek.")
@@ -44,9 +64,9 @@ def submit_verified_batch(
     # deterministickou lokální validací. create_batch proto neprovádí žádný
     # další placený test a zachovává jedinou veřejnou transportní cestu.
     return client.create_batch(
-        input_file_id=input_file_id,
-        endpoint=endpoint,
-        completion_window=completion_window,
+        input_file_id=submit_payload["input_file_id"],
+        endpoint=submit_payload["endpoint"],
+        completion_window=submit_payload["completion_window"],
         _prevalidated_rows=verified_rows,
     )
 
