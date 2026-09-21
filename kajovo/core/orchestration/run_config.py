@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from typing import Any
 
 import jsonschema
+
+from .contracts import canonical_bytes
 
 RUN_CONFIG_V2_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -123,14 +124,7 @@ def run_scope_hash(cfg: Any) -> str:
             else ""
         ),
     }
-    raw = json.dumps(
-        scope,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+    return hashlib.sha256(canonical_bytes(scope)).hexdigest()
 
 
 def require_resumable_run_config_v2(ui_state: dict[str, Any], mode: str) -> None:
