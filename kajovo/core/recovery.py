@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import copy
-import json
 import os
 from pathlib import Path
 
-from .contracts import extract_text_from_response, parse_json_strict
+from .contracts import ContractError, extract_text_from_response, parse_json_strict
 from .delivery_preparation import validate_preparation_snapshot
 from .recoverable_artifacts import artifact_path, load_run_state
 from .runlog import load_output_evidence
@@ -16,10 +15,13 @@ from .utils import safe_join_under_root
 
 def read_record(path: Path) -> dict:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         return {}
+    try:
+        return parse_json_strict(text)
+    except ContractError as exc:
+        raise ValueError(f"Recovery evidence obsahuje nekanonický JSON: {path}") from exc
 
 
 def newest(directory: Path, pattern: str = "*.json") -> list[Path]:
@@ -81,19 +83,28 @@ def recover_run(log_dir, run_id):
     previous = state.get("last_response_id") or state.get("last_structure_response_id")
     events = directory / "events.jsonl"
     if not previous and events.is_file():
-        for line in reversed(events.read_text(encoding="utf-8", errors="replace").splitlines()):
-            try:
-                event = json.loads(line)
-                data = event.get("data") or {}
-                if (
-                    event.get("type") == "api.trace"
-                    and data.get("action") == "complete"
-                    and data.get("response_id")
-                ):
-                    previous = data["response_id"]
-                    break
-            except (ValueError, AttributeError):
+        try:
+            event_lines = events.read_text(encoding="utf-8", errors="strict").splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("Recovery events nejsou čitelné UTF-8.") from exc
+        for line_no, line in reversed(list(enumerate(event_lines, 1))):
+            if not line.strip():
                 continue
+            try:
+                event = parse_json_strict(line)
+            except ContractError as exc:
+                raise ValueError(
+                    f"Recovery event JSON je poškozený na řádku {line_no}."
+                ) from exc
+            data = event.get("data") or {}
+            if (
+                isinstance(data, dict)
+                and event.get("type") == "api.trace"
+                and data.get("action") == "complete"
+                and data.get("response_id")
+            ):
+                previous = data["response_id"]
+                break
     candidates = [directory]
     output = state.get("out_dir") or ui.get("out_dir")
     if output:
