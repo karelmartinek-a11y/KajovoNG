@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS provider_operations(
     work_order_hash TEXT NOT NULL REFERENCES work_orders(work_order_hash),
     endpoint TEXT NOT NULL,
     request_hash TEXT NOT NULL,
+    physical_request_hash TEXT,
     state TEXT NOT NULL CHECK(
         state IN ('prepared','submission_unknown','submitted','completed','not_submitted')
     ),
@@ -162,6 +163,23 @@ def _migrate_work_order_contract(db: sqlite3.Connection) -> None:
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_work_orders_attempt_id
         ON work_orders(attempt_id) WHERE attempt_id IS NOT NULL
+        """
+    )
+
+
+def _migrate_provider_operation_contract(db: sqlite3.Connection) -> None:
+    if not _table_exists(db, "provider_operations"):
+        return
+    columns = _columns(db, "provider_operations")
+    if "physical_request_hash" not in columns:
+        db.execute(
+            "ALTER TABLE provider_operations ADD COLUMN physical_request_hash TEXT"
+        )
+    db.execute(
+        """
+        UPDATE provider_operations
+        SET physical_request_hash=request_hash
+        WHERE physical_request_hash IS NULL AND endpoint != '/v1/batches'
         """
     )
 
@@ -360,6 +378,7 @@ class OrchestrationRepository:
             _migrate_legacy_economic_schema(db)
             db.executescript(_SCHEMA)
             _migrate_work_order_contract(db)
+            _migrate_provider_operation_contract(db)
             db.execute(
                 "INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(2,?)",
                 (_now(),),
@@ -601,7 +620,7 @@ class OrchestrationRepository:
                 )
             row = db.execute(
                 """
-                SELECT work_order_hash,endpoint,request_hash,state
+                SELECT work_order_hash,endpoint,request_hash,state,physical_request_hash
                 FROM provider_operations WHERE attempt_id=?
                 """,
                 (attempt_id,),
@@ -629,14 +648,16 @@ class OrchestrationRepository:
             db.execute(
                 """
                 INSERT INTO provider_operations(
-                    attempt_id,work_order_hash,endpoint,request_hash,state,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?)
+                    attempt_id,work_order_hash,endpoint,request_hash,
+                    physical_request_hash,state,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)
                 """,
                 (
                     attempt_id,
                     work_order_hash,
                     endpoint,
                     request_hash,
+                    request_hash if endpoint != "/v1/batches" else None,
                     "prepared",
                     _now(),
                     _now(),
@@ -645,11 +666,69 @@ class OrchestrationRepository:
             db.commit()
             return True
 
+    def bind_physical_request(
+        self,
+        attempt_id: str,
+        *,
+        physical_request_hash: str,
+        remote_input_file_id: str | None = None,
+    ) -> None:
+        if (
+            not isinstance(physical_request_hash, str)
+            or len(physical_request_hash) != 64
+            or any(ch not in "0123456789abcdef" for ch in physical_request_hash)
+        ):
+            raise OrchestrationError("PHYSICAL_REQUEST_HASH_INVALID", attempt_id)
+        if remote_input_file_id is not None and (
+            not isinstance(remote_input_file_id, str)
+            or not remote_input_file_id.strip()
+        ):
+            raise OrchestrationError("REMOTE_INPUT_FILE_INVALID", attempt_id)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """
+                SELECT endpoint,state,physical_request_hash,remote_input_file_id
+                FROM provider_operations WHERE attempt_id=?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if not row:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_UNKNOWN", attempt_id)
+            endpoint, state, current_hash, current_file = row
+            if state not in {"prepared", "not_submitted", "submission_unknown", "submitted"}:
+                db.rollback()
+                raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
+            if current_hash and current_hash != physical_request_hash:
+                db.rollback()
+                raise OrchestrationError("PHYSICAL_REQUEST_HASH_CONFLICT", attempt_id)
+            if current_file and remote_input_file_id and current_file != remote_input_file_id:
+                db.rollback()
+                raise OrchestrationError("REMOTE_INPUT_FILE_CONFLICT", attempt_id)
+            if endpoint == "/v1/batches" and not (remote_input_file_id or current_file):
+                db.rollback()
+                raise OrchestrationError("REMOTE_INPUT_FILE_REQUIRED", attempt_id)
+            db.execute(
+                """
+                UPDATE provider_operations
+                SET physical_request_hash=?,
+                    remote_input_file_id=COALESCE(remote_input_file_id,?),
+                    updated_at=?
+                WHERE attempt_id=?
+                """,
+                (physical_request_hash, remote_input_file_id, _now(), attempt_id),
+            )
+            db.commit()
+
     def mark_submission_started(self, attempt_id: str) -> None:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT state FROM provider_operations WHERE attempt_id=?",
+                """
+                SELECT state,endpoint,physical_request_hash,remote_input_file_id
+                FROM provider_operations WHERE attempt_id=?
+                """,
                 (attempt_id,),
             ).fetchone()
             if not row:
@@ -658,6 +737,12 @@ class OrchestrationRepository:
             if row[0] == "completed":
                 db.commit()
                 return
+            if not row[2] or (row[1] == "/v1/batches" and not row[3]):
+                db.rollback()
+                raise OrchestrationError(
+                    "PHYSICAL_REQUEST_NOT_BOUND",
+                    attempt_id,
+                )
             if row[0] not in {"prepared", "not_submitted"}:
                 db.rollback()
                 raise OrchestrationError("PROVIDER_OPERATION_STATE", attempt_id)
