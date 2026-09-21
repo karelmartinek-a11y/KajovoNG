@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..contracts import (
     ContractError,
+    parse_json_strict,
 )
 from ..delivery_preparation import validate_preparation_snapshot
 from ..openai_client import OpenAIClient
@@ -16,12 +16,83 @@ from ..utils import safe_join_under_root, sha256_file
 if TYPE_CHECKING:
     from .context import RunContext
 
+
+_RUNTIME_ATTRIBUTE_NAMES = {
+    "_diag_text",
+    "_in_dir_info",
+    "_vector_store_ids",
+    "_diag_vector_store_ids",
+    "_fs_tools",
+    "_diag_zip_path",
+    "_input_kind_cache",
+    "_file_name_cache",
+}
+
+
+def _string_list(value, label):
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ContractError(f"Recovery runtime: {label} musí být seznam řetězců.")
+    return list(value)
+
+
+def _string_map(value, label):
+    if not isinstance(value, dict) or any(
+        not isinstance(key, str) or not isinstance(item, str)
+        for key, item in value.items()
+    ):
+        raise ContractError(f"Recovery runtime: {label} musí být mapa řetězců.")
+    return dict(value)
+
+
+def _validate_runtime_manifest(runtime):
+    required = {
+        "attributes",
+        "diag_file_ids",
+        "preparation_snapshot",
+        "response_id",
+        "resume_files",
+        "resume_prev_id",
+    }
+    if not isinstance(runtime, dict) or set(runtime) != required:
+        raise ContractError("Recovery runtime má neplatnou množinu polí.")
+    attributes = runtime["attributes"]
+    if not isinstance(attributes, dict) or set(attributes) != _RUNTIME_ATTRIBUTE_NAMES:
+        raise ContractError("Recovery runtime má neplatnou množinu atributů.")
+    if not isinstance(attributes["_diag_text"], str):
+        raise ContractError("Recovery runtime: _diag_text musí být řetězec.")
+    if attributes["_in_dir_info"] is not None and not isinstance(attributes["_in_dir_info"], dict):
+        raise ContractError("Recovery runtime: _in_dir_info musí být objekt nebo null.")
+    _string_list(attributes["_vector_store_ids"], "_vector_store_ids")
+    _string_list(attributes["_diag_vector_store_ids"], "_diag_vector_store_ids")
+    if attributes["_fs_tools"] is not None:
+        if not isinstance(attributes["_fs_tools"], list) or any(
+            not isinstance(item, dict) for item in attributes["_fs_tools"]
+        ):
+            raise ContractError("Recovery runtime: _fs_tools musí být seznam objektů nebo null.")
+    if not isinstance(attributes["_diag_zip_path"], str):
+        raise ContractError("Recovery runtime: _diag_zip_path musí být řetězec.")
+    _string_map(attributes["_input_kind_cache"], "_input_kind_cache")
+    _string_map(attributes["_file_name_cache"], "_file_name_cache")
+    _string_list(runtime["diag_file_ids"], "diag_file_ids")
+    if runtime["preparation_snapshot"] is not None and not isinstance(
+        runtime["preparation_snapshot"], dict
+    ):
+        raise ContractError("Recovery runtime: preparation_snapshot musí být objekt nebo null.")
+    for key in ("response_id", "resume_prev_id"):
+        if runtime[key] is not None and not isinstance(runtime[key], str):
+            raise ContractError(f"Recovery runtime: {key} musí být řetězec nebo null.")
+    _string_list(runtime["resume_files"], "resume_files")
+    return runtime
+
+
 def prepare_runtime(self: RunContext, client: OpenAIClient) -> tuple[list[str], str | None]:
     runtime_path = self.log.find_json("manifests", "response_runtime") if self._response_journal else None
     if runtime_path:
-        runtime = json.loads(Path(runtime_path).read_text(encoding="utf-8"))
-        for name, value in runtime["attributes"].items():
-            setattr(self, name, value)
+        runtime = _validate_runtime_manifest(
+            parse_json_strict(Path(runtime_path).read_text(encoding="utf-8"))
+        )
+        for name in sorted(_RUNTIME_ATTRIBUTE_NAMES):
+            setattr(self, name, runtime["attributes"][name])
         diag_file_ids = runtime["diag_file_ids"]
         self.cfg.preparation_snapshot = runtime["preparation_snapshot"]
         self.cfg.response_id = runtime["response_id"]
