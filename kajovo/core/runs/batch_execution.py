@@ -83,8 +83,8 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             "je nutná explicitní příprava FileContext."
         )
 
-    encode_requests(manifest)
     work_orders = _work_orders(manifest)
+    encode_requests(manifest)
     manifest_v4 = from_file_manifest(self.log.run_id, manifest)
     _save_v4(self.log, manifest_v4)
 
