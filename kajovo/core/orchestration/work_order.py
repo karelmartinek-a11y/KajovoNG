@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
 import jsonschema
 
+from ..utils import validate_relative_path
 from .contracts import canonical_bytes, canonical_sha256
 
 WORK_ORDER_V2_SCHEMA: dict[str, Any] = {
@@ -130,6 +132,23 @@ def validate_work_order_v2(value: dict[str, Any]) -> None:
         if not value[key]:
             raise ValueError(f"WORK_ORDER_V2.{key} nesmí být prázdné.")
 
+    for key in ("input_projection_hash", "schema_hash", "prompt_hash", "model_capability_hash", "policy_hash", "source_snapshot_hash"):
+        if re.fullmatch(r"[0-9a-f]{64}", value[key]) is None:
+            raise ValueError(f"WORK_ORDER_V2.{key} musí být SHA-256.")
+    expected_hash = value["expected_target_hash"]
+    if expected_hash is not None and re.fullmatch(r"[0-9a-f]{64}", expected_hash) is None:
+        raise ValueError("WORK_ORDER_V2.expected_target_hash musí být SHA-256 nebo explicitní null.")
+    path = value["target_path"]
+    if path is not None:
+        if validate_relative_path(path) != path or "\\" in path:
+            raise ValueError("WORK_ORDER_V2.target_path musí být kanonická relativní cesta.")
+    elif expected_hash is not None:
+        raise ValueError("WORK_ORDER_V2: hash cíle bez cílové cesty.")
+    if value["contract_name"] == "FILE_CONTENT_V1" and path is None:
+        raise ValueError("WORK_ORDER_V2: souborový kontrakt vyžaduje cílovou cestu.")
+    if type(value["attempt_no"]) is not int or value["attempt_id"] != attempt_identity(value["run_id"], value["task_id"], value["attempt_no"]):
+        raise ValueError("WORK_ORDER_V2.attempt_id neodpovídá běhu, úloze a pokusu.")
+
 
 def _hash(value: Any) -> str:
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
@@ -152,19 +171,28 @@ def work_order_from_mapping(raw_value: dict[str, Any]) -> WorkOrder:
         )
     # LEGACY-DATA-READER: starý V2 záznam může obsahovat odstraněný finanční identifikátor.
     value.pop("budget_reservation_id", None)
-    return WorkOrder(**value)
+    order = WorkOrder(**value)
+    validate_work_order_v2(order.to_dict())
+    supplied = raw_value.get("order_hash")
+    if "attempt_id" in raw_value and supplied is not None and supplied != order.order_hash:
+        raise ValueError("WORK_ORDER_V2.order_hash neodpovídá obsahu.")
+    return order
 
 
 def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrder:
     """Zmrazí kanonický V2 WorkOrder před transportem."""
     stage = str(task["stage"])
     target_path = task.get("target_path")
+    if target_path is not None and "expected_target_hash" not in task:
+        raise ValueError("WORK_ORDER_V2: chybí explicitní původní očekávání cíle.")
     target_id = str(task.get("target_id") or target_path or stage)
     schema = copy.deepcopy(task["schema"])
     prompt = str(task["prompt"])
     model = str(task["model"])
     route = str(task.get("route") or "responses_live")
-    attempt_no = int(task.get("attempt_no", 1))
+    attempt_no = task.get("attempt_no", 1)
+    if type(attempt_no) is not int:
+        raise ValueError("WORK_ORDER_V2.attempt_no musí být celé číslo.")
     approval_id = str(
         task.get("approval_id")
         or getattr(config, "execution_approval_id", "")

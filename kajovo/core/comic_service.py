@@ -442,15 +442,14 @@ class ComicService:
             },
             projection,
         )
+        journal = ResponseJournal(log, self.settings.response_poll_timeout_s)
+        resume_existing = journal.has_entry(body)
+        transport_body = {**body, "background": True, "store": True}
         prepare_provider_request(
-            log, cfg, self.client, body, work_order=order
+            log, cfg, self.client, transport_body, work_order=order,
+            allow_existing=resume_existing,
         )
-        journal = ResponseJournal(
-            log, self.settings.response_poll_timeout_s
-        )
-        # Polling/resume is not a new provider submit. A journal entry is the
-        # durable authority for whether this exact payload was already sent.
-        if not journal.has_entry(body):
+        if not resume_existing:
             mark_submission_started(log, order)
         try:
             response = journal.execute(

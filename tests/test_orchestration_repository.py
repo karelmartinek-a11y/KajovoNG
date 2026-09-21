@@ -6,7 +6,8 @@ import pytest
 
 from kajovo.core.orchestration.errors import OrchestrationError
 from kajovo.core.orchestration.repository import OrchestrationRepository
-from kajovo.core.orchestration.work_order import WorkOrder
+from kajovo.core.orchestration.contracts import canonical_sha256
+from kajovo.core.orchestration.work_order import WorkOrder, attempt_identity
 
 
 def _order(run_id: str, task_id: str, attempt_id: str) -> WorkOrder:
@@ -20,15 +21,15 @@ def _order(run_id: str, task_id: str, attempt_id: str) -> WorkOrder:
         target_id=task_id,
         target_path=None,
         expected_target_hash=None,
-        input_projection_hash="input-" + task_id,
+        input_projection_hash=canonical_sha256("input-" + task_id),
         contract_name="TEST_V1",
-        schema_hash="schema-" + task_id,
-        prompt_hash="prompt-" + task_id,
+        schema_hash=canonical_sha256("schema-" + task_id),
+        prompt_hash=canonical_sha256("prompt-" + task_id),
         model="gpt-5.6-luna",
-        model_capability_hash="cap-" + task_id,
-        policy_hash="policy-" + task_id,
-        source_snapshot_hash="source-" + task_id,
-        attempt_id=attempt_id,
+        model_capability_hash=canonical_sha256("cap-" + task_id),
+        policy_hash=canonical_sha256("policy-" + task_id),
+        source_snapshot_hash=canonical_sha256("source-" + task_id),
+        attempt_id=attempt_identity(run_id, task_id, 1),
         approval_id="approval-1",
         attempt_no=1,
     )

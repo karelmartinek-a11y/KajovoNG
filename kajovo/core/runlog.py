@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .run_bundle import RunBundle, TERMINAL_STATUSES
-from .safe_config import redact_evidence
+from .safe_config import persist_evidence, redact_evidence
 from .utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
 
 _KIND_DIRS = {
@@ -290,7 +290,7 @@ class RunLogger:
         )
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-                json.dump(self._redact(payload), stream, ensure_ascii=False, indent=2, default=str)
+                json.dump(persist_evidence(payload), stream, ensure_ascii=False, indent=2, default=str)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
@@ -562,7 +562,7 @@ class RunLogger:
     def update_state(self, patch: Dict[str, Any]) -> None:
         from .recoverable_artifacts import STATE_ARTIFACTS, save_artifact
 
-        patch = self._redact(patch)
+        patch = persist_evidence(patch)
         for key in STATE_ARTIFACTS & patch.keys():
             save_artifact(self.paths.run_dir, "state/" + key, patch[key])
         state = {}
@@ -687,7 +687,7 @@ class RunLogger:
     def save_json(self, kind: str, name: str, obj: Any, *, step_id: str = "") -> str:
         from .recoverable_artifacts import save_artifact
 
-        obj = self._redact(obj)
+        obj = persist_evidence(obj)
         save_artifact(self.paths.run_dir, kind + "/" + name, obj)
         path = self._json_path(kind, name)
         self._atomic_write_json(path, obj)

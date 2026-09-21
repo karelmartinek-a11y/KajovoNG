@@ -9,6 +9,7 @@ from ..context_limits import checked_measurement, ensure_technical_limits
 from ..contracts import ContractError
 from .contracts import canonical_sha256
 from .repository import repository_for_logger
+from .request_binding import validate_response_work_order
 from .run_config import build_run_config_v2, run_scope_hash
 from .work_order import WorkOrder, work_order_from_mapping
 
@@ -41,11 +42,11 @@ def _ensure_run(logger, cfg, work_order: WorkOrder) -> None:
 
 
 def _endpoint(order: WorkOrder) -> str:
-    if order.route == "responses_batch":
+    if order.route in {"responses_batch", "image_batch"}:
         return "/v1/batches"
-    if order.route in {"image_live", "image_batch"}:
-        return "/v1/images/edits"
-    return "/v1/responses"
+    if order.route == "responses_live":
+        return "/v1/responses"
+    raise ContractError("Obrazová/local operace vyžaduje vlastní explicitní endpoint.")
 
 
 def prepare_provider_request(
@@ -64,6 +65,7 @@ def prepare_provider_request(
         raise ContractError(
             "PROVIDER_REQUEST_BEZ_WORK_ORDER: submit nemá zmrazenou pracovní identitu."
         )
+    validate_response_work_order(work_order, payload)
     if measurement is None:
         measurement = checked_measurement(payload, client, batch=batch)
     else:
@@ -98,6 +100,17 @@ def prepare_batch(
         raise ContractError(
             "BATCH technická evidence neodpovídá počtu požadavků."
         )
+    # Celá sada musí být platná před prvním zápisem či zahájením operace.
+    identifiers = [str(row.get("custom_id") or "") for row in requests]
+    if not identifiers or "" in identifiers or len(set(identifiers)) != len(identifiers) or set(identifiers) != set(work_orders):
+        raise ContractError("BATCH custom_id a WorkOrder mapování nejsou vzájemně jednoznačné.")
+    for row, supplied in zip(requests, measurements, strict=True):
+        raw_order = work_orders[row["custom_id"]]
+        order = raw_order if isinstance(raw_order, WorkOrder) else work_order_from_mapping(raw_order)
+        if row.get("method") != "POST" or row.get("url") != "/v1/responses" or order.route != "responses_batch":
+            raise ContractError("BATCH řádek neodpovídá transportní cestě WorkOrderu.")
+        validate_response_work_order(order, row["body"])
+        ensure_technical_limits(copy.deepcopy(supplied))
     repo = repository_for_logger(logger)
     for row, supplied in zip(requests, measurements, strict=True):
         custom_id = str(row["custom_id"])
