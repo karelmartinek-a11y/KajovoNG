@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .contracts import ContractError, parse_json_value_strict
+from .orchestration.contracts import canonical_bytes
+
 BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_COMPATIBILITY_VERSION = 1
 INDEX_SCHEMA_VERSION = 3
@@ -56,13 +59,7 @@ def _now_iso(timestamp: float | None = None) -> str:
 
 
 def _json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
+    return canonical_bytes(value)
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -92,22 +89,26 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 
 
 def _atomic_json(path: Path, value: Any) -> None:
-    _atomic_bytes(path, json.dumps(value, ensure_ascii=False, indent=2, default=str).encode("utf-8") + b"\n")
+    _atomic_bytes(path, canonical_bytes(value) + b"\n")
 
 
 def _append_jsonl(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(json.dumps(value, ensure_ascii=False, default=str) + "\n")
+        stream.write(canonical_bytes(value).decode("utf-8") + "\n")
         stream.flush()
         os.fsync(stream.fileno())
 
 
 def _read_json(path: Path, default: Any = None) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         return default
+    try:
+        return parse_json_value_strict(text)
+    except ContractError as exc:
+        raise ValueError(f"Nekanonický JSON evidence: {path}") from exc
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -116,15 +117,18 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return records
-    for line in lines:
+    for line_no, line in enumerate(lines, 1):
         if not line.strip():
             continue
         try:
-            value = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(value, dict):
-            records.append(value)
+            value = parse_json_value_strict(line)
+        except ContractError as exc:
+            raise ValueError(
+                f"Nekanonický JSONL řádek {path}:{line_no}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"JSONL evidence musí obsahovat objekty: {path}:{line_no}")
+        records.append(value)
     return records
 
 
@@ -160,8 +164,8 @@ def _structured_value(text: str) -> Any:
     if not text.strip():
         return None
     try:
-        return json.loads(text)
-    except ValueError:
+        return parse_json_value_strict(text)
+    except (ContractError, ValueError):
         return None
 
 
