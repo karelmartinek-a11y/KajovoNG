@@ -19,7 +19,7 @@ from ..image_runtime import inspect_image, validate_image_request
 from ..model_registry import model_spec
 from ..openai_transport import SubmissionOutcomeUnknown
 from ..utils import ensure_dir, safe_join_under_root, sha256_file
-from .contracts import canonical_sha256
+from .contracts import canonical_sha256, parse_json_strict
 from .repository import repository_for_logger
 from .work_order import freeze_order
 
@@ -265,7 +265,7 @@ def _load_saved_resource_image(worker, path: str) -> dict[str, Any] | None:
     if not saved:
         return None
     try:
-        payload = json.loads(Path(saved).read_text(encoding="utf-8"))
+        payload = parse_json_strict(Path(saved).read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError) as exc:
         raise ContractError(
             f"{path}: uložená provider odpověď je poškozená."
