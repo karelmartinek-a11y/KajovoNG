@@ -13,10 +13,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source:
+    name: Immutable source evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Capture tracked source revision without credentials
+        run: |
+          git archive --format=zip --output=contract-source.zip HEAD
+          git rev-parse HEAD > contract-source-sha.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canonical-source-${{ github.sha }}
+          path: |
+            contract-source.zip
+            contract-source-sha.txt
+          retention-days: 3
   contracts:
     name: canonical-contracts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +60,8 @@ jobs:
         run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
       - name: First complete source and physical schema pass
         run: python tools/verify_contract_links.py --output contract-links-first.json
+      - name: Canonical identity and schema binding regression
+        run: python -m pytest -q tests/test_canonical_contract_links.py
       - name: Recovery and physical contract regression
         run: python -m pytest -q tests/test_orchestration_repository.py tests/test_response_journal.py tests/test_delivery_pipeline.py tests/test_filesystem_boundaries.py tests/test_comic_domain.py tests/test_generate_batch_waves.py tests/test_cascade.py tests/test_cascade_v2.py
       - name: Independent repeated source and physical schema pass
