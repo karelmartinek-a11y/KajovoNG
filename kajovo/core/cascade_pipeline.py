@@ -31,7 +31,7 @@ from .contracts import ContractError, parse_json_strict, validate_paths
 from .model_registry import model_spec
 from .openai_client import OpenAIClient
 from .openai_transport import SubmissionOutcomeUnknown
-from .orchestration.contracts import canonical_bytes, canonical_sha256
+from .orchestration.contracts import canonical_sha256
 from .orchestration.provider_operations import (
     mark_not_submitted,
     mark_submission,
