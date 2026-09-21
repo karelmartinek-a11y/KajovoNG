@@ -42,11 +42,9 @@ def _ensure_run(logger, cfg, work_order: WorkOrder) -> None:
 
 
 def _endpoint(order: WorkOrder) -> str:
-    if order.route in {"responses_batch", "image_batch"}:
-        return "/v1/batches"
-    if order.route == "responses_live":
-        return "/v1/responses"
-    raise ContractError("Obrazová/local operace vyžaduje vlastní explicitní endpoint.")
+    if order.route == "local":
+        raise ContractError("Lokální WorkOrder nemá provider endpoint.")
+    return order.provider_endpoint
 
 
 def prepare_provider_request(
@@ -107,7 +105,12 @@ def prepare_batch(
     for row, supplied in zip(requests, measurements, strict=True):
         raw_order = work_orders[row["custom_id"]]
         order = raw_order if isinstance(raw_order, WorkOrder) else work_order_from_mapping(raw_order)
-        if row.get("method") != "POST" or row.get("url") != "/v1/responses" or order.route != "responses_batch":
+        if (
+            row.get("method") != "POST"
+            or row.get("url") != "/v1/responses"
+            or order.route != "responses_batch"
+            or order.provider_endpoint != "/v1/batches"
+        ):
             raise ContractError("BATCH řádek neodpovídá transportní cestě WorkOrderu.")
         validate_response_work_order(order, row["body"])
         ensure_technical_limits(copy.deepcopy(supplied))
