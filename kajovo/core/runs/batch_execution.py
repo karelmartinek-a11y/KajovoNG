@@ -17,6 +17,7 @@ from ..orchestration.provider_operations import (
 )
 from ..orchestration.work_order import WorkOrder, work_order_from_mapping
 from ..progress import ProgressEvent
+from ..recoverable_artifacts import load_run_state
 
 if TYPE_CHECKING:
     from .context import RunContext
@@ -43,18 +44,12 @@ def _work_orders(manifest: dict[str, Any]) -> dict[str, WorkOrder]:
 
 
 def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
-    import json
-    from pathlib import Path
-
     log.save_json(
         "manifests",
         f"batch_manifest_v4_{manifest_v4['manifest_id']}",
         manifest_v4,
     )
-    try:
-        state = json.loads(Path(log.state_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        state = {}
+    state = load_run_state(log.paths.run_dir)
     manifests = dict(state.get("batch_manifests_v4") or {})
     manifests[manifest_v4["manifest_id"]] = manifest_v4
     log.update_state(
@@ -67,8 +62,6 @@ def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
 
 def _submit_generate_batch(self: RunContext, client, manifest):
     from ..orchestration.repository import repository_for_logger
-    from ..recoverable_artifacts import load_run_state
-
     current_state = load_run_state(self.log.paths.run_dir)
     if (
         current_state.get("submission_unknown")
