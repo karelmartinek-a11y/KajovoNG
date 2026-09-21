@@ -45,6 +45,21 @@ class CascadeItemDialog(QDialog):
             self.form.text("file_name", "Relativní cesta výstupního souboru", record.file_name)
             self.form.choice("file_mode", "Způsob zápisu", [("Vytvořit soubor", "create"), ("Upravit vstupní soubor", "modify")], record.file_mode)
             self.form.choice("modify_input_id", "Upravovaný vstup", [("Vyberte vstup", ""), *[(item.name or item.id, item.id) for item in inputs]], record.modify_input_id)
+            json_mask = QPlainTextEdit(
+                json.dumps(record.json_schema, ensure_ascii=False, indent=2)
+                if record.json_schema is not None
+                else ""
+            )
+            json_mask.setMinimumHeight(180)
+            self.form.add(
+                "json_schema",
+                "JSON Schema maska strukturovaného výstupu",
+                json_mask,
+            )
+            body.addWidget(caption(
+                "Pro druh „Strukturovaná data“ je maska povinná: kořen object, všechny vlastnosti required a additionalProperties=false.",
+                "muted",
+            ))
             options = QPlainTextEdit(json.dumps([item.to_dict() for item in record.decision_options], ensure_ascii=False, indent=2))
             options.setMinimumHeight(160)
             self.form.add("decision_options", "Rozhodovací větve ve formátu JSON", options)
@@ -78,7 +93,14 @@ class CascadeItemDialog(QDialog):
                     value[name] = widget.text()
                 else:
                     text = widget.toPlainText()
-                    value[name] = json.loads(text) if name == "decision_options" else text
+                    if name == "decision_options":
+                        value[name] = json.loads(text)
+                    elif name == "json_schema":
+                        value[name] = json.loads(text) if text.strip() else None
+                    else:
+                        value[name] = text
+            if value.get("kind") != "json":
+                value["json_schema"] = None
             self.record = type(self.record).from_dict(value)
         except (ValueError, TypeError) as error:
             self.notice.setText(str(error))
