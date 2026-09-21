@@ -4,16 +4,16 @@ import hashlib
 import os
 from typing import TYPE_CHECKING, Any
 
-from ..batch_submit import submit_verified_batch
+from ..batch_submit import response_batch_submit_payload, submit_verified_batch
 from ..contracts import ContractError
 from ..generate_batch import encode_requests
 from ..orchestration.batch_manifest import from_file_manifest, transition
 from ..orchestration.provider_operations import (
+    bind_physical_request,
     mark_not_submitted,
     mark_submission,
     mark_submission_started,
     prepare_batch,
-    set_remote_input_file,
 )
 from ..orchestration.work_order import WorkOrder, work_order_from_mapping
 from ..progress import ProgressEvent
@@ -174,8 +174,14 @@ def _submit_generate_batch(self: RunContext, client, manifest):
         "batch_manifest_v4_id": manifest_v4["manifest_id"],
     }
     self.log.update_state(evidence)
+    submit_payload = response_batch_submit_payload(input_file_id)
     for order in work_orders.values():
-        set_remote_input_file(self.log, order, input_file_id)
+        bind_physical_request(
+            self.log,
+            order,
+            submit_payload,
+            remote_input_file_id=input_file_id,
+        )
 
     self._set(55, 0, "Odesílám pracovní dávku…", stage="BATCH SUBMIT")
     manifest_v4 = transition(manifest_v4, "submitting")
@@ -213,6 +219,17 @@ def _submit_generate_batch(self: RunContext, client, manifest):
         raise
 
     batch_id = str(batch.get("id") or "")
+    if (
+        str(batch.get("input_file_id") or input_file_id) != input_file_id
+        or str(batch.get("endpoint") or "/v1/responses") != "/v1/responses"
+    ):
+        for order in work_orders.values():
+            mark_submission(self.log, order, None, unknown=True)
+        manifest_v4 = transition(manifest_v4, "submission_unknown")
+        _save_v4(self.log, manifest_v4)
+        raise ContractError(
+            "BATCH provider odpověď neodpovídá zmrazenému input_file_id/endpointu."
+        )
     if not batch_id:
         for order in work_orders.values():
             mark_submission(self.log, order, None, unknown=True)
