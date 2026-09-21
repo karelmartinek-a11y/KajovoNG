@@ -124,12 +124,12 @@ def test_response_journal_reopens_exact_payload_with_domain_secret_field_names(t
     response = {"id": "resp_domain", "status": "completed", "output_text": json.dumps({"token": "length"})}
     client.create_response.return_value = response
     journal = ResponseJournal(log, 2)
-    assert journal.execute(client, payload, stopped=lambda: False, cancelled=lambda: False)["id"] == "resp_domain"
+    assert journal.execute(client, payload, stopped=lambda: False, cancelled=lambda: False, progress=lambda *_: None)["id"] == "resp_domain"
     restarted_log = RunLogger(str(tmp_path / "log"), "RUN_JOURNAL", "synthetic", resume=True)
     restarted = ResponseJournal(restarted_log, 2)
     assert restarted.has_entry(payload)
     assert restarted.confirmed_id(payload) == "resp_domain"
-    assert restarted.execute(client, payload, stopped=lambda: False, cancelled=lambda: False)["id"] == "resp_domain"
+    assert restarted.execute(client, payload, stopped=lambda: False, cancelled=lambda: False, progress=lambda *_: None)["id"] == "resp_domain"
     client.create_response.assert_called_once()
 
 
