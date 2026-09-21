@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 
 from .model_registry import matrix_version, model_spec, model_usages
+from .orchestration.contracts import parse_json_strict
+from .orchestration.errors import OrchestrationError
 from .utils import atomic_write_text
 
 
@@ -52,8 +54,8 @@ class ModelCatalogCache:
         if not api_key or not self.path.is_file():
             return empty
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            raw = parse_json_strict(self.path.read_text(encoding="utf-8"))
+        except (OSError, OrchestrationError, TypeError):
             return empty
         if (
             not isinstance(raw, dict)
