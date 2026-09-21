@@ -6,6 +6,7 @@ import pytest
 from kajovo.core.cascade_contract import (
     CascadeValidationError,
     output_machine_key,
+    runtime_schema_for_step,
     validate_cascade_definition,
 )
 from kajovo.core.cascade_pipeline import CascadeRunConfig, CascadeRunExecutor
@@ -17,6 +18,7 @@ from kajovo.core.cascade_types import (
     CascadeStep,
 )
 from kajovo.core.config import AppSettings
+from kajovo.core.contracts import ContractError
 from kajovo.core.run_bundle import LegacyRunAdapter
 
 MODEL = "gpt-5.6-luna"
@@ -415,3 +417,99 @@ def test_cascade_provider_operation_records_identity_and_raw_usage(tmp_path):
             usage, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ))
     ]
+
+
+
+def _strict_json_mask():
+    return {
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string"},
+            "count": {"type": "integer"},
+        },
+        "required": ["answer", "count"],
+        "additionalProperties": False,
+    }
+
+
+def test_deterministic_json_output_requires_explicit_strict_mask():
+    output = CascadeOutput(name="Data", kind="json")
+    step = CascadeStep(
+        title="JSON",
+        model=MODEL,
+        input_text="Vrať strukturovaná data.",
+        context_id="Kontext JSON",
+        deterministic=True,
+        outputs=[output],
+    )
+    with pytest.raises(CascadeValidationError, match="JSON Schema masku"):
+        validate_cascade_definition(
+            CascadeDefinition("json-mask-required", steps=[step]),
+            strict=True,
+        )
+
+
+def test_deterministic_json_wire_schema_embeds_exact_output_mask():
+    mask = _strict_json_mask()
+    output = CascadeOutput(name="Data", kind="json", json_schema=mask)
+    step = CascadeStep(
+        title="JSON",
+        model=MODEL,
+        input_text="Vrať strukturovaná data.",
+        context_id="Kontext JSON",
+        deterministic=True,
+        outputs=[output],
+    )
+    validate_cascade_definition(
+        CascadeDefinition("json-mask-wire", steps=[step]),
+        strict=True,
+    )
+    schema = runtime_schema_for_step(step)
+    assert schema["properties"][output_machine_key(output)] == mask
+    assert schema["properties"][output_machine_key(output)] is not mask
+
+
+def test_deterministic_json_output_is_validated_against_its_mask(tmp_path):
+    mask = _strict_json_mask()
+    output = CascadeOutput(name="Data", kind="json", json_schema=mask)
+    step = CascadeStep(
+        title="JSON",
+        model=MODEL,
+        input_text="Vrať strukturovaná data.",
+        context_id="Kontext JSON",
+        deterministic=True,
+        outputs=[output],
+    )
+    definition = CascadeDefinition("json-mask-runtime", steps=[step])
+    worker = _worker(definition, tmp_path)
+    values = {}
+    valid = {"answer": "ano", "count": 2}
+    summary, decision = worker._process_deterministic_output(
+        step=step,
+        idx=1,
+        decoded={output_machine_key(output): valid},
+        client=_client(),
+        context={},
+        values=values,
+    )
+    assert decision is None
+    assert summary[output.id] == valid
+    assert values[f"{step.id}|{output.id}"] == {"kind": "json", "value": valid}
+
+    with pytest.raises(ContractError, match="porušuje svoji JSON masku"):
+        worker._process_deterministic_output(
+            step=step,
+            idx=1,
+            decoded={output_machine_key(output): {"answer": "ano"}},
+            client=_client(),
+            context={},
+            values={},
+        )
+
+
+def test_json_output_mask_roundtrip_is_lossless():
+    mask = _strict_json_mask()
+    output = CascadeOutput(name="Data", kind="json", json_schema=mask)
+    restored = CascadeOutput.from_dict(output.to_dict())
+    assert restored.json_schema == mask
+    assert restored.to_dict() == output.to_dict()
