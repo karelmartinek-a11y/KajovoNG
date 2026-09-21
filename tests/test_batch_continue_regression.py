@@ -59,7 +59,8 @@ def test_corrupt_current_batch_state_never_resets_to_empty_before_submit(tmp_pat
     )
     client = Mock()
     saved = manifest()
-    with pytest.raises(Exception):
+    from kajovo.core.contracts import ContractError
+    with pytest.raises(ContractError):
         worker._submit_generate_batch(client, saved)
     client.upload_file.assert_not_called()
     client.create_batch.assert_not_called()
