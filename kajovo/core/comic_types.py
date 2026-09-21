@@ -86,8 +86,19 @@ class ComicError(ValueError):
         self.retryable = retryable
 
 
+def _json_value(value):
+    """Explicitně převede interní neměnné sekvence komiksu na JSON arrays."""
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
+    return value
+
+
 def canonical(value):
-    return canonical_bytes(value).decode("utf-8")
+    return canonical_bytes(_json_value(value)).decode("utf-8")
 
 
 def checked_text(value, label, maximum=30000, required=False):
