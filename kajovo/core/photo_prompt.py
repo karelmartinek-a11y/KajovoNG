@@ -119,6 +119,7 @@ def professionalize_prompt(
             "task_id": "PHOTO_PLAN",
             "stage": "PHOTO",
             "route": "responses_live",
+            "provider_endpoint": "/v1/responses",
             "target_id": "PHOTO_PLAN",
             "target_path": None,
             "expected_target_hash": None,
