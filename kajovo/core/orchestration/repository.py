@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS work_orders(
     prompt_hash TEXT NOT NULL,
     model TEXT NOT NULL,
     route TEXT NOT NULL,
+    attempt_id TEXT,
+    provider_endpoint TEXT,
+    work_order_json TEXT CHECK(work_order_json IS NULL OR json_valid(work_order_json)),
     UNIQUE(run_id,task_id,attempt_no)
 );
 CREATE TABLE IF NOT EXISTS provider_operations(
@@ -135,6 +138,27 @@ def _route_endpoint(route: str) -> str:
     if route in {"image_live", "image_batch"}:
         return "/v1/images/edits"
     return "/v1/responses"
+
+
+def _migrate_work_order_contract(db: sqlite3.Connection) -> None:
+    """Additive V3 persistence for exact canonical WorkOrder identity."""
+    if not _table_exists(db, "work_orders"):
+        return
+    columns = _columns(db, "work_orders")
+    additions = {
+        "attempt_id": "TEXT",
+        "provider_endpoint": "TEXT",
+        "work_order_json": "TEXT",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            db.execute(f"ALTER TABLE work_orders ADD COLUMN {name} {declaration}")
+    db.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_work_orders_attempt_id
+        ON work_orders(attempt_id) WHERE attempt_id IS NOT NULL
+        """
+    )
 
 
 def _migrate_legacy_economic_schema(db: sqlite3.Connection) -> None:
@@ -330,8 +354,13 @@ class OrchestrationRepository:
             db.execute("PRAGMA foreign_keys=OFF")
             _migrate_legacy_economic_schema(db)
             db.executescript(_SCHEMA)
+            _migrate_work_order_contract(db)
             db.execute(
                 "INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(2,?)",
+                (_now(),),
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(3,?)",
                 (_now(),),
             )
             db.commit()
@@ -405,25 +434,41 @@ class OrchestrationRepository:
     def register_work_order(self, order, *, body_ref: str, input_hash: str) -> str:
         value = order.to_dict() if hasattr(order, "to_dict") else dict(order)
         order_hash = getattr(order, "order_hash", None) or canonical_sha256(value)
+        if input_hash != value["input_projection_hash"]:
+            raise OrchestrationError(
+                "WORK_ORDER_INPUT_HASH_MISMATCH",
+                str(value.get("attempt_id") or order_hash),
+            )
+        work_order_json = json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        if canonical_sha256(json.loads(work_order_json)) != order_hash:
+            raise OrchestrationError("WORK_ORDER_HASH_MISMATCH", order_hash)
+        expected = (
+            value["run_id"],
+            value["task_id"],
+            value["attempt_no"],
+            body_ref,
+            input_hash,
+            value["schema_hash"],
+            value["prompt_hash"],
+            value["model"],
+            value["route"],
+            value["attempt_id"],
+            value["provider_endpoint"],
+            work_order_json,
+        )
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 """
-                SELECT run_id,task_id,attempt_no,input_hash,schema_hash,prompt_hash,model,route
+                SELECT run_id,task_id,attempt_no,body_ref,input_hash,schema_hash,
+                       prompt_hash,model,route,attempt_id,provider_endpoint,
+                       work_order_json
                 FROM work_orders WHERE work_order_hash=?
                 """,
                 (order_hash,),
             ).fetchone()
-            expected = (
-                value["run_id"],
-                value["task_id"],
-                value["attempt_no"],
-                input_hash,
-                value["schema_hash"],
-                value["prompt_hash"],
-                value["model"],
-                value["route"],
-            )
             if row:
                 if tuple(row) != expected:
                     db.rollback()
@@ -433,13 +478,41 @@ class OrchestrationRepository:
 
             legacy = db.execute(
                 """
-                SELECT work_order_hash,input_hash,schema_hash,prompt_hash,model,route
+                SELECT work_order_hash,body_ref,input_hash,schema_hash,prompt_hash,
+                       model,route,attempt_id,provider_endpoint,work_order_json
                 FROM work_orders WHERE run_id=? AND task_id=? AND attempt_no=?
                 """,
                 (value["run_id"], value["task_id"], value["attempt_no"]),
             ).fetchone()
             if legacy:
-                if tuple(legacy[1:]) != expected[3:]:
+                # Historické V2 řádky neměly úplný kanonický JSON. Ty lze
+                # pouze konzervativně znovu otevřít; novější řádek musí být
+                # shodný bitově ve všech uložených kontraktech.
+                if legacy[9] is not None:
+                    current = (
+                        value["run_id"],
+                        value["task_id"],
+                        value["attempt_no"],
+                        legacy[1],
+                        legacy[2],
+                        legacy[3],
+                        legacy[4],
+                        legacy[5],
+                        legacy[6],
+                        legacy[7],
+                        legacy[8],
+                        legacy[9],
+                    )
+                    if current != expected:
+                        db.rollback()
+                        raise OrchestrationError("WORK_ORDER_CONFLICT", str(legacy[0]))
+                elif tuple(legacy[2:7]) != (
+                    input_hash,
+                    value["schema_hash"],
+                    value["prompt_hash"],
+                    value["model"],
+                    value["route"],
+                ) or legacy[1] != body_ref:
                     db.rollback()
                     raise OrchestrationError("WORK_ORDER_CONFLICT", str(legacy[0]))
                 db.commit()
@@ -449,8 +522,9 @@ class OrchestrationRepository:
                 """
                 INSERT INTO work_orders(
                     work_order_hash,run_id,task_id,attempt_no,body_ref,input_hash,
-                    schema_hash,prompt_hash,model,route
-                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    schema_hash,prompt_hash,model,route,attempt_id,
+                    provider_endpoint,work_order_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     order_hash,
@@ -463,6 +537,9 @@ class OrchestrationRepository:
                     value["prompt_hash"],
                     value["model"],
                     value["route"],
+                    value["attempt_id"],
+                    value["provider_endpoint"],
+                    work_order_json,
                 ),
             )
             db.commit()
@@ -479,6 +556,34 @@ class OrchestrationRepository:
     ) -> bool:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            work = db.execute(
+                """
+                SELECT body_ref,attempt_id,provider_endpoint,work_order_json
+                FROM work_orders WHERE work_order_hash=?
+                """,
+                (work_order_hash,),
+            ).fetchone()
+            if not work:
+                db.rollback()
+                raise OrchestrationError("WORK_ORDER_UNKNOWN", work_order_hash)
+            if work[0] != request_hash:
+                db.rollback()
+                raise OrchestrationError(
+                    "PROVIDER_REQUEST_HASH_MISMATCH",
+                    attempt_id,
+                )
+            if work[1] is not None and work[1] != attempt_id:
+                db.rollback()
+                raise OrchestrationError(
+                    "PROVIDER_ATTEMPT_MISMATCH",
+                    attempt_id,
+                )
+            if work[2] is not None and work[2] != endpoint:
+                db.rollback()
+                raise OrchestrationError(
+                    "PROVIDER_ENDPOINT_MISMATCH",
+                    attempt_id,
+                )
             row = db.execute(
                 """
                 SELECT work_order_hash,endpoint,request_hash,state
