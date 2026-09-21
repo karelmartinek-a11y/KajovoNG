@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -582,8 +583,11 @@ def _prepare_photo_submit(job, rows, log_dir):
         endpoint=order.provider_endpoint,
         request_hash=submit_hash,
     )
-    if job.input_file_id:
-        repo.set_remote_input_file(order.attempt_id, job.input_file_id)
+    repo.bind_physical_request(
+        order.attempt_id,
+        physical_request_hash=submit_hash,
+        remote_input_file_id=job.input_file_id,
+    )
     root = save_job(job, log_dir)
     atomic_write_text(
         str(root / "work_order_v2.json"),
