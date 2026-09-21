@@ -982,7 +982,7 @@ class CascadeRunExecutor:
             lines.append("- " + describe_output(output))
             if output.kind == "json":
                 lines.append(
-                    f"  Hodnotu „{output.name}“ vrať jako validní JSON serializovaný do jednoho textového řetězce."
+                    f"  Hodnotu „{output.name}“ vrať jako JSON objekt odpovídající přesně jeho vnořené JSON Schema masce."
                 )
             if output.kind == "file" and output.file_mode == "modify":
                 lines.append(
@@ -1181,14 +1181,24 @@ class CascadeRunExecutor:
                 values[value_key] = {"kind": "text", "value": raw}
                 summary[output.id] = raw
             elif output.kind == "json":
-                if not isinstance(raw, str):
-                    raise ContractError(f"Krok {idx}: výstup „{output.name}“ musí obsahovat JSON text.")
-                try:
-                    parsed = json.loads(raw)
-                except ValueError as exc:
+                if not isinstance(raw, dict):
                     raise ContractError(
-                        f"Krok {idx}: výstup „{output.name}“ neobsahuje platný JSON."
+                        f"Krok {idx}: strukturovaný výstup „{output.name}“ musí být JSON objekt."
+                    )
+                if not isinstance(output.json_schema, dict):
+                    raise ContractError(
+                        f"Krok {idx}: strukturovaný výstup „{output.name}“ nemá zmrazenou JSON masku."
+                    )
+                try:
+                    jsonschema.Draft202012Validator(
+                        output.json_schema,
+                        format_checker=jsonschema.FormatChecker(),
+                    ).validate(raw)
+                except jsonschema.ValidationError as exc:
+                    raise ContractError(
+                        f"Krok {idx}: výstup „{output.name}“ porušuje svoji JSON masku: {exc.message}"
                     ) from exc
+                parsed = copy.deepcopy(raw)
                 values[value_key] = {"kind": "json", "value": parsed}
                 summary[output.id] = parsed
             elif output.kind == "decision":
