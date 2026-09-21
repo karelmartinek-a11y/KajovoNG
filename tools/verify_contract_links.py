@@ -74,13 +74,14 @@ class CallInventory(ast.NodeVisitor):
             task = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "task"), None)
             if isinstance(task, ast.Dict):
                 for key, value in zip(task.keys, task.values, strict=True):
-                    if not isinstance(key, ast.Constant) or key.value not in {"stage", "route", "target_path", "expected_target_hash", "contract_name", "schema", "approval_id", "attempt_no"}:
+                    if not isinstance(key, ast.Constant) or key.value not in {"stage", "route", "provider_endpoint", "target_path", "expected_target_hash", "contract_name", "schema", "approval_id", "attempt_no"}:
                         continue
                     if isinstance(value, ast.Constant):
                         row["fields"][key.value] = value.value
                     else:
                         row["dynamic"].append(key.value)
                 row["has_explicit_target_expectation"] = any(isinstance(key, ast.Constant) and key.value == "expected_target_hash" for key in task.keys)
+                row["has_explicit_provider_endpoint"] = any(isinstance(key, ast.Constant) and key.value == "provider_endpoint" for key in task.keys)
             else:
                 row["dynamic_task"] = True
             self.orders.append(row)
@@ -187,6 +188,17 @@ def main():
     parser.add_argument("--compare", type=Path)
     args = parser.parse_args()
     static = inventory()
+    for call in static["work_order_calls"]:
+        if (
+            call.get("path", "").startswith(("kajovo/", "kajovong/", "utf8nobom/"))
+            and not call.get("dynamic_task")
+            and not call.get("has_explicit_provider_endpoint")
+        ):
+            static["errors"].append({
+                "path": call["path"],
+                "line": call["line"],
+                "error": "Kanonický freeze_order nemá explicitní provider_endpoint.",
+            })
     original_connect = socket.socket.connect
     original_create = socket.create_connection
     socket.socket.connect = deny_network
@@ -202,6 +214,27 @@ def main():
     for db in databases:
         if db["integrity"] != ["ok"] or db["foreign_key_errors"] or db["foreign_keys_enabled"] != 1:
             report["errors"].append({"database": db["name"], "error": "Integrita nebo vynucení FK nesplněno."})
+        if db["name"] == "orchestration":
+            work_orders = next(
+                (table for table in db["tables"] if table["name"] == "work_orders"),
+                None,
+            )
+            columns = {
+                row[1] for row in (work_orders or {}).get("columns", [])
+            }
+            required = {
+                "work_order_hash",
+                "body_ref",
+                "input_hash",
+                "attempt_id",
+                "provider_endpoint",
+                "work_order_json",
+            }
+            if work_orders is None or not required <= columns:
+                report["errors"].append({
+                    "database": db["name"],
+                    "error": "work_orders nemá úplnou fyzickou vazbu identity/payloadu/endpointu.",
+                })
     if args.compare:
         previous = json.loads(args.compare.read_text(encoding="utf-8"))
         for key in ("source_fingerprint", "schemas", "databases"):
