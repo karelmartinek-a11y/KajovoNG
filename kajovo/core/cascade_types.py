@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
@@ -111,6 +112,7 @@ class CascadeOutput:
     file_name: str = ""
     file_mode: str = "create"  # create|modify
     modify_input_id: str = ""
+    json_schema: Optional[Dict[str, Any]] = None
     decision_options: List[CascadeDecisionOption] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -122,6 +124,7 @@ class CascadeOutput:
             "file_name": self.file_name,
             "file_mode": self.file_mode,
             "modify_input_id": self.modify_input_id,
+            "json_schema": copy.deepcopy(self.json_schema),
             "decision_options": [item.to_dict() for item in self.decision_options],
         }
 
@@ -141,6 +144,9 @@ class CascadeOutput:
         file_mode = str(data.get("file_mode") or "create").strip().lower()
         if file_mode not in CASCADE_FILE_MODES:
             raise ValueError("Neznámý režim souborového výstupu.")
+        json_schema = data.get("json_schema")
+        if json_schema is not None and not isinstance(json_schema, dict):
+            raise ValueError("JSON maska výstupu musí být objekt nebo null.")
         options_raw = data.get("decision_options", [])
         if not isinstance(options_raw, list) or any(not isinstance(row, dict) for row in options_raw):
             raise ValueError("Volby rozhodnutí musí být seznam objektů.")
@@ -152,6 +158,7 @@ class CascadeOutput:
             file_name=str(data.get("file_name") or "").strip().replace("\\", "/"),
             file_mode=file_mode,
             modify_input_id=str(data.get("modify_input_id") or "").strip(),
+            json_schema=copy.deepcopy(json_schema),
             decision_options=[CascadeDecisionOption.from_dict(row) for row in options_raw],
         )
 
@@ -215,7 +222,18 @@ class CascadeStep:
                 )
             return
         if self.output_type == "json":
-            self.outputs.append(CascadeOutput(name="JSON", kind="json"))
+            self.outputs.append(
+                CascadeOutput(
+                    name="JSON",
+                    kind="json",
+                    json_schema=(
+                        copy.deepcopy(self.output_schema_custom)
+                        if self.output_schema_kind == "custom"
+                        and isinstance(self.output_schema_custom, dict)
+                        else None
+                    ),
+                )
+            )
         else:
             self.outputs.append(CascadeOutput(name="Text", kind="text"))
 
