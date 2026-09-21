@@ -177,6 +177,7 @@ def _gen_file_chunks(
                 "step_id": self._delivery_step_id,
                 "stage": contract.split("_", 1)[0],
                 "route": "responses_live",
+                "provider_endpoint": "/v1/responses",
                 "target_id": path,
                 "target_path": path,
                 "expected_target_hash": expected_target_hash,
