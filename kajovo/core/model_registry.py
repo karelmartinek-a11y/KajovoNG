@@ -33,10 +33,26 @@ def _validate_matrix(value):
     for model, spec in value["models"].items():
         if not isinstance(model, str) or not isinstance(spec, dict) or not required <= set(spec):
             raise ValueError(f"Modelová matice má neúplný model: {model!r}.")
-        if spec["canonical"] != model:
-            raise ValueError(f"Model {model} má jinou canonical identitu.")
-        if type(spec["responses"]) is not bool or type(spec["batch"]) is not bool or type(spec["deprecated"]) is not bool:
-            raise ValueError(f"Model {model} má neplatné boolean capability.")
+        if not isinstance(spec["canonical"], str) or not spec["canonical"].strip():
+            raise ValueError(f"Model {model} má neplatnou canonical identitu.")
+        for key in ("responses", "batch", "reasoning_supported", "cache_options", "deprecated"):
+            if type(spec[key]) is not bool:
+                raise ValueError(f"Model {model} má neplatné boolean capability {key}.")
+        if not isinstance(spec["sampling"], str) or not spec["sampling"]:
+            raise ValueError(f"Model {model} má neplatný sampling kontrakt.")
+        for key in ("context_window", "max_input_tokens", "max_output_tokens"):
+            token_limit = spec.get(key)
+            if token_limit is not None and (
+                type(token_limit) is not int or token_limit <= 0
+            ):
+                raise ValueError(f"Model {model} má neplatný limit {key}.")
+        source_hash = spec.get("source_sha256")
+        if source_hash is not None and (
+            not isinstance(source_hash, str)
+            or len(source_hash) != 64
+            or set(source_hash) - set("0123456789abcdef")
+        ):
+            raise ValueError(f"Model {model} má neplatný source_sha256.")
         for key in (
             "features", "reasoning", "reasoning_modes", "reasoning_summaries",
             "cache_retention", "image_details", "service_tiers",
