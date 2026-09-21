@@ -39,9 +39,9 @@ CREATE TABLE IF NOT EXISTS work_orders(
     prompt_hash TEXT NOT NULL,
     model TEXT NOT NULL,
     route TEXT NOT NULL,
-    attempt_id TEXT,
-    provider_endpoint TEXT,
-    work_order_json TEXT CHECK(work_order_json IS NULL OR json_valid(work_order_json)),
+    attempt_id TEXT NOT NULL,
+    provider_endpoint TEXT NOT NULL,
+    work_order_json TEXT NOT NULL CHECK(json_valid(work_order_json)),
     UNIQUE(run_id,task_id,attempt_no)
 );
 CREATE TABLE IF NOT EXISTS provider_operations(
@@ -133,11 +133,16 @@ def _columns(db: sqlite3.Connection, name: str) -> set[str]:
 
 
 def _route_endpoint(route: str) -> str:
-    if route == "responses_batch":
+    if route in {"responses_batch", "image_batch"}:
         return "/v1/batches"
-    if route in {"image_live", "image_batch"}:
+    if route == "responses_live":
+        return "/v1/responses"
+    if route == "image_live":
         return "/v1/images/edits"
-    return "/v1/responses"
+    raise OrchestrationError(
+        "WORK_ORDER_ROUTE_UNKNOWN",
+        f"Legacy WorkOrder má neznámou route: {route}",
+    )
 
 
 def _migrate_work_order_contract(db: sqlite3.Connection) -> None:
@@ -434,6 +439,16 @@ class OrchestrationRepository:
     def register_work_order(self, order, *, body_ref: str, input_hash: str) -> str:
         value = order.to_dict() if hasattr(order, "to_dict") else dict(order)
         order_hash = getattr(order, "order_hash", None) or canonical_sha256(value)
+        for label, digest in (("body_ref", body_ref), ("input_hash", input_hash)):
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+            ):
+                raise OrchestrationError(
+                    "WORK_ORDER_DIGEST_INVALID",
+                    f"{label} musí být kanonický SHA-256.",
+                )
         if input_hash != value["input_projection_hash"]:
             raise OrchestrationError(
                 "WORK_ORDER_INPUT_HASH_MISMATCH",
