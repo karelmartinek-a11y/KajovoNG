@@ -20,9 +20,10 @@ from .contracts import (
 )
 from .request_rules import uses_reasoning_defaults, validate_response_payload
 from .structured_output import file_content_format, validate_output
+from .orchestration.contracts import canonical_sha256
 from .orchestration.work_order import freeze_order, validate_work_order_v2
 from .utils import atomic_write_text, is_versing_snapshot_dir, safe_join_under_root
-from .batch_submit import submit_verified_batch
+from .batch_submit import response_batch_submit_payload, submit_verified_batch
 from .progress import ProgressEvent
 from .run_bundle import RunBundle
 from .context_compiler import ContextCompiler, canonical
@@ -1202,8 +1203,13 @@ def _submit_v3_followup_wave(
         json.dumps(state, ensure_ascii=False, indent=2),
     )
 
+    physical_submit = response_batch_submit_payload(input_file_id)
     for order in orders.values():
-        repo.set_remote_input_file(order.attempt_id, input_file_id)
+        repo.bind_physical_request(
+            order.attempt_id,
+            physical_request_hash=canonical_sha256(physical_submit),
+            remote_input_file_id=input_file_id,
+        )
         repo.mark_submission_started(order.attempt_id)
     try:
         batch = submit_verified_batch(
@@ -1973,8 +1979,13 @@ def _repeat_v3_batch(
         str(Path(run_dir) / "run_state.json"),
         json.dumps(state, ensure_ascii=False, indent=2),
     )
+    physical_submit = response_batch_submit_payload(input_file_id)
     for order in orders.values():
-        repo.set_remote_input_file(order.attempt_id, input_file_id)
+        repo.bind_physical_request(
+            order.attempt_id,
+            physical_request_hash=canonical_sha256(physical_submit),
+            remote_input_file_id=input_file_id,
+        )
         repo.mark_submission_started(order.attempt_id)
     try:
         batch = submit_verified_batch(
