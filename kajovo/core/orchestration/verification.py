@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import json
 import os
 import platform
 import shutil
@@ -15,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import safe_join_under_root, sha256_file
-from .contracts import canonical_sha256, parse_json_strict
+from .contracts import canonical_sha256, parse_json_strict, parse_json_value_strict
 from .errors import OrchestrationError
 
 
@@ -201,7 +200,7 @@ def _static_format_checks(root: Path) -> tuple[list[dict[str, Any]], str]:
             if suffix == ".py":
                 ast.parse(raw.decode("utf-8", errors="strict"), filename=rel)
             elif suffix == ".json":
-                parse_json_strict(raw.decode("utf-8", errors="strict"))
+                parse_json_value_strict(raw.decode("utf-8", errors="strict"))
             elif suffix == ".toml":
                 tomllib.loads(raw.decode("utf-8", errors="strict"))
             elif suffix in {".xml", ".svg"}:
