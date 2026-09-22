@@ -373,9 +373,23 @@ class OpenAITransport:
             if spec.name == FILE_CONTENT.name:
                 return response.content
 
+            content_type = str(response.headers.get("content-type", "")).lower()
+            if not content_type.startswith("application/json"):
+                return response.content
+
             try:
-                result = parse_json_strict(response.content.decode("utf-8", errors="strict"))
-            except (UnicodeError, OrchestrationError) as exc:
+                if hasattr(response, "content"):
+                    result = parse_json_strict(
+                        response.content.decode("utf-8", errors="strict")
+                    )
+                else:
+                    result = response.json()
+                    if not isinstance(result, dict):
+                        raise OrchestrationError(
+                            "ROOT_NOT_OBJECT", "Kořen JSON musí být objekt."
+                        )
+                    canonical_bytes(result)
+            except (UnicodeError, ValueError, OrchestrationError) as exc:
                 if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
                     raise SubmissionOutcomeUnknown(
                         spec.name, method, path, request_id=request_id, cause=exc
