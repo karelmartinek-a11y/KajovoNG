@@ -222,9 +222,9 @@ def test_photo_submit_retains_durable_failure_classification(tmp_path, photo_job
     client = Mock()
     client.upload_file.side_effect = [{"id": "file_source"}, {"id": "file_input"}]
     if fault == "rejected":
-        client._req.side_effect = OpenAIError("Odmítnuto", 400)
+        client.create_image_batch.side_effect = OpenAIError("Odmítnuto", 400)
     else:
-        client._req.return_value = {"status": "validating"}
+        client.create_image_batch.return_value = {"status": "validating"}
     log_dir = tmp_path / "LOG"
     with pytest.raises((OpenAIError, ValueError)):
         prepare_and_submit(client, photo_job, log_dir)
@@ -239,8 +239,8 @@ def test_photo_submit_retains_durable_failure_classification(tmp_path, photo_job
         ).fetchall() == [
             ("not_submitted" if fault == "rejected" else "submission_unknown",),
         ]
-    client._req.assert_called_once()
-    assert client._req.call_args.kwargs["max_attempts"] == 1
+    client.create_image_batch.assert_called_once()
+    client._req.assert_not_called()
 
 
 @pytest.mark.parametrize("raw,message", [(b"\xff", "UTF-8"), (b"[]\n", "JSON objekt"), (b"{", "neplatný JSON")])

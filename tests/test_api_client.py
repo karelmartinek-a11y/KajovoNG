@@ -7,6 +7,7 @@ import requests
 
 from kajovo.core.openai_client import OpenAIClient, OpenAIError, image_batch_submit_payload
 from kajovo.core.openai_transport import SubmissionOutcomeUnknown
+from kajovo.core.photo_batch import image_edit_model_ids
 
 
 def test_paginated_files_are_complete():
@@ -97,3 +98,40 @@ def test_image_batch_submit_payload_keeps_documented_output_expiration():
             "seconds": 2592000,
         },
     }
+
+
+def test_create_image_batch_performs_one_canonical_post():
+    model = image_edit_model_ids()[0]
+    row = {
+        "custom_id": "photo_1",
+        "method": "POST",
+        "url": "/v1/images/edits",
+        "body": {
+            "model": model,
+            "images": [{"file_id": "file_photo"}],
+            "prompt": "Preserve reality.",
+            "n": 1,
+            "size": "auto",
+            "quality": "high",
+            "output_format": "png",
+            "background": "auto",
+        },
+    }
+    client = OpenAIClient("test")
+    result = {"id": "batch_photo", "status": "validating"}
+    with patch.object(client, "_req", return_value=result) as request:
+        assert client.create_image_batch("file_batch", [row]) == result
+    request.assert_called_once_with(
+        "POST",
+        "/batches",
+        json_body={
+            "input_file_id": "file_batch",
+            "endpoint": "/v1/images/edits",
+            "completion_window": "24h",
+            "output_expires_after": {
+                "anchor": "created_at",
+                "seconds": 2592000,
+            },
+        },
+        max_attempts=1,
+    )

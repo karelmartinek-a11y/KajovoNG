@@ -66,6 +66,49 @@ def _validate_matrix(value):
             for item in spec["endpoints"]
         ):
             raise ValueError(f"Model {model} má neplatné endpointy.")
+        image = spec.get("image_capabilities")
+        if image is not None:
+            common = {
+                "endpoints", "batch", "max_references", "max_input_bytes",
+                "input_formats", "max_input_pixels", "max_prompt_chars",
+                "quality", "output_formats", "background", "input_fidelity",
+                "source", "verified_on",
+            }
+            if not isinstance(image, dict) or not common <= set(image):
+                raise ValueError(f"Model {model} má neúplný image_capabilities kontrakt.")
+            if type(image["batch"]) is not bool:
+                raise ValueError(f"Model {model} má neplatný image_capabilities.batch.")
+            for key in ("max_references", "max_input_bytes", "max_input_pixels", "max_prompt_chars"):
+                if type(image[key]) is not int or image[key] <= 0:
+                    raise ValueError(f"Model {model} má neplatný image_capabilities.{key}.")
+            for key in ("endpoints", "input_formats", "quality", "output_formats", "background", "input_fidelity"):
+                if (
+                    not isinstance(image[key], list)
+                    or any(not isinstance(value, str) or not value for value in image[key])
+                    or len(image[key]) != len(set(image[key]))
+                ):
+                    raise ValueError(f"Model {model} má neplatný image_capabilities.{key}.")
+            if not set(image["endpoints"]) <= {"/v1/images/generations", "/v1/images/edits"}:
+                raise ValueError(f"Model {model} má neplatný obrazový endpoint.")
+            if not set(image["input_fidelity"]) <= {"low", "high"}:
+                raise ValueError(f"Model {model} má neplatné image input_fidelity.")
+            if not isinstance(image["source"], str) or not image["source"].startswith("https://developers.openai.com/"):
+                raise ValueError(f"Model {model} nemá platný zdroj obrazového kontraktu.")
+            if not isinstance(image["verified_on"], str) or not image["verified_on"]:
+                raise ValueError(f"Model {model} nemá datum ověření obrazového kontraktu.")
+            if "sizes" in image:
+                if (
+                    not isinstance(image["sizes"], list)
+                    or not image["sizes"]
+                    or any(not isinstance(value, str) or not value for value in image["sizes"])
+                    or len(image["sizes"]) != len(set(image["sizes"]))
+                ):
+                    raise ValueError(f"Model {model} má neplatné pevné image sizes.")
+            else:
+                for key in ("min_pixels", "max_pixels", "max_edge", "multiple", "max_ratio"):
+                    limit_value = image.get(key)
+                    if not isinstance(limit_value, (int, float)) or isinstance(limit_value, bool) or limit_value <= 0:
+                        raise ValueError(f"Model {model} má neplatný flexibilní limit {key}.")
     return value
 
 

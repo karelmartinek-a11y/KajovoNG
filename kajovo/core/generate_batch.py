@@ -557,7 +557,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
         legacy = measure_request({**body, "input": json.dumps(legacy_context, ensure_ascii=False)}, batch=True)
         report["legacy_estimated_input_tokens"] = legacy["input_tokens"]
         report["saved_estimated_input_tokens"] = legacy["input_tokens"] - report["input_tokens"]
-        validate_response_payload(body)
+        validate_response_payload(body, batch=True)
         custom_id = f"{run_id}_{stage[:2]}_{index:05d}"
         rows.append({"custom_id": custom_id, "method": "POST", "url": "/v1/responses", "body": body})
         report.update(routing=routing, path=file["path"], custom_id=custom_id)
@@ -646,7 +646,7 @@ def encode_requests(manifest):
     validate_paths([{"path": p} for p in manifest["expected"].values()])
     compiler = ContextCompiler(manifest["snapshot"]) if manifest.get("version") == 3 else None
     for row in rows:
-        validate_response_payload(row["body"], batch=True if v3_graph else False)
+        validate_response_payload(row["body"], batch=True)
         if row["method"] != "POST" or row["url"] != "/v1/responses" or row["body"].get("previous_response_id"):
             raise ContractError("Souborová úloha musí být samostatný požadavek Responses.")
         context = parse_json_strict(row["body"]["input"])

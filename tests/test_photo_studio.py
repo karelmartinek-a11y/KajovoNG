@@ -150,20 +150,16 @@ def test_image_edit_batch_row_uses_image_endpoint():
     assert validate_image_edit_rows([row]) == [row]
 
 
-def test_image_batch_adapter_performs_one_working_post_only():
+def test_image_batch_adapter_delegates_to_canonical_client_transport():
     client = Mock()
     client._validate_resource_id.return_value = None
-    client._req.return_value = {"id": "batch_photo", "status": "validating"}
+    client.create_image_batch.return_value = {"id": "batch_photo", "status": "validating"}
     item = PhotoBatchItem("i", "c", "a.jpg", "a.jpg", "hash", "file_photo")
     row = image_edit_row(item, model=_image_model(), prompt="Keep it real.", quality="high", size="auto", output_format="png")
     result = ImageEditBatchAdapter(client).submit("file_batch", [row])
     assert result["id"] == "batch_photo"
-    client._req.assert_called_once_with(
-        "POST",
-        "/batches",
-        json_body={"input_file_id": "file_batch", "endpoint": "/v1/images/edits", "completion_window": "24h"},
-        max_attempts=1,
-    )
+    client.create_image_batch.assert_called_once_with("file_batch", [row])
+    client._req.assert_not_called()
 
 
 def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
@@ -357,7 +353,7 @@ def test_photo_batch_submit_creates_work_order_and_provider_operation(tmp_path):
     uploads = iter([{"id": "file_source"}, {"id": "file_batch"}])
     client.upload_file.side_effect = lambda *args, **kwargs: next(uploads)
     client._validate_resource_id.return_value = None
-    client._req.return_value = {
+    client.create_image_batch.return_value = {
         "id": "batch_photo",
         "status": "validating",
         "input_file_id": "file_batch",
@@ -382,7 +378,8 @@ def test_photo_batch_submit_creates_work_order_and_provider_operation(tmp_path):
         ).fetchall()
     assert work == [("image_batch", "PHOTO_BATCH_SUBMIT")]
     assert operations == [("submitted", "batch_photo")]
-    assert client._req.call_count == 1
+    client.create_image_batch.assert_called_once()
+    client._req.assert_not_called()
 
 
 def test_photo_batch_uncertain_submit_is_not_reposted(tmp_path):
@@ -408,15 +405,16 @@ def test_photo_batch_uncertain_submit_is_not_reposted(tmp_path):
     uploads = iter([{"id": "file_source"}, {"id": "file_batch"}])
     client.upload_file.side_effect = lambda *args, **kwargs: next(uploads)
     client._validate_resource_id.return_value = None
-    client._req.side_effect = TimeoutError("lost response")
+    client.create_image_batch.side_effect = TimeoutError("lost response")
 
     with pytest.raises(TimeoutError):
         prepare_and_submit(client, job, log_dir)
     assert job.status == "submission_unknown"
-    assert client._req.call_count == 1
+    assert client.create_image_batch.call_count == 1
+    client._req.assert_not_called()
 
     # Recovery checks the exact Files input + endpoint and never POSTs again.
-    client._req.side_effect = None
+    client.create_image_batch.side_effect = None
     client.list_batches.return_value = [
         {
             "id": "batch_recovered",
@@ -429,4 +427,5 @@ def test_photo_batch_uncertain_submit_is_not_reposted(tmp_path):
     client.retrieve_batch.return_value = client.list_batches.return_value[0]
     refresh_job(client, job, log_dir)
     assert job.batch_id == "batch_recovered"
-    assert client._req.call_count == 1
+    assert client.create_image_batch.call_count == 1
+    client._req.assert_not_called()

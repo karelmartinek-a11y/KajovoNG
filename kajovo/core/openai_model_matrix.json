@@ -1,6 +1,6 @@
 {
-  "version": "2026-09-14.1",
-  "checked_at": "2026-09-10",
+  "version": "2026-09-22.1",
+  "checked_at": "2026-09-22",
   "sources": {
     "batch": {
       "url": "https://developers.openai.com/api/docs/guides/batch",
@@ -6188,7 +6188,51 @@
       ],
       "notes": [
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
-      ]
+      ],
+      "image_capabilities": {
+        "endpoints": [
+          "/v1/images/generations",
+          "/v1/images/edits"
+        ],
+        "batch": true,
+        "max_references": 16,
+        "max_input_bytes": 49999999,
+        "input_formats": [
+          "PNG",
+          "JPEG",
+          "WEBP"
+        ],
+        "max_input_pixels": 64000000,
+        "max_prompt_chars": 32000,
+        "quality": [
+          "auto",
+          "low",
+          "medium",
+          "high"
+        ],
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "background": [
+          "auto",
+          "opaque",
+          "transparent"
+        ],
+        "input_fidelity": [
+          "low",
+          "high"
+        ],
+        "sizes": [
+          "auto",
+          "1024x1024",
+          "1536x1024",
+          "1024x1536"
+        ],
+        "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
+        "verified_on": "2026-09-22"
+      }
     },
     "gpt-image-1.5-2025-12-16": {
       "source": "https://developers.openai.com/api/docs/models/gpt-image-1.5",
@@ -6235,7 +6279,51 @@
       ],
       "notes": [
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
-      ]
+      ],
+      "image_capabilities": {
+        "endpoints": [
+          "/v1/images/generations",
+          "/v1/images/edits"
+        ],
+        "batch": true,
+        "max_references": 16,
+        "max_input_bytes": 49999999,
+        "input_formats": [
+          "PNG",
+          "JPEG",
+          "WEBP"
+        ],
+        "max_input_pixels": 64000000,
+        "max_prompt_chars": 32000,
+        "quality": [
+          "auto",
+          "low",
+          "medium",
+          "high"
+        ],
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "background": [
+          "auto",
+          "opaque",
+          "transparent"
+        ],
+        "input_fidelity": [
+          "low",
+          "high"
+        ],
+        "sizes": [
+          "auto",
+          "1024x1024",
+          "1536x1024",
+          "1024x1536"
+        ],
+        "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
+        "verified_on": "2026-09-22"
+      }
     },
     "gpt-image-2": {
       "source": "https://developers.openai.com/api/docs/models/gpt-image-2",
@@ -6282,7 +6370,48 @@
       ],
       "notes": [
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
-      ]
+      ],
+      "image_capabilities": {
+        "endpoints": [
+          "/v1/images/generations",
+          "/v1/images/edits"
+        ],
+        "batch": true,
+        "max_references": 16,
+        "max_input_bytes": 49999999,
+        "input_formats": [
+          "PNG",
+          "JPEG",
+          "WEBP"
+        ],
+        "max_input_pixels": 64000000,
+        "max_prompt_chars": 32000,
+        "quality": [
+          "auto",
+          "low",
+          "medium",
+          "high"
+        ],
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "background": [
+          "auto",
+          "opaque",
+          "transparent"
+        ],
+        "input_fidelity": [],
+        "min_pixels": 655360,
+        "max_pixels": 8294400,
+        "max_edge": 3840,
+        "multiple": 16,
+        "max_ratio": 3,
+        "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
+        "verified_on": "2026-09-22",
+        "standard_pixels": 3686400
+      }
     },
     "gpt-image-2-2026-04-21": {
       "source": "https://developers.openai.com/api/docs/models/gpt-image-2",
@@ -6329,7 +6458,48 @@
       ],
       "notes": [
         "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
-      ]
+      ],
+      "image_capabilities": {
+        "endpoints": [
+          "/v1/images/generations",
+          "/v1/images/edits"
+        ],
+        "batch": true,
+        "max_references": 16,
+        "max_input_bytes": 49999999,
+        "input_formats": [
+          "PNG",
+          "JPEG",
+          "WEBP"
+        ],
+        "max_input_pixels": 64000000,
+        "max_prompt_chars": 32000,
+        "quality": [
+          "auto",
+          "low",
+          "medium",
+          "high"
+        ],
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "background": [
+          "auto",
+          "opaque",
+          "transparent"
+        ],
+        "input_fidelity": [],
+        "min_pixels": 655360,
+        "max_pixels": 8294400,
+        "max_edge": 3840,
+        "multiple": 16,
+        "max_ratio": 3,
+        "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
+        "verified_on": "2026-09-22",
+        "standard_pixels": 3686400
+      }
     },
     "gpt-image-2.5-flare": {
       "source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare",
@@ -6406,14 +6576,17 @@
           "opaque",
           "transparent"
         ],
-        "input_fidelity": [],
+        "input_fidelity": [
+          "low",
+          "high"
+        ],
         "min_pixels": 655360,
         "max_pixels": 8294400,
         "max_edge": 3840,
         "multiple": 16,
         "max_ratio": 3,
         "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
-        "verified_on": "2026-09-14",
+        "verified_on": "2026-09-22",
         "standard_pixels": 3686400
       }
     },
@@ -6492,14 +6665,17 @@
           "opaque",
           "transparent"
         ],
-        "input_fidelity": [],
+        "input_fidelity": [
+          "low",
+          "high"
+        ],
         "min_pixels": 655360,
         "max_pixels": 8294400,
         "max_edge": 3840,
         "multiple": 16,
         "max_ratio": 3,
         "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
-        "verified_on": "2026-09-14",
+        "verified_on": "2026-09-22",
         "standard_pixels": 3686400
       }
     },
@@ -6578,14 +6754,17 @@
           "opaque",
           "transparent"
         ],
-        "input_fidelity": [],
+        "input_fidelity": [
+          "low",
+          "high"
+        ],
         "min_pixels": 655360,
         "max_pixels": 8294400,
         "max_edge": 3840,
         "multiple": 16,
         "max_ratio": 3,
         "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
-        "verified_on": "2026-09-14",
+        "verified_on": "2026-09-22",
         "standard_pixels": 3686400
       }
     },
@@ -6664,14 +6843,17 @@
           "opaque",
           "transparent"
         ],
-        "input_fidelity": [],
+        "input_fidelity": [
+          "low",
+          "high"
+        ],
         "min_pixels": 655360,
         "max_pixels": 8294400,
         "max_edge": 3840,
         "multiple": 16,
         "max_ratio": 3,
         "source": "https://developers.openai.com/api/reference/resources/images/methods/edit",
-        "verified_on": "2026-09-14",
+        "verified_on": "2026-09-22",
         "standard_pixels": 3686400
       }
     },

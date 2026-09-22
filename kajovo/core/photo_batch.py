@@ -18,7 +18,7 @@ from typing import Iterable
 from .batch_submit import exact_batch_matches
 from .comic_types import IMAGE_MODEL, ComicError
 from .contracts import ContractError, parse_json_strict
-from .image_runtime import inspect_image
+from .image_runtime import image_capability, inspect_image, preferred_input_fidelity, validate_image_request
 from .orchestration.contracts import canonical_bytes, canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.image_slots import image_policy
@@ -26,6 +26,7 @@ from .orchestration.repository import OrchestrationRepository
 from .orchestration.run_config import build_run_config_v2
 from .orchestration.work_order import freeze_order
 from .model_registry import model_spec, models_for_usage
+from .openai_client import image_batch_submit_payload
 from .photo_prompt import manual_photo_plan
 from .utils import atomic_write_text
 
@@ -189,35 +190,53 @@ def make_items(paths: Iterable[str]) -> list[PhotoBatchItem]:
 def image_edit_row(item, *, model, prompt, quality, size, output_format) -> dict:
     if not item.uploaded_file_id:
         raise ValueError(f"{item.source_name}: chybí file_id.")
+    body = {
+        "model": model,
+        "images": [{"file_id": item.uploaded_file_id}],
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "quality": quality,
+        "output_format": output_format,
+        "background": "auto",
+    }
+    fidelity = preferred_input_fidelity(model)
+    if fidelity:
+        body["input_fidelity"] = fidelity
+    try:
+        validate_image_request(IMAGE_EDIT_ENDPOINT, body)
+    except ComicError as exc:
+        raise ValueError(
+            f"{item.source_name}: Image Edit payload porušuje kanonický kontrakt: {exc}"
+        ) from exc
     return {
         "custom_id": item.custom_id,
         "method": "POST",
         "url": IMAGE_EDIT_ENDPOINT,
-        "body": {
-            "model": model,
-            "images": [{"file_id": item.uploaded_file_id}],
-            "prompt": prompt,
-            "n": 1,
-            "size": size,
-            "quality": quality,
-            "output_format": output_format,
-            "background": "auto",
-        },
+        "body": body,
     }
 
 
 def image_edit_options(model: str) -> dict:
-    """Lokální omezení podle oficiální specifikace rodiny GPT Image."""
+    """UI možnosti jsou odvozené ze stejné capability masky jako transport."""
     if not _is_image_edit_model(model):
         raise ValueError("Vybraný model nepodporuje dávkové úpravy fotografií.")
-    modern = model.startswith("gpt-image-2")
-    extended = model.startswith("gpt-image-2.5-")
+    cap = image_capability(model)
+    fixed = cap.get("sizes")
+    if fixed is not None:
+        sizes = list(fixed)
+        custom_size = False
+    else:
+        sizes = [
+            "auto", "1024x1024", "1536x1024", "1024x1536",
+            "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840",
+        ]
+        custom_size = True
     return {
-        "quality": ["auto", "low", "medium", "high", *(["xhigh", "max"] if extended else [])],
-        "sizes": ["auto", "1024x1024", "1536x1024", "1024x1536",
-                  *(["2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840"] if modern else [])],
-        "custom_size": modern,
-        "source": "https://developers.openai.com/api/docs/guides/image-generation",
+        "quality": list(cap["quality"]),
+        "sizes": sizes,
+        "custom_size": custom_size,
+        "source": str(cap.get("source") or ""),
     }
 
 
@@ -248,16 +267,6 @@ def validate_image_edit_rows(rows: Iterable[dict]) -> list[dict]:
     models: set[str] = set()
     if not 1 <= len(rows) <= 50000:
         raise ValueError("Image Edit BATCH vyžaduje 1 až 50 000 řádků.")
-    required = {
-        "model",
-        "images",
-        "prompt",
-        "n",
-        "size",
-        "quality",
-        "output_format",
-        "background",
-    }
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"custom_id", "method", "url", "body"}:
             raise ValueError("Neplatný řádek Image Edit BATCH.")
@@ -272,33 +281,21 @@ def validate_image_edit_rows(rows: Iterable[dict]) -> list[dict]:
             raise ValueError("Neplatné custom_id, metoda nebo endpoint Image Edit BATCH.")
         ids.add(cid)
         body = row["body"]
-        if not isinstance(body, dict) or set(body) != required:
-            raise ValueError("Neplatné parametry Image Edit BATCH.")
-        model = str(body["model"])
+        if not isinstance(body, dict):
+            raise ValueError("Image Edit BATCH body musí být JSON object.")
+        model = str(body.get("model") or "")
         if not _is_image_edit_model(model):
             raise ValueError(f"{model}: pevná matice nepovoluje Image Edit BATCH model.")
         models.add(model)
-        validate_image_edit_parameters(model, body["quality"], body["size"], body["output_format"])
-        images = body["images"]
-        if (
-            not isinstance(images, list)
-            or len(images) != 1
-            or not isinstance(images[0], dict)
-            or set(images[0]) != {"file_id"}
-            or not re.fullmatch(r"[A-Za-z0-9_-]+", str(images[0]["file_id"]))
-        ):
-            raise ValueError("Každý řádek vyžaduje právě jeden platný file_id.")
-        if not isinstance(body["prompt"], str) or not body["prompt"].strip() or body["n"] != 1:
-            raise ValueError("Image Edit vyžaduje prompt a n=1.")
-        if body["quality"] not in {"auto", "low", "medium", "high", "xhigh", "max"}:
-            raise ValueError("Neplatná kvalita Image Edit.")
-        if body["output_format"] not in {"png", "jpeg", "webp"}:
-            raise ValueError("Neplatný formát Image Edit.")
-        if not (
-            body["size"] == "auto"
-            or re.fullmatch(r"\d{2,5}x\d{2,5}", str(body["size"]))
-        ):
-            raise ValueError("Neplatná velikost Image Edit.")
+        try:
+            validate_image_request(IMAGE_EDIT_ENDPOINT, body)
+        except ComicError as exc:
+            raise ValueError(
+                f"{cid}: Image Edit payload porušuje kanonický kontrakt: {exc}"
+            ) from exc
+        images = body.get("images")
+        if not isinstance(images, list) or len(images) != 1:
+            raise ValueError("PHOTO BATCH vyžaduje právě jednu zdrojovou fotografii na řádek.")
     if len(models) != 1:
         raise ValueError("Jeden Image Edit BATCH smí obsahovat právě jeden model.")
     return rows
@@ -307,25 +304,37 @@ def validate_image_edit_rows(rows: Iterable[dict]) -> list[dict]:
 PHOTO_BATCH_CREATE_SCHEMA = {
     "type": "object",
     "properties": {
-        "input_file_id": {"type": "string"},
+        "input_file_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+        },
         "endpoint": {"type": "string", "enum": [IMAGE_EDIT_ENDPOINT]},
         "completion_window": {"type": "string", "enum": ["24h"]},
+        "output_expires_after": {
+            "type": "object",
+            "properties": {
+                "anchor": {"type": "string", "enum": ["created_at"]},
+                "seconds": {"type": "integer", "enum": [2592000]},
+            },
+            "required": ["anchor", "seconds"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["input_file_id", "endpoint", "completion_window"],
+    "required": [
+        "input_file_id",
+        "endpoint",
+        "completion_window",
+        "output_expires_after",
+    ],
     "additionalProperties": False,
 }
 
 
+
 def image_edit_batch_submit_payload(input_file_id: str) -> dict:
-    if not isinstance(input_file_id, str) or not re.fullmatch(
-        r"[A-Za-z0-9_-]+", input_file_id
-    ):
-        raise ValueError("Image Edit BATCH vyžaduje platné input_file_id.")
-    return {
-        "input_file_id": input_file_id,
-        "endpoint": IMAGE_EDIT_ENDPOINT,
-        "completion_window": "24h",
-    }
+    """Compatibility facade over the single canonical image-batch submit mask."""
+    return image_batch_submit_payload(input_file_id, IMAGE_EDIT_ENDPOINT)
+
 
 
 class ImageEditBatchAdapter:
@@ -339,12 +348,7 @@ class ImageEditBatchAdapter:
         verified = validate_image_edit_rows(rows)
         if not verified:
             raise ValueError("Pracovní Image Edit BATCH nemá žádné řádky.")
-        return self.client._req(
-            "POST",
-            "/batches",
-            json_body=image_edit_batch_submit_payload(input_file_id),
-            max_attempts=1,
-        )
+        return self.client.create_image_batch(input_file_id, verified)
 
 
 def copy_photo_plan(value, final_prompt: str) -> dict:
