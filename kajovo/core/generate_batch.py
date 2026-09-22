@@ -557,7 +557,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
         legacy = measure_request({**body, "input": json.dumps(legacy_context, ensure_ascii=False)}, batch=True)
         report["legacy_estimated_input_tokens"] = legacy["input_tokens"]
         report["saved_estimated_input_tokens"] = legacy["input_tokens"] - report["input_tokens"]
-        validate_response_payload(body)
+        validate_response_payload(body, batch=True)
         custom_id = f"{run_id}_{stage[:2]}_{index:05d}"
         rows.append({"custom_id": custom_id, "method": "POST", "url": "/v1/responses", "body": body})
         report.update(routing=routing, path=file["path"], custom_id=custom_id)
