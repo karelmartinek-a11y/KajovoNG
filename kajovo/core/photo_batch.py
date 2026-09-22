@@ -330,9 +330,11 @@ PHOTO_BATCH_CREATE_SCHEMA = {
 }
 
 
+
 def image_edit_batch_submit_payload(input_file_id: str) -> dict:
     """Compatibility facade over the single canonical image-batch submit mask."""
     return image_batch_submit_payload(input_file_id, IMAGE_EDIT_ENDPOINT)
+
 
 
 class ImageEditBatchAdapter:
