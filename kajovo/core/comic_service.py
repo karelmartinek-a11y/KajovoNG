@@ -33,7 +33,7 @@ from .comic_types import (
     validate_story,
     validate_storyboard,
 )
-from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, source_bytes, validate_image_request
+from .image_runtime import image_capability, inspect_image, normalized_image, postprocess, preferred_input_fidelity, source_bytes, validate_image_request
 from .model_registry import model_spec, models_for_usage
 from .openai_client import image_batch_submit_payload
 from .orchestration.contracts import canonical_sha256
@@ -1155,6 +1155,9 @@ class ComicService:
                 "output_format": "png", "background": "opaque"}
         if refs:
             body.update(images=[{"file_id": ref} for ref in refs])
+            fidelity = preferred_input_fidelity(IMAGE_MODEL)
+            if fidelity:
+                body["input_fidelity"] = fidelity
         return body
 
     def _frozen_image_index(self, project_id, asset_ids):
