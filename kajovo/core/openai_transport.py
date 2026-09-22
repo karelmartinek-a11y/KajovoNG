@@ -17,6 +17,9 @@ from typing import Any
 
 import requests
 
+from .orchestration.contracts import canonical_bytes, parse_json_strict
+from .orchestration.errors import OrchestrationError
+
 
 class OpenAIError(Exception):
     """Normalizovana chyba poskytovatele nebo transportu."""
@@ -275,6 +278,16 @@ class OpenAITransport:
         timeout: float | None = None,
         max_attempts: int | None = None,
     ) -> Any:
+        if files is None and json_body is not None:
+            try:
+                if not isinstance(json_body, dict):
+                    raise ValueError("Tělo požadavku API musí být JSON objekt.")
+                canonical_bytes(json_body)
+            except (ValueError, TypeError) as exc:
+                error = OpenAIError(f"{method} {path}: neplatné JSON tělo požadavku: {exc}")
+                error.request_sent = False
+                raise error from exc
+
         attempts = spec.max_attempts
         if max_attempts is not None:
             attempts = min(attempts, max(1, int(max_attempts)))
@@ -356,18 +369,21 @@ class OpenAITransport:
                 error.request_id = request_id
                 raise error
 
-            if response.headers.get("content-type", "").startswith("application/json"):
-                try:
-                    result = response.json()
-                except ValueError as exc:
-                    if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
-                        raise SubmissionOutcomeUnknown(
-                            spec.name, method, path, request_id=request_id, cause=exc
-                        ) from exc
-                    raise OpenAIError(f"{method} {path}: neplatná JSON odpověď") from exc
-                if isinstance(result, dict) and request_id:
-                    result.setdefault("_request_id", request_id)
-                return result
-            return response.content
+            if spec.name == FILE_CONTENT.name:
+                return response.content
+
+            try:
+                result = parse_json_strict(response.content.decode("utf-8", errors="strict"))
+            except (UnicodeError, OrchestrationError) as exc:
+                if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
+                    raise SubmissionOutcomeUnknown(
+                        spec.name, method, path, request_id=request_id, cause=exc
+                    ) from exc
+                error = OpenAIError(f"{method} {path}: neplatná JSON odpověď")
+                error.request_id = request_id
+                raise error from exc
+            if request_id:
+                result["_request_id"] = request_id
+            return result
 
         raise AssertionError("Nedostupny stav transportni smycky")

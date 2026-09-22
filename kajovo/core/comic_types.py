@@ -20,6 +20,10 @@ BIBLE_FIELDS = (
 BIBLE_SCHEMA = obj({name: {"type": "string"} for name in BIBLE_FIELDS})
 DESCRIPTOR_SCHEMA = obj({"descriptor": {"type": "string"}})
 
+MAX_STORYBOARD_DIALOGUES = 5
+MAX_OVERLAY_TEXT_CHARS = 3000
+MAX_STORYBOARD_SPEAKER_CHARS = 200
+
 _COMIC_TEXT = {"type": "string"}
 _COMIC_STRINGS = array(_COMIC_TEXT)
 _DIALOGUE_SCHEMA = obj({
@@ -55,10 +59,31 @@ STORYBOARD_SCHEMA = obj({
         "shot": _COMIC_TEXT,
         "visual": _COMIC_TEXT,
         "entity_ids": _COMIC_STRINGS,
-        "dialogue": array(_DIALOGUE_SCHEMA),
-        "caption": _COMIC_TEXT,
+        "dialogue": {
+            **array(obj({
+                "speaker": {
+                    "type": "string",
+                    "pattern": rf"^[\s\S]{{1,{MAX_STORYBOARD_SPEAKER_CHARS}}}$",
+                },
+                "text": {
+                    "type": "string",
+                    "pattern": rf"^[\s\S]{{1,{MAX_OVERLAY_TEXT_CHARS - MAX_STORYBOARD_SPEAKER_CHARS - 2}}}$",
+                },
+            })),
+            "maxItems": MAX_STORYBOARD_DIALOGUES,
+            "description": "Nejvýše pět bublin; delší dialog rozděl do dalších panelů bez vynechání obsahu.",
+        },
+        "caption": {
+            "type": "string",
+            "pattern": rf"^[\s\S]{{0,{MAX_OVERLAY_TEXT_CHARS}}}$",
+            "description": "Prázdný řetězec znamená panel bez titulku.",
+        },
     })),
 })
+STORY_SCHEMA["properties"]["beats"]["minItems"] = 1
+SCRIPT_SCHEMA["properties"]["scenes"]["minItems"] = 1
+STORYBOARD_SCHEMA["properties"]["panels"]["minItems"] = 1
+
 CONTINUITY_SCHEMA = obj({
     "status": {"type": "string", "enum": ["pass", "needs_changes"]},
     "issues": array(obj({
@@ -142,7 +167,7 @@ def normalize_bible(result, style):
 
 
 def validate_document(value):
-    if not isinstance(value, dict) or set(value) != {"version", "nodes"} or value["version"] != 1:
+    if not isinstance(value, dict) or set(value) != {"version", "nodes"} or type(value["version"]) is not int or value["version"] != 1:
         raise ComicError("invalid_document", "Nepodporovaná verze zadání panelu.")
     if not isinstance(value["nodes"], list) or len(value["nodes"]) > 2000:
         raise ComicError("invalid_document", "Zadání má příliš mnoho částí.")
@@ -215,7 +240,7 @@ def validate_overlays(value, sfx=True):
             raise ComicError("invalid_overlay", "Neplatná typografie textového prvku.")
         if layer["kind"] not in ("dialog", "thought", "caption", "sfx") or (layer["kind"] == "sfx" and not sfx):
             raise ComicError("sfx_disabled", "SFX nejsou povoleny stylem komiksu.")
-        checked_text(layer["text"], "Text bubliny", 3000, True)
+        checked_text(layer["text"], "Text bubliny", MAX_OVERLAY_TEXT_CHARS, True)
         for key in ("x", "y", "w", "h", "tail_x", "tail_y", "font_size"):
             v = layer[key]
             if type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1:
@@ -284,6 +309,8 @@ def validate_storyboard(value, script, entity_ids):
     ids = [row["id"] for row in panels]
     if any(not item.strip() for item in ids) or len(ids) != len(set(ids)):
         raise ComicError("invalid_output", "Storyboard panel ID musí být jedinečná a neprázdná.")
+    if any(type(row["position"]) is not int for row in panels):
+        raise ComicError("invalid_output", "Pozice storyboard panelu musí být celé číslo.")
     positions = sorted(row["position"] for row in panels)
     if positions != list(range(1, len(panels) + 1)):
         raise ComicError(
@@ -300,10 +327,13 @@ def validate_storyboard(value, script, entity_ids):
             raise ComicError("invalid_output", "Storyboard panel odkazuje na neznámou entitu.")
         checked_text(panel["shot"], "Typ záběru", 2000, True)
         checked_text(panel["visual"], "Vizuální obsah panelu", 12000, True)
-        checked_text(panel["caption"], "Titulek", 5000)
+        checked_text(panel["caption"], "Titulek", MAX_OVERLAY_TEXT_CHARS, bool(panel["caption"]))
+        if len(panel["dialogue"]) > MAX_STORYBOARD_DIALOGUES:
+            raise ComicError("invalid_output", "Více než pět bublin rozdělte do dalších panelů.")
         for line in panel["dialogue"]:
-            checked_text(line["speaker"], "Mluvčí", 200, True)
-            checked_text(line["text"], "Dialog", 5000, True)
+            checked_text(line["speaker"], "Mluvčí", MAX_STORYBOARD_SPEAKER_CHARS, True)
+            checked_text(line["text"], "Dialog", MAX_OVERLAY_TEXT_CHARS - MAX_STORYBOARD_SPEAKER_CHARS - 2, True)
+            checked_text(line["speaker"] + ": " + line["text"], "Text bubliny", MAX_OVERLAY_TEXT_CHARS, True)
     if used_scenes != scene_ids:
         raise ComicError(
             "invalid_output",

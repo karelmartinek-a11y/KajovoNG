@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from pathlib import Path
 import uuid
 
-from .model_registry import model_spec
+from .model_registry import model_spec, models_for_usage
+from .contracts import ContractError
 from .orchestration.provider_operations import (
     mark_not_submitted,
     mark_submission,
@@ -28,9 +29,10 @@ Je-li uživatelův požadavek zaměřen na realistickou fotografii, formuluj ins
 
 Odstraň vágní formulace, opakování, rozpory a konverzační výplň. Nahraď je přesnými vizuálními a fotografickými instrukcemi. Požadavky na světlo, perspektivu, svislice, horizont, barvy, expozici, kontrast, čistotu, ostrost, kompozici, objekty, textury, materiály, odrazy, okna, výhled a postprodukci přepiš do profesionální fotografické terminologie, ale zachovej jejich původní význam.
 
-NEVYSVĚTLUJ, co jsi změnil. NEKOMENTUJ zadání. NEPIŠ úvod ani závěr. NEPOUŽÍVEJ Markdown.
-
-Výstupem musí být pouze hotový prompt, který lze bez další úpravy předat image-edit modelu. Výsledný profesionální prompt napiš v angličtině."""
+Vrať výhradně JSON objekt PHOTO_PLAN_V1 podle předepsaného schématu, bez Markdownu, úvodu a závěru.
+Pole professional_prompt musí obsahovat hotový profesionální prompt v angličtině, který lze bez další úpravy předat image-edit modelu.
+Pole edit_actions musí obsahovat alespoň jednu konkrétní požadovanou změnu. Pole preserve_invariants musí obsahovat výslovné požadavky na zachování; pokud žádné nejsou, vrať prázdné pole.
+Pole acceptance_criteria musí obsahovat alespoň jedno konkrétní kritérium kontroly výsledku podle zadání. Nevracej prázdné položky ani nedoplňuj nový záměr uživatele. Text všech tří seznamů musí být v souladu s professional_prompt."""
 
 
 @dataclass(frozen=True)
@@ -44,21 +46,47 @@ class ProfessionalizedPrompt:
     photo_plan: dict
 
 
+def _photo_prompt_limit() -> int:
+    limits = [
+        spec["image_capabilities"]["max_prompt_chars"]
+        for model in models_for_usage(None, "photo_edit_batch")
+        for spec in [model_spec(model)]
+        if spec.get("image_capabilities")
+    ]
+    if not limits:
+        raise ValueError("PHOTO_PLAN_V1 nemá žádný kompatibilní cílový obrazový model.")
+    return min(limits)
+
+
+def _validated_photo_prompt(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("PHOTO_PLAN_V1 vyžaduje neprázdný textový prompt.")
+    value = value.strip()
+    limit = _photo_prompt_limit()
+    if len(value) > limit:
+        raise ValueError(f"PHOTO_PLAN_V1 prompt překračuje limit obrazového kroku {limit} znaků.")
+    return value
+
+
 def professionalize_payload(model: str, prompt: str) -> dict:
+    if not isinstance(prompt, str):
+        raise ValueError("Zadání úpravy fotografie musí být text.")
     prompt = prompt.strip()
     if not prompt:
         raise ValueError("Nejprve napište zadání úpravy fotografie.")
     if len(prompt) > 30000:
         raise ValueError("Zadání je příliš dlouhé; maximálně 30 000 znaků.")
+    limit = _photo_prompt_limit()
+    text = {"type": "string", "pattern": r"\S"}
     schema = obj({
-        "professional_prompt": {"type": "string"},
-        "edit_actions": array({"type": "string"}),
-        "preserve_invariants": array({"type": "string"}),
-        "acceptance_criteria": array({"type": "string"}),
+        "professional_prompt": {**text, "description": f"Hotový anglický prompt, nejvýše {limit} znaků."},
+        "edit_actions": {**array(text), "minItems": 1},
+        "preserve_invariants": array(text),
+        "acceptance_criteria": {**array(text), "minItems": 1},
     })
     payload = {
         "model": model,
-        "instructions": PROFESSIONALIZE_INSTRUCTIONS,
+        "instructions": PROFESSIONALIZE_INSTRUCTIONS + f"\nprofessional_prompt smí mít nejvýše {limit} znaků.",
         "input": "Převeď následující uživatelské zadání na profesionální prompt:\n\n<USER_PROMPT>\n" + prompt + "\n</USER_PROMPT>",
         "text": response_format("PHOTO_PLAN_V1", schema),
         "store": False,
@@ -79,8 +107,8 @@ def professionalize_prompt(
     log_dir: str | Path,
     reporter=None,
 ) -> ProfessionalizedPrompt:
+    payload = professionalize_payload(model, prompt)
     original = prompt.strip()
-    payload = professionalize_payload(model, original)
     run_id = "RUN_PHOTO_PROMPT_" + uuid.uuid4().hex
     log = RunLogger(str(log_dir), run_id, "Photo Studio")
     cfg = SimpleNamespace(
@@ -149,6 +177,20 @@ def professionalize_prompt(
     mark_submission_started(log, order)
     try:
         response = client.create_response(payload)
+    except ContractError as exc:
+        rejected_response = getattr(exc, "response", None)
+        rejected_id = rejected_response.get("id") if isinstance(rejected_response, dict) else None
+        if isinstance(rejected_id, str) and rejected_id.strip():
+            mark_submission(log, order, rejected_id, unknown=False)
+            record_usage(log, order, rejected_response)
+            log.save_json("responses", "photo_plan_response", rejected_response)
+            log.update_state({"status": "failed", "error_code": "OUTPUT_CONTRACT"})
+        elif getattr(exc, "request_sent", None) is False:
+            mark_not_submitted(log, order)
+        else:
+            mark_submission(log, order, None, unknown=True)
+            log.update_state({"status": "submission_unknown"})
+        raise
     except Exception as exc:
         definite_reject = (
             getattr(exc, "request_sent", None) is False
@@ -174,11 +216,7 @@ def professionalize_prompt(
     if reporter:
         reporter("Odpověď Responses API přijata; ověřuji výstupní kontrakt.")
     value = validate_output(response, payload)
-    final = str(value.get("professional_prompt") or "").strip()
-    if not final:
-        raise ValueError("Responses API vrátilo prázdný profesionální prompt.")
-    if len(final) > 60000:
-        raise ValueError("Výsledný profesionální prompt překračuje interní limit.")
+    final = _validated_photo_prompt(value["professional_prompt"])
     plan = {
         "version": 1,
         "professional_prompt": final,
@@ -221,9 +259,7 @@ def professionalize_prompt(
 
 def manual_photo_plan(prompt: str) -> dict:
     """Deterministic plan for a user-authored prompt; adds no new edit intent."""
-    value = str(prompt or "").strip()
-    if not value:
-        raise ValueError("PHOTO_PLAN_V1 vyžaduje neprázdný prompt.")
+    value = _validated_photo_prompt(prompt)
     return {
         "version": 1,
         "professional_prompt": value,

@@ -29,6 +29,19 @@ def output_machine_key(output: CascadeOutput) -> str:
     return _machine_key("out", output.id)
 
 
+def _validate_output_keys(step: CascadeStep) -> None:
+    seen: set[str] = set()
+    for output in step.outputs:
+        if not isinstance(output.id, str) or not output.id.strip() or "|" in output.id:
+            raise CascadeValidationError("ID výstupu musí být neprázdný text bez oddělovače |.")
+        key = output_machine_key(output)
+        if key in seen:
+            raise CascadeValidationError(
+                f"Výstupy kroku mají kolizi JSON klíče {key!r}; zvolte odlišná stabilní ID."
+            )
+        seen.add(key)
+
+
 def _step_position_map(definition: CascadeDefinition) -> Dict[str, int]:
     return {step.id: index for index, step in enumerate(definition.steps)}
 
@@ -282,11 +295,14 @@ def validate_cascade_definition(
         raise CascadeValidationError("Kaskáda musí obsahovat alespoň jeden krok.")
 
     step_ids = [step.id for step in definition.steps]
-    if any(not value for value in step_ids) or len(step_ids) != len(set(step_ids)):
+    if any(not isinstance(value, str) or not value.strip() or "|" in value for value in step_ids):
+        raise CascadeValidationError("ID kroku musí být neprázdný text bez oddělovače |.")
+    if len(step_ids) != len(set(step_ids)):
         raise CascadeValidationError("Každý krok musí mít jedinečné stabilní ID.")
 
     for step in definition.steps:
         step.ensure_outputs()
+        _validate_output_keys(step)
     resolve_decision_targets(definition, strict=strict)
     positions = _step_position_map(definition)
     outputs = _output_lookup(definition)
@@ -397,6 +413,7 @@ def step_signature(step: CascadeStep) -> str:
 def runtime_schema_for_step(step: CascadeStep) -> Dict[str, Any]:
     """Create a strict deterministic schema for named outputs."""
     step.ensure_outputs()
+    _validate_output_keys(step)
     properties: Dict[str, Any] = {}
     required: List[str] = []
     for output in step.outputs:
@@ -426,7 +443,10 @@ def runtime_schema_for_step(step: CascadeStep) -> Dict[str, Any]:
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "enum": [output.file_name]},
-                    "encoding": {"type": "string", "enum": ["utf-8", "base64"]},
+                    "encoding": {
+                        "type": "string",
+                        "enum": ["utf-8" if output.file_type in {"txt", "md", "json", "csv"} else "base64"],
+                    },
                     "content": {
                         "type": "string",
                         "description": (
@@ -465,19 +485,19 @@ def humanize_cascade_error(exc: BaseException) -> str:
     if "insufficient_quota" in low or "quota" in low or "billing" in low:
         return "OpenAI účet nemá dostatek kreditu nebo má omezené účtování."
     if "rate limit" in low or "429" in low:
-        return "OpenAI je právě přetížené nebo byl dosažen rychlostní limit; krok se po třech pokusech nepodařilo dokončit."
+        return "OpenAI je právě přetížené nebo byl dosažen rychlostní limit; krok nebyl dokončen."
     if "timeout" in low or "timed out" in low:
-        return "OpenAI neodpovědělo včas ani po třech pokusech."
+        return "OpenAI neodpovědělo včas; před dalším odesláním je nutné ověřit stav požadavku."
     if "api key" in low or "authentication" in low or "401" in low:
         return "OpenAI API klíč není platný nebo nemá potřebné oprávnění."
     if "context" in low and ("length" in low or "window" in low):
         return "Požadavek je příliš velký pro kontext zvoleného modelu."
     if "output" in low and ("contract" in low or "schéma" in low or "schema" in low):
-        return "Model ani po třech pokusech nevrátil výstup v požadovaném formátu."
+        return "Model nevrátil výstup v požadovaném formátu."
     if "soubor" in low or "file" in low:
         return "Krok se zastavil, protože požadovaný soubor není dostupný nebo neodpovídá definici."
     if "rozhod" in low or "decision" in low:
         return "Rozhodovací krok nevrátil jednu z předem povolených odpovědí."
     if isinstance(exc, CascadeValidationError):
         return raw.rstrip(".") + "."
-    return "Krok se nepodařilo dokončit ani po třech pokusech; technický důvod je uložen v logu."
+    return "Krok se nepodařilo dokončit; technický důvod je uložen v logu."

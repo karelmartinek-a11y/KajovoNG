@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 from PIL import Image, ImageOps, UnidentifiedImageError
 from .comic_types import ComicError, IMAGE_MODEL
@@ -83,8 +84,17 @@ def validate_image_request(endpoint, body):
     allowed = required | ({"images", "input_fidelity"} if endpoint == "/v1/images/edits" else set())
     if endpoint not in cap["endpoints"] or not required <= set(body) or set(body) - allowed:
         raise ComicError("unsupported_parameter", "Nepodporovaný endpoint nebo obrazový parametr.")
-    if body["n"] != 1 or not isinstance(body["prompt"], str) or not 0 < len(body["prompt"].strip()) <= cap["max_prompt_chars"]:
-        raise ComicError("invalid_input", "Požadavek potřebuje prompt do 32 000 znaků a jeden výstup.")
+    if type(body["n"]) is not int or body["n"] != 1:
+        raise ComicError("invalid_input", "Obrazový požadavek vyžaduje celé číslo n=1.")
+    if (
+        not isinstance(body["prompt"], str)
+        or not body["prompt"].strip()
+        or len(body["prompt"]) > cap["max_prompt_chars"]
+    ):
+        raise ComicError(
+            "invalid_input",
+            f"Požadavek potřebuje neprázdný prompt do {cap['max_prompt_chars']} znaků.",
+        )
     for field, options in (("quality", "quality"), ("output_format", "output_formats"), ("background", "background")):
         if body[field] not in cap[options]:
             raise ComicError("unsupported_parameter", f"Nepodporovaná hodnota {field}.")
@@ -102,6 +112,8 @@ def validate_image_request(endpoint, body):
         ):
             raise ComicError("invalid_format", "Generovací velikost není podporována vybraným modelem.")
     elif body["size"] != "auto":
+        if not isinstance(body["size"], str) or not re.fullmatch(r"[1-9][0-9]*x[1-9][0-9]*", body["size"]):
+            raise ComicError("invalid_format", "Rozměry musí být kanonické šířkaxvýška v pixelech.")
         try:
             w, h = map(int, body["size"].split("x"))
         except (ValueError, AttributeError) as exc:
