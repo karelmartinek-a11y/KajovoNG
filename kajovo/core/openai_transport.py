@@ -37,6 +37,7 @@ class OpenAIError(Exception):
         self.param = param
         self.code = code
         self.request_id: str | None = None
+        self.request_sent: bool | None = None
 
 
 class OperationEffect(Enum):
