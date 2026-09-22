@@ -374,13 +374,14 @@ class OpenAITransport:
                 return response.content
 
             content_type = str(response.headers.get("content-type", "")).lower()
+            raw_content = getattr(response, "content", None)
             if not content_type.startswith("application/json"):
-                return response.content
+                return raw_content if isinstance(raw_content, bytes) else response.content
 
             try:
-                if hasattr(response, "content"):
+                if isinstance(raw_content, (bytes, bytearray)):
                     result = parse_json_strict(
-                        response.content.decode("utf-8", errors="strict")
+                        bytes(raw_content).decode("utf-8", errors="strict")
                     )
                 else:
                     result = response.json()
