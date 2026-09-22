@@ -16,6 +16,17 @@ def image_capability(model=IMAGE_MODEL):
     return result
 
 
+def preferred_input_fidelity(model=IMAGE_MODEL):
+    """Vrátí jedinou povolenou aplikační volbu fidelity, nebo None pro omit."""
+    cap = image_capability(model)
+    policy = image_policy().get("input_fidelity")
+    if policy == "high_if_supported_else_omit" and "high" in cap.get("input_fidelity", []):
+        return "high"
+    if policy in (None, "omit", "high_if_supported_else_omit"):
+        return None
+    raise ComicError("unsupported_parameter", "Neznámá politika věrnosti vstupních obrázků.")
+
+
 def inspect_image(data, model=IMAGE_MODEL):
     cap = image_capability(model)
     policy = image_policy()
@@ -81,7 +92,16 @@ def validate_image_request(endpoint, body):
         raise ComicError("unsupported_parameter", "Průhlednost vyžaduje PNG nebo WebP.")
     if "input_fidelity" in body and body["input_fidelity"] not in cap["input_fidelity"]:
         raise ComicError("unsupported_parameter", "Nepodporovaná věrnost reference.")
-    if body["size"] != "auto":
+    fixed_sizes = cap.get("sizes")
+    if fixed_sizes is not None:
+        if (
+            not isinstance(fixed_sizes, list)
+            or not fixed_sizes
+            or any(not isinstance(value, str) or not value for value in fixed_sizes)
+            or body["size"] not in fixed_sizes
+        ):
+            raise ComicError("invalid_format", "Generovací velikost není podporována vybraným modelem.")
+    elif body["size"] != "auto":
         try:
             w, h = map(int, body["size"].split("x"))
         except (ValueError, AttributeError) as exc:
