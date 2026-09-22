@@ -106,8 +106,8 @@ def _validate_matrix(value):
                     raise ValueError(f"Model {model} má neplatné pevné image sizes.")
             else:
                 for key in ("min_pixels", "max_pixels", "max_edge", "multiple", "max_ratio"):
-                    value = image.get(key)
-                    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+                    limit_value = image.get(key)
+                    if not isinstance(limit_value, (int, float)) or isinstance(limit_value, bool) or limit_value <= 0:
                         raise ValueError(f"Model {model} má neplatný flexibilní limit {key}.")
     return value
 
