@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from PySide6.QtWidgets import QComboBox, QDialog, QLineEdit, QPlainTextEdit, QWidget
 
 from kajovo.core.cascade_types import CASCADE_FILE_TYPES, CascadeInput
