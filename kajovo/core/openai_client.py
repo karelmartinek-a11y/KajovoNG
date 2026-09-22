@@ -98,18 +98,23 @@ class OpenAIClient:
         return self._req("POST", endpoint.removeprefix("/v1"), json_body=body, max_attempts=1)
 
     def create_image_batch(self, input_file_id, rows):
-        from .image_runtime import validate_image_request
+        from .image_runtime import image_capability, validate_image_request
         self._validate_resource_id(input_file_id)
         ids, models, endpoints = set(), set(), set()
-        if not 1 <= len(rows) <= 50000:
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 50000:
             raise ValueError("Obrazová dávka vyžaduje 1 až 50 000 položek.")
         for row in rows:
-            cid = row.get("custom_id")
+            if not isinstance(row, dict) or set(row) != {"custom_id", "method", "url", "body"}:
+                raise ValueError("Obrazová dávka obsahuje nekanonický JSONL řádek.")
+            cid = row["custom_id"]
             self._validate_resource_id(cid)
-            if cid in ids or row.get("method") != "POST":
+            if cid in ids or row["method"] != "POST":
                 raise ValueError("Neplatná nebo duplicitní položka dávky.")
             ids.add(cid)
             validate_image_request(row["url"], row["body"])
+            capability = image_capability(row["body"]["model"])
+            if capability.get("batch") is not True:
+                raise ValueError("Vybraný obrazový model nepodporuje Batch.")
             endpoints.add(row["url"])
             models.add(row["body"]["model"])
         if len(models) != 1 or len(endpoints) != 1:
