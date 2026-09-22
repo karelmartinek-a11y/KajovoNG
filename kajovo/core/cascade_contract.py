@@ -405,7 +405,6 @@ def validate_cascade_definition(
 
 def step_signature(step: CascadeStep) -> str:
     payload = step.to_dict()
-    payload.pop("previous_response_id_expr", None)
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

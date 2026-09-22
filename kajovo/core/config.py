@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass, asdict, field, fields, is_dataclass
 from typing import List, Optional
 from .utils import ensure_dir, atomic_write_text
+from .orchestration.contracts import parse_json_strict
 from .secret_store import get_secret, set_secret
 
 DEFAULT_SETTINGS_FILE = "kajovo_settings.json"
@@ -107,9 +108,7 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
     raw = {}
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-    if not isinstance(raw, dict):
-        raise ValueError("Nastavení musí být JSON objekt.")
+            raw = parse_json_strict(f.read())
 
     def merge(obj, data):
         allowed = {f.name for f in fields(obj)}
