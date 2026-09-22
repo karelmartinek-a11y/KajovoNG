@@ -646,7 +646,7 @@ def encode_requests(manifest):
     validate_paths([{"path": p} for p in manifest["expected"].values()])
     compiler = ContextCompiler(manifest["snapshot"]) if manifest.get("version") == 3 else None
     for row in rows:
-        validate_response_payload(row["body"], batch=True if v3_graph else False)
+        validate_response_payload(row["body"], batch=True)
         if row["method"] != "POST" or row["url"] != "/v1/responses" or row["body"].get("previous_response_id"):
             raise ContractError("Souborová úloha musí být samostatný požadavek Responses.")
         context = parse_json_strict(row["body"]["input"])
