@@ -8,6 +8,7 @@ from pathlib import Path
 import uuid
 
 from .utils import atomic_write_text
+from .orchestration.contracts import parse_json_strict
 
 SCHEMA_VERSION = 1
 
@@ -109,8 +110,8 @@ class PhotoTemplateStore:
         if not self.path.exists():
             return []
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            payload = parse_json_strict(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
             raise ValueError(f"Soubor šablon nelze načíst: {exc}") from exc
         if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA_VERSION:
             raise ValueError("Soubor šablon má nepodporovanou verzi.")

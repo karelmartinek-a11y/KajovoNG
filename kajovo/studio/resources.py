@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QTabWidget, QWidget,
 )
 
+from kajovo.core.orchestration.contracts import parse_json_value_strict
+
 from .components import DetailDialog, action, actions, caption, confirm, vertical
 
 
@@ -48,7 +50,7 @@ class ValueDialog(QDialog):
 
     def submit(self):
         try:
-            value = json.loads(self.editor.toPlainText()) if self.structured else self.editor.toPlainText().strip()
+            value = parse_json_value_strict(self.editor.toPlainText()) if self.structured else self.editor.toPlainText().strip()
             if not self.structured and not value:
                 raise ValueError("Vyplňte hodnotu.")
             self.value = value

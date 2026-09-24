@@ -1,0 +1,40 @@
+name: CHANGE development environment
+
+on:
+  push:
+    branches: [change-run-config-v2-production]
+    paths: ['.github/workflows/change-development.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  environment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Export tracked source and constrained verification dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/change-environment/wheelhouse"
+          git rev-parse HEAD > "$RUNNER_TEMP/change-environment/source-sha.txt"
+          git bundle create "$RUNNER_TEMP/change-environment/source.bundle" HEAD
+          git archive HEAD -o "$RUNNER_TEMP/change-environment/source.tar"
+          tar -cf "$RUNNER_TEMP/change-environment/resources.tar" resources
+          python -m pip download -c requirements/constraints.txt -d "$RUNNER_TEMP/change-environment/wheelhouse" '.[dev,build]'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: change-development-${{ github.sha }}
+          path: ${{ runner.temp }}/change-environment
+          if-no-files-found: error
+          retention-days: 1

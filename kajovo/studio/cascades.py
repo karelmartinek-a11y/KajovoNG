@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from kajovo.core.cascade_contract import validate_cascade_definition
 from kajovo.core.cascade_pipeline import CascadeRunConfig
 from kajovo.core.cascade_types import CascadeDefinition, CascadeInput, CascadeOutput, CascadeStep
+from kajovo.core.orchestration.contracts import parse_json_strict
 from kajovo.core.utils import atomic_write_text, new_run_id
 
 from .cascade_items import CascadeItemDialog
@@ -321,7 +322,7 @@ class CascadesPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Načíst kaskádu", str(base), "Kaskády (*.json)")
         if path:
             try:
-                definition = CascadeDefinition.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+                definition = CascadeDefinition.from_dict(parse_json_strict(Path(path).read_text(encoding="utf-8")))
                 self.definition = definition
                 self.location = path
                 self.current_id = None

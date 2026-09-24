@@ -1,7 +1,6 @@
 """Fyzické obrazové sloty vznikají až po deduplikaci všech logických rolí."""
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -9,7 +8,7 @@ from importlib.resources import files
 from types import MappingProxyType
 from typing import Literal
 
-from .contracts import canonical_sha256
+from .contracts import canonical_sha256, parse_json_strict
 from .errors import OrchestrationError
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
@@ -18,7 +17,7 @@ _ORDER = {"edit_base": 0, "identity_reference": 1, "style_reference": 2}
 
 def image_policy() -> dict:
     """Každý volající dostane vlastní kopii nezměněné normativní politiky."""
-    return json.loads(files(__package__).joinpath("policies/images.json").read_text("utf-8"))
+    return parse_json_strict(files(__package__).joinpath("policies/images.json").read_text("utf-8"))
 
 
 def normalization_policy_hash() -> str:

@@ -1,0 +1,51 @@
+name: r05c-inventory
+
+on:
+  push:
+    branches:
+      - codex/r05c-inventory-temp
+    paths:
+      - '.github/workflows/r05c_inventory.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Legacy UI references
+        shell: bash
+        run: |
+          echo '=== DESKTOP_REFS ==='
+          grep -R -nE 'kajovo\.desktop|kajovo/desktop' kajovo tests scripts tools Build .github --exclude-dir=.git || true
+      - name: Broad silent exception candidates
+        shell: bash
+        run: |
+          echo '=== BROAD_EXCEPT ==='
+          grep -R -nE 'except (Exception|BaseException)' kajovo scripts tools tests --include='*.py' || true
+          echo '=== SUPPRESS_EXCEPTION ==='
+          grep -R -nE 'suppress\((Exception|BaseException)' kajovo scripts tools tests --include='*.py' || true
+      - name: Tracked hygiene candidates
+        shell: bash
+        run: |
+          echo '=== HYGIENE ==='
+          git ls-files | grep -E '(^LOG/|^aa\.txt$|__pycache__|\.py[co]$|\.pytest_cache|\.mypy_cache|\.ruff_cache|^dist/|^build/)' || true
+      - name: Run executor method inventory
+        shell: bash
+        run: |
+          echo '=== EXECUTOR_METHODS ==='
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for path in (Path('kajovo/core/runs/executor.py'), Path('kajovo/core/cascade_pipeline.py')):
+              tree = ast.parse(path.read_text(encoding='utf-8'))
+              print(path, 'lines=', len(path.read_text(encoding='utf-8').splitlines()))
+              for node in tree.body:
+                  if isinstance(node, ast.ClassDef):
+                      print('CLASS', node.name)
+                      for child in node.body:
+                          if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                              print(f'  {child.lineno:4d} {child.name}')
+          PY

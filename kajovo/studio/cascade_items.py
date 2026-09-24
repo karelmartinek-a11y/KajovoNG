@@ -7,6 +7,7 @@ import json
 from PySide6.QtWidgets import QComboBox, QDialog, QLineEdit, QPlainTextEdit, QWidget
 
 from kajovo.core.cascade_types import CASCADE_FILE_TYPES, CascadeInput
+from kajovo.core.orchestration.contracts import parse_json_strict, parse_json_value_strict
 from .components import Form, action, actions, caption, scroll, vertical
 
 
@@ -94,9 +95,9 @@ class CascadeItemDialog(QDialog):
                 else:
                     text = widget.toPlainText()
                     if name == "decision_options":
-                        value[name] = json.loads(text)
+                        value[name] = parse_json_value_strict(text)
                     elif name == "json_schema":
-                        value[name] = json.loads(text) if text.strip() else None
+                        value[name] = parse_json_strict(text) if text.strip() else None
                     else:
                         value[name] = text
             if value.get("kind") != "json":
