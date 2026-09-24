@@ -436,7 +436,7 @@ def _static_format_checks(root: Path) -> tuple[list[dict[str, Any]], str]:
             if suffix == ".py":
                 ast.parse(raw.decode("utf-8", errors="strict"), filename=rel)
             elif suffix == ".json":
-                json.loads(raw.decode("utf-8", errors="strict"))
+                parse_json_value_strict(raw.decode("utf-8", errors="strict"))
             elif suffix == ".toml":
                 tomllib.loads(raw.decode("utf-8", errors="strict"))
             elif suffix in {".xml", ".svg"}:

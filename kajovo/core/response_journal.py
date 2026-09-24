@@ -1,7 +1,6 @@
 """Trvalá evidence pracovních odpovědí a obnovitelné sledování generace."""
 
 import copy
-import json
 import time
 from pathlib import Path
 
