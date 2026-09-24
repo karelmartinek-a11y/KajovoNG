@@ -7,6 +7,7 @@ import json
 from PySide6.QtWidgets import QComboBox, QDialog, QLineEdit, QPlainTextEdit, QWidget
 
 from kajovo.core.cascade_types import CASCADE_FILE_TYPES, CascadeInput
+from kajovo.core.orchestration.contracts import parse_json_strict, parse_json_value_strict
 from .components import Form, action, actions, caption, scroll, vertical
 
 

@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QTabWidget, QWidget,
 )
 
+from kajovo.core.orchestration.contracts import parse_json_value_strict
+
 from .components import DetailDialog, action, actions, caption, confirm, vertical
 
 

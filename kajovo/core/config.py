@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass, asdict, field, fields, is_dataclass
 from typing import List, Optional
 from .utils import ensure_dir, atomic_write_text
+from .orchestration.contracts import parse_json_strict
 from .secret_store import get_secret, set_secret
 
 DEFAULT_SETTINGS_FILE = "kajovo_settings.json"

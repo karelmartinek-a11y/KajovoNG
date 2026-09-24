@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from kajovo.core.cascade_contract import validate_cascade_definition
 from kajovo.core.cascade_pipeline import CascadeRunConfig
 from kajovo.core.cascade_types import CascadeDefinition, CascadeInput, CascadeOutput, CascadeStep
+from kajovo.core.orchestration.contracts import parse_json_strict
 from kajovo.core.utils import atomic_write_text, new_run_id
 
 from .cascade_items import CascadeItemDialog
