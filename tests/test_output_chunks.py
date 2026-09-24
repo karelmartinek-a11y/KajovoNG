@@ -18,6 +18,28 @@ def test_inconsistent_chunk_metadata_is_rejected(metadata):
         validate_chunk_metadata(metadata)
 
 
+@pytest.mark.parametrize("metadata", [
+    None,
+    [],
+    "chunk",
+])
+def test_chunk_metadata_requires_object(metadata):
+    with pytest.raises(ContractError, match="objekt"):
+        validate_chunk_metadata(metadata)
+
+
+@pytest.mark.parametrize("index", [-1, 5001, 1.5, True])
+def test_chunk_metadata_rejects_invalid_index(index):
+    with pytest.raises(ContractError, match="index"):
+        validate_chunk_metadata(chunk(index, 0, False, None))
+
+
+@pytest.mark.parametrize("has_more", [None, 0, 1, "yes"])
+def test_chunk_metadata_requires_boolean_has_more(has_more):
+    with pytest.raises(ContractError, match="boolean"):
+        validate_chunk_metadata(chunk(0, 0, has_more, None))
+
+
 def test_batch_contradictory_terminal_chunks_preserve_existing_file(tmp_path):
     target = tmp_path/'keep.txt'
     target.write_text('original', encoding='utf-8')
