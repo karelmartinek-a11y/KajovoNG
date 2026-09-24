@@ -5,7 +5,7 @@ import copy
 from typing import Any
 
 from ..context_compiler import content_hash
-from ..context_limits import checked_measurement, ensure_technical_limits
+from ..context_limits import checked_measurement, ensure_technical_limits, measure_request
 from ..contracts import ContractError
 from .contracts import canonical_sha256
 from .repository import repository_for_logger
@@ -47,6 +47,21 @@ def _endpoint(order: WorkOrder) -> str:
     return order.provider_endpoint
 
 
+def _validate_measurement(payload, report, *, batch=False):
+    if report.get("request_hash") != content_hash(payload):
+        raise ContractError("REQUEST_MEASUREMENT_MISMATCH: měření nepatří odesílanému payloadu.")
+    exact = report.get("input_tokens") if report.get("input_tokens_exact") is True else None
+    try:
+        actual = measure_request(payload, exact_input_tokens=exact, batch=batch)
+    except ValueError as exc:
+        raise ContractError("REQUEST_MEASUREMENT_MISMATCH: neplatné měření tokenů.") from exc
+    for key in ("model", "input_tokens", "input_tokens_exact", "input_token_upper_bound",
+                "output_limit", "context_window", "context_breakdown", "status", "blockers"):
+        if key not in report or report[key] != actual[key]:
+            raise ContractError(f"REQUEST_MEASUREMENT_MISMATCH: neodpovídá {key}.")
+    return ensure_technical_limits(copy.deepcopy(report))
+
+
 def prepare_provider_request(
     logger,
     cfg,
@@ -64,10 +79,12 @@ def prepare_provider_request(
             "PROVIDER_REQUEST_BEZ_WORK_ORDER: submit nemá zmrazenou pracovní identitu."
         )
     validate_response_work_order(work_order, payload)
+    client.evidence_bundle = logger.bundle
+    client.evidence_step_id = work_order.step_id
     if measurement is None:
         measurement = checked_measurement(payload, client, batch=batch)
     else:
-        measurement = ensure_technical_limits(copy.deepcopy(measurement))
+        measurement = _validate_measurement(payload, measurement, batch=batch)
 
     _ensure_run(logger, cfg, work_order)
     repo = repository_for_logger(logger)
@@ -113,7 +130,7 @@ def prepare_batch(
         ):
             raise ContractError("BATCH řádek neodpovídá transportní cestě WorkOrderu.")
         validate_response_work_order(order, row["body"])
-        ensure_technical_limits(copy.deepcopy(supplied))
+        _validate_measurement(row["body"], supplied, batch=True)
     repo = repository_for_logger(logger)
     for row, supplied in zip(requests, measurements, strict=True):
         custom_id = str(row["custom_id"])

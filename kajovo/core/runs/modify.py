@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..contracts import (
@@ -40,11 +39,14 @@ def _run_v3_modify_production(
         dispatch_resource_target,
         prepare_production_scope,
     )
+    from ..orchestration.preparation import _inventory
     selected, completed, excluded = prepare_production_scope(self, struct)
     files_by_path = {
         str(row["path"]): row for row in struct["spine"]["files"]
     }
     source_items = {item.rel_path: item for item in up_items}
+    _, archived_originals = _inventory(self)
+    archived_by_path = {row["path"]: row for row in archived_originals}
     originals: dict[str, str] = {}
     for path, target in selected.items():
         if target.get("kind") != "text":
@@ -64,21 +66,21 @@ def _run_v3_modify_production(
             source_path = safe_join_under_root(root, source)
             if sha256_file(source_path) != item.sha256:
                 raise ContractError(f"IN se od skenu změnil: {source}")
-            try:
-                originals[source] = Path(source_path).read_text(
-                    encoding="utf-8"
-                )
-            except UnicodeDecodeError:
+            archived = archived_by_path.get(source)
+            if archived is None:
                 if source == path:
                     raise ContractError(
-                        f"B3: textový modify target není UTF-8: {path}"
-                    ) from None
+                        f"B3: textový modify target chybí v archivu UTF-8: {path}"
+                    )
+                continue
+            if archived["sha256"] != item.sha256:
+                raise ContractError(f"B3: archivovaný originál neodpovídá IN: {source}")
+            originals[source] = archived["content"]
 
     self._delivery_originals = originals
     self._delivery_overwrite_hashes = dict(
         self._delivery_expected_target_hashes
     )
-    self._delivery_verified_artifacts = {}
     generated_text: dict[str, str] = {}
     resource_pending: list[dict[str, Any]] = []
 
@@ -176,6 +178,8 @@ def _run_v3_modify_production(
             self.cfg.temperature,
             text_scope,
             requirements=self._delivery_snapshot["requirements"],
+            source_segments=self._delivery_snapshot.get("source_segments"),
+            requirements_wrapper=self._delivery_snapshot.get("requirements_wrapper"),
             maximum_quality=self.cfg.maximum_quality,
             mode="MODIFY",
             originals=originals,
@@ -184,6 +188,7 @@ def _run_v3_modify_production(
             expected_target_hashes=expected,
             approved_paths=text_scope,
             completed_targets=completed,
+            verified_artifacts=self._delivery_verified_artifacts,
         )
         manifest["overwrite_hashes"] = expected
         manifest["dry_run"] = bool(self.cfg.dry_run)
@@ -321,7 +326,12 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
     (root, items, up_items, tools, supports_fs, vs_id,
      b_text, b_input_files, b_input_images) = prepare_modify_inputs(self, client, diag_file_ids)
     plan, struct, resp2_id = prepare_delivery(
-        self, client, "MODIFY", base_prev_id, b_text, b_input_files, b_input_images,
+        self, client, "MODIFY", base_prev_id,
+        {"recovery_instruction": self.cfg.recovery_instruction,
+         "diagnostics": self._diag_text if self._should_inline_diag_text() else "",
+         "input_inventory_note": self._in_dir_fallback_note(),
+         "reference_file_ids": self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)},
+        b_input_files, b_input_images,
         tools if supports_fs else None)
 
     if self.cfg.stop_after_plan:

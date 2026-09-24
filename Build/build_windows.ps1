@@ -24,6 +24,7 @@ $pyinstallerArgs = @(
     "--clean"
     "--windowed"
     "--collect-data", "kajovo.core"
+    "--copy-metadata", "kajovong"
     "--name", $AppName
     "--icon", $iconPath
     "--add-data", "$runtimeIcon;resources"
@@ -31,6 +32,7 @@ $pyinstallerArgs = @(
     "--add-data", "resources/studio-symbol.png;resources"
     "--add-data", "resources/montserrat_regular.ttf;resources"
     "--add-data", "resources/montserrat_bold.ttf;resources"
+    "--add-data", "resources/orchestration;resources/orchestration"
     "kajovo/app/main.py"
 )
 

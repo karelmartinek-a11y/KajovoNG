@@ -77,15 +77,17 @@ class HistoryData:
 
 
 def checked_checkpoints(adapter, records, artifacts):
+    # Kontrola integrity pracuje s kanonickými daty, nikoli redigovanou UI kopií.
+    artifacts = adapter.artifacts()
     responses = adapter.responses() if any(row.get("required_response_ids") for row in records) else []
     checked = []
     hashes = {}
     for record in records:
         row = dict(record)
         try:
-            adapter.bundle.validate_checkpoint(str(row.get("checkpoint_id") or ""),
+            canonical = adapter.bundle.validate_checkpoint(str(row.get("checkpoint_id") or ""),
                                                artifacts=artifacts, responses=responses, hash_cache=hashes)
-            state = row.get("state_snapshot") or {}
+            state = canonical.get("state_snapshot") or {}
             ui = state.get("ui_state") or {}
             if ui.get("in_dir") and not (state.get("input_archive") or {}).get("complete"):
                 raise ValueError("Není doložen úplný archiv vstupního adresáře.")

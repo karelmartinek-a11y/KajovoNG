@@ -152,12 +152,12 @@ def load_api_key() -> str:
 
     if record is not _MISSING:
         value = _api_key_from_record(record)
-        legacy = _read_persisted_api_key()
-        if legacy is not None:
-            try:
+        try:
+            legacy = _read_persisted_api_key()
+            if legacy is not None:
                 _delete_persisted_api_key()
-            except APIKeyStoreError as exc:
-                _warn_legacy_cleanup_failure(exc)
+        except APIKeyStoreError as exc:
+            _warn_legacy_cleanup_failure(exc)
         os.environ["OPENAI_API_KEY"] = value
         return value
 
@@ -231,6 +231,8 @@ def set_secret(key: str, value: str) -> bool:
                 keyring.delete_password(SERVICE_NAME, key)
             except keyring.errors.PasswordDeleteError:
                 pass
+        if (keyring.get_password(SERVICE_NAME, key) or "") != value:
+            raise ValueError("Zápis hesla nebyl potvrzen čtením úložiště.")
         return True
     except Exception:
         if value:

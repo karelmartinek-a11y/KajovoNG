@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .errors import OrchestrationError
+from .contracts import canonical_sha256
+from .request_binding import validate_response_work_order
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,10 @@ def build_payload(order, projection, attempt) -> PreparedRequest:
     body = copy.deepcopy(getattr(attempt, "body", attempt))
     if not isinstance(body, dict):
         raise OrchestrationError("REQUEST_INVALID", "Prepared request body musí být objekt.")
+    projected = projection.to_dict() if hasattr(projection, "to_dict") else projection
+    if canonical_sha256(projected) != order.input_projection_hash:
+        raise OrchestrationError("CONTEXT_HASH_MISMATCH", "Projekce neodpovídá zmrazenému WorkOrderu.")
+    validate_response_work_order(order, body)
     if body.get("model") != order.model:
         raise OrchestrationError("MODEL_BINDING_CHANGED", "Model se po schválení změnil.")
     if body.get("previous_response_id") and order.route != "responses_live":

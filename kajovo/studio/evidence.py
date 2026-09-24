@@ -11,6 +11,8 @@ from .components import vertical
 
 
 NAMES = {
+    "last_error": "Poslední chyba", "validations": "Kontroly kontraktů",
+    "batch_errors": "Chyby dávek", "recovery_events": "Zotavení",
     "project": "Projekt", "run_id": "Identifikátor běhu", "status": "Stav",
     "mode": "Způsob práce", "created_at": "Vytvořeno", "finished_at": "Ukončeno",
     "input_summary": "Zadání", "output_summary": "Výsledek", "model_summary": "Modely",
@@ -105,8 +107,8 @@ class EvidenceView(QWidget):
                 content = value.get(key)
                 if content in (None, "", []):
                     continue
-                if isinstance(content, list):
-                    content = ", ".join(str(item) for item in content)
+                if isinstance(content, (list, dict)):
+                    content = json.dumps(content, ensure_ascii=False, indent=2)
                 elif isinstance(content, str):
                     content = VALUES.get(content, content)
                 parts.append(f"{name}\n{content}")

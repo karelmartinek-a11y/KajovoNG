@@ -1,10 +1,11 @@
 """Trvalá evidence pracovních odpovědí a obnovitelné sledování generace."""
 
 import copy
+import json
 import time
 from pathlib import Path
 
-from .contracts import parse_json_strict
+from .contracts import ContractError, parse_json_strict
 from .delivery_preparation import digest
 from .openai_client import OpenAIError
 
@@ -21,12 +22,44 @@ class ResponseCancelled(RuntimeError):
     """API potvrdilo zrušení vzdálené generace."""
 
 
+def _replay_identity(payload):
+    """Pouze pořadí klíčů JSON podkladů není změnou pracovní fáze."""
+    body = copy.deepcopy(payload)
+    messages = body.get("input")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+                continue
+            for part in message["content"]:
+                if isinstance(part, dict) and part.get("type") == "input_text" and isinstance(part.get("text"), str):
+                    try:
+                        value = parse_json_strict(part["text"])
+                    except (ContractError, ValueError, TypeError):
+                        continue
+                    part["text"] = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return digest(body)
+
+
 class ResponseJournal:
     def __init__(self, logger, timeout_s=3600, *, clock=time.monotonic, sleep=time.sleep):
         self.log = logger
         self.timeout_s = timeout_s
         self.clock, self.sleep = clock, sleep
         self.entries = {}
+        self.continuation = None
+        self.replay_required = None
+        continuation_path = logger.find_json("manifests", "live_continuation")
+        if continuation_path:
+            from .runs.live_continuation import validate_live_continuation
+            self.continuation = validate_live_continuation(
+                parse_json_strict(Path(continuation_path).read_text(encoding="utf-8")), target_run_id=logger.run_id,
+            )
+            self.replay_required = self.continuation["pending_hash"]
+            replay_path = logger.find_json("manifests", "live_replay_complete")
+            if replay_path:
+                replay = parse_json_strict(Path(replay_path).read_text(encoding="utf-8"))
+                if replay.get("hash") == self.replay_required:
+                    self.replay_required = None
         path = logger.find_json("manifests", "response_journal")
         if path:
             data = parse_json_strict(Path(path).read_text(encoding="utf-8"))
@@ -38,6 +71,63 @@ class ResponseJournal:
                     raise ValueError(
                         "Evidence požadavku má neplatný hash; automatické pokračování je zablokováno."
                     )
+        if self.continuation:
+            original = self.continuation["journal"]["entries"]
+            for key, item in original.items():
+                current = self.entries.get(key) or {}
+                if current.get("payload") != item.get("payload") or current.get("id") != item.get("id"):
+                    raise ValueError("Continue LIVE: ztracený nebo změněný zděděný journal.")
+
+    def frozen_payload(self, payload):
+        """Vybere původní bajtově přesný payload; nikdy nepřekládá nový submit."""
+        if not self.continuation:
+            return payload
+        body = copy.deepcopy(payload)
+        body.update(background=True, store=True)
+        inherited = self.continuation["journal"]["entries"]
+        if digest(body) in inherited:
+            return copy.deepcopy(inherited[digest(body)]["payload"])
+        identity = _replay_identity(body)
+        matches = [entry["payload"] for entry in inherited.values()
+                   if _replay_identity(entry["payload"]) == identity]
+        if len(matches) > 1:
+            raise SubmissionUnknown("Continue LIVE: nejednoznačná identita zmrazené pracovní fáze.")
+        return copy.deepcopy(matches[0]) if matches else payload
+
+    def inherited_order(self, payload):
+        if not self.continuation:
+            return None
+        body = copy.deepcopy(self.frozen_payload(payload))
+        body.update(background=True, store=True)
+        key = digest(body)
+        raw = self.continuation["work_orders"].get(key)
+        if raw is None and self.replay_required:
+            raise SubmissionUnknown(
+                "Continue LIVE: obnovená fáze neodpovídá zmrazenému požadavku; nový POST je zakázán."
+            )
+        if raw is not None:
+            from .orchestration.work_order import work_order_from_mapping
+            return work_order_from_mapping(raw)
+        return None
+
+    def frozen_preparation_payload(self, payload):
+        """Obnova přípravy čte původní masku pouze při jinak totožném požadavku."""
+        body = copy.deepcopy(payload)
+        body.update(background=True, store=True)
+        name = ((body.get("text") or {}).get("format") or {}).get("name")
+        matches = []
+        for entry in self.entries.values():
+            original = entry.get("payload") or {}
+            original_format = ((original.get("text") or {}).get("format") or {})
+            if not name or original_format.get("name") != name:
+                continue
+            candidate = copy.deepcopy(body)
+            candidate["text"] = copy.deepcopy(original["text"])
+            if _replay_identity(candidate) == _replay_identity(original):
+                matches.append(original)
+        if len(matches) > 1:
+            raise SubmissionUnknown("Obnova přípravy: nejednoznačný původní požadavek.")
+        return copy.deepcopy(matches[0]) if matches else payload
 
     def has_entry(self, payload) -> bool:
         """Return whether this exact background payload already has journal state."""
@@ -75,6 +165,8 @@ class ResponseJournal:
         entry = self.entries.get(key)
         reused = entry is not None
         if entry is None:
+            if self.replay_required:
+                raise SubmissionUnknown("Continue LIVE: původní odpověď nebyla převzata; nový POST je zakázán.")
             if stopped() or cancelled():
                 raise RuntimeError("STOP_REQUESTED")
             if any(
@@ -127,6 +219,13 @@ class ResponseJournal:
             raise RuntimeError(
                 "API tento požadavek odmítlo. Opravte zadání nebo nastavení a spusťte nový běh."
             )
+        from .runs.live_continuation import response_claim
+        with response_claim(Path(self.log.paths.run_dir).parent, entry["id"], self.log.run_id,
+                            require_owner=bool(self.continuation and key == self.continuation["pending_hash"])):
+            return self._poll(client, key, entry, reused=reused, stopped=stopped,
+                              cancelled=cancelled, progress=progress)
+
+    def _poll(self, client, key, entry, *, reused, stopped, cancelled, progress):
         response = entry.get("response", {})
         if reused and entry["status"] == "completed":
             self.log.event(
@@ -139,11 +238,11 @@ class ResponseJournal:
         while entry["status"] in ("queued", "in_progress"):
             if stopped():
                 raise ResponsePending(
-                    "Sledování zastaveno. Vzdálená generace může pokračovat; použijte ReRun."
+                    "Sledování zastaveno. Vzdálená generace může pokračovat; použijte Continue."
                 )
             if self.clock() - start >= self.timeout_s:
                 raise ResponsePending(
-                    "Vypršel limit sledování generace. Odpověď zůstává uložená pod svým ID; pokračujte přes ReRun."
+                    "Vypršel limit sledování generace. Odpověď zůstává uložená pod svým ID; pokračujte přes Continue."
                 )
             progress(
                 "cancelling" if cancel_sent else entry["status"],
@@ -202,6 +301,9 @@ class ResponseJournal:
                     stopped,
                     lambda: False,
                 )
+        if self.continuation and entry["status"] == "completed":
+            self.log.update_state({"live_replay_pending": {"hash": key, "id": entry["id"]},
+                                   "live_replay_complete": False})
         self.log.clear_state_keys("response_pending")
         if entry["status"] == "cancelled":
             raise ResponseCancelled("Vzdálená generace byla zrušena (cancelled).")

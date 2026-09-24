@@ -90,6 +90,12 @@ def _work_order_for_payload(self: RunContext, payload: dict[str, Any], attempt: 
     from ..orchestration.work_order import freeze_order
 
     stage = str(getattr(self, "_progress_stage", "") or self.cfg.mode)
+    active_id = getattr(self.log, "_active_request_step_id", "")
+    step = next((row for row in self.log.bundle.steps() if row["step_id"] == active_id), None)
+    if step is None:
+        step = self.log.bundle.ensure_step(stage, kind="api", model=str(payload.get("model") or ""))
+    stage = step["stage"]
+    self.log._active_request_step_id = step["step_id"]
     fmt = (payload.get("text") or {}).get("format") or {}
     schema = fmt.get("schema") or {}
     projection = {
@@ -107,7 +113,7 @@ def _work_order_for_payload(self: RunContext, payload: dict[str, Any], attempt: 
         self.cfg,
         {
             "run_id": self.log.run_id,
-            "step_id": str(getattr(self, "_delivery_step_id", "") or stage),
+            "step_id": step["step_id"],
             "task_id": f"{stage}:{task_hash[:20]}",
             "stage": stage,
             "route": "responses_live",
@@ -118,6 +124,7 @@ def _work_order_for_payload(self: RunContext, payload: dict[str, Any], attempt: 
             "contract_name": str(fmt.get("name") or "TEXT_RESPONSE"),
             "schema": schema,
             "prompt": str(payload.get("instructions") or ""),
+            "request_payload": payload,
             "model": str(payload.get("model") or ""),
             "model_capability": (
                 self._model_caps(str(payload.get("model") or ""))
@@ -146,6 +153,34 @@ def _work_order_for_payload(self: RunContext, payload: dict[str, Any], attempt: 
 # Diagnostika.
 
 
+def inherited_response_order(self: RunContext, payload, attempt=0):
+    journal = self._response_journal
+    if journal is None or not journal.continuation:
+        return None
+    body = copy.deepcopy(payload)
+    if attempt:
+        body.setdefault("metadata", {})["kajovo_repair_attempt"] = str(attempt)
+    prepare_payload(body)
+    apply_quality(body, self.cfg.maximum_quality)
+    return journal.inherited_order(body)
+
+
+def _bind_inherited_evidence(self: RunContext, client, order, payload):
+    """Transport potomka odkazuje na jeho krok, původ práce zůstává explicitní."""
+    step = self.log.bundle.ensure_step(
+        order.stage, kind="api", model=order.model,
+        reasoning_effort=str((payload.get("reasoning") or {}).get("effort") or ""),
+    )
+    client.evidence_bundle = self.log.bundle
+    client.evidence_step_id = step["step_id"]
+    self.log._active_request_step_id = step["step_id"]
+    self.log.event("response.inherited_binding", {
+        "step_id": step["step_id"], "source_run_id": order.run_id,
+        "source_step_id": order.step_id, "attempt_id": order.attempt_id,
+        "work_order_hash": order.order_hash,
+    })
+
+
 def _create_response(self: RunContext, client, payload, *, attempt=0, measurement=None):
     if attempt:
         payload = copy.deepcopy(payload)
@@ -153,6 +188,7 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
     prepare_payload(payload)
     if self._response_journal is not None:
         apply_quality(payload, self.cfg.maximum_quality)
+        payload = self._response_journal.frozen_payload(payload)
     transport_payload = (
         {**payload, "background": True, "store": True}
         if self._response_journal is not None
@@ -160,10 +196,9 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
     )
     if measurement is not None:
         from ..context_compiler import content_hash
-        measurement = {
-            **measurement,
-            "request_hash": content_hash(transport_payload),
-        }
+        if measurement.get("request_hash") != content_hash(transport_payload):
+            # Změna transportu nebo reasoning vyžaduje nové měření skutečného vstupu.
+            measurement = None
     from ..orchestration.provider_operations import (
         mark_not_submitted,
         mark_submission,
@@ -171,21 +206,23 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
         prepare_provider_request,
         record_usage,
     )
-    work_order = _work_order_for_payload(self, transport_payload, attempt)
+    inherited_order = (
+        self._response_journal.inherited_order(payload)
+        if self._response_journal is not None else None
+    )
+    work_order = inherited_order or _work_order_for_payload(self, transport_payload, attempt)
     resume_existing = (
         self._response_journal is not None
         and self._response_journal.has_entry(payload)
     )
-    measurement = prepare_provider_request(
-        self.log,
-        self.cfg,
-        client,
-        transport_payload,
-        measurement=measurement,
-        work_order=work_order,
-        allow_existing=resume_existing,
-    )
-    self._progress_stage = getattr(self, "_progress_stage", self.cfg.mode)
+    if inherited_order is None:
+        measurement = prepare_provider_request(
+            self.log, self.cfg, client, transport_payload,
+            measurement=measurement, work_order=work_order, allow_existing=resume_existing,
+        )
+    else:
+        _bind_inherited_evidence(self, client, work_order, payload)
+    self._progress_stage = work_order.stage
     self.progress_event.emit(
         ProgressEvent(
             self._progress_stage,
@@ -221,6 +258,8 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
                             "waiting",
                             detail=f"{labels[state]} · sledování {elapsed} s",
                             source="api",
+                            provider_state=state,
+                            response_id=self._response_journal.confirmed_id(payload),
                         )
                     ),
                 )
@@ -239,6 +278,8 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
             if self._response_journal is not None
             else ""
         )
+        if inherited_order is not None:
+            raise
         if confirmed_id:
             mark_submission(
                 self.log,
@@ -260,7 +301,8 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
 
     provider_id = str(response.get("id") or "")
     if provider_id:
-        mark_submission(self.log, work_order, provider_id, unknown=False)
+        if inherited_order is None:
+            mark_submission(self.log, work_order, provider_id, unknown=False)
         record_usage(self.log, work_order, response)
     else:
         mark_submission(self.log, work_order, None, unknown=True)
@@ -270,8 +312,11 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
     self.progress_event.emit(
         ProgressEvent(
             self._progress_stage,
+            "validating_result",
             detail="Odpověď přijata z OpenAI Responses API; lokálně ověřuji výsledek.",
-            source="api",
+            source="validation",
+            provider_state=str(response.get("status") or ""),
+            response_id=provider_id,
         )
     )
     self.log.save_json(
@@ -299,6 +344,31 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
         )
     self.transition(RunStatus.PROCESSING_RESPONSE)
     validate_output(response, payload)
+    if self._response_journal is not None:
+        from ..delivery_preparation import digest
+        if self._response_journal.replay_required == digest(transport_payload):
+            self._response_journal.replay_required = None
+    return response
+
+
+def retrieve_inherited_response(self: RunContext, client):
+    """První síťová operace Continue používá přesný původní payload a Response ID."""
+    journal = self._response_journal
+    evidence = journal.continuation
+    entry = journal.entries[evidence["pending_hash"]]
+    order = journal.inherited_order(entry["payload"])
+    _bind_inherited_evidence(self, client, order, entry["payload"])
+    response = journal.execute(
+        client, copy.deepcopy(entry["payload"]), stopped=lambda: self._stop,
+        cancelled=lambda: self._cancel_response,
+        progress=lambda state, elapsed: self.progress_event.emit(
+            ProgressEvent(order.stage, "waiting", detail=f"Obnova {entry['id']} · {state} · {elapsed} s", source="api")
+        ),
+    )
+    from ..orchestration.provider_operations import record_usage
+    record_usage(self.log, order, response)
+    self.log.save_json("responses", "received_" + entry["id"], response)
+    # Doménová validace a posun checkpointu proběhnou až ve workflow.
     return response
 
 # Režim GENERATE.

@@ -1,6 +1,7 @@
 """Workbench smí přijmout pouze editovatelný clone intent, ne skryté resume."""
 
 from unittest.mock import Mock
+import json
 
 from kajovo.core.config import AppSettings
 from kajovo.studio.context import StudioContext
@@ -15,6 +16,18 @@ def test_workbench_has_no_history_resume_state(qtbot, tmp_path):
     assert not hasattr(workbench, "resume_submitted")
     assert not hasattr(workbench, "resume_notice")
     assert workbench.start_button.text() == "Spustit práci"
+
+
+def test_clarification_updates_task_without_hidden_history(qtbot, tmp_path, monkeypatch):
+    context = StudioContext(AppSettings(log_dir=str(tmp_path / "LOG")), Mock(), api_key="test")
+    workbench = Workbench(context)
+    qtbot.addWidget(workbench)
+    workbench.widgets["response_id"].setText("resp_old")
+    monkeypatch.setattr("kajovo.studio.workbench.QInputDialog.getMultiLineText", lambda *args: ("Česky.", True))
+    workbench.resolve_questions({"questions": [{"question": "Jaký jazyk?"}]}, "Vytvořit dokument.")
+    assert "Vytvořit dokument." in workbench.prompt.toPlainText()
+    assert "Česky." in workbench.prompt.toPlainText()
+    assert workbench.widgets["response_id"].text() == ""
 
 
 def test_clone_lineage_is_written_only_when_new_workbench_run_starts(qtbot, tmp_path, monkeypatch):
@@ -38,5 +51,6 @@ def test_clone_lineage_is_written_only_when_new_workbench_run_starts(qtbot, tmp_
     workbench.start()
     targets = [path for path in (tmp_path / "LOG").iterdir() if path.is_dir()]
     assert len(targets) == 1
-    assert '"relation_type": "clone"' in (targets[0] / "lineage.json").read_text(encoding="utf-8")
+    lineage = json.loads((targets[0] / "lineage.json").read_text(encoding="utf-8"))
+    assert any(row["relation_type"] == "clone" for row in lineage["records"])
     assert workbench.pending_lineage is None

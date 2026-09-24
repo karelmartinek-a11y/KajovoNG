@@ -74,7 +74,7 @@ def test_work_submission_uses_locally_validated_rows_without_second_submit(tmp_p
     worker = make_worker(tmp_path, "GENERATE")
     client = Mock()
     client.upload_file.return_value = {"id": "file_work"}
-    client.create_batch.return_value = {"id": "batch_work", "status": "validating"}
+    client.create_batch.return_value = {"id": "batch_work", "status": "validating", "input_file_id": "file_work", "endpoint": "/v1/responses"}
     result = worker._submit_generate_batch(client, manifest())
     assert result["batch_id"] == "batch_work"
     client.create_batch.assert_called_once()
@@ -152,7 +152,7 @@ def test_live_preparation_then_one_request_per_file(tmp_path):
     assert not errors, errors
     assert results[0]["status"] == "batch_pending"
     assert format_names(responder) == [
-        "A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V1",
+        "A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V2",
         "A2_FILE_SPEC_V1", "A2_FILE_SPEC_V1",
     ]
     client.upload_file.assert_called_once()
@@ -287,7 +287,7 @@ def test_invalid_preparation_never_submits_batch(tmp_path):
     from change_v2_fixtures import format_names, run, scenario
 
     def invalid_spine(name, value, _data):
-        if name == "A2_SPINE_V1":
+        if name == "A2_SPINE_V2":
             value["result"]["data"]["files"][0]["requires"] = ["unknown"]
         return value
 
@@ -299,7 +299,7 @@ def test_invalid_preparation_never_submits_batch(tmp_path):
     assert errors
     assert "hello.txt: neznámé interface binding." in errors[0]
     assert format_names(responder) == [
-        "A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V1", "A2_SPINE_V1",
+        "A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V2",
     ]
     client.upload_file.assert_not_called()
     client.create_batch.assert_not_called()
@@ -360,6 +360,7 @@ def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_or
         })
         client = Mock()
         client.retrieve_batch.return_value = {
+            "id": "batch_legacy", "input_file_id": "file_legacy", "endpoint": "/v1/responses",
             "status": "completed", "output_file_id": "file_output",
         }
         client.file_content.return_value = raw(outputs(m))
@@ -389,6 +390,7 @@ def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_or
     batch_id = state["batch_id"]
     client.reset_mock()
     client.retrieve_batch.return_value = {
+        "id": batch_id, "input_file_id": "file_batch_input", "endpoint": "/v1/responses",
         "status": "completed",
         "output_file_id": "file_output",
     }
@@ -402,19 +404,10 @@ def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_or
         )
         assert result["status"] == "files_complete_unverified"
     client.upload_file.return_value = {"id": "file_retry"}
-    client.create_batch.return_value = {"id": "batch_retry"}
+    client.create_batch.return_value = {"id": "batch_retry", "input_file_id": "file_retry", "endpoint": "/v1/responses"}
     state_path = Path(worker.log.state_path)
     approved_state = state_path.read_bytes()
-    if not repair_allowed:
-        with pytest.raises(ContractError, match="explicitní autorizaci"):
-            repeat_saved_batch(client, worker.log.paths.run_dir, batch_id, ["maths.py"])
-        assert state_path.read_bytes() == approved_state
-        client.upload_file.assert_not_called()
-        client.create_batch.assert_not_called()
-        client.create_response.assert_not_called()
-        return
     for key, value in (
-        ("repair_allowed", False), ("expires_at", "2000-01-01T00:00:00+00:00"),
         ("scope_hash", "jiný rozsah"), ("approval_id", "jiné schválení"),
     ):
         denied = json.loads(approved_state)
@@ -453,6 +446,7 @@ def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_or
     original_order = next(value for value in m["work_orders"].values() if value["target_path"] == "maths.py")
     assert order["task_id"] == original_order["task_id"]
     assert order["attempt_no"] == 2
+    assert order["version"] == 3 and order["attempt_kind"] == "manual"
     assert order["attempt_id"] != original_order["attempt_id"]
     assert retry["snapshot_hash"] == m["snapshot_hash"]
     context = json.loads(retry["requests"][0]["body"]["input"])
@@ -471,10 +465,11 @@ def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_or
         for row in rows:
             row["response"]["body"]["id"] = "resp_" + row["custom_id"]
         client.file_content.return_value = raw(rows)
+        client.retrieve_batch.return_value.update(id=current_id, input_file_id="file_retry")
         result = process_saved_batch(client, worker.log.paths.run_dir, current_id, worker.settings)
         assert result["status"] == "files_complete_unverified"
         if current_id == "batch_retry":
-            client.create_batch.return_value = {"id": "batch_retry3"}
+            client.create_batch.return_value = {"id": "batch_retry3", "input_file_id": "file_retry", "endpoint": "/v1/responses"}
             repeat_saved_batch(
                 client, worker.log.paths.run_dir,
                 batch_id if retry_original else current_id, ["maths.py"], "Fix sum again",
@@ -490,10 +485,13 @@ def test_restart_import_responses_and_selective_retry(tmp_path, legacy, retry_or
     assert third["snapshot"] == retry["snapshot"] == m["snapshot"]
     assert state["generate_batch"] == m
     assert state["batch_id"] == batch_id
-    before = state_path.read_bytes()
-    for source_id in (batch_id, "batch_retry3"):
-        with pytest.raises(ContractError, match="limit tří pokusů"):
-            repeat_saved_batch(client, worker.log.paths.run_dir, source_id, ["maths.py"])
-    assert state_path.read_bytes() == before
-    assert client.create_batch.call_count == client.upload_file.call_count == 2
+    client.create_batch.return_value = {"id": "batch_retry4", "input_file_id": "file_retry", "endpoint": "/v1/responses"}
+    repeat_saved_batch(client, worker.log.paths.run_dir,
+                       batch_id if retry_original else "batch_retry3", ["maths.py"])
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    fourth = state["generate_batches"]["batch_retry4"]
+    fourth_order = next(iter(fourth["work_orders"].values()))
+    assert fourth_order["attempt_no"] == 4 and fourth_order["attempt_kind"] == "manual"
+    assert state["generate_batch"] == m
+    assert client.create_batch.call_count == client.upload_file.call_count == 3
     client.create_response.assert_not_called()

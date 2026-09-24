@@ -47,6 +47,7 @@ class Task(QThread):
 
 
 STATES = {
+    "needs_clarification": "Je potřeba upřesnit zadání",
     "created": "Vytvořeno",
     "preparing": "Připravuje se",
     "running": "Běží",
@@ -67,6 +68,7 @@ STATES = {
     "dry_run": "Návrh je připraven bez zápisu",
     "plan_ready": "Ověřený plán je připraven; výroba nebyla spuštěna",
     "qfile_plan_ready": "Návrh cesty QFILE čeká na potvrzení uživatele",
+    "waiting_manual_resource": "Čeká se na dodání ručního podkladu",
     "files_complete_unverified": "Soubory jsou převzaté, funkčnost nebyla ověřena",
     "ready_to_import": "Výsledek je připraven k převzetí",
     "importing": "Přebírám vzdálený výsledek",
@@ -268,7 +270,7 @@ class Operations(QObject):
         path = Path(directory).expanduser().resolve()
         if any(
             path == other or path in other.parents or other in path.parents
-            for other in self._output_reservations.values()
+            for roots in self._output_reservations.values() for other in roots
         ):
             raise ValueError("Do tohoto adresáře nebo jeho části již zapisuje jiná operace.")
 
@@ -280,6 +282,7 @@ class Operations(QObject):
         cancellable=False,
         popup=True,
         output_dir=None,
+        write_roots=(),
         identifier=None,
     ):
         worker = Task(function, self)
@@ -290,6 +293,7 @@ class Operations(QObject):
             cancellable=cancellable,
             popup=popup,
             output_dir=output_dir,
+            write_roots=write_roots,
             identifier=identifier,
         )
 
@@ -347,8 +351,12 @@ class Operations(QObject):
         popup=True,
         identifier=None,
         output_dir=None,
+        write_roots=(),
     ):
-        self.assert_output_available(output_dir)
+        roots = tuple({Path(value).expanduser().resolve()
+                       for value in (*write_roots, output_dir) if value})
+        for root in roots:
+            self.assert_output_available(root)
         identifier = identifier or uuid4().hex
         previous = self.records.get(identifier)
         if previous and not previous.terminal:
@@ -387,11 +395,12 @@ class Operations(QObject):
                 run_id=str(getattr(cfg, "run_id", "") or identifier),
                 model=str(getattr(cfg, "model", "") or ""),
                 project=str(getattr(cfg, "project", "") or ""),
+                maximum_quality=bool(getattr(cfg, "maximum_quality", False)),
             )
         record = Operation(identifier, title, worker, dialog)
         self.records[identifier] = record
-        if output_dir:
-            self._output_reservations[(id(self), identifier)] = Path(output_dir).expanduser().resolve()
+        if roots:
+            self._output_reservations[(id(self), identifier)] = roots
         if cancellable and hasattr(worker, "request_stop"):
             dialog.stop_callback = worker.request_stop
             dialog.stop.setEnabled(True)
@@ -415,10 +424,23 @@ class Operations(QObject):
                 error if isinstance(error, UserError) else describe_error(RuntimeError(str(error))),
             )
         )
+        if not isinstance(worker, Task) and hasattr(worker, "failure_detail"):
+            worker.finished_err.connect(
+                lambda error: setattr(
+                    record, "error", record.error or describe_error(RuntimeError(str(error)))
+                )
+            )
         worker.finished.connect(lambda: self._finished(record, receive))
         if popup:
             dialog.show()
-        worker.start()
+        try:
+            worker.start()
+        except Exception:
+            self._output_reservations.pop((id(self), identifier), None)
+            self.records.pop(identifier, None)
+            dialog.close()
+            dialog.deleteLater()
+            raise
         self.changed.emit()
         return record
 

@@ -17,7 +17,8 @@ def test_continue_generate_batch_with_recovered_resume_files_skips_live_a1_a2(tm
 
     client = Mock()
     client.upload_file.return_value = {"id": "file_work"}
-    client.create_batch.return_value = {"id": "batch_work", "status": "validating"}
+    client.create_batch.return_value = {"id": "batch_work", "status": "validating",
+                                        "input_file_id": "file_work", "endpoint": "/v1/responses"}
     results, errors = [], []
     worker.finished_ok.connect(results.append)
     worker.finished_err.connect(errors.append)

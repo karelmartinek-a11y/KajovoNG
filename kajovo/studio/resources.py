@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFileDialog, QListWidget, QListWidgetItem,
     QPlainTextEdit, QTabWidget, QWidget,
@@ -48,7 +48,9 @@ class ValueDialog(QDialog):
 
     def submit(self):
         try:
-            value = json.loads(self.editor.toPlainText()) if self.structured else self.editor.toPlainText().strip()
+            from kajovo.core.orchestration.contracts import parse_json_value_strict
+
+            value = parse_json_value_strict(self.editor.toPlainText()) if self.structured else self.editor.toPlainText().strip()
             if not self.structured and not value:
                 raise ValueError("Vyplňte hodnotu.")
             self.value = value
@@ -59,10 +61,14 @@ class ValueDialog(QDialog):
 
 
 class ResourcesPage(QWidget):
+    resource_deleted = Signal(str, str, str)
+
     def __init__(self, context, parent=None):
         super().__init__(parent)
         self.context = context
+        self.resource_deleted.connect(self._prune_deleted)
         self.busy = False
+        self.store_selection_generation = 0
         self.controls = []
         root = vertical(self, 0)
         self.tabs = QTabWidget()
@@ -113,13 +119,22 @@ class ResourcesPage(QWidget):
         self.notice.setText(f"Připojeno k zadání: {len(self.context.files)} souborů a {len(self.context.stores)} úložišť.")
 
     def clear(self):
+        self.store_selection_generation += 1
         for widget in self.lists.values():
             widget.clear()
         self.store_files.clear()
         self.update_summary()
 
     def clear_store_files(self, *_):
+        self.store_selection_generation += 1
         self.store_files.clear()
+
+    def store_receiver(self, store):
+        generation = self.store_selection_generation
+        def receive(rows):
+            if store == self.current_store() and generation == self.store_selection_generation:
+                fill_records(self.store_files, rows)
+        return receive
 
     def execute(self, title, operation, receive=None):
         if self.busy:
@@ -193,9 +208,12 @@ class ResourcesPage(QWidget):
         if not identifiers or not confirm(self, "Odstranit vzdálené prostředky", f"Trvale odstranit {len(identifiers)} položek ze služby?"):
             return
 
+        key = self.context.api_key
+
         def remove(client, task):
             for identifier in identifiers:
                 (client.delete_file if kind == "files" else client.delete_vector_store)(identifier)
+                self.resource_deleted.emit(key, kind, identifier)
             return client.list_files() if kind == "files" else client.list_vector_stores()
 
         def receive(records):
@@ -205,6 +223,17 @@ class ResourcesPage(QWidget):
 
         self.execute("Odstranění prostředků", remove, receive)
 
+    @Slot(str, str, str)
+    def _prune_deleted(self, key, kind, identifier):
+        if key != self.context.api_key:
+            return
+        setattr(self.context, kind, [value for value in getattr(self.context, kind) if value != identifier])
+        listing = self.lists[kind]
+        for index in reversed(range(listing.count())):
+            if listing.item(index).data(Qt.UserRole) == identifier:
+                listing.takeItem(index)
+        self.context.attachments_changed.emit()
+
     def current_store(self):
         item = self.lists["stores"].currentItem()
         return item.data(Qt.UserRole) if item else None
@@ -212,11 +241,8 @@ class ResourcesPage(QWidget):
     def refresh_store_files(self):
         identifier = self.current_store()
         if identifier:
-            def receive(rows):
-                if identifier == self.current_store():
-                    fill_records(self.store_files, rows)
             self.execute("Načtení souborů úložiště", lambda client, task: client.list_vector_store_files(identifier),
-                         receive)
+                         self.store_receiver(identifier))
 
     def add_store_files(self):
         dialog = ValueDialog("Přidání souborů", "Identifikátory souborů, každý na samostatném řádku", parent=self)
@@ -238,7 +264,7 @@ class ResourcesPage(QWidget):
                 client.add_file_to_vector_store(store, identifier)
             return client.list_vector_store_files(store)
 
-        self.execute("Přidání souborů do úložiště", add, lambda rows: fill_records(self.store_files, rows))
+        self.execute("Přidání souborů do úložiště", add, self.store_receiver(store))
 
     def remove_store_files(self):
         store = self.current_store()
@@ -249,7 +275,7 @@ class ResourcesPage(QWidget):
                     client.delete_vector_store_file(store, identifier)
                 return client.list_vector_store_files(store)
 
-            self.execute("Odebrání z úložiště", remove, lambda rows: fill_records(self.store_files, rows))
+            self.execute("Odebrání z úložiště", remove, self.store_receiver(store))
 
     def attributes(self):
         store = self.current_store()
@@ -260,8 +286,19 @@ class ResourcesPage(QWidget):
         attrs = item.data(Qt.UserRole + 1).get("attributes", {})
         dialog = ValueDialog("Atributy souboru", "Atributy ve formátu JSON", json.dumps(attrs, ensure_ascii=False, indent=2), self, structured=True)
         if dialog.exec() == QDialog.Accepted:
+            if not isinstance(dialog.value, dict):
+                self.notice.setText("Atributy musí být JSON objekt.")
+                return
+            generation = self.store_selection_generation
+            def receive(value):
+                if store != self.current_store() or generation != self.store_selection_generation:
+                    return
+                for index in range(self.store_files.count()):
+                    current = self.store_files.item(index)
+                    if current.data(Qt.UserRole) == identifier:
+                        current.setData(Qt.UserRole + 1, value)
             self.execute("Uložení atributů", lambda client, task: client.update_vector_store_file_attributes(store, identifier, dialog.value),
-                         lambda value: item.setData(Qt.UserRole + 1, value))
+                         receive)
 
     def details(self):
         store = self.current_store()

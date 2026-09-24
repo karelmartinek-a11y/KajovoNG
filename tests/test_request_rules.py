@@ -25,6 +25,30 @@ def test_output_token_minimum_accepted():
     validate_response_payload({"model": "gpt-4.1-nano", "max_output_tokens": 16})
 
 
+@pytest.mark.parametrize("forced,present", [("file_search", "code_interpreter"), ("code_interpreter", "file_search")])
+def test_forced_tool_must_match_attached_type(forced, present):
+    tool = ({"type": "file_search", "vector_store_ids": ["vs_test"]} if present == "file_search"
+            else {"type": "code_interpreter", "container": {"type": "auto"}})
+    payload = {"model": "gpt-5.6-luna", "input": "test", "tools": [tool], "tool_choice": {"type": forced}}
+    with pytest.raises(ValueError, match="není připojen"):
+        validate_response_payload(payload)
+    payload["tool_choice"] = {"type": present}
+    validate_response_payload(payload)
+
+
+def test_code_interpreter_work_is_live_only_and_has_explicit_file_bindings():
+    payload = {"model": "gpt-5.6-luna", "input": "Vytvoř PDF.", "max_output_tokens": 128,
+               "tools": [{"type": "code_interpreter", "container": {"type": "auto", "file_ids": ["file_original"]}}],
+               "tool_choice": "required"}
+    validate_response_payload(payload)
+    with pytest.raises(ValueError):
+        validate_response_payload(payload, batch=True)
+    client = OpenAIClient("test")
+    client.retrieve_file = Mock(return_value={"id": "file_original", "filename": "original.pdf"})
+    client.validate_resources(payload)
+    client.retrieve_file.assert_called_once_with("file_original")
+
+
 @pytest.mark.parametrize("field,value", [("reasoning", []), ("reasoning", False), ("reasoning", ""),
                                          ("input", {}), ("input", 0), ("input", False)])
 def test_invalid_optional_types(field, value):

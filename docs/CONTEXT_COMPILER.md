@@ -1,14 +1,14 @@
 # Pracovní kontext souboru
 
-`context_compiler.py` sestavuje FileContext deterministicky z kanonické přípravy. Nevolá model, nevyhledává podle slov ani přípon a neořezává text. Příprava nových A2/B2 a A2Q/B2Q vyžaduje `implementation.version: 1`. Starý kontrakt zůstává validní pro čtení původní evidence, ale nemůže vytvořit nový souborový request bez implementačních údajů.
+`context_compiler.py` sestavuje FileContext deterministicky z kanonické přípravy V2 a grafu V3 (SPINE a FILE_SPEC). Nevolá model, nevyhledává podle slov ani přípon a neořezává text. Legacy kontrakty slouží pro čtení původní evidence; nový request vyžaduje úplnou přípravu.
 
 ## Kontrakty a původ
 
-`implementation.scopes` přiřazuje každé globální povinnosti konkrétní cesty a důvod. Atomem je položka seznamu nebo neprázdný objekt/skalar v requirements, plánu či pravidlech struktury. Requirement objekty s ID a položky architektury mají samostatné vazby souborů. Prázdná působnost, chybějící položka nebo neznámá cesta blokují přípravu; compiler působnost nevymýšlí.
+`spine.obligation_owners` přiřazuje globálním povinnostem konkrétní vlastníky. Requirements a komponenty plánu mají explicitní ID a vazby souborů. Chybějící vlastník nebo neznámá cesta blokují přípravu; compiler působnost nevymýšlí.
 
-`implementation.interfaces` obsahuje stabilní ID, verzi, přesnou signaturu, chybovou sémantiku a lifecycle. Každý provider i consumer se váže na tutéž verzi. Příprava má v signatuře zachytit typy, generika, nullability a veřejné exporty. Chybějící symbol nebo provider blokuje dodání. Lokální kontrola ověřuje shodu kanonických kontraktů; sama není typovým překladačem libovolného jazyka ani důkazem správnosti slovní definice.
+`spine.interfaces` obsahuje stabilní identity a přesný vstupní, výstupní, chybový a životní kontrakt. Provider i consumer se vážou na stejnou definici. Chybějící rozhraní nebo provider blokuje přípravu. Kontrola vazeb není typovým překladačem libovolného jazyka ani důkazem správnosti slovní definice.
 
-`implementation.files` obsahuje jen relevantní facets, například persistence, transakce, serializaci, concurrency, security či framework. Facet uvádí definici a zdrojové odkazy. `required_facets` stanovuje příprava podle rizik souboru; chybějící deklarovaný detail je blokující. Akceptace, ověřovací scénáře, očekávaný viditelný výstup a explicitní `allow_empty` jsou povinné. Kritická nevyřešená otázka blokuje A3/B3 i ve Standard režimu. Maximum Quality navíc zachovává nezávislý modelový quality gate.
+`file_specs` obsahují relevantní facets, například persistence, transakce, serializaci, concurrency, security či framework. Facet uvádí definici a zdrojové odkazy. `required_facets` stanovuje SPINE; chybějící deklarovaný detail blokuje přípravu. Kritická otázka z DETAIL se předá uživateli před A3/B3 i ve Standard režimu. Maximum Quality navíc zachovává modelovou kontrolu přípravy.
 
 FileContext obsahuje cílový soubor, jeho implementační kontrakt, relevantní requirements, architekturu, povinnosti s působností, přesná sdílená rozhraní, přímé dependency kontrakty a případné původní zdroje. B3 zachovává úplný původní cíl a přímé zdrojové závislosti; neposílá celý IN. Každá složka má hash a dohledatelný selector ve `context_provenance`. Detailní důvod globální působnosti zůstává přímo u povinnosti.
 
@@ -16,7 +16,7 @@ FileContext obsahuje cílový soubor, jeho implementační kontrakt, relevantní
 
 Obálka odděluje `source_snapshot_hash`, `file_context_hash`, `contract_hash` a `dependency_hashes`. Hash pracovního kontextu nezahrnuje auditní hash, takže změna nesouvisejícího zdroje nemění pracovní identitu consumeru. `ContextCompiler.invalidated` porovnává pracovní kontexty a rozšiřuje změny na tranzitivní konzumenty. U MODIFY přijímá také přesné původní obsahy obou verzí.
 
-Nový manifest má verzi 3. Auditní snapshot se ukládá jednou; řádky obsahují FileContext bez globálního snapshotu, bez tools a bez návaznosti. `encode_requests` znovu kompiluje kontext proti snapshotu a ověřuje hashe původních obsahů. Verze 1 a 2 se interpretují pouze podle svých původních kontraktů. Jejich import zůstává dostupný; opakované odeslání vyžaduje novou implementační přípravu. Žádná tichá migrace nebo full-snapshot fallback neexistuje.
+Nový manifest má verzi 3 a `compiler_revision: 2`. Snapshot se ukládá jednou; řádky obsahují FileContext bez globálního snapshotu, tools a návaznosti. Nové requesty se překompilují proti snapshotu. Archivovaný import kontroluje zmrazený kontext, request, WorkOrder a hashe, ale nepřepisuje je současným compilerem. Původní evidence se nemigruje změnou obsahu. Snapshot zahrnuje přesné zdrojové segmenty a MODIFY závazky zachování a migrací; zachované obsahové závislosti pocházejí z hashově ověřeného archivu.
 
 `recoverable_artifacts.py` ukládá přesný serializovaný obsah jako obsahově adresovanou obnovitelnou evidenci. Současný `RunLogger` a Run Bundle uchovávají důkazní obsah rovněž bezeztrátově; nová evidence se obsahově nerediguje ani nemaskuje. Obsahově adresované soubory vznikají výhradně exkluzivním vytvořením, při čtení se ověřuje SHA-256 a poškozený obsah se nenahrazuje jiným logem. Index vybírá aktuální artefakt, staré objekty se nemažou. Na POSIX se používají režimy 0700/0600; na Windows zůstává přístup závislý na ACL zvoleného LOG adresáře. Nejde o šifrování ani bezpečnostní hranici vůči uživateli s přístupem k tomuto adresáři.
 
@@ -36,11 +36,11 @@ LIVE pokračování a opravy používají stejnou technickou kontrolu. Raw provi
 
 ## Závislosti, pokračování a hranice ověření
 
-Compiler vytváří SCC a topologické vlny kondenzovaného DAG iterativním algoritmem. Cyklická skupina je explicitní součást kontextu; soubory používají přesná společná rozhraní. Manifest ukládá `dependency_waves`. Současné Batch úlohy pracují proti kontraktům, nikoli proti dosud neověřenému kódu providerů. Uložený plán vln zatím není automatický vícebatchový scheduler čekající na integrační validaci každé vlny.
+Závislosti typu `contract` sdílejí přesná rozhraní; `verified_content` čekají na obsah providera. BATCH scheduler posílá připravenou dependency-wave a po jejím importu může sestavit další. Cyklická závislost požadující dosud nevytvořený obsah je neproveditelná a příprava ji odmítne. Číslo vlny se přebírá ze stejného zdrojového manifestu do transportní evidence V4.
 
-Rozhraní compileru přijímá verified dependency artefakty pouze se stavem `verified`, shodným kontraktem a SHA-256 obsahu. Runtime automaticky nepovyšuje stažený nebo syntakticky validní soubor na takový artefakt. To vyžaduje skutečnou integrační validaci příslušného projektu, která v aplikaci není univerzálně implementována.
+Compiler přijímá dependency artefakt se shodným kontraktem, SHA-256 obsahu a stavem `verified`. Tento stav značí ověřenou integritu a návaznost evidence, nikoli funkční či integrační test produktu. Dodaný produkt zůstává `files_complete_unverified`; runtime nezavádí nové produktové testovací brány.
 
-LIVE začíná každý soubor bez historie přípravy. Další chunky navazují pouze uvnitř stejného souboru, posílají hash kontextu a prefixu namísto opakovaného FileContextu. Indexy, počet, konec a návaznost se nadále validují. Konečný obsah a hashe chunků se ukládají přesně. Protokol neprovádí slepé spojování neúplných JSON; při `incomplete` se běh zastaví. Dávkový soubor musí být celý v jedné odpovědi.
+LIVE i BATCH předává každý soubor v samostatném requestu bez historie přípravy a bez návaznosti na předchozí soubor. `FILE_CONTENT_V1` vrací celý obsah. Neúplná odpověď se nespojuje naslepo ani nevydává za hotový soubor. Explicitní návaznost uživatelské konverzace je jiný kontrakt než automatické řetězení výrobních kroků.
 
 ## Evidence a UI
 

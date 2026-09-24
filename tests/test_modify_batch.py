@@ -109,7 +109,7 @@ def test_modify_completion_protects_original_and_reimport(tmp_path):
     manifest = modify_manifest()
     run, out = save_state(tmp_path, manifest)
     client = Mock()
-    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    client.retrieve_batch.return_value = {"id": "batch_original", "input_file_id": "file_original", "endpoint": "/v1/responses", "status": "completed", "output_file_id": "file_results"}
     client.file_content.return_value = raw(modify_outputs(manifest))
     for _ in range(2):
         result = complete_saved_batch(client, run, "batch_original", None)
@@ -142,7 +142,7 @@ def test_modify_retry_keeps_source_manifest_and_original_hashes(tmp_path):
     manifest = state["generate_batch"]
     primary_batch = state["batch_id"]
     original_manifest = copy.deepcopy(manifest)
-    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    client.retrieve_batch.return_value = {"id": primary_batch, "input_file_id": "file_batch_input", "endpoint": "/v1/responses", "status": "completed", "output_file_id": "file_results"}
     rows = batch_output_rows(manifest)
     for row in rows:
         row["response"]["body"]["id"] = "resp_" + row["custom_id"]
@@ -151,7 +151,7 @@ def test_modify_retry_keeps_source_manifest_and_original_hashes(tmp_path):
     assert result["status"] == "files_complete_unverified"
     client.reset_mock()
     client.upload_file.return_value = {"id": "file_retry"}
-    client.create_batch.return_value = {"id": "batch_retry"}
+    client.create_batch.return_value = {"id": "batch_retry", "input_file_id": "file_retry", "endpoint": "/v1/responses"}
     repeat_saved_batch(client, run, primary_batch, ["maths.py"])
     state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
     assert state["generate_batch"] == original_manifest
@@ -167,7 +167,7 @@ def test_modify_retry_keeps_source_manifest_and_original_hashes(tmp_path):
     assert "_B3_" in retry["requests"][0]["custom_id"]
     encode_requests(state["generate_batch"])
     encode_requests(retry)
-    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    client.retrieve_batch.return_value = {"id": "batch_retry", "input_file_id": "file_retry", "endpoint": "/v1/responses", "status": "completed", "output_file_id": "file_results"}
     rows = batch_output_rows(retry)
     for row in rows:
         row["response"]["body"]["id"] = "resp_" + row["custom_id"]
@@ -204,7 +204,7 @@ def test_unknown_retry_recovery_keeps_primary_batch(tmp_path):
     state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
     manifest = state["generate_batch"]
     primary_batch = state["batch_id"]
-    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    client.retrieve_batch.return_value = {"id": primary_batch, "input_file_id": "file_batch_input", "endpoint": "/v1/responses", "status": "completed", "output_file_id": "file_results"}
     rows = batch_output_rows(manifest)
     for row in rows:
         row["response"]["body"]["id"] = "resp_" + row["custom_id"]
@@ -228,6 +228,15 @@ def test_unknown_retry_recovery_keeps_primary_batch(tmp_path):
     assert after["generate_batches"]["batch_recovered"] == before["pending_batch_submission"]["manifest"]
     assert after["submission_unknown"] is False
     assert "pending_batch_submission" not in after
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+    repo = OrchestrationRepository(run.parent / "orchestration.sqlite3")
+    retry_manifest = after["generate_batches"]["batch_recovered"]
+    with repo.connect() as db:
+        for order in retry_manifest["work_orders"].values():
+            assert db.execute("SELECT state,provider_id,remote_input_file_id FROM provider_operations WHERE attempt_id=?",
+                              (order["attempt_id"],)).fetchone() == ("submitted", "batch_recovered", "file_retry")
+    v4 = after["batch_manifests_v4"][before["pending_batch_submission"]["manifest_v4_id"]]
+    assert v4["state"] == "submitted" and v4["provider_batch_id"] == "batch_recovered"
     client.create_batch.assert_called_once()
     client.create_response.assert_not_called()
 
@@ -263,7 +272,7 @@ def test_modify_dry_run_validates_and_logs_without_out_writes(tmp_path):
     run, out = save_state(tmp_path, manifest)
     before = (out / "maths.py").read_bytes()
     client = Mock()
-    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_results"}
+    client.retrieve_batch.return_value = {"id": "batch_original", "input_file_id": "file_original", "endpoint": "/v1/responses", "status": "completed", "output_file_id": "file_results"}
     client.file_content.return_value = raw(modify_outputs(manifest))
     result = complete_saved_batch(client, run, "batch_original", None)
     assert result["dry_run"] and result["status"] == "dry_run"

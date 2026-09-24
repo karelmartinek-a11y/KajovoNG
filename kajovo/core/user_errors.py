@@ -25,6 +25,7 @@ class UserError:
 
 # Katalog zachovává význam kódu; například HTTP 429 samo nerozlišuje kredit a rychlost.
 API_CODES = {
+    "local_request_evidence_failed": ("Požadavek nebyl odeslán: selhala místní evidence požadavku v aplikaci.", "Jde o interní chybu aplikace; původní příčina je v technických podrobnostech."),
     "max_output_tokens": ("Odpověď dosáhla výstupního limitu a není úplná.", "Upravte rozpočet výstupu nebo rozdělení dodávky; neimportujte částečný obsah."),
     "credit_balance_exhausted": ("Předplacený kredit organizace byl vyčerpán.", "Doplňte kredit organizace u poskytovatele."),
     "organization_spend_limit_exceeded": ("Organizace dosáhla nastaveného rozpočtového limitu.", "Ověřte rozpočet organizace u poskytovatele."),

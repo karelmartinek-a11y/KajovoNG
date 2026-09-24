@@ -92,7 +92,7 @@ def ready_tasks(dag: ExecutionDag, evidence) -> tuple[str, ...]:
         ready = tuple(
             path
             for path in wave
-            if set(dag.content_dependencies.get(path, ())) <= available
+            if path not in available and set(dag.content_dependencies.get(path, ())) <= available
         )
         if ready:
             return ready

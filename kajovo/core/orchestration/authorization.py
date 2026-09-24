@@ -8,6 +8,12 @@ from typing import Any
 from .contracts import canonical_sha256
 
 
+def automatic_attempt_limit(config) -> int:
+    """První pokus je povolen startem; další jen explicitní politikou oprav."""
+    policy = config.get("auto_repair") if isinstance(config, dict) else getattr(config, "auto_repair", "off")
+    return 3 if policy == "within_approval" else 1
+
+
 @dataclass(frozen=True)
 class ExecutionAuthorization:
     version: int
@@ -87,6 +93,7 @@ def validate_execution_authorization(
     run_config: dict[str, Any],
     scope_hash: str,
     require_repair: bool = False,
+    allow_expired: bool = False,
 ) -> ExecutionAuthorization:
     """Validate the frozen root Start authorization without extending its scope."""
     if not isinstance(authorization, dict):
@@ -115,7 +122,7 @@ def validate_execution_authorization(
         raise ValueError("execution_authorization expiry invalid") from exc
     if expires.tzinfo is None:
         raise ValueError("execution_authorization expiry must be timezone-aware")
-    if expires <= datetime.now(timezone.utc):
+    if not allow_expired and expires <= datetime.now(timezone.utc):
         raise ValueError("execution_authorization expired")
     if require_repair and authorization.get("repair_allowed") is not True:
         raise ValueError("execution_authorization does not allow repair")

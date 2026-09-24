@@ -123,12 +123,10 @@ class CascadesPage(QWidget):
     def refresh_models(self, *_):
         values = self.context.models_for_usage("cascade")
         recommended = self.context.recommended_model("cascade")
-        self.model.blockSignals(True)
-        self.model.clear()
-        for value in values:
-            self.model.addItem(value, value)
-        self.model.setCurrentIndex(self.model.findData(recommended) if recommended else -1)
-        self.model.blockSignals(False)
+        from .model_selection import refill_models
+
+        step = self.selected()
+        refill_models(self.model, values, recommended, selected=step.model if step else None)
 
     def draw_steps(self, selected=None):
         self.loading = True
@@ -161,6 +159,9 @@ class CascadesPage(QWidget):
             self.temperature.setValue(step.temperature or 0)
             self.instructions.setPlainText(step.instructions)
             self.text.setPlainText(step.input_text)
+            self.refresh_models()
+        for index in (2, 3):
+            self.tabs.setTabEnabled(index, bool(step and step.deterministic))
         self.refresh_items()
 
     def refresh_items(self):
@@ -182,6 +183,9 @@ class CascadesPage(QWidget):
         if not step:
             self.validation.setText("Nejdříve vyberte krok kaskády.")
             return
+        if not step.deterministic:
+            self.validation.setText("Legacy krok upravujte přes úplný kontrakt; typované položky vyžadují deterministický režim.")
+            return
         rows = getattr(step, kind)
         listing = self.item_lists[kind]
         index = listing.currentRow()
@@ -201,7 +205,7 @@ class CascadesPage(QWidget):
     def remove_item(self, kind):
         step = self.selected()
         index = self.item_lists[kind].currentRow()
-        if step and 0 <= index < len(getattr(step, kind)):
+        if step and step.deterministic and 0 <= index < len(getattr(step, kind)):
             getattr(step, kind).pop(index)
             self.refresh_items()
             self.validate()
@@ -227,6 +231,7 @@ class CascadesPage(QWidget):
         step = CascadeStep(
             title=f"Krok {len(self.definition.steps) + 1}",
             model=self.context.recommended_model("cascade"),
+            deterministic=True,
         )
         self.definition.steps.append(step)
         self.draw_steps(step.id)
@@ -293,7 +298,12 @@ class CascadesPage(QWidget):
         if dialog.exec() == QDialog.Accepted:
             try:
                 self.definition = CascadeDefinition.from_dict(dialog.value)
+                self.name.blockSignals(True)
+                self.output.blockSignals(True)
                 self.name.setText(self.definition.name)
+                self.output.setText(self.definition.default_out_dir)
+                self.name.blockSignals(False)
+                self.output.blockSignals(False)
                 self.draw_steps()
             except (TypeError, ValueError) as error:
                 self.validation.setText(str(error))
@@ -302,6 +312,9 @@ class CascadesPage(QWidget):
         self.definition.name = self.name.text()
         self.definition.default_out_dir = self.output.text()
         try:
+            available = self.context.models_for_usage("cascade")
+            if any(step.model not in available for step in self.definition.steps):
+                raise ValueError("Zvolený model není dostupný pro kaskádu; vyberte jiný model.")
             validate_cascade_definition(self.definition)
         except ValueError as error:
             self.validation.setText(str(error))
@@ -321,7 +334,8 @@ class CascadesPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Načíst kaskádu", str(base), "Kaskády (*.json)")
         if path:
             try:
-                definition = CascadeDefinition.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+                from kajovo.core.orchestration.contracts import parse_json_strict
+                definition = CascadeDefinition.from_dict(parse_json_strict(Path(path).read_text(encoding="utf-8")))
                 self.definition = definition
                 self.location = path
                 self.current_id = None

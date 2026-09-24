@@ -277,7 +277,7 @@ class V2Responder:
                     "baseline_findings": [],
                 }
             )
-        elif name in {"A2_SPINE_V1", "B2_SPINE_V1"}:
+        elif name in {"A2_SPINE_V2", "B2_SPINE_V2"}:
             value = self._ready(spine_data(self.mode, self.files))
         elif name in {"A2_FILE_SPEC_V1", "B2_FILE_SPEC_V1"}:
             target = data["target"]
@@ -287,7 +287,7 @@ class V2Responder:
                 for ref in requirement["source_refs"]
             ]
             value = self._ready(file_spec(target, refs))
-        elif name in {"A2Q_QUALITY_GATE_V2", "B2Q_QUALITY_GATE_V2"}:
+        elif name in {"A2Q_QUALITY_GATE_V3", "B2Q_QUALITY_GATE_V3"}:
             graph = data["implementation_graph"]
             value = self._ready(
                 {

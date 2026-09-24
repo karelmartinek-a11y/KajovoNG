@@ -13,15 +13,19 @@ STAGE_TITLES = {
     "Vstupní data": "Příprava vstupních dat",
     "Indexace": "Indexace podkladů pro hledání",
     "A0": "Analýza zadání",
-    "A0R": "Profesionální requirements",
+    "A0R": "Rozpracování požadavků",
     "A1": "Architektonický plán",
     "A2": "Struktura projektu",
-    "A2Q": "Quality gate",
+    "A2_SPINE": "Návrh souborů a rozhraní",
+    "A2_DETAIL": "Specifikace jednotlivých souborů",
+    "A2Q": "Kontrola implementačního návrhu",
     "A3": "Vytváření souborů",
-    "B0R": "Change requirements",
+    "B0R": "Rozpracování požadavků na změnu",
     "B1": "Plán změn",
     "B2": "Struktura změn",
-    "B2Q": "Quality gate",
+    "B2_SPINE": "Návrh změn souborů a rozhraní",
+    "B2_DETAIL": "Specifikace jednotlivých změn",
+    "B2Q": "Kontrola návrhu změn",
     "B3": "Úprava souborů",
     "Upload": "Nahrávání podkladů",
     "Download": "Stahování výsledků",
@@ -50,6 +54,9 @@ STATE_TITLES = {
     "importing": "Přebírá se",
     "ready_to_import": "K převzetí",
     "completed": "Dokončeno",
+    "completed_unverified": "Převzato bez ověření funkčnosti",
+    "needs_clarification": "Čeká na upřesnění zadání",
+    "waiting_manual_resource": "Čeká na ruční podklad",
     "closed": "Dokončeno / uzavřeno",
     "dry_run": "Dry-run / návrh bez zápisu",
     "plan_ready": "Ověřený plán připraven / výroba zastavena",
@@ -116,12 +123,12 @@ def source_title(source: str) -> str:
 
 def default_plan(mode: str = "", quality: bool = False) -> list[str]:
     if mode == "MODIFY":
-        stages = ["B0R", "B1", "B2"]
+        stages = ["B0R", "B1", "B2_SPINE", "B2_DETAIL", "B2"]
         if quality:
             stages.append("B2Q")
         return stages + ["B3", "Validace kontraktů", "Ukládání"]
     if mode == "GENERATE":
-        stages = ["A0", "A0R", "A1", "A2"]
+        stages = ["A0R", "A1", "A2_SPINE", "A2_DETAIL", "A2"]
         if quality:
             stages.append("A2Q")
         return stages + ["A3", "Validace kontraktů", "Ukládání"]
@@ -144,18 +151,17 @@ def build_steps(events, *, mode: str = "", quality: bool = False) -> list[Displa
         for event in events
         if event.stage != "RUN" and event.state == "completed"
     }
-    current_index = keys.index(current) if current in keys else -1
     return [
         DisplayStep(
             key,
             stage_title(key),
-            "current"
+            "done"
+            if key in completed
+            else "current"
             if key == current
-            else "done"
-            if key in completed or (current_index >= 0 and index < current_index)
             else "pending",
         )
-        for index, key in enumerate(keys)
+        for key in keys
     ]
 
 

@@ -49,6 +49,7 @@ def test_unknown_preserves_checkpoint_and_prevents_restart(tmp_path, before):
         assert not results
         assert events[-1].state == "submission_unknown"
         restarted = make_executor(tmp_path, before + 2)
+        restarted.cfg.cascade = executor.cfg.cascade
         restarted.execute()
         assert client.create_response.call_count == before + 1
 

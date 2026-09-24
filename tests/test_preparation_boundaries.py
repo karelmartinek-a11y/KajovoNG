@@ -35,6 +35,7 @@ def test_plan_is_repaired_before_structure_and_preserves_attempts(tmp_path, mode
         return value
 
     worker, client, responder = preparation_scenario(tmp_path, mode, mutate=mutate)
+    worker.cfg.auto_repair = "within_approval"
     prepare(worker, client)
     calls = responder.calls
     prefix = "A" if mode == "GENERATE" else "B"
@@ -70,6 +71,7 @@ def test_identical_invalid_plan_stops_without_structure(tmp_path, mode, fault):
         return value
 
     worker, client, responder = preparation_scenario(tmp_path, mode, mutate=mutate)
+    worker.cfg.auto_repair = "within_approval"
     with patch.object(worker, "_set"), pytest.raises(ContractError):
         prepare(worker, client)
     assert len(responder.calls) == 3
@@ -126,6 +128,7 @@ def test_schema_invalid_reply_is_repaired_in_same_phase(tmp_path):
         return {} if len(responder.calls) == 1 else value
 
     worker, client, responder = preparation_scenario(tmp_path, "GENERATE", mutate=mutate)
+    worker.cfg.auto_repair = "within_approval"
     prepare(worker, client)
     calls = responder.calls
     assert len(calls) == 5

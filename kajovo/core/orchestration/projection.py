@@ -95,8 +95,8 @@ def verify_projection(p: Projection, store) -> None:
             artifact = artifacts.get(component.artifact_id)
             if artifact is None:
                 raise OrchestrationError("CONTEXT_SOURCE_MISSING", component.artifact_id)
-            digest = str(artifact.get("sha256") or canonical_sha256(artifact.get("value")))
-            if digest != component.sha256:
+            digest = canonical_sha256(artifact.get("value"))
+            if digest != component.sha256 or artifact.get("sha256", digest) != digest:
                 raise OrchestrationError("CONTEXT_HASH_MISMATCH", component.artifact_id)
 
 
@@ -109,15 +109,27 @@ def projection_from_file_context(
     working = compiled.get("working_context") or {}
     components: list[Binding] = []
     payload: dict[str, Any] = {}
-    for role, value in (
-        ("target_file", working.get("target_file")),
-        ("implementation_contract", working.get("implementation_contract")),
-        ("requirements", working.get("relevant_requirements")),
-        ("interfaces", working.get("shared_interfaces")),
-        ("obligations", working.get("global_obligations")),
-        ("sources", working.get("relevant_source_excerpts")),
-        ("dependencies", working.get("dependency_contracts")),
+    for role, source_key in (
+        ("target_file", "target_file"),
+        ("implementation_contract", "implementation_contract"),
+        ("requirements", "relevant_requirements"),
+        ("interfaces", "shared_type_contracts"),
+        ("obligations", "applicable_invariants"),
+        ("sources", "relevant_source_excerpts"),
+        ("source_segments", "source_segments"),
+        ("dependencies", "dependency_contracts"),
+        ("architecture", "architecture_contracts"),
+        ("project", "project_contract"),
+        ("assumptions", "applicable_assumptions"),
+        ("decisions", "architecture_decisions"),
+        ("integration_rules", "integration_rules"),
+        ("packages", "packages"),
+        ("acceptance", "acceptance_contracts"),
+        ("verified_artifacts", "verified_dependency_artifacts"),
+        ("cycles", "cycle_contracts"),
+        ("modify_obligations", "modify_obligations"),
     ):
+        value = working.get(source_key)
         if value in (None, [], {}):
             continue
         artifact_id = f"{target}:{role}"
@@ -126,7 +138,7 @@ def projection_from_file_context(
             Binding(
                 artifact_id=artifact_id,
                 sha256=digest,
-                selector=f"/working_context/{role}",
+                selector=f"/working_context/{source_key}",
                 role=role,
                 reason=f"ContextCompiler explicitně vybral {role} pro {target}.",
             )

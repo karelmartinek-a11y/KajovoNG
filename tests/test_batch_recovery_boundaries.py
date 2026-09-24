@@ -57,7 +57,9 @@ def test_legacy_completion_archives_raw_and_output_and_checkpoint(tmp_path):
         "custom_id": "RUN_RECOVERY_C1", "response": {"status_code": 200, "body": {
             "status": "completed", "output_text": json.dumps({
                 "contract": "C_FILES_ALL", "root": "src",
-                "files": [{"path": "hello.txt", "content": "Přesný výsledek\n"}],
+                "files": [{"path": "hello.txt", "purpose": "Výsledek", "content": "Přesný výsledek\n"}],
+                "project": {"name": "Test", "target_os": "Windows", "runtime": "text", "language": "text"},
+                "build_run": {"prerequisites": [], "commands": [], "verification": []}, "notes": [],
             }),
         }},
     })
@@ -195,9 +197,11 @@ def test_photo_recovery_requires_unique_exact_provider_identity(tmp_path, photo_
     job = photo_job
     job.status = "submission_unknown" if fault != "not_submitted" else "preparing"
     job.input_file_id = "file_input"
+    from test_photo_studio import _prepare_import_job
+    _prepare_import_job(job, tmp_path / "LOG")
     root = save_job(job, tmp_path / "LOG")
     before = (root / "photo_job.json").read_bytes()
-    match = {"id": "batch_found", "input_file_id": "file_input", "endpoint": IMAGE_EDIT_ENDPOINT}
+    match = {"id": "batch_found", "input_file_id": "file_input", "endpoint": IMAGE_EDIT_ENDPOINT, "status": "in_progress"}
     records = [
         {**match, "input_file_id": "file_other"},
         {**match, "endpoint": "/v1/responses"},
@@ -246,9 +250,12 @@ def test_photo_submit_retains_durable_failure_classification(tmp_path, photo_job
 @pytest.mark.parametrize("raw,message", [(b"\xff", "UTF-8"), (b"[]\n", "JSON objekt"), (b"{", "neplatný JSON")])
 def test_photo_malformed_download_is_archived_without_output(tmp_path, photo_job, raw, message):
     photo_job.batch_id = "batch_photo"
+    from test_photo_studio import _prepare_import_job
+    _prepare_import_job(photo_job, tmp_path / "LOG")
     client = Mock()
     client.retrieve_batch.return_value = {
         "id": "batch_photo", "status": "completed", "output_file_id": "file_result",
+        "input_file_id": photo_job.input_file_id, "endpoint": IMAGE_EDIT_ENDPOINT,
     }
     client.file_content.return_value = raw
     with pytest.raises(ValueError, match=message):

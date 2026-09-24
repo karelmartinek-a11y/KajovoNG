@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from dataclasses import replace
 
 import pytest
 
@@ -46,6 +48,133 @@ def _run(repo: OrchestrationRepository, run_id: str) -> None:
         approval_id="approval-1",
         status="running",
     )
+
+
+def test_manual_attempt_after_third_preserves_automatic_limit(tmp_path):
+    from kajovo.core.orchestration.work_order import validate_work_order_v2
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-1")
+    first = _order("RUN-1", "TASK-1", "unused")
+    order = replace(first, version=3, attempt_kind="manual", attempt_no=4,
+                    attempt_id=attempt_identity("RUN-1", "TASK-1", 4))
+    validate_work_order_v2(order.to_dict())
+    repo.register_work_order(order, body_ref=canonical_sha256("body"), input_hash=order.input_projection_hash)
+    with pytest.raises(ValueError):
+        validate_work_order_v2(replace(order, attempt_kind="automatic").to_dict())
+    with pytest.raises(ValueError):
+        validate_work_order_v2(replace(order, version=2, attempt_kind=None).to_dict())
+
+
+def test_latest_target_attempt_uses_frozen_work_order_and_is_run_scoped(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    for run_id in ("RUN-1", "RUN-2"):
+        _run(repo, run_id)
+        for attempt in range(1, 4 if run_id == "RUN-2" else 3):
+            order = replace(_order(run_id, "file", "unused"), target_path="a.txt",
+                            attempt_no=attempt, attempt_id=attempt_identity(run_id, "file", attempt))
+            repo.register_work_order(order, body_ref=canonical_sha256("body"), input_hash=order.input_projection_hash)
+    assert repo.latest_target_attempts("RUN-1") == {"a.txt": 2}
+    assert repo.latest_target_attempts("RUN-2") == {"a.txt": 3}
+    assert repo.latest_target_attempts("unknown") == {}
+
+
+def test_batch_dispatch_is_atomic_and_prepared_recovery_needs_no_upload(tmp_path):
+    from kajovo.core.orchestration.batch_recovery import reconcile_unsubmitted
+    run_dir = tmp_path / "RUN-1"
+    run_dir.mkdir()
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-1")
+    order = _order("RUN-1", "file", "unused")
+    body_hash = canonical_sha256("body")
+    work_hash = repo.register_work_order(order, body_ref=body_hash, input_hash=order.input_projection_hash)
+    repo.prepare_provider_operation(attempt_id=order.attempt_id, work_order_hash=work_hash,
+                                    endpoint="/v1/responses", request_hash=body_hash)
+    with pytest.raises(OrchestrationError):
+        repo.mark_batch_dispatch([order.attempt_id, "absent"], rejected=True)
+    with repo.connect() as db:
+        assert db.execute("SELECT state FROM provider_operations").fetchone()[0] == "prepared"
+    state = {"submission_unknown": True, "status": "submission_unknown",
+             "pending_batch_submission": {"manifest": {"work_orders": {"file": order.to_dict()}}}}
+    reconcile_unsubmitted(run_dir, state)
+    assert state["submission_unknown"] is False
+    assert "pending_batch_submission" not in state
+    assert state["status"] == "partial"
+    with repo.connect() as db:
+        assert db.execute("SELECT state FROM provider_operations").fetchone()[0] == "not_submitted"
+
+
+def test_attempt_migration_preserves_historical_json_and_foreign_keys(tmp_path, monkeypatch):
+    from kajovo.core.orchestration.repository import _SCHEMA
+    path = tmp_path / "orchestration.sqlite3"
+    with sqlite3.connect(path) as db:
+        db.executescript(_SCHEMA.replace("CHECK(attempt_no >= 1)", "CHECK(attempt_no BETWEEN 1 AND 3)"))
+    with monkeypatch.context() as patch:
+        patch.setattr("kajovo.core.orchestration.repository._migrate_attempt_ordinals", lambda db: None)
+        repo = OrchestrationRepository(path)
+        _run(repo, "RUN-1")
+        old = _order("RUN-1", "TASK-1", "unused")
+        work_hash = repo.register_work_order(old, body_ref=canonical_sha256("body"), input_hash=old.input_projection_hash)
+        repo.prepare_provider_operation(attempt_id=old.attempt_id, work_order_hash=work_hash,
+                                        endpoint="/v1/responses", request_hash=canonical_sha256("body"))
+    with repo.connect() as db:
+        before = db.execute("SELECT * FROM work_orders").fetchall()
+        operations = db.execute("SELECT * FROM provider_operations").fetchall()
+    OrchestrationRepository(path)
+    with repo.connect() as db:
+        assert db.execute("SELECT * FROM work_orders").fetchall() == before
+        assert db.execute("SELECT * FROM provider_operations").fetchall() == operations
+        assert not db.execute("PRAGMA foreign_key_check").fetchall()
+        assert "BETWEEN 1 AND 3" not in db.execute("SELECT sql FROM sqlite_master WHERE name='work_orders'").fetchone()[0]
+
+
+def test_terminal_provider_failure_without_usage_is_closed(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-1")
+    order = _order("RUN-1", "TASK-1", "unused")
+    body_hash = canonical_sha256("body")
+    work_hash = repo.register_work_order(order, body_ref=body_hash, input_hash=order.input_projection_hash)
+    repo.prepare_provider_operation(attempt_id=order.attempt_id, work_order_hash=work_hash,
+                                    endpoint="/v1/responses", request_hash=body_hash)
+    repo.mark_submitted(order.attempt_id, "resp_failed", unknown=False)
+    with pytest.raises(OrchestrationError):
+        repo.mark_terminal(order.attempt_id, "resp_other")
+    repo.mark_terminal(order.attempt_id, "resp_failed")
+    repo.mark_terminal(order.attempt_id, "resp_failed")
+    with repo.connect() as db:
+        assert db.execute("SELECT state FROM provider_operations").fetchone()[0] == "completed"
+        assert db.execute("SELECT COUNT(*) FROM usage_records").fetchone()[0] == 0
+
+
+def test_batch_identity_recovery_is_atomic_on_conflicting_second_order(tmp_path):
+    repo = OrchestrationRepository(tmp_path / "orchestration.sqlite3")
+    _run(repo, "RUN-1")
+    orders = []
+    for task in ("ONE", "TWO"):
+        order = replace(_order("RUN-1", task, "unused"), route="responses_batch", provider_endpoint="/v1/batches")
+        body_hash = canonical_sha256(task)
+        work_hash = repo.register_work_order(order, body_ref=body_hash, input_hash=order.input_projection_hash)
+        repo.prepare_provider_operation(attempt_id=order.attempt_id, work_order_hash=work_hash,
+                                        endpoint="/v1/batches", request_hash=body_hash)
+        repo.set_remote_input_file(order.attempt_id, "file_input")
+        orders.append(order)
+    repo.mark_submitted(orders[1].attempt_id, "batch_other", unknown=False)
+    with pytest.raises(OrchestrationError, match="PROVIDER_ID_CONFLICT"):
+        repo.recover_batch_identity(orders, batch_id="batch_correct", input_file_id="file_input")
+    with repo.connect() as db:
+        assert db.execute("SELECT state,provider_id FROM provider_operations WHERE attempt_id=?", (orders[0].attempt_id,)).fetchone() == ("prepared", None)
+
+
+def test_manual_authorization_can_refresh_expiry_without_enabling_auto_repair():
+    from kajovo.core.orchestration.authorization import create_execution_authorization, validate_execution_authorization
+    cfg = {"model_bindings": [], "quality": "standard", "auto_repair": "off", "verification_profile_ids": [],
+           "execution": "batch", "stop_after_plan": False, "dry_run": False}
+    authorization = create_execution_authorization("RUN", cfg, "scope", lifetime_hours=-1).to_dict()
+    with pytest.raises(ValueError, match="expired"):
+        validate_execution_authorization(authorization, run_id="RUN", run_config=cfg, scope_hash="scope")
+    restored = validate_execution_authorization(authorization, run_id="RUN", run_config=cfg, scope_hash="scope", allow_expired=True)
+    assert restored.repair_allowed is False
+    with pytest.raises(ValueError, match="repair"):
+        validate_execution_authorization(authorization, run_id="RUN", run_config=cfg, scope_hash="scope", allow_expired=True, require_repair=True)
 
 
 def test_provider_operation_prevents_duplicate_submit(tmp_path):

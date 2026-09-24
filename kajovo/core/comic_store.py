@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .comic_types import ComicError, PanelFormat, canonical, checked_text, validate_document, validate_overlays, validate_style
+from .comic_types import ComicError, DEFAULT_PANEL_FORMAT, PanelFormat, canonical, checked_text, validate_document, validate_overlays, validate_style
 from .contracts import ContractError, parse_json_value_strict
 
 
@@ -572,11 +572,17 @@ class ComicStore:
             return created
 
     def panel(self, project, name="Panel"):
+        checked_text(name, "Název panelu", 200, True)
+        self.get("projects", project)
         identifier, stamp = uid(), now()
+        prompt_id = uid()
         with self.transaction() as db:
             db.execute("INSERT INTO panels(id,project_id,name,position,format,overlays,created_at,updated_at) VALUES(?,?,?,(SELECT COUNT(*) FROM panels WHERE project_id=?),?,'[]',?,?)",
-                       (identifier, project, name, project, canonical({"width": 2048, "height": 2048, "dpi": 300, "fit": "pad", "experimental": False}), stamp, stamp))
-        self.save_panel(identifier, 1, name, {"version": 1, "nodes": []}, self.get("panels", identifier)["format"], [])
+                       (identifier, project, name, project, canonical(DEFAULT_PANEL_FORMAT), stamp, stamp))
+            db.execute("INSERT INTO prompts VALUES(?,?,?,?)",
+                       (prompt_id, identifier, canonical({"version": 1, "nodes": []}), stamp))
+            db.execute("UPDATE panels SET prompt_id=?,revision=2 WHERE id=?", (prompt_id, identifier))
+            self.event(db, project, "save_panel", {"panel_id": identifier, "prompt_id": prompt_id})
         return identifier
 
     def save_panel(self, identifier, revision, name, document, fmt, overlays):
@@ -617,8 +623,27 @@ class ComicStore:
     def panel_action(self, identifier, action):
         panel = self.get("panels", identifier)
         if action == "duplicate":
-            new = self.panel(panel["project_id"], panel["name"] + " – kopie")
-            self.save_panel(new, 2, panel["name"] + " – kopie", self.get("prompts", panel["prompt_id"])["document"], panel["format"], panel["overlays"])
+            new, prompt_id, stamp = uid(), uid(), now()
+            with self.transaction() as db:
+                panel = decoded(db.execute("SELECT * FROM panels WHERE id=?", (identifier,)).fetchone())
+                name = panel["name"][:200 - len(" – kopie")] + " – kopie"
+                document = decoded(db.execute("SELECT * FROM prompts WHERE id=?", (panel["prompt_id"],)).fetchone())["document"]
+                project = decoded(db.execute("SELECT * FROM projects WHERE id=?", (panel["project_id"],)).fetchone())
+                validate_document(document)
+                PanelFormat(**panel["format"])
+                validate_overlays(panel["overlays"], project["style"]["sfx"])
+                bindings = {node["entity_id"] for node in document["nodes"] if node["type"] != "text"}
+                for node in document["nodes"]:
+                    if node["type"] != "text":
+                        entity = db.execute("SELECT * FROM entities WHERE id=?", (node["entity_id"],)).fetchone()
+                        if not entity or entity["project_id"] != panel["project_id"] or node["type"] != entity["kind"] + "_ref":
+                            raise ComicError("broken_reference", "Odkaz patří jinému projektu nebo typu entity.")
+                db.execute("INSERT INTO panels(id,project_id,name,position,format,overlays,created_at,updated_at) VALUES(?,?,?,(SELECT COUNT(*) FROM panels WHERE project_id=?),?,?,?,?)",
+                           (new, panel["project_id"], name, panel["project_id"], canonical(panel["format"]), canonical(panel["overlays"]), stamp, stamp))
+                db.execute("INSERT INTO prompts VALUES(?,?,?,?)", (prompt_id, new, canonical(document), stamp))
+                db.executemany("INSERT INTO bindings VALUES(?,?)", [(prompt_id, entity) for entity in bindings])
+                db.execute("UPDATE panels SET prompt_id=?,revision=2 WHERE id=?", (prompt_id, new))
+                self.event(db, panel["project_id"], "duplicate_panel", {"panel_id": new, "source_panel_id": identifier})
             return new
         with self.transaction() as db:
             if action == "delete":

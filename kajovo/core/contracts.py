@@ -158,6 +158,18 @@ def file_response_format(contract: str, path: str, chunk_index: int, action=None
     schema = {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
     return {"format": {"type": "json_schema", "name": contract, "strict": True, "schema": schema}}
 
+def historical_file_response_format():
+    """Uzavřená historická maska A3 pro čtení dříve odeslaných částí."""
+    wire = file_response_format("A3_FILE", None, 0)
+    wire["format"]["schema"]["properties"]["chunking"]["properties"] = {
+        "chunk_index": {"type": "integer", "minimum": 0},
+        "chunk_count": {"type": "integer", "minimum": 0},
+        "has_more": {"type": "boolean"},
+        "next_chunk_index": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+    }
+    return wire
+
+
 def parse_json_value_strict(text: str) -> Any:
     return _load_json(text)
 

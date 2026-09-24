@@ -34,6 +34,39 @@ def source(tmp_path, mode="GENERATE"):
     return settings, logger, ui
 
 
+def test_plan_ready_continue_reserves_the_actual_live_output(tmp_path):
+    original = {"out_dir": str(tmp_path), "stop_after_plan": True, "execution_approval_id": "old",
+                "send_as_c": False, "dry_run": False}
+    effective = HistoryBranchLauncher._branch_ui(original, "GENERATE", "continue", "plan_ready")
+    assert HistoryBranchLauncher._output_dir("GENERATE", {}, effective) == tmp_path.resolve()
+    assert effective["stop_after_plan"] is False and effective["execution_approval_id"] == ""
+    assert original["stop_after_plan"] is True
+
+
+def test_checkpoint_availability_uses_canonical_not_redacted_preparation(monkeypatch):
+    adapter = Mock()
+    canonical_snapshot = {"version": 2, "sensitive_text": "původní přesný text"}
+    adapter.bundle.validate_checkpoint.return_value = {"state_snapshot": {
+        "preparation_snapshot": canonical_snapshot, "ui_state": {"mode": "GENERATE", "maximum_quality": False}}}
+    validator = Mock()
+    monkeypatch.setattr("kajovo.core.delivery_preparation.validate_preparation_snapshot", validator)
+    rows = [{"checkpoint_id": "cp1", "state_snapshot": {"preparation_snapshot": {"sensitive_text": "[redacted]"}}}]
+    result = checked_checkpoints(adapter, rows, [])
+    validator.assert_called_once_with(canonical_snapshot, "GENERATE", False)
+    assert result[0]["_availability_valid"] is True
+
+
+def test_modify_map_uses_v3_spine_file_actions():
+    from kajovo.studio.history_details import classify_modify_files
+    state = {"preparation_snapshot": {"version": 2, "graph": {"spine": {"files": [
+        {"path": "new.txt", "action": "add"}, {"path": "old.txt", "action": "preserve"},
+        {"path": "changed.txt", "action": "modify"},
+    ]}}}}
+    changes = classify_modify_files({}, state)
+    assert {row.path for row in changes} == {"new.txt", "old.txt", "changed.txt"}
+    assert next(row for row in changes if row.path == "old.txt").classification == "zachované"
+
+
 def test_wrapped_label_releases_old_height_after_panel_expands(qtbot):
     from kajovo.studio.components import caption
     label = caption("Delší text vybrané fáze musí po rozšíření panelu zabírat méně řádků.")
@@ -386,6 +419,8 @@ def test_input_tree_is_reconstructed_from_archive_even_after_original_changes(tm
     inputs.mkdir()
     (inputs / "test.txt").write_text("původní", encoding="utf-8")
     ui["in_dir"] = str(inputs)
+    from kajovo.core.orchestration.source_pack import freeze_run_sources
+    freeze_run_sources(SimpleNamespace(**ui), settings, logger)
     logger.update_state({"ui_state": ui})
     adapter = LegacyRunAdapter(logger.paths.run_dir)
     checkpoint = adapter.checkpoints()[-1]

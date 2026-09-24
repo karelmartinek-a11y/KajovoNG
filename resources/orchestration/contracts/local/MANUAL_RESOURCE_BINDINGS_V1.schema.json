@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "run_id", "graph_hash", "bindings"],
+  "properties": {
+    "version": {"type": "integer", "const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "graph_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target_path", "source_or_task_id", "artifact_id", "sha256"],
+        "properties": {
+          "target_path": {"type": "string", "minLength": 1},
+          "source_or_task_id": {"type": "string", "minLength": 1},
+          "artifact_id": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    }
+  }
+}

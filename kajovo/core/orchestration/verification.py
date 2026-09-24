@@ -663,6 +663,22 @@ def build_verification_candidate(
     return candidate
 
 
+def unverified_delivery_report(staging_root, staged, *, target_id):
+    """Eviduje dodání bez čtení, kopírování či testování obsahu produktu."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    profile = {"id": "delivery-no-product-tests", "commands": [], "required_checks": []}
+    plan = VerificationPlan(target_id, canonical_sha256(staged), profile["id"],
+                            canonical_sha256(profile), (), (), str(staging_root))
+    return _report(
+        plan, "unsupported", [{"id": "product-tests", "criterion_id": "product-tests",
+            "kind": "deterministic", "status": "skipped", "evidence_hashes": [],
+            "detail": "Dodání nespouští následné testování produktu."}],
+        image_digest=None, started_at=now, finished_at=now,
+        format_result="partial", functional_result="not_run",
+    )
+
+
 def candidate_verification_report(
     run_dir: str | Path,
     staged: list[dict[str, Any]],
@@ -671,21 +687,13 @@ def candidate_verification_report(
     target_id: str,
     profile_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    candidate = build_verification_candidate(run_dir, staged, mode=mode)
-    report = technical_staging_report(
-        candidate,
-        target_id=target_id,
-        profile_ids=profile_ids,
-    )
+    candidate = Path(run_dir).resolve() / "staging"
+    report = unverified_delivery_report(candidate, staged, target_id=target_id)
     report["candidate_mode"] = mode
     report["candidate_root"] = candidate.relative_to(
         Path(run_dir).resolve()
     ).as_posix()
-    report["candidate_scope"] = (
-        "approved_source_pack_plus_staged"
-        if mode == "MODIFY"
-        else "staged_outputs"
-    )
+    report["candidate_scope"] = "staged_outputs"
     _validate_verification_report(report, VERIFICATION_REPORT_V3_SCHEMA)
     return report
 

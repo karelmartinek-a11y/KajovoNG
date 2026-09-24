@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import tempfile
 import time
@@ -215,6 +216,7 @@ class RunLogger:
         resume: bool = False,
         comic_operation_id: str = "",
         resume_import: bool = False,
+        resume_resource: bool = False,
     ):
         root_dir = os.path.abspath(os.curdir)
         if not base_log_dir:
@@ -236,6 +238,8 @@ class RunLogger:
                 and state.get("status") != "submission_unknown"
             )
             resumable_comic = bool(comic_operation_id) and state.get("mode") == "COMIC" and state.get("comic_operation_id") == comic_operation_id
+            resumable_resource = (resume_resource and state.get("status") == "waiting_manual_resource"
+                                  and not state.get("submission_unknown"))
             if (
                 (
                     (not state.get("generate_batch") and not resumable_response)
@@ -243,6 +247,7 @@ class RunLogger:
                     or state.get("submission_unknown")
                 )
                 and not resumable_comic
+                and not resumable_resource
             ):
                 raise ValueError("Běh nemá dávku bezpečně připravenou k pokračování.")
         else:
@@ -491,43 +496,10 @@ class RunLogger:
         if "ui_state" not in patch or not isinstance(state.get("ui_state"), dict):
             return
         ui = state["ui_state"]
-        known_originals = {
-            str(item.get("original_path") or "")
-            for item in self.bundle.artifacts()
-        }
         in_dir = str(ui.get("in_dir") or "").strip()
-        complete = not in_dir or Path(in_dir).is_dir()
-        if in_dir and Path(in_dir).is_dir():
-            root = Path(in_dir).resolve()
-            for source in sorted(root.rglob("*")):
-                if not source.is_file():
-                    continue
-                key = str(source.resolve())
-                if key in known_originals:
-                    continue
-                try:
-                    relative = source.resolve().relative_to(root).as_posix()
-                    self.bundle.archive_artifact(
-                        source,
-                        role="in_project_file",
-                        kind="input_file",
-                        source="ui_state.in_dir",
-                        reusable=True,
-                        reconstruction_role=relative,
-                        metadata={"relative_path": relative},
-                    )
-                    known_originals.add(key)
-                except (OSError, ValueError) as exc:
-                    complete = False
-                    self.bundle.append_event(
-                        "artifact.archive_error",
-                        {"path": str(source), "error": str(exc)},
-                        severity="error",
-                        source_module="runlog",
-                        operation="archive_input",
-                        human_message=f"Vstupní soubor {source.name} nebylo možné archivovat.",
-                        technical_message=str(exc),
-                    )
+        # Archivaci provádí zmrazení SourcePacku podle schválené politiky.
+        # UI stav nesmí rozšířit inventář novým procházením živého adresáře.
+        complete = not in_dir or isinstance(state.get("source_pack"), dict)
         state["input_archive"] = {"version": 1, "complete": complete, "in_dir": in_dir,
             "artifact_ids": [row["artifact_id"] for row in self.bundle.artifacts()
                              if row.get("role") == "in_project_file" and row.get("artifact_id")]}
@@ -773,7 +745,7 @@ class RunLogger:
         if step_id and where == "run":
             step = next((s for s in self.bundle.steps() if s["step_id"] == step_id), {})
             detail["stage"] = step.get("stage", "")
-            if step.get("status") not in {"completed", "cancelled"}:
+            if step.get("status") not in {"completed", "cancelled", "submission_unknown", "response_pending"}:
                 self.bundle.update_step(step_id, status="failed", finished_at=datetime.now(timezone.utc).isoformat())
         if where == "run":
             self.update_state({"failure_detail": detail})
@@ -790,8 +762,8 @@ class RunLogger:
             severity="error",
             source_module="runlog",
             operation=where,
-            human_message=str(ex),
-            technical_message=traceback.format_exc(),
+            human_message=self._redact(str(ex)),
+            technical_message=self._redact(traceback.format_exc()),
         )
         state = _read_json_dict(Path(self.state_path))
         if (
@@ -838,17 +810,30 @@ def find_last_incomplete_run(log_dir: str) -> Optional[str]:
     for name in os.listdir(log_dir):
         if os.path.isdir(os.path.join(log_dir, name)) and name.startswith("RUN_"):
             runs.append(name)
-    runs.sort(reverse=True)
-    for run_id in runs[:30]:
+    candidates = []
+    for run_id in runs:
         state_path = os.path.join(log_dir, run_id, "run_state.json")
         try:
             state = parse_json_strict(
                 Path(state_path).read_text(encoding="utf-8")
             )
+            if not isinstance(state, dict):
+                continue
             if state.get("status") not in TERMINAL_STATUSES:
-                return run_id
+                created = state.get("created_at")
+                try:
+                    if type(created) in (int, float):
+                        stamp = float(created)
+                    elif isinstance(created, str):
+                        stamp = datetime.fromisoformat(created).timestamp()
+                    else:
+                        stamp = datetime.strptime(run_id[4:16], "%d%m%Y%H%M").timestamp()
+                    if math.isfinite(stamp):
+                        candidates.append((stamp, run_id))
+                except (ValueError, OverflowError, OSError):
+                    continue
         except (OSError, OrchestrationError):
             # Discovery historie může poškozený běh přeskočit, ale nikdy jej
             # nepoužije jako zdroj pro runtime obnovu.
             continue
-    return None
+    return max(candidates)[1] if candidates else None

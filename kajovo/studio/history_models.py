@@ -9,6 +9,7 @@ from typing import Any
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
 from .history_state import PresentedState, present_state
+from kajovo.core.run_bundle import OUTPUT_ARTIFACT_ROLES
 
 
 STAGE_TITLES = {
@@ -142,6 +143,8 @@ def build_run(
     remote_complete = any(
         isinstance(remote_records.get(identifier), dict)
         and remote_records[identifier].get("status") == "completed"
+        and (not isinstance(imports.get(identifier), dict)
+             or imports[identifier].get("import_status") not in {"files_complete_unverified", "completed", "comic_completed"})
         for identifier in batches
     )
     if pending_import and remote_complete:
@@ -150,7 +153,7 @@ def build_run(
                        else stage for stage in stages)
     artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), list) else []
     input_count = sum(1 for row in artifacts or [] if row.get("role") in {"user_input", "attached_file", "in_project_file", "input"})
-    output_count = sum(1 for row in artifacts or [] if row.get("role") in {"generated_file", "modified_file", "batch_output", "log_export"})
+    output_count = sum(1 for row in artifacts or [] if row.get("role") in OUTPUT_ARTIFACT_ROLES)
     models = summary.get("models") or summary.get("model_summary") or []
     if isinstance(models, str):
         models = [models]
@@ -267,7 +270,7 @@ class RunTableModel(QAbstractTableModel):
                 continue
             if values.get("lineage") and not run.has_lineage:
                 continue
-            if created is not None and ((lower is not None and created < lower) or (upper is not None and created > upper)):
+            if created is not None and ((lower is not None and created < lower) or (upper is not None and created >= upper)):
                 continue
             rows.append(run)
         return rows

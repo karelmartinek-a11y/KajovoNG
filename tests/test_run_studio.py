@@ -40,7 +40,7 @@ def _source(tmp_path, *, mode="QA", status="failed", batch=False):
     ("completed", "Dokončeno"), ("partial", "Částečně dokončeno"),
     ("failed", "Chyba"), ("cancelled", "Zrušeno"), ("running", "Běží"),
     ("response_pending", "Čeká na odpověď"), ("batch_pending", "BATCH běží"),
-    ("files_complete_unverified", "Neověřeno · čeká na převzetí"), ("dry_run", "Dry-run"),
+    ("files_complete_unverified", "Soubory převzaté, funkčnost neověřena"), ("dry_run", "Dry-run"),
     ("submission_unknown", "Neznámý výsledek"), ("blocked", "Blokováno"),
 ])
 def test_central_state_mapping_has_text_icon_and_color(key, label):

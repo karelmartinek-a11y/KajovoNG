@@ -40,16 +40,40 @@ def file_content_format():
     return response_format("FILE_CONTENT_V1", obj({"content": {"type": "string"}}))
 
 
+def clarification_question_schema():
+    return obj({
+        "code": {"type": "string", "enum": [
+            "missing_input", "scope_conflict", "unsupported_requirement", "infeasible"
+        ]},
+        "source_refs": array({"type": "string"}),
+        "question": {"type": "string", "pattern": r"\S"},
+        "blocking": {"type": "boolean"},
+    })
+
+
+def blocked_result_schema():
+    return obj({
+        "status": {"type": "string", "enum": ["blocked"]},
+        "questions": {**array(clarification_question_schema()), "minItems": 1},
+    })
+
+
 def qa_answer_format():
     """QA_ANSWER_V2 keeps human answer separate from evidence and uncertainty."""
     text = {"type": "string"}
     strings = array(text)
-    claim = obj({
+    claim_fields = {
         "id": text,
         "text": text,
         "evidence_ids": strings,
-        "certainty": {"type": "string", "enum": ["supported", "inference", "unknown"]},
-    })
+    }
+    claim = {"anyOf": [
+        obj({**claim_fields,
+             "evidence_ids": {**strings, "minItems": 1},
+             "certainty": {"type": "string", "enum": ["supported"]}}),
+        obj({**claim_fields,
+             "certainty": {"type": "string", "enum": ["inference", "unknown"]}}),
+    ]}
     ready = obj({
         "status": {"type": "string", "enum": ["ready"]},
         "data": obj({
@@ -58,18 +82,7 @@ def qa_answer_format():
             "limitations": strings,
         }),
     })
-    question = obj({
-        "code": {"type": "string", "enum": [
-            "missing_input", "scope_conflict", "unsupported_requirement", "infeasible"
-        ]},
-        "source_refs": strings,
-        "question": text,
-        "blocking": {"type": "boolean"},
-    })
-    blocked = obj({
-        "status": {"type": "string", "enum": ["blocked"]},
-        "questions": array(question),
-    })
+    blocked = blocked_result_schema()
     return response_format("QA_ANSWER_V2", obj({"result": {"anyOf": [ready, blocked]}}))
 
 
@@ -99,18 +112,7 @@ def qfile_plan_format():
             "acceptance": array(acceptance),
         }),
     })
-    question = obj({
-        "code": {"type": "string", "enum": [
-            "missing_input", "scope_conflict", "unsupported_requirement", "infeasible"
-        ]},
-        "source_refs": strings,
-        "question": text,
-        "blocking": {"type": "boolean"},
-    })
-    blocked = obj({
-        "status": {"type": "string", "enum": ["blocked"]},
-        "questions": array(question),
-    })
+    blocked = blocked_result_schema()
     return response_format("QFILE_PLAN_V1", obj({"result": {"anyOf": [ready, blocked]}}))
 
 
@@ -123,9 +125,10 @@ def validate_schema(schema):
                "title", "$defs", "$ref", "anyOf", "minimum", "maximum", "exclusiveMinimum",
                "exclusiveMaximum", "multipleOf", "pattern", "format", "minItems", "maxItems"}
     properties_count = 0
+    enum_count = 0
 
     def visit(node, depth=0):
-        nonlocal properties_count
+        nonlocal properties_count, enum_count
         if not isinstance(node, dict) or depth > 10:
             raise ValueError("Neplatná nebo příliš hluboká definice strict schématu.")
         unknown = set(node) - allowed
@@ -162,8 +165,12 @@ def validate_schema(schema):
             visit(child, depth + 1)
         if "format" in node and node["format"] not in ("date-time", "time", "date", "duration", "email", "hostname", "ipv4", "ipv6", "uuid"):
             raise ValueError("Nepodporovaný formát řetězce ve strict schématu.")
-        if len(node.get("enum", [])) > 1000:
+        values = node.get("enum", [])
+        enum_count += len(values)
+        if enum_count > 1000:
             raise ValueError("Příliš rozsáhlý výčet ve schématu.")
+        if len(values) > 250 and sum(len(value) for value in values if isinstance(value, str)) > 15000:
+            raise ValueError("Řetězce jednoho výčtu překračují limit 15000 znaků.")
 
     visit(schema)
     if properties_count > 5000 or len(json.dumps(schema, ensure_ascii=False)) > 120000:
@@ -285,7 +292,7 @@ def resolve_schema(
     """Příprava neurčitého kontraktu s omezeným počtem oprav.
 
     Volitelný request callback umožní nadřazenému workflow obalit každý
-    generativní návrh vlastním WorkOrder/budget/recovery kontraktem.
+    generativní návrh vlastním WorkOrder/recovery kontraktem.
     """
 
     if original:
@@ -323,16 +330,47 @@ def resolve_schema(
 
 def restore_optional_fields(value, original):
     """Převede nepřítomná volitelná pole z nullable drátového tvaru."""
-    if isinstance(value, dict) and isinstance(original, dict):
-        required = original.get("required", [])
-        props = original.get("properties", {})
-        result = {}
-        for key, child in value.items():
-            definition = props.get(key, {})
-            if child is None and key not in required and not jsonschema.Draft202012Validator(definition).is_valid(None):
-                continue
-            result[key] = restore_optional_fields(child, definition)
-        return result
-    if isinstance(value, list):
-        return [restore_optional_fields(v, original.get("items", {})) for v in value]
-    return value
+    validator = jsonschema.Draft202012Validator(original)
+
+    def resolve(schema):
+        visited = set()
+        while isinstance(schema, dict) and "$ref" in schema:
+            ref = schema["$ref"]
+            if ref in visited or not (ref == "#" or ref.startswith("#/")):
+                raise ContractError("Neplatný lokální odkaz při obnově volitelných polí.")
+            visited.add(ref)
+            target = original
+            for part in ref[2:].split("/") if ref != "#" else []:
+                target = target[part.replace("~1", "/").replace("~0", "~")]
+            schema = target
+        return schema
+
+    def restore(item, schema):
+        schema = resolve(schema)
+        if not isinstance(schema, dict):
+            return item
+        if "anyOf" in schema:
+            candidates = []
+            for branch in schema["anyOf"]:
+                try:
+                    candidate = restore(item, branch)
+                except ContractError:
+                    continue
+                if validator.evolve(schema=branch).is_valid(candidate) and candidate not in candidates:
+                    candidates.append(candidate)
+            if len(candidates) != 1:
+                raise ContractError("Volitelné hodnoty nemají jednoznačnou platnou větev anyOf.")
+            return candidates[0]
+        if isinstance(item, dict):
+            result = {}
+            for key, child in item.items():
+                definition = schema.get("properties", {}).get(key, {})
+                if child is None and key not in schema.get("required", []) and not validator.evolve(schema=definition).is_valid(None):
+                    continue
+                result[key] = restore(child, definition)
+            return result
+        if isinstance(item, list):
+            return [restore(child, schema.get("items", {})) for child in item]
+        return item
+
+    return restore(value, original)

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
-from ..contracts import ContractError
+from ..contracts import ContractError, extract_text_from_response
+from ..orchestration.preparation import PreparationBlocked
 from ..openai_client import OpenAIClient
 from ..safe_config import safe_ui_state
-from ..structured_output import qa_answer_format, validate_output
+from ..structured_output import OutputContractError, qa_answer_format, validate_output
+from ..orchestration.contracts import parse_json_strict
 from ..utils import ts_code
 
 if TYPE_CHECKING:
@@ -32,6 +35,10 @@ def _run_qa(
     )
     input_text = self._append_io_reference(input_text, ref_file_ids)
     input_text = self._with_diag_text(input_text)
+    evidence_ids = set(ref_file_ids + input_file_ids + input_image_ids)
+    for segment in (getattr(self, "source_context", {}) or {}).get("segments", []):
+        evidence_ids.update((segment["source_id"], segment["segment_id"]))
+    input_text += "\n\nIdentifikátory dostupných podkladů: " + json.dumps(sorted(evidence_ids), ensure_ascii=False)
     payload = self._payload_base(
         model=self.cfg.model,
         instructions=self._append_io_reference_instructions(
@@ -46,6 +53,7 @@ def _run_qa(
     payload["text"] = qa_answer_format()
     if self._fs_tools:
         payload["tools"] = self._fs_tools
+        payload["include"] = ["file_search_call.results"]
 
     self._log_request_attachments(
         "QA",
@@ -76,21 +84,40 @@ def _run_qa(
             "contract": "QA_ANSWER_V2",
         },
     )
-    resp = self._create_response(client, payload)
-    parsed = validate_output(resp, payload)
+    try:
+        resp = self._create_response(client, payload)
+        parsed = validate_output(resp, payload)
+    except OutputContractError as exc:
+        # Zachovej strict masku, ale vrať doménovou diagnostiku pro tento
+        # sémanticky neplatný případ místo obecného JSON Schema výpisu.
+        has_unsupported_claim = False
+        try:
+            response = getattr(exc, "response", None)
+            raw = parse_json_strict(extract_text_from_response(response))
+            result = raw.get("result") if isinstance(raw, dict) else None
+            data = result.get("data") if isinstance(result, dict) else None
+            claims = data.get("claims") if isinstance(data, dict) else None
+            has_unsupported_claim = isinstance(claims, list) and any(
+                isinstance(claim, dict)
+                and claim.get("certainty") == "supported"
+                and not claim.get("evidence_ids")
+                for claim in claims
+            )
+        except Exception:
+            pass
+        if has_unsupported_claim:
+            raise ContractError(
+                "QA_ANSWER_V2: podložené tvrzení nemá žádné podklady."
+            ) from exc
+        raise
     result = parsed.get("result")
     if not isinstance(result, dict):
         raise ContractError("QA_ANSWER_V2: chybí result.")
     if result.get("status") == "blocked":
         questions = result.get("questions") or []
-        raise ContractError(
-            "QA je zablokované: "
-            + "; ".join(
-                str(q.get("question") or q.get("code") or "chybí podklad")
-                for q in questions
-                if isinstance(q, dict)
-            )
-        )
+        if not questions:
+            raise ContractError("QA blocked odpověď nemá otázky.")
+        raise PreparationBlocked("QA", questions)
     data = result.get("data")
     if result.get("status") != "ready" or not isinstance(data, dict):
         raise ContractError("QA_ANSWER_V2: neplatný stav odpovědi.")
@@ -103,6 +130,23 @@ def _run_qa(
         or not isinstance(limitations, list)
     ):
         raise ContractError("QA_ANSWER_V2: neplatná datová část.")
+    for output in resp.get("output", []):
+        if output.get("type") == "file_search_call":
+            evidence_ids.update(
+                row["file_id"] for row in output.get("results") or [] if row.get("file_id")
+            )
+        if output.get("type") == "message":
+            for part in output.get("content", []):
+                evidence_ids.update(
+                    row["file_id"] for row in part.get("annotations", [])
+                    if row.get("type") == "file_citation" and row.get("file_id")
+                )
+    for claim in claims:
+        if claim.get("certainty") == "supported" and not claim.get("evidence_ids"):
+            raise ContractError("QA_ANSWER_V2: podložené tvrzení nemá žádné podklady.")
+        unknown = set(claim.get("evidence_ids", [])) - evidence_ids
+        if unknown:
+            raise ContractError(f"QA_ANSWER_V2: neznámé podklady tvrzení: {sorted(unknown)}")
 
     self.log.save_json(
         "responses",

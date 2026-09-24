@@ -72,6 +72,10 @@ def recover_run(log_dir, run_id):
             ui.get("mode", "GENERATE"),
             state.get("maximum_quality", ui.get("maximum_quality", False)),
         )
+        if snapshot.get("version") == 2:
+            ui["response_id"] = ""
+            graph = snapshot.get("graph") or {}
+            return ui, None, copy.deepcopy((graph.get("spine") or {}).get("files") or [])
         structure = snapshot["structure"]
         ui["maximum_quality"] = snapshot["maximum_quality"]
         files_key = "touched_files" if ui.get("mode") == "MODIFY" else "files"

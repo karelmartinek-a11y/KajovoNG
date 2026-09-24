@@ -37,7 +37,7 @@ def fingerprint(value):
 
 
 def source_paths():
-    result = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True)
+    result = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT, capture_output=True, check=True)
     paths = []
     for name in result.stdout.decode("utf-8", errors="strict").split("\0"):
         if not name:
@@ -121,7 +121,7 @@ def schema_inventory():
     from kajovo.core.orchestration.contracts import parse_json_strict
     from kajovo.core.orchestration.run_config import RUN_CONFIG_V2_SCHEMA
     from kajovo.core.orchestration.verification import VERIFICATION_REPORT_V3_SCHEMA
-    from kajovo.core.orchestration.work_order import WORK_ORDER_V2_SCHEMA
+    from kajovo.core.orchestration.work_order import WORK_ORDER_V2_SCHEMA, WORK_ORDER_V3_SCHEMA
 
     records, errors = [], []
     modules = [
@@ -163,12 +163,16 @@ def schema_inventory():
         fmt = factory()["format"]
         validate_schema(fmt["schema"])
         records.append({"name": factory.__name__, "contract": fmt["name"], "kind": "provider_mask", "sha256": fingerprint(fmt["schema"]), "status": "passed"})
+    from kajovo.core.orchestration.manual_resources import MANUAL_RESOURCE_BINDINGS_V1_SCHEMA
+
     contract_root = ROOT / "resources" / "orchestration" / "contracts"
     physical_contracts = {
+        contract_root / "local" / "MANUAL_RESOURCE_BINDINGS_V1.schema.json": MANUAL_RESOURCE_BINDINGS_V1_SCHEMA,
         contract_root / "local" / "BATCH_MANIFEST_V4.schema.json": BATCH_MANIFEST_V4_SCHEMA,
         contract_root / "local" / "RUN_CONFIG_V2.schema.json": RUN_CONFIG_V2_SCHEMA,
         contract_root / "local" / "VERIFICATION_REPORT_V3.schema.json": VERIFICATION_REPORT_V3_SCHEMA,
         contract_root / "local" / "WORK_ORDER_V2.schema.json": WORK_ORDER_V2_SCHEMA,
+        contract_root / "local" / "WORK_ORDER_V3.schema.json": WORK_ORDER_V3_SCHEMA,
         contract_root / "wire" / "FILE_CONTENT_V1.schema.json": file_content_format()["format"]["schema"],
     }
     actual_contracts = set(contract_root.rglob("*.schema.json"))

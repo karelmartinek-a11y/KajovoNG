@@ -12,9 +12,14 @@ import jsonschema
 from .contracts import canonical_sha256
 from .waves import build_execution_dag
 from ..context_limits import preparation_measurement
+from ..context_compiler import owned_obligations
 from ..contracts import ContractError, extract_text_from_response, validate_paths
-from ..structured_output import array, obj, prepare_payload, response_format, validate_output
+from ..structured_output import (
+    array, blocked_result_schema, clarification_question_schema, obj,
+    prepare_payload, response_format, validate_output,
+)
 from ..safe_config import safe_ui_state
+from ..progress import ProgressEvent
 
 
 COMMON = (
@@ -26,6 +31,8 @@ COMMON = (
     "vystupnim formatu; nevracej kopii vstupu ani vypis uvah. Chybejici zasadni "
     "podklad priznej pres blocked variantu, pokud ji kontrakt nabizi. Stav provedeni "
     "a opravneni ridi aplikace, ne model."
+    " Doplňující otázky jsou pouze pro rozpory zadání nebo chybějící uživatelské "
+    "informace. Technické chyby návrhu oprav sám, nežádej schválení vadného řešení."
 )
 PROMPTS = {
     "A0R": COMMON + "\n\nVytvor implementacni requirements. Oddel explicitni body od nezbytnych odvozenych podminek s derived_from a necessity. Kazdy mandatory pozadavek svaz s akceptaci. Zivotni cykly rozpracuj jen tam, kde jsou relevantni. Nezaved jinou produktovou funkci. Nevydavej grafove pokryti za dukaz pravdiveho pochopeni.",
@@ -40,6 +47,18 @@ PROMPTS = {
     "B2Q": COMMON + "\n\nJednej jako nezavisly principal engineer nad existujicim systemem. Proved skutecny pre-implementation quality gate celeho IMPLEMENTATION_GRAPH_V3 proti CHANGE/PRESERVE scope. Hledej nekompletni end-to-end dopad, consumer/provider a typove konflikty, error/recovery mezery, lifecycle, persistence, acceptance, dependency completeness a blokujici nejasnosti. Opravnene nalezy rovnou zapracuj do kompletniho corrected_spine a corrected_file_specs; nevracej jen audit a nemen nedotceny produktovy scope.",
 }
 
+for _stage in ("A2_SPINE", "B2_SPINE", "A2Q", "B2Q"):
+    PROMPTS[_stage] += (
+        " Pro image_workflow vyplň image_production verze 1: size a background "
+        "přesně podle explicitního zadání. Pokud zadání parametr neurčuje, použij auto. "
+        "Požadovanou průhlednost nebo rozměry nenahrazuj jinou hodnotou."
+    )
+for _stage in ("A2_DETAIL", "B2_DETAIL"):
+    PROMPTS[_stage] += (
+        " owned_obligations obsahuje přesné definice povinností vlastněných cílem. "
+        "Každou pokryj v facets.obligation_ids a nepřidávej povinnosti jiných vlastníků."
+    )
+
 
 def _source_ref():
     return obj({
@@ -52,23 +71,41 @@ def _source_ref():
 
 
 def _question():
-    return obj({
-        "code": {"type": "string", "enum": [
-            "missing_input", "scope_conflict", "unsupported_requirement", "infeasible"
-        ]},
-        "source_refs": array({"type": "string"}),
-        "question": {"type": "string"},
-        "blocking": {"type": "boolean"},
-    })
+    return clarification_question_schema()
 
 
 def _result(data_schema):
     return obj({
         "result": {"anyOf": [
             obj({"status": {"type": "string", "enum": ["ready"]}, "data": data_schema}),
-            obj({"status": {"type": "string", "enum": ["blocked"]}, "questions": array(_question())}),
+            blocked_result_schema(),
         ]}
     })
+
+
+def _semantic_schema(schema):
+    """Povinný významový text musí obsahovat skutečný obsah i na wire hranici."""
+    required_text = {
+        "id", "product_intent", "statement", "actor", "owner", "assertion",
+        "responsibility", "decision", "reason", "expected_result", "purpose",
+        "definition", "input_contract", "output_contract", "error_semantics",
+        "lifecycle", "behavior", "given", "when", "then", "question", "name",
+    }
+    # Pomocné masky sdílejí slovník typu string; jednotlivé vlastnosti musí
+    # mít nezávislá omezení, aby se např. nepovinný důvod nestal neprázdným.
+    result = json.loads(json.dumps(schema))
+    def visit(node):
+        if isinstance(node, dict):
+            for key, value in node.get("properties", {}).items():
+                if key in required_text and value.get("type") == "string":
+                    value["pattern"] = r"\S"
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+    visit(result)
+    return result
 
 
 def _requirements_data():
@@ -106,7 +143,6 @@ def _requirements_data():
     })
     assumption = obj({
         "id": text, "statement": text, "reason": text, "requirement_ids": strings,
-        "requires_approval": {"type": "boolean"},
     })
     return obj({
         "product_intent": text,
@@ -150,10 +186,10 @@ def _plan_data():
     })
 
 
-def _file_row():
+def _file_row(*, legacy=False):
     text = {"type": "string"}
     strings = array(text)
-    return obj({
+    row = obj({
         "path": text,
         "component_id": text,
         "action": {"type": "string", "enum": ["generate", "add", "modify", "preserve"]},
@@ -168,6 +204,17 @@ def _file_row():
         "dependency_content_mode": {"type": "string", "enum": ["contract", "verified_content"]},
         "dependency_content_reason": text,
     })
+    if legacy:
+        return row
+    contract = copy.deepcopy(row)
+    contract["properties"]["content_dependencies"] = {**array(text), "maxItems": 0}
+    contract["properties"]["dependency_content_mode"] = {"type": "string", "enum": ["contract"]}
+    contract["properties"]["dependency_content_reason"] = {"type": "string", "enum": [""]}
+    verified = copy.deepcopy(row)
+    verified["properties"]["content_dependencies"] = {**array(text), "minItems": 1}
+    verified["properties"]["dependency_content_mode"] = {"type": "string", "enum": ["verified_content"]}
+    verified["properties"]["dependency_content_reason"] = {"type": "string", "pattern": r"\S"}
+    return {"anyOf": [contract, verified]}
 
 
 def _interface():
@@ -182,22 +229,34 @@ def _interface():
     })
 
 
-def _spine_data():
+def _spine_data(*, legacy=False, strict=True):
     text = {"type": "string"}
     strings = array(text)
+    resource = obj({
+        "path": text,
+        "producer": {"type": "string", "enum": [
+            "existing_asset", "image_workflow", "local_renderer", "manual_input"
+        ]},
+        "source_or_task_id": text, "criterion_ids": strings,
+    })
+    if not legacy:
+        image_resource = copy.deepcopy(resource)
+        image_resource["properties"]["producer"]["enum"] = ["image_workflow"]
+        image_resource["properties"]["image_production"] = obj({
+            "version": {"type": "integer", "enum": [1]},
+            "size": {"type": "string", "pattern": r"^(auto|[1-9][0-9]*x[1-9][0-9]*)$"},
+            "background": {"type": "string", "enum": ["auto", "opaque", "transparent"]},
+        })
+        image_resource["required"].append("image_production")
+        resource["properties"]["producer"]["enum"].remove("image_workflow")
+        resource = {"anyOf": [resource, image_resource]}
     return obj({
-        "files": array(_file_row()),
+        "files": array(_file_row(legacy=not strict)),
         "interfaces": array(_interface()),
         "obligation_owners": array(obj({
             "obligation_id": text, "paths": strings, "reason": text,
         })),
-        "resource_deliveries": array(obj({
-            "path": text,
-            "producer": {"type": "string", "enum": [
-                "existing_asset", "image_workflow", "local_renderer", "manual_input"
-            ]},
-            "source_or_task_id": text, "criterion_ids": strings,
-        })),
+        "resource_deliveries": array(resource),
     })
 
 
@@ -259,10 +318,7 @@ def _quality_format(name: str) -> dict[str, Any]:
         "status": {"type": "string", "enum": ["ready"]},
         "data": ready_data,
     })
-    blocked = obj({
-        "status": {"type": "string", "enum": ["blocked"]},
-        "questions": array(_question()),
-    })
+    blocked = blocked_result_schema()
     schema = obj({
         "result": {"anyOf": [ready, blocked]},
     })
@@ -291,13 +347,16 @@ FORMATS = {
         "preserved_files": array({"type": "string"}),
         "baseline_findings": array({"type": "string"}),
     }))),
-    "A2_SPINE": response_format("A2_SPINE_V1", _result(_spine_data())),
+    "A2_SPINE": response_format("A2_SPINE_V2", _result(_spine_data())),
     "A2_DETAIL": response_format("A2_FILE_SPEC_V1", _result(_file_spec_data())),
-    "B2_SPINE": response_format("B2_SPINE_V1", _result(_spine_data())),
+    "B2_SPINE": response_format("B2_SPINE_V2", _result(_spine_data())),
     "B2_DETAIL": response_format("B2_FILE_SPEC_V1", _result(_file_spec_data())),
-    "A2Q": _quality_format("A2Q_QUALITY_GATE_V2"),
-    "B2Q": _quality_format("B2Q_QUALITY_GATE_V2"),
+    "A2Q": _quality_format("A2Q_QUALITY_GATE_V3"),
+    "B2Q": _quality_format("B2Q_QUALITY_GATE_V3"),
 }
+
+for _format in FORMATS.values():
+    _format["format"]["schema"] = _semantic_schema(_format["format"]["schema"])
 
 
 GRAPH_SCHEMA = obj({
@@ -306,7 +365,7 @@ GRAPH_SCHEMA = obj({
     "source_snapshot_hash": {"type": "string"},
     "requirements_hash": {"type": "string"},
     "plan_hash": {"type": "string"},
-    "spine": _spine_data(),
+    "spine": {"anyOf": [_spine_data(strict=False), _spine_data(legacy=True, strict=False)]},
     "file_specs": array(obj({"path": {"type": "string"}, "spec": _file_spec_data()})),
     "verification_profile_ids": array({"type": "string"}),
 })
@@ -363,13 +422,18 @@ def _source_refs_ok(worker, refs: list[dict[str, Any]]) -> None:
 
 
 def validate_requirements_v2(worker, data: dict[str, Any]) -> None:
+    _validate_json(data, _semantic_schema(_requirements_data()), "requirements")
     reqs, acceptance = data["requirements"], data["acceptance"]
     req_ids = _unique(reqs, "id", "requirements")
     acceptance_ids = _unique(acceptance, "id", "acceptance")
     invariant_ids = _unique(data["invariants"], "id", "invariants")
     flow_ids = _unique(data["flows"], "id", "flows")
     lifecycle_ids = _unique(data["lifecycles"], "id", "lifecycles")
-    del invariant_ids, flow_ids, lifecycle_ids
+    _unique(data["assumptions"], "id", "assumptions")
+    if len(invariant_ids | flow_ids | lifecycle_ids) != sum(
+        map(len, (invariant_ids, flow_ids, lifecycle_ids))
+    ):
+        raise ContractError("ID povinností musí být jedinečná i mezi jejich druhy.")
     for req in reqs:
         _source_refs_ok(worker, req["source_refs"])
         if not set(req["acceptance_ids"]) <= acceptance_ids:
@@ -381,6 +445,8 @@ def validate_requirements_v2(worker, data: dict[str, Any]) -> None:
                 raise ContractError(f"{req['id']}: derived_from odkazuje mimo requirements.")
         elif req["derived_from"]:
             raise ContractError(f"{req['id']}: explicit requirement nesmí mít derived_from.")
+        elif not req["source_refs"]:
+            raise ContractError(f"{req['id']}: explicit requirement nemá zdroj.")
         if req["priority"] == "mandatory" and not req["acceptance_ids"]:
             raise ContractError(f"{req['id']}: mandatory requirement nemá akceptaci.")
     for row in [*data["invariants"], *data["flows"], *data["lifecycles"], *acceptance, *data["assumptions"]]:
@@ -392,9 +458,26 @@ def validate_requirements_v2(worker, data: dict[str, Any]) -> None:
     for criterion in acceptance:
         if criterion["mandatory"] and not criterion["assertion"].strip():
             raise ContractError(f"{criterion['id']}: mandatory acceptance nemá assertion.")
+        expected = {req["id"] for req in reqs if criterion["id"] in req["acceptance_ids"]}
+        if set(criterion["requirement_ids"]) != expected:
+            raise ContractError(f"{criterion['id']}: nesouhlasí obousměrná vazba akceptace.")
+    pending = {req["id"]: set(req["derived_from"]) for req in reqs}
+    while pending:
+        ready = {key for key, parents in pending.items() if not parents}
+        if not ready:
+            raise ContractError("Odvození požadavků obsahuje cyklus.")
+        pending = {key: parents - ready for key, parents in pending.items() if key not in ready}
+    for lifecycle in data["lifecycles"]:
+        states = set(lifecycle["states"])
+        if len(states) != len(lifecycle["states"]) or not states or "" in states:
+            raise ContractError(f"{lifecycle['id']}: neplatné stavy životního cyklu.")
+        for transition in lifecycle["transitions"]:
+            if not {transition["from_state"], transition["to_state"]} <= states:
+                raise ContractError(f"{lifecycle['id']}: přechod odkazuje na neznámý stav.")
 
 
 def validate_plan_v2(requirements: dict[str, Any], plan: dict[str, Any]) -> None:
+    _validate_json(plan, _semantic_schema(_plan_data()), "plan")
     req_ids = {row["id"] for row in requirements["requirements"]}
     flow_ids = {row["id"] for row in requirements["flows"]}
     acceptance_ids = {row["id"] for row in requirements["acceptance"]}
@@ -402,6 +485,9 @@ def validate_plan_v2(requirements: dict[str, Any], plan: dict[str, Any]) -> None
     component_ids = _unique(components, "id", "components")
     _unique(plan["decisions"], "id", "decisions")
     _unique(plan["verification_intents"], "id", "verification_intents")
+    for package in plan["packages"]:
+        if not set(package["required_by"]) <= component_ids:
+            raise ContractError(f"{package['name']}: required_by odkazuje mimo komponenty.")
     covered: set[str] = set()
     for row in components:
         if not row["responsibility"].strip():
@@ -425,6 +511,7 @@ def validate_plan_v2(requirements: dict[str, Any], plan: dict[str, Any]) -> None
 
 
 def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, Any], spine: dict[str, Any]) -> None:
+    _validate_json(spine, _semantic_schema(GRAPH_SCHEMA["properties"]["spine"]), "spine")
     files = spine["files"]
     validate_paths(files)
     paths = _unique(files, "path", "files")
@@ -489,6 +576,14 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
         )
 
     interfaces_by_id = {row["id"]: row for row in interfaces}
+    files_by_path = {row["path"]: row for row in files}
+    for interface in interfaces:
+        for role, binding in (("providers", "provides"), ("consumers", "requires")):
+            for path in interface[role]:
+                if path in files_by_path and interface["id"] not in files_by_path[path][binding]:
+                    relationship_errors.append(
+                        f"{interface['id']}: {path} nepotvrzuje vazbu {binding}."
+                    )
     for row in files:
         unknown = set(row["provides"] + row["requires"]) - interface_ids
         if unknown:
@@ -522,12 +617,20 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
     if relationship_errors:
         raise ContractError("\n".join(relationship_errors))
     owned: set[str] = set()
+    obligations = {
+        row["id"] for kind in ("invariants", "flows", "lifecycles")
+        for row in requirements[kind]
+    }
     for owner in spine["obligation_owners"]:
+        if owner["obligation_id"] not in obligations:
+            raise ContractError(f"{owner['obligation_id']}: neznámá povinnost.")
         if not owner["reason"].strip() or not set(owner["paths"]) <= paths or not owner["paths"]:
             raise ContractError(f"{owner['obligation_id']}: neplatný obligation owner.")
         if owner["obligation_id"] in owned:
             raise ContractError(f"{owner['obligation_id']}: obligation má více owner záznamů.")
         owned.add(owner["obligation_id"])
+    if owned != obligations:
+        raise ContractError(f"Povinnosti nemají vlastníka: {sorted(obligations - owned)}")
     for resource in spine["resource_deliveries"]:
         if resource["path"] not in paths:
             raise ContractError(f"{resource['path']}: resource delivery není ve file indexu.")
@@ -537,6 +640,7 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
 
 def validate_file_spec_v1(worker, target: dict[str, Any], spine: dict[str, Any],
                           requirements: dict[str, Any], spec: dict[str, Any]) -> None:
+    _validate_json(spec, _semantic_schema(_file_spec_data()), "file_spec")
     interface_versions = {row["id"]: row["version"] for row in spine["interfaces"]}
     acceptance_ids = {row["id"] for row in requirements["acceptance"]}
     bindings = spec["interface_bindings"]
@@ -567,17 +671,27 @@ def validate_file_spec_v1(worker, target: dict[str, Any], spine: dict[str, Any],
         raise ContractError(f"{target['path']}: detail nemá akceptaci.")
     if any(not value.strip() for value in spec["assumptions"]):
         raise ContractError(f"{target['path']}: assumption nesmí být prázdný.")
+    blocked = []
     for question in spec["unresolved_questions"]:
         _source_refs_ok(worker, question["source_refs"])
         if question["blocking"]:
-            raise ContractError(
-                f"{target['path']}: blokující nejasnost: {question['question']}"
-            )
+            blocked.append(copy.deepcopy(question))
+    if blocked:
+        stage = "B2_DETAIL" if target["action"] in {"add", "modify"} else "A2_DETAIL"
+        raise PreparationBlocked(stage, blocked)
     if target["action"] == "modify" and not spec["preserved_behavior"]:
         raise ContractError(
             f"{target['path']}: MODIFY detail musí explicitně uvést preserved behavior."
         )
     kinds = {row["kind"] for row in spec["facets"]}
+    obligations = {row["obligation_id"] for row in owned_obligations(requirements, spine, target["path"])}
+    for facet in spec["facets"]:
+        if not set(facet["obligation_ids"]) <= obligations:
+            raise ContractError(f"{target['path']}: facet odkazuje na neznámou nebo nevlastněnou povinnost.")
+    covered = {identifier for facet in spec["facets"] for identifier in facet["obligation_ids"]}
+    if obligations - covered:
+        raise ContractError(f"{target['path']}: detail nepokrývá vlastněné povinnosti {sorted(obligations - covered)}.")
+    _unique(spec["test_scenarios"], "id", "test_scenarios")
     if not set(spec["required_facets"]) <= kinds:
         raise ContractError(f"{target['path']}: chybí required facet.")
     if spec["expected_visible_tokens"] <= 0 and not spec["allow_empty"]:
@@ -647,7 +761,7 @@ def _source_subset(worker, requirements: list[dict[str, Any]] | None = None) -> 
         "image_slots": copy.deepcopy(context.get("image_slots") or []),
         "attachments": copy.deepcopy(context.get("attachments") or []),
     }
-    if not requirements:
+    if requirements is None:
         return source
     wanted = {
         (ref["source_id"], ref["segment_id"])
@@ -658,6 +772,9 @@ def _source_subset(worker, requirements: list[dict[str, Any]] | None = None) -> 
         row for row in source.get("segments", [])
         if (row["source_id"], row["segment_id"]) in wanted
     ]
+    source_ids = {source_id for source_id, _ in wanted}
+    source["attachments"] = [row for row in source["attachments"] if row.get("source_id") in source_ids]
+    source["image_slots"] = [row for row in source["image_slots"] if row.get("source_id", row.get("slot_id")) in source_ids]
     return source
 
 
@@ -697,13 +814,25 @@ def _prepare_spine(spine: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str
     return prepared, additions
 
 
-def _compile_source_attachments(worker, client, stage: str, model: str):
+def _compile_source_attachments(worker, client, stage: str, model: str, input_value):
     from ..compat import SUPPORTED_INPUT_FILE_EXTS
 
     caps = worker._model_caps(model)
     runtime = getattr(worker, "_preparation_runtime_inputs", {}) or {}
-    file_ids = [str(value) for value in runtime.get("file_ids", []) if value]
-    image_ids = [str(value) for value in runtime.get("image_ids", []) if value]
+    primary = stage in {"A0R", "B0R", "A1", "B1"}
+    file_ids = [str(value) for value in runtime.get("file_ids", []) if value] if primary else []
+    image_ids = [str(value) for value in runtime.get("image_ids", []) if value] if primary else []
+    wanted = set()
+    def select(value):
+        if isinstance(value, dict):
+            if isinstance(value.get("source_id"), str):
+                wanted.add(value["source_id"])
+            for child in value.values():
+                select(child)
+        elif isinstance(value, list):
+            for child in value:
+                select(child)
+    select(input_value)
     seen_files = set(file_ids)
     seen_images = set(image_ids)
     mapping: list[dict[str, Any]] = []
@@ -715,6 +844,8 @@ def _compile_source_attachments(worker, client, stage: str, model: str):
     root = Path(worker.log.paths.run_dir).resolve()
     for source in (getattr(worker, "source_context", {}) or {}).get("_provider_inputs", []):
         source_id = str(source.get("source_id") or "")
+        if not primary and source_id not in wanted:
+            continue
         media = str(source.get("media_type") or "application/octet-stream")
         filename = str(source.get("filename") or source_id)
         provider_id = str(source.get("provider_file_id") or cache.get(source_id) or "")
@@ -773,10 +904,16 @@ def _compile_source_attachments(worker, client, stage: str, model: str):
 
 def _request(worker, client, stage: str, input_value: dict[str, Any], model: str,
              semantic, *, tools=None) -> tuple[dict[str, Any], str]:
+    worker._progress_stage = stage
+    target_path = str((input_value.get("target") or {}).get("path") or "")
+    worker.progress_event.emit(ProgressEvent(
+        stage, "preparing", source="local", model=model, path=target_path,
+        detail="Připravuji podklady požadavku." + (f" Soubor: {target_path}" if target_path else ""),
+    ))
     fmt = FORMATS[stage]
     request_text = json.dumps(input_value, ensure_ascii=False)
     source_files, source_images = _compile_source_attachments(
-        worker, client, stage, model
+        worker, client, stage, model, input_value
     )
     payload = worker._payload_base(
         model=model,
@@ -788,6 +925,8 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
     payload["text"] = copy.deepcopy(fmt)
     if tools:
         payload["tools"] = tools
+        if any(tool.get("type") == "file_search" for tool in tools):
+            payload["include"] = ["file_search_call.results"]
     if worker.cfg.maximum_quality:
         from ..requirements import apply_quality
 
@@ -797,7 +936,11 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
     last_error: Exception | None = None
     failed_candidates: set[tuple[str, str]] = set()
     failed_candidate: dict[str, Any] | str | None = None
-    for attempt in range(3):
+    from .authorization import automatic_attempt_limit
+
+    max_attempts = automatic_attempt_limit(worker.cfg)
+    for attempt in range(max_attempts):
+        response = None
         worker._check_stop()
         working = copy.deepcopy(payload)
         if attempt and last_error is not None:
@@ -815,6 +958,10 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
             )
         prepare_payload(working)
         measurement = preparation_measurement(working, client)
+        journal = getattr(worker, "_response_journal", None)
+        if journal is not None:
+            working = journal.frozen_preparation_payload(working)
+            prepare_payload(working)
         worker.log.save_json(
             "requests", f"{stage}_v2_request_{attempt}",
             {"payload": working, "ui_state": safe_ui_state(worker.cfg)}, step_id=step_id,
@@ -857,12 +1004,13 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
                 validator=stage, status="failed", errors=[str(exc)],
                 evidence={
                     "attempt": attempt + 1,
+                    "response_id": str((rejected_response or response or {}).get("id") or ""),
                     "candidate_hash": candidate_hash,
                     "error_signature": signature[1] if signature else None,
                     "no_progress": no_progress,
                 },
             )
-            if no_progress or attempt == 2:
+            if no_progress or attempt == max_attempts - 1:
                 worker.log.bundle.update_step(
                     step_id, status="failed", finished_at=record["timestamp"]
                 )
@@ -883,6 +1031,12 @@ def _request(worker, client, stage: str, input_value: dict[str, Any], model: str
             step_id, status="completed", progress=100,
             finished_at=record["timestamp"],
         )
+        worker.progress_event.emit(ProgressEvent(
+            stage, "completed", source="validation", model=model, path=target_path,
+            response_id=str(response.get("id") or ""),
+            detail="Výstup kroku přijat a ověřen proti jeho kontraktu."
+            + (f" Soubor: {target_path}" if target_path else ""),
+        ))
         return data, str(response.get("id") or "")
     raise ContractError(f"{stage}: příprava selhala.")
 
@@ -894,6 +1048,11 @@ def _save(worker, snapshot: dict[str, Any], stage: str) -> None:
     worker.cfg.preparation_snapshot = copy.deepcopy(snapshot)
     worker.log.update_state({"preparation_snapshot": snapshot})
     worker.log.save_json("manifests", "preparation_snapshot_v2", snapshot)
+    if stage in {"A2", "B2"}:
+        worker.progress_event.emit(ProgressEvent(
+            stage, "completed", source="validation",
+            detail="Implementační graf sestaven, ověřen a uložen.",
+        ))
 
 
 def validate_graph(
@@ -911,6 +1070,8 @@ def validate_graph(
         raise ContractError(
             "IMPLEMENTATION_GRAPH_V3 nelze ověřit bez kanonických requirements a plan."
         )
+    if graph["requirements_hash"] != canonical_sha256(requirements) or graph["plan_hash"] != canonical_sha256(plan):
+        raise ContractError("IMPLEMENTATION_GRAPH_V3: nesouhlasí hashe rodičovských podkladů.")
     validate_spine_v1(graph["mode"], requirements, plan, graph["spine"])
     from .resource_delivery import validate_resource_plan
     validate_resource_plan(worker, graph)
@@ -958,6 +1119,16 @@ def _core_snapshot_values(snapshot: dict[str, Any], mode: str):
     return requirements, plan
 
 
+def modify_obligations(wrapper, requirement_ids):
+    """Globální závazky zůstávají platné, lokální se vybírají přes ID požadavků."""
+    selected = set(requirement_ids)
+    return {
+        "preserve": [copy.deepcopy(row) for row in wrapper.get("preserve", [])
+                     if not row.get("requirement_ids") or selected.intersection(row["requirement_ids"])],
+        "migration_requirements": copy.deepcopy(wrapper.get("migration_requirements", [])),
+    }
+
+
 def _quality_gate(
     worker,
     client,
@@ -973,6 +1144,10 @@ def _quality_gate(
         "plan": plan,
         "implementation_graph": graph,
     }
+    if mode == "MODIFY":
+        snapshot = worker.cfg.preparation_snapshot or {}
+        quality_input["change_requirements"] = snapshot.get("requirements")
+        quality_input["change_plan"] = snapshot.get("plan")
 
     def semantic(data):
         corrected = {
@@ -1013,6 +1188,7 @@ def _quality_gate(
 
 
 def _validate_modify_requirement_wrapper(worker, wrapper: dict[str, Any]) -> None:
+    _validate_json(wrapper, FORMATS["B0R"]["format"]["schema"]["properties"]["result"]["anyOf"][0]["properties"]["data"], "B0R")
     requirements = wrapper.get("change_requirements")
     if not isinstance(requirements, dict):
         raise ContractError("B0R: chybí change_requirements.")
@@ -1035,6 +1211,7 @@ def _validate_modify_plan_wrapper(
     wrapper: dict[str, Any],
     inventory: list[dict[str, Any]],
 ) -> None:
+    _validate_json(wrapper, FORMATS["B1"]["format"]["schema"]["properties"]["result"]["anyOf"][0]["properties"]["data"], "B1")
     plan = wrapper.get("plan")
     if not isinstance(plan, dict):
         raise ContractError("B1: chybí plan.")
@@ -1072,6 +1249,12 @@ def _finalize_delivery_snapshot(
     plan: dict[str, Any],
     graph: dict[str, Any],
 ) -> None:
+    if mode == "MODIFY":
+        inventory, _ = _inventory(worker)
+        reconciled = reconcile_modify_plan(requirements, snapshot["plan"], graph["spine"], inventory)
+        if reconciled != snapshot["plan"]:
+            snapshot["plan"] = reconciled
+            _save(worker, snapshot, snapshot["canonical_stage"])
     worker._delivery_snapshot = {
         "version": 2,
         "mode": mode,
@@ -1082,9 +1265,26 @@ def _finalize_delivery_snapshot(
         ),
         "plan": plan,
         "plan_wrapper": snapshot["plan"],
+        "source_segments": copy.deepcopy((getattr(worker, "source_context", {}) or {}).get("segments", [])),
         "structure": graph,
         "graph": graph,
     }
+
+
+def reconcile_modify_plan(requirements, wrapper, spine, inventory):
+    """Upřesní technický seznam souborů podle výsledného grafu, nikoli zadání."""
+    result = copy.deepcopy(wrapper)
+    files = spine["files"]
+    result["files_to_add"] = sorted(row["path"] for row in files if row["action"] == "add")
+    result["files_to_modify"] = sorted(row["path"] for row in files if row["action"] == "modify")
+    result["preserved_files"] = sorted(
+        {row["path"] for row in inventory} - set(result["files_to_modify"])
+    )
+    _validate_modify_plan_wrapper(requirements, result, inventory)
+    existing = {row["path"] for row in inventory}
+    if any(row["action"] == "preserve" and row["path"] not in existing for row in files):
+        raise ContractError("B2: zachovaný soubor není ve zmrazeném inventáři.")
+    return result
 
 
 def prepare_delivery_v2(worker, client, mode: str, tools=None):
@@ -1142,9 +1342,10 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
                 worker,
                 client,
                 "A0R",
-                {"source": source, "facts": []},
+                {"source": source, "facts": [], "runtime_context": copy.deepcopy(getattr(worker, "_preparation_runtime_inputs", {}).get("text", ""))},
                 worker._generate_model("A1"),
                 lambda data: validate_requirements_v2(worker, data),
+                tools=tools,
             )
             snapshot["requirements"] = requirements
             snapshot["response_id"] = rid
@@ -1155,13 +1356,17 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
                     "segments": [
                         row
                         for row in source["segments"]
-                        if row["source_id"] == "SRC-USER-TEXT"
+                        if row["source_id"] not in {
+                            item.id for item in worker.source_pack.sources
+                            if item.kind == "existing_project"
+                        }
                     ],
                     "image_slots": source.get("image_slots", []),
                 },
                 "project_inventory": inventory,
                 "selected_originals": originals,
                 "baseline_report": None,
+                "runtime_context": copy.deepcopy(getattr(worker, "_preparation_runtime_inputs", {}).get("text", "")),
             }
             wrapper, rid = _request(
                 worker,
@@ -1198,6 +1403,7 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
                 {"requirements": requirements, "source": source},
                 worker._generate_model("A1"),
                 lambda data: validate_plan_v2(requirements, data),
+                tools=tools,
             )
             snapshot["plan"] = plan
             snapshot["response_id"] = rid
@@ -1239,7 +1445,6 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
             spine_input = {
                 "requirements": requirements,
                 "plan": plan,
-                "source": source,
             }
             spine, rid = _request(
                 worker,
@@ -1250,6 +1455,7 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
                 lambda data: validate_spine_v1(
                     mode, requirements, plan, data
                 ),
+                tools=tools,
             )
             detail_stage = "A2_DETAIL"
         else:
@@ -1362,6 +1568,8 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
                 "interfaces": interfaces,
                 "requirements": selected_requirements,
                 "acceptance": selected_acceptance,
+                "source": _source_subset(worker, selected_requirements),
+                "modify_obligations": modify_obligations(snapshot["requirements"], target["requirement_ids"]),
             }
             if (
                 target["action"] == "modify"
@@ -1379,6 +1587,7 @@ def prepare_delivery_v2(worker, client, mode: str, tools=None):
                 )
             model = worker.cfg.model
 
+        detail_input["owned_obligations"] = owned_obligations(requirements, spine, path)
         spec, rid = _request(
             worker,
             client,

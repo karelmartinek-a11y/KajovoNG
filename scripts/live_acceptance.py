@@ -735,7 +735,7 @@ def main(argv: list[str] | None = None) -> int:
                 usage_root = root / "comic-panels"
 
             collect_raw_usage(usage_root, report)
-            enrich_ids(root, report)
+            enrich_ids(usage_root, report)
             reports.append(report)
             root_state = read_checkpoint(root / "acceptance_state.json")
             root_state.setdefault("cases", {})[case] = {

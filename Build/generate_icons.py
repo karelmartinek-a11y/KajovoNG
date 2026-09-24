@@ -42,6 +42,7 @@ def main() -> None:
     # Ikona okna (PNG), programu Windows (ICO) a favicon.
     _save_png(img, RESOURCES / "app_icon.png", 512)
     _save_png(img, BUILD_ASSETS / "app_icon.png", 512)
+    _save_png(img, BUILD_ASSETS / "app_icon_1024.png", 1024)
     _save_ico(img, BUILD_ASSETS / "app_icon.ico", sizes=[256, 128, 64, 48, 32, 24, 16])
     _save_ico(img, BUILD_ASSETS / "favicon.ico", sizes=[32, 16])
 

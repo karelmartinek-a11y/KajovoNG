@@ -42,7 +42,7 @@ Run Bundle používá režim `COMIC`, ID operace a cestu knihovny. Dávky a Hist
 
 ## Datový model a migrace
 
-Nová knihovna se vytváří jako SQLite `user_version=2` a tabulka `migrations` eviduje verze 1 i 2. Existující podporovaná knihovna `user_version=1` se transakčně migruje na verzi 2 přidáním textové výrobní osy; neznámou verzi ani neznámou neprázdnou databázi aplikace nepřepisuje. Nepoužívá dřívější provozní databázi aplikace. Tabulky:
+Knihovna používá SQLite `user_version=4`. Podporované starší verze se transakčně migrují podle `comic_store.py`, včetně evidence textové výroby a schválení; neznámou verzi ani neznámou neprázdnou databázi aplikace nepřepisuje. Nepoužívá dřívější provozní databázi aplikace. Tabulky:
 
 - `projects`, `bibles`, `style_refs`: nastavení, jeho snapshoty a verzovaná bible.
 - `entities`, `entity_refs`, `entity_revisions`: společná normalizovaná knihovna postav a prostředí, původní i pracovní podklady.

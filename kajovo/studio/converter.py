@@ -94,6 +94,8 @@ class ConverterWindow(QMainWindow):
 
         try:
             result = validate_input_paths([field.text() for field in self.paths], self.backup.text())
+            for path in (*(target.path for target in result[0]), result[1]):
+                self.operations.assert_output_available(path)
         except ValueError as error:
             self.validation.setText(str(error))
             self.start_button.setEnabled(False)
@@ -122,7 +124,8 @@ class ConverterWindow(QMainWindow):
         def completed(result):
             self.result.setPlainText(str((result or {}).get("message", "Převod byl dokončen.")))
 
-        self.operations.start("Záloha a převod textů", execute, completed)
+        self.operations.start("Záloha a převod textů", execute, completed,
+                              write_roots=(*(target.path for target in targets), backup))
 
     def closeEvent(self, event):
         if self.operations.active:

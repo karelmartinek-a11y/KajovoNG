@@ -44,7 +44,9 @@ def validate_modify_sources(structure, root, items, completed_paths=()):
             if (
                 item is None
                 or not os.path.isfile(target)
-                or not item.uploadable
+                or not (item.uploadable or (
+                    getattr(item, "inventory_only", False) is True and item.size == 0
+                ))
                 or sha256_file(target) != item.sha256
             ):
                 raise ContractError(
@@ -173,7 +175,7 @@ def prepare_delivery(
     """New runs use CHANGE V2 preparation; old readers stay for legacy evidence."""
     del previous_id
     worker._preparation_runtime_inputs = {
-        "text": str(input_text or ""),
+        "text": input_text if isinstance(input_text, dict) else {"supplied_context": str(input_text or "")},
         "file_ids": list(input_files or []),
         "image_ids": list(input_images or []),
     }

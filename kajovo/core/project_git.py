@@ -21,13 +21,21 @@ EXCLUDED = {".git", ".venv", "venv", "node_modules", "LOG", "cache", "__pycache_
 
 def allowed_file(relative):
     path = Path(relative)
-    if any(part in EXCLUDED for part in path.parts):
+    parts = tuple(part.casefold() for part in path.parts)
+    if any(part in {value.casefold() for value in EXCLUDED} for part in parts):
         return False
-    if path.parts[:2] in {("Build", "lib"), ("Build", "Kajovo")}:
+    if parts[:2] in {("build", "lib"), ("build", "kajovo")}:
         return False
-    if len(path.parts) > 1 and path.parts[0] == "Build" and path.parts[1].startswith("bdist."):
+    if len(parts) > 1 and parts[0] == "build" and parts[1].startswith("bdist."):
         return False
-    return not (path.name.startswith(".env") or path.name == "kajovo_settings.json" or path.suffix.lower() in {".pem", ".key", ".db", ".sqlite"})
+    database_suffixes = (".db", ".sqlite", ".sqlite3")
+    name = path.name.lower()
+    database = any(
+        name.endswith(suffix + sidecar)
+        for suffix in database_suffixes
+        for sidecar in ("", "-wal", "-shm", "-journal")
+    )
+    return not (name.startswith(".env") or name == "kajovo_settings.json" or database or path.suffix.lower() in {".pem", ".key"})
 
 
 class ProjectGit:
@@ -133,6 +141,8 @@ class ProjectGit:
         real_index = Path(
             self.text("rev-parse", "--git-path", "index").strip()
         )
+        if not real_index.is_absolute():
+            real_index = self.root / real_index
         before_index = (
             hashlib.sha256(real_index.read_bytes()).hexdigest()
             if real_index.is_file()
@@ -160,7 +170,7 @@ class ProjectGit:
                 "GIT_COMMITTER_NAME": "Kajovo Milestone",
                 "GIT_COMMITTER_EMAIL": "milestone@localhost",
             }
-            self.command("read-tree", "HEAD", extra_env=env)
+            self.command("read-tree", "--empty", extra_env=env)
             for relative in sorted(candidates):
                 path = Path(safe_join_under_root(self.root, relative))
                 if path.exists() or path.is_symlink():
@@ -214,7 +224,9 @@ class ProjectGit:
             "snapshot_commit": commit,
             "base_head": head,
             "branch": self.branch(),
-            "included_paths": sorted(candidates),
+            "included_paths": sorted(value for value in self.text(
+                "ls-tree", "-r", "--name-only", "-z", commit
+            ).split("\0") if value),
             "excluded_policy": "allowed_file",
         }
         self._milestone_dir()
@@ -262,21 +274,33 @@ class ProjectGit:
             # only as that narrower committed tree; no archived diff is claimed.
             milestone_type = "legacy_commit_only"
 
-        self.command(
-            "restore",
-            "--source",
-            "refs/tags/" + name,
-            "--staged",
-            "--worktree",
-            "--",
-            ".",
-        )
-        expected_tree = self.text(
-            "rev-parse", "refs/tags/" + name + "^{tree}"
-        ).strip()
-        actual_tree = self.text("write-tree").strip()
-        if actual_tree != expected_tree:
-            raise RuntimeError("Obnovený index neodpovídá snapshotu milníku.")
+        target = "refs/tags/" + name
+        expected = {}
+        for row in self.text("ls-tree", "-r", "-z", target).split("\0"):
+            if not row:
+                continue
+            info, relative = row.split("\t", 1)
+            mode, _, digest = info.split()
+            if allowed_file(relative):
+                expected[relative] = (mode, digest)
+        current = {value for value in self.text("ls-files", "-z").split("\0")
+                   if value and allowed_file(value)}
+        for relative in sorted(current | expected.keys()):
+            safe_join_under_root(self.root, relative)
+            self.command("--literal-pathspecs", "restore", "--source", target,
+                         "--staged", "--worktree", "--", relative)
+        actual = {}
+        for row in self.text("ls-files", "--stage", "-z").split("\0"):
+            if not row:
+                continue
+            info, relative = row.split("\t", 1)
+            mode, digest, stage = info.split()
+            if allowed_file(relative):
+                if stage != "0":
+                    raise RuntimeError("Obnovený index obsahuje konflikt.")
+                actual[relative] = (mode, digest)
+        if actual != expected:
+            raise RuntimeError("Povolená část indexu neodpovídá snapshotu milníku.")
         if self.branch() != branch:
             raise RuntimeError("Po obnově neodpovídá aktivní větev původní větvi.")
         result = self.snapshot()

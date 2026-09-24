@@ -176,13 +176,21 @@ def test_background_not_allowed_inside_batch():
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+@pytest.mark.parametrize("schema_upgrade", [False, True])
 @pytest.mark.parametrize(
     "pending_stage",
     ["requirements", "spine", "file"],
 )
 def test_worker_recovers_v2_stage_without_reposting(
-    tmp_path, mode, pending_stage
+    tmp_path, mode, pending_stage, schema_upgrade, monkeypatch
 ):
+    from kajovo.core.orchestration.preparation import FORMATS, _file_row
+    original_formats = copy.deepcopy(FORMATS)
+    if schema_upgrade:
+        for stage in ("A2_SPINE", "B2_SPINE"):
+            old = copy.deepcopy(FORMATS[stage])
+            old["format"]["schema"]["properties"]["result"]["anyOf"][0]["properties"]["data"]["properties"]["files"]["items"] = _file_row(legacy=True)
+            monkeypatch.setitem(FORMATS, stage, old)
     pending_contract = {
         "requirements": (
             "A0R_REQUIREMENTS_V2"
@@ -190,7 +198,7 @@ def test_worker_recovers_v2_stage_without_reposting(
             else "B0R_REQUIREMENTS_V2"
         ),
         "spine": (
-            "A2_SPINE_V1" if mode == "GENERATE" else "B2_SPINE_V1"
+            "A2_SPINE_V2" if mode == "GENERATE" else "B2_SPINE_V2"
         ),
         "file": "FILE_CONTENT_V1",
     }[pending_stage]
@@ -224,6 +232,9 @@ def test_worker_recovers_v2_stage_without_reposting(
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert state["status"] == "response_pending"
     create_count_before_resume = client.create_response.call_count
+    if schema_upgrade:
+        for stage, fmt in original_formats.items():
+            monkeypatch.setitem(FORMATS, stage, fmt)
 
     resumed = RunWorker(
         worker.cfg,
@@ -251,6 +262,8 @@ def test_worker_recovers_v2_stage_without_reposting(
     assert resumed_errors == []
     assert resumed_results
     resumed_client.retrieve_response.assert_called_with(pending["id"])
+    assert all(call.args[0]["text"]["format"]["name"] != pending_contract
+               for call in resumed_client.create_response.call_args_list)
     # The pending paid mutation is retrieved, never submitted a second time.
     assert all(
         call.args[0].get("metadata", {}).get("kajovo_repair_attempt") != "duplicate"

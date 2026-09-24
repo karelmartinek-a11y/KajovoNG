@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Set, Tuple
 
@@ -150,20 +151,6 @@ def _validate_output(step: CascadeStep, output: CascadeOutput, step_number: int)
                 f"Krok {step_number}: JSON maska výstupu „{output.name}“ není strict schema: {exc}"
             ) from exc
 
-        def contains_local_ref(node: Any) -> bool:
-            if isinstance(node, dict):
-                return "$ref" in node or "$defs" in node or any(
-                    contains_local_ref(value) for value in node.values()
-                )
-            if isinstance(node, list):
-                return any(contains_local_ref(value) for value in node)
-            return False
-
-        if contains_local_ref(output.json_schema):
-            raise CascadeValidationError(
-                f"Krok {step_number}: JSON maska výstupu „{output.name}“ nesmí obsahovat $ref/$defs; "
-                "vnořená maska musí být úplná a samostatná."
-            )
     elif output.kind == "decision":
         if len(output.decision_options) < 2:
             raise CascadeValidationError(
@@ -312,6 +299,18 @@ def validate_cascade_definition(
         if not step.model.strip():
             raise CascadeValidationError(f"Krok {index}: vyberte model.")
         if not step.deterministic:
+            mirror = replace(step, outputs=[])
+            mirror.ensure_outputs()
+            def effective_output(output):
+                return {key: value for key, value in output.to_dict().items() if key not in {"id", "name"}}
+            incompatible_outputs = bool(step.outputs) and (
+                [effective_output(output) for output in step.outputs]
+                != [effective_output(output) for output in mirror.outputs]
+            )
+            if step.inputs or incompatible_outputs:
+                raise CascadeValidationError(
+                    f"Krok {index}: typované vstupy a výstupy neodpovídají legacy kontraktu; zvolte deterministický krok."
+                )
             # Staré kaskády zůstávají spustitelné bez vynucení nového UI kontraktu.
             continue
         if not step.title.strip():
@@ -405,7 +404,6 @@ def validate_cascade_definition(
 
 def step_signature(step: CascadeStep) -> str:
     payload = step.to_dict()
-    payload.pop("previous_response_id_expr", None)
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -415,6 +413,7 @@ def runtime_schema_for_step(step: CascadeStep) -> Dict[str, Any]:
     step.ensure_outputs()
     _validate_output_keys(step)
     properties: Dict[str, Any] = {}
+    definitions: Dict[str, Any] = {}
     required: List[str] = []
     for output in step.outputs:
         key = output_machine_key(output)
@@ -429,9 +428,29 @@ def runtime_schema_for_step(step: CascadeStep) -> Dict[str, Any]:
                 raise CascadeValidationError(
                     f"Strukturovaný výstup „{output.name}“ nemá explicitní JSON Schema masku."
                 )
-            properties[key] = json.loads(
+            nested = json.loads(
                 json.dumps(output.json_schema, ensure_ascii=False)
             )
+            references = []
+            def relocate(value, references=references, key=key):
+                if isinstance(value, dict):
+                    if "$ref" in value:
+                        references.append(value["$ref"])
+                        ref = value["$ref"]
+                        if ref != "#" and not ref.startswith("#/"):
+                            raise CascadeValidationError("Kaskáda dovoluje pouze lokální JSON odkazy.")
+                        value["$ref"] = f"#/$defs/{key}" + ref[1:]
+                    for child in value.values():
+                        relocate(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        relocate(child)
+            relocate(nested)
+            if references:
+                definitions[key] = nested
+                properties[key] = {"$ref": f"#/$defs/{key}"}
+            else:
+                properties[key] = nested
         elif output.kind == "decision":
             properties[key] = {
                 "type": "string",
@@ -439,6 +458,18 @@ def runtime_schema_for_step(step: CascadeStep) -> Dict[str, Any]:
                 "description": f"Vyber právě jednu předdefinovanou odpověď pro „{output.name}“.",
             }
         elif output.kind == "file":
+            if output.file_type not in {"txt", "md", "json", "csv"}:
+                properties[key] = {
+                    "type": "object",
+                    "properties": {
+                        "contract": {"type": "string", "enum": ["CASCADE_BINARY_TASK_V1"]},
+                        "path": {"type": "string", "enum": [output.file_name]},
+                        "instructions": {"type": "string", "pattern": r"\S"},
+                    },
+                    "required": ["contract", "path", "instructions"],
+                    "additionalProperties": False,
+                }
+                continue
             properties[key] = {
                 "type": "object",
                 "properties": {
@@ -460,12 +491,16 @@ def runtime_schema_for_step(step: CascadeStep) -> Dict[str, Any]:
             }
         else:
             raise CascadeValidationError(f"Neznámý typ výstupu: {output.kind}")
-    return {
+    schema = {
         "type": "object",
         "properties": properties,
         "required": required,
         "additionalProperties": False,
     }
+    if definitions:
+        schema["$defs"] = definitions
+    validate_schema(schema)
+    return schema
 
 
 def describe_output(output: CascadeOutput) -> str:

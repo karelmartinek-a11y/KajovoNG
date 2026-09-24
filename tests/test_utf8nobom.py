@@ -5,6 +5,8 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import Mock
+import os
+import stat
 
 import pytest
 
@@ -102,3 +104,26 @@ def test_zip_preserves_comment_and_rejects_unsafe_paths_without_changes(tmp_path
     with pytest.raises(ValueError):
         rewrite_zip_if_needed(path, Mock(), RunLogger(tmp_path, "unsafe"))
     assert path.read_bytes() == original
+
+
+def test_zip_copies_outer_permissions_before_replace(tmp_path, monkeypatch):
+    from utf8nobom import app
+
+    path = tmp_path / "mode.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("file.txt", b"\xef\xbb\xbftext")
+    if os.name != "nt":
+        path.chmod(0o640)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    copied = []
+    original = app.shutil.copymode
+
+    def copy_mode(source, target):
+        assert path.read_bytes().startswith(b"PK")
+        copied.append((source, target))
+        return original(source, target)
+
+    monkeypatch.setattr(app.shutil, "copymode", copy_mode)
+    rewrite_zip_if_needed(path, Mock(), RunLogger(tmp_path, "mode"))
+    assert len(copied) == 1 and copied[0][0] == path
+    assert stat.S_IMODE(path.stat().st_mode) == mode

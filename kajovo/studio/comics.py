@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
                               QPlainTextEdit, QSpinBox, QSplitter, QTabWidget, QWidget)
 
 from kajovo.core.comic_service import ComicService
+from kajovo.comic_layout import prepare_storyboard_layout
 from kajovo.core.comic_types import DEFAULT_STYLE, ComicError, PanelFormat
 from kajovo.core.image_runtime import image_capability
 from kajovo.core.user_errors import describe_error
@@ -34,7 +35,7 @@ class ComicsPage(QWidget):
         self.running = set()
         self.pending_settings = False
         self.poll_started = {}
-        self.service = ComicService(context.settings)
+        self.service = ComicService(context.settings, storyboard_layout=prepare_storyboard_layout)
         root = vertical(self, 0)
         top = actions(action("comic.new", "Nový komiks", self.create_project, "primary"),
                       action("comic.refresh", "Obnovit knihovnu", self.refresh_projects),
@@ -74,6 +75,7 @@ class ComicsPage(QWidget):
         self.build_style()
         self.build_story_pipeline()
         history = QWidget()
+        self.history_page = history
         body = vertical(history)
         self.jobs = QListWidget()
         self.jobs.setAccessibleName("Operace komiksu")
@@ -101,6 +103,8 @@ class ComicsPage(QWidget):
         self.panels.currentItemChanged.connect(self.select_panel)
         split.addWidget(self.panels)
         editor = QWidget()
+        self.panel_editor = editor
+        editor.setEnabled(False)
         form = vertical(editor)
         self.panel_name = QLineEdit()
         self.panel_name.setPlaceholderText("Název panelu")
@@ -336,7 +340,8 @@ class ComicsPage(QWidget):
 
     def service_for(self, task, network=True):
         return ComicService(self.context.settings, self.context.client() if network else None,
-                            emit=task.progress_event.emit, stopped=task.isInterruptionRequested)
+                            emit=task.progress_event.emit, stopped=task.isInterruptionRequested,
+                            storyboard_layout=prepare_storyboard_layout)
 
     def launch(self, title, function, receive=None, network=True, identifier=None, popup=True):
         settings = copy.deepcopy(self.context.settings)
@@ -344,7 +349,8 @@ class ComicsPage(QWidget):
         try:
             client = self.context.client() if network else None
             def work(task):
-                service = ComicService(settings, client, task.progress_event.emit, task.isInterruptionRequested)
+                service = ComicService(settings, client, task.progress_event.emit, task.isInterruptionRequested,
+                                       storyboard_layout=prepare_storyboard_layout)
                 return function(service)
             self.context.operations.start(title, work, receive, cancellable=True, identifier=identifier, popup=popup)
         except Exception as exc:
@@ -666,10 +672,12 @@ class ComicsPage(QWidget):
             self.overlays.load(None, [])
         self.loading = False
         self.dirty = False
+        self.panel_editor.setEnabled(bool(self.panel_id))
+        self.overlays.setEnabled(bool(self.panel_id))
         self.update_format_info()
 
     def mark_dirty(self, *_):
-        if not self.loading:
+        if not self.loading and self.panel_id:
             self.dirty = True
             self.update_format_info()
 
@@ -913,7 +921,7 @@ class ComicsPage(QWidget):
             batches = self.service.store.rows("batches", "operation_id=?", (op["id"],))
             items = self.service.store.rows("batch_items", "batch_id IN (SELECT id FROM batches WHERE operation_id=?)", (op["id"],))
             evidence = {"operation": op, "batches": batches, "items": items}
-            DetailDialog("Evidence komiksu", "Uložené snapshoty, výsledky, usage, náklady a chyby jednotlivých panelů.", self, evidence).exec()
+            DetailDialog("Evidence komiksu", "Uložené snapshoty, výsledky, usage a chyby jednotlivých panelů.", self, evidence).exec()
         except Exception as exc:
             self.fail(exc)
 
@@ -967,7 +975,7 @@ class ComicsPage(QWidget):
         if self.style_dirty and not self.save_style():
             return
         self.pending_settings = False
-        self.service = ComicService(self.context.settings)
+        self.service = ComicService(self.context.settings, storyboard_layout=prepare_storyboard_layout)
         self.project_id = None
         self.panel_id = None
         self.panel_record = None

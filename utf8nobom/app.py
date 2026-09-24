@@ -189,7 +189,7 @@ def normalize_text_bytes(data: bytes) -> tuple[bytes, bool]:
     if encoding:
         decoded = data.decode(encoding, errors="strict")
         # Explicit endian codecs keep BOM as U+FEFF; utf-8-sig removes it.
-        if decoded.startswith("\ufeff"):
+        if encoding != "utf-8-sig" and decoded.startswith("\ufeff"):
             decoded = decoded[1:]
         normalized = decoded.encode("utf-8", errors="strict")
         return normalized, normalized != data
@@ -304,7 +304,7 @@ def build_scan_plan(targets: Sequence[TargetSpec]) -> ScanPlan:
                     size = 1
                 units = max(size, 1)
                 file_tasks.append(FileTask(kind="zip" if is_zip_path(path) else "file", path=path, size=size))
-                total_units += units * 2
+                total_units += units * (2 if is_zip_path(path) else 3)
                 if is_zip_path(path):
                     try:
                         with zipfile.ZipFile(path, "r") as archive:
@@ -406,6 +406,7 @@ def rewrite_zip_if_needed(path: Path, tracker: ProgressTracker, logger: RunLogge
                 clone.flag_bits = info.flag_bits
                 clone.internal_attr = info.internal_attr
                 target.writestr(clone, payload)
+        shutil.copymode(path, tmp_path)
         os.replace(tmp_path, path)
         logger.write("zip_rewritten", zip_path=str(path), changed_entries=changed_entries)
     finally:

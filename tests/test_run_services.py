@@ -27,6 +27,8 @@ def test_unknown_upload_stops_run_and_blocks_same_run_restart(tmp_path):
         assert state["unknown_submission"]["operation"] == "upload_file"
         assert worker.log.bundle.verify_integrity()["status"] != "changed"
         worker.execute()
+        state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
+        assert state["lifecycle_status"] == "unknown_remote_submission"
     assert client.upload_file.call_count == 1
     client.create_response.assert_not_called()
     assert not results
@@ -72,6 +74,8 @@ def test_diagnostics_collection_and_upload(tmp_path, remote):
 def test_unknown_indexation_never_falls_back_to_new_work(tmp_path):
     worker = make_worker(tmp_path, "QA")
     worker.cfg.in_dir = str(tmp_path)
+    worker.cfg.use_file_search = True
+    worker.cfg.model_caps["supports_file_search"] = True
     worker.cfg.model_caps["supports_vector_store"] = True
     worker._zip_in_dir = Mock(return_value=str(tmp_path / "input.txt"))
     (tmp_path / "input.txt").write_text("data", encoding="utf-8")

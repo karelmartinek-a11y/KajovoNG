@@ -204,7 +204,8 @@ def _prepare_response_runtime(self: RunContext, client):
     self._runtime_diag_file_ids = diag_file_ids
 
 
-def _approved_project_items(self: RunContext, root: str):
+def _approved_project_items(self: RunContext, root: str, *, include_inventory: bool = False):
+    """Vrátí schválené uploady, volitelně i výhradně místní prázdné originály."""
     root_path = Path(root).resolve()
     run_root = Path(self.log.paths.run_dir).resolve()
     rows = []
@@ -250,16 +251,20 @@ def _approved_project_items(self: RunContext, root: str):
         if not rel or not expected or not bundle_rel:
             raise ContractError("SOURCE_PACK obsahuje neúplný schválený záznam.")
 
-        if decision and decision not in {"approved", "approved_asset"}:
+        inventory_only = decision == "inventory_only"
+        if inventory_only and not include_inventory:
             continue
-        if decision not in {"approved", "approved_asset"}:
+        if decision and decision not in {"approved", "approved_asset", "inventory_only"}:
+            continue
+        if decision not in {"approved", "approved_asset", "inventory_only"}:
             current_policy = legacy_policy_item(rel)
             if current_policy is None:
                 raise ContractError(
                     f"Starý SourcePack nemá doložitelné schválení zdroje: {rel}"
                 )
             binary_asset = project_binary_asset_candidate(current_policy)
-            if not current_policy.uploadable and not binary_asset:
+            inventory_only = include_inventory and getattr(current_policy, "inventory_only", False)
+            if not current_policy.uploadable and not binary_asset and not inventory_only:
                 raise ContractError(
                     f"Starý SourcePack nelze znovu použít: {rel} "
                     f"je nyní odmítnut politikou ({current_policy.reason})."
@@ -296,14 +301,18 @@ def _approved_project_items(self: RunContext, root: str):
             raise ContractError(f"SourcePack artifact uniká z RunBundle: {rel}") from exc
         if not frozen.is_file() or sha256_file(str(frozen)) != expected:
             raise ContractError(f"Immutable SourcePack artifact je poškozen: {rel}")
+        if inventory_only and (current.stat().st_size != 0 or frozen.stat().st_size != 0):
+            raise ContractError(f"Místní inventář prázdných souborů obsahuje neprázdný zdroj: {rel}")
         rows.append(SimpleNamespace(
             rel_path=rel,
             abs_path=str(current),
             frozen_path=str(frozen),
             size=current.stat().st_size,
             sha256=expected,
-            uploadable=True,
+            uploadable=not inventory_only,
+            inventory_only=inventory_only,
             reason=(
+                "inventory_only" if inventory_only else
                 "approved_source_pack"
                 if decision in {"approved", "approved_asset"}
                 else "legacy_policy_reapproved"
@@ -356,8 +365,13 @@ def _prepare_in_dir_upload(self: RunContext, client: OpenAIClient) -> dict[str, 
     in_dir = (self.cfg.in_dir or "").strip()
     if not in_dir or not os.path.isdir(in_dir):
         return None
+    if self.cfg.mode in {"GENERATE", "MODIFY"}:
+        # Příprava dostává IN ze zmrazených segmentů/originálů SourcePacku.
+        return None
     self._set(4, 0, "Kontroluji a nahrávám vstupní data…", stage="Vstupní data")
     zip_path = self._zip_in_dir(in_dir)
+    if os.path.getsize(zip_path) == 0:
+        return None
     up = client.upload_file(zip_path, purpose='user_data')
     file_id = up["id"]
     self._remember_file_name(file_id, os.path.basename(zip_path))
@@ -369,7 +383,7 @@ def _prepare_in_dir_upload(self: RunContext, client: OpenAIClient) -> dict[str, 
             "Zápis pomocné evidence selhal: %s", evidence_error
         )
 
-    if (not self.cfg.send_as_c or self.cfg.mode == "GENERATE") and self._preparation_cap("supports_vector_store"):
+    if self.cfg.use_file_search and self._preparation_cap("supports_file_search") and (not self.cfg.send_as_c or self.cfg.mode == "GENERATE") and self._preparation_cap("supports_vector_store"):
         try:
             self._set(6, 0, "Indexuji vstupní data pro file_search…", stage="Indexace")
             vs = client.create_vector_store(f"IN_{ts_code()}")
@@ -536,7 +550,7 @@ def prepare_modify_inputs(self: RunContext, client: OpenAIClient, diag_file_ids:
     """Připraví MODIFY výhradně ze schváleného SourcePacku a explicitních příloh."""
     self._set(8, 0, "Ověřuji zmrazený vstupní projekt IN…", stage="Vstupní data")
     root = self.cfg.in_dir
-    items = _approved_project_items(self, root)
+    items = _approved_project_items(self, root, include_inventory=True)
     up_items = list(items)
 
     tools = list(self._fs_tools or []) or None
@@ -589,4 +603,3 @@ def prepare_modify_inputs(self: RunContext, client: OpenAIClient, diag_file_ids:
         b_input_files,
         b_input_images,
     )
-

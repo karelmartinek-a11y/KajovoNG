@@ -5,7 +5,7 @@ import copy
 import json
 
 from PySide6.QtCore import QByteArray, QMimeData, QPointF, QRectF, QUrl, Qt, Signal
-from PySide6.QtGui import (QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap,
+from PySide6.QtGui import (QColor, QImage, QPainter, QPainterPath, QPen, QPixmap,
                           QTextCharFormat, QTextCursor, QTextDocument, QTextFormat, QTextImageFormat, QFontMetricsF)
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDoubleSpinBox, QFormLayout, QGraphicsItem,
                               QGraphicsObject, QGraphicsScene, QGraphicsView, QHBoxLayout, QListWidget,
@@ -138,24 +138,9 @@ def paint_layer(painter, layer, width, height):
         painter.drawEllipse(tail, width * .009, width * .009)
     elif layer["kind"] == "caption":
         painter.drawRect(rect)
-    inset = .18 if layer["kind"] in ("dialog", "thought") else .06
-    inner = rect.adjusted(rect.width() * inset, rect.height() * inset, -rect.width() * inset, -rect.height() * inset)
-    doc = QTextDocument()
-    font = QFont("Montserrat")
-    font.setPixelSize(max(1, round(layer["font_size"] * height)))
-    font.setBold(layer["kind"] == "sfx" or layer.get("bold", False))
-    doc.setDefaultFont(font)
-    doc.setDefaultStyleSheet("body { color: black; }")
-    doc.setPlainText(layer["text"])
-    cursor = QTextCursor(doc)
-    cursor.select(QTextCursor.Document)
-    ink = QTextCharFormat()
-    ink.setForeground(QColor("black"))
-    cursor.mergeCharFormat(ink)
-    option = doc.defaultTextOption()
-    option.setAlignment(Qt.AlignHCenter if layer["kind"] in ("dialog", "thought", "sfx") else Qt.AlignLeft)
-    doc.setDefaultTextOption(option)
-    doc.setTextWidth(inner.width())
+    from kajovo.comic_layout import text_document
+
+    doc, inner = text_document(layer, width, height)
     overflow = doc.size().height() > inner.height()
     painter.translate(inner.topLeft())
     doc.drawContents(painter, QRectF(0, 0, inner.width(), inner.height()))
@@ -219,8 +204,10 @@ class BalloonItem(QGraphicsObject):
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
+        self.prepareGeometryChange()
         self.layer["x"] = self.x() / self.size.width()
         self.layer["y"] = self.y() / self.size.height()
+        self.update()
         self.moved.emit()
 
 

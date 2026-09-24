@@ -163,7 +163,7 @@ def graph_scenario(tmp_path, batch, candidates):
     remaining = iter(candidates)
 
     def mutate(name, value, data):
-        if name == "A2_SPINE_V1":
+        if name == "A2_SPINE_V2":
             value["result"]["data"] = copy.deepcopy(next(remaining))
         elif name == "A2_FILE_SPEC_V1":
             value["result"]["data"]["interface_bindings"] = [
@@ -234,7 +234,7 @@ def test_new_a2_is_prepared_before_live_or_batch_generation(tmp_path, batch):
     assert results and not errors
     assert original == before
     names = format_names(responder)
-    assert names[:3] == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V1"]
+    assert names[:3] == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2", "A2_SPINE_V2"]
     assert names[3:11] == ["A2_FILE_SPEC_V1"] * len(prepared["files"])
     run_dir = Path(worker.log.paths.run_dir)
     original_record = json.loads(next((run_dir / "responses").glob("*A2_SPINE_v2_response_0*.json")).read_text(encoding="utf-8"))
@@ -269,9 +269,10 @@ def test_repair_receives_all_errors_and_current_prepared_manifest(tmp_path):
     bad["files"][1]["requires"].append("unknown-a")
     bad["files"][3]["requires"].append("unknown-b")
     worker, client, responder = graph_scenario(tmp_path, True, [bad, fixed])
+    worker.cfg.auto_repair = "within_approval"
     results, errors = run(worker, client)
     assert results and not errors
-    requests = [payload for payload in responder.calls if payload["text"]["format"]["name"] == "A2_SPINE_V1"]
+    requests = [payload for payload in responder.calls if payload["text"]["format"]["name"] == "A2_SPINE_V2"]
     assert len(requests) == 2
     original_input = json.loads(requests[0]["input"][0]["content"][0]["text"])
     run_dir = Path(worker.log.paths.run_dir)
@@ -300,11 +301,12 @@ def test_unrepairable_manifest_blocks_all_file_generation(tmp_path, batch, repea
         for index, candidate in enumerate(candidates):
             candidate["files"][0]["purpose"] = f"Odlišný kandidát {index}"
     worker, client, responder = graph_scenario(tmp_path, batch, candidates)
+    worker.cfg.auto_repair = "within_approval"
     with patch.object(worker, "_gen_file_chunks") as generate:
         results, errors = run(worker, client)
     assert not results and errors and "controller" in errors[0]
     assert ("NO_PROGRESS" in errors[0]) is repeated
-    assert format_names(responder) == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2"] + ["A2_SPINE_V1"] * (2 if repeated else 3)
+    assert format_names(responder) == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2"] + ["A2_SPINE_V2"] * (2 if repeated else 3)
     client.create_batch.assert_not_called()
     client.upload_file.assert_not_called()
     generate.assert_not_called()
@@ -312,13 +314,14 @@ def test_unrepairable_manifest_blocks_all_file_generation(tmp_path, batch, repea
 
 def test_repeated_wire_invalid_spine_stops_before_third_paid_request(tmp_path):
     def malformed(name, value, data):
-        if name == "A2_SPINE_V1":
+        if name == "A2_SPINE_V2":
             value["result"]["data"]["files"][0]["requires"] = "není seznam"
         return value
 
     worker, client, responder = scenario(tmp_path, "GENERATE", batch=True, mutate=malformed)
+    worker.cfg.auto_repair = "within_approval"
     results, errors = run(worker, client)
     assert not results and errors and "NO_PROGRESS" in errors[0]
-    assert format_names(responder) == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2"] + ["A2_SPINE_V1"] * 2
+    assert format_names(responder) == ["A0R_REQUIREMENTS_V2", "A1_PLAN_V2"] + ["A2_SPINE_V2"] * 2
     client.upload_file.assert_not_called()
     client.create_batch.assert_not_called()

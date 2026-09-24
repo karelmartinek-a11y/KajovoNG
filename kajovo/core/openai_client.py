@@ -81,6 +81,19 @@ class OpenAIClient:
     ) -> Any:
         """Kompatibilitni fasada; retry rozhoduje vyhradne OpenAITransport."""
         spec = operation_spec(method, path)
+        bundle = getattr(self, "evidence_bundle", None)
+        record = None
+        def observe(event, **details):
+            nonlocal record
+            if event == "dispatch_started":
+                record = bundle.record_request(
+                    json_body, name="provider_transport", endpoint="/v1" + path,
+                    method=method, request_role="transport",
+                    step_id=getattr(self, "evidence_step_id", ""),
+                )
+            if record is not None:
+                bundle.record_transport_event(record["request_record_id"], event, **details)
+
         return self._transport.request(
             spec,
             method,
@@ -89,6 +102,7 @@ class OpenAIClient:
             files=files,
             timeout=timeout,
             max_attempts=max_attempts,
+            observer=observe if bundle is not None else None,
         )
 
     def create_image(self, endpoint, body):
@@ -157,6 +171,11 @@ class OpenAIClient:
     def retrieve_file(self, file_id: str) -> Dict[str, Any]:
         self._validate_resource_id(file_id)
         return self._req("GET", f"/files/{file_id}")
+
+    def container_file_content(self, container_id: str, file_id: str) -> bytes:
+        self._validate_resource_id(container_id)
+        self._validate_resource_id(file_id)
+        return self._req("GET", f"/containers/{container_id}/files/{file_id}/content")
 
     def configure_validation(self, settings):
         from .response_policy import ResponsePolicy
@@ -240,6 +259,9 @@ class OpenAIClient:
         if metadata:
             validate_input_file_sizes(metadata)
         for tool in payload.get("tools", []):
+            if tool.get("type") == "code_interpreter":
+                for file_id in tool["container"].get("file_ids", []):
+                    self.retrieve_file(file_id)
             for vs_id in tool.get("vector_store_ids", []):
                 self._validate_resource_id(vs_id)
                 store = self._req("GET", f"/vector_stores/{vs_id}")
@@ -347,7 +369,8 @@ class OpenAIClient:
         self._validate_resource_id(response_id)
         if cancel:
             return self._req("POST", f"/responses/{response_id}/cancel", max_attempts=1)
-        return self._req("GET", f"/responses/{response_id}")
+        # Opakování pollingu řídí ResponseJournal, nikoli vnořený transport.
+        return self._req("GET", f"/responses/{response_id}", max_attempts=1)
 
     def retrieve_response(self, response_id):
         return self._response_operation(response_id)

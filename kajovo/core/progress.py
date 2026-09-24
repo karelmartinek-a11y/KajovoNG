@@ -7,11 +7,14 @@ import time
 
 
 TERMINAL_RUN_STATES = {
+    "needs_clarification",
     "completed",
+    "completed_unverified",
     "closed",
     "dry_run",
     "plan_ready",
     "qfile_plan_ready",
+    "waiting_manual_resource",
     "partial",
     "files_complete_unverified",
     "unfinished_record",

@@ -9,6 +9,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from ..runs.locking import ExecutionLock
 
 from ..utils import ensure_dir, safe_join_under_root, sha256_file, validate_relative_path
 from .contracts import canonical_bytes, canonical_sha256, parse_json_strict
@@ -131,7 +132,7 @@ def _validate_journal_plan(journal: dict[str, Any], run_root: Path) -> None:
         raise OrchestrationError("PUBLISH_JOURNAL_HASH", str(run_root))
 
 
-class _TargetPublishLock:
+class TargetPublishLock:
     """Procesový zámek OS; pád uvolní handle bez mazání souboru jiného procesu."""
     def __init__(self, target_root: Path):
         self.target_root = target_root.resolve()
@@ -304,6 +305,7 @@ def _journal_report(journal: dict[str, Any], journal_path: Path, run_root: Path)
 
 
 def _restore_old(run_root: Path, target_root: Path, row: dict[str, Any]) -> None:
+    _assert_no_link_boundary(target_root, row["path"])
     destination = Path(safe_join_under_root(str(target_root), row["path"]))
     actual = _hash_if_file(destination)
     if actual != row["new_hash"]:
@@ -329,6 +331,9 @@ def _restore_old(run_root: Path, target_root: Path, row: dict[str, Any]) -> None
         if _hash_if_file(destination) != row["expected_old_hash"]:
             raise OrchestrationError("PUBLISH_ROLLBACK_HASH", row["path"])
     elif destination.exists():
+        _assert_no_link_boundary(target_root, row["path"])
+        if _hash_if_file(destination) != row["new_hash"]:
+            raise OrchestrationError("PUBLISH_RECOVERY_CONFLICT", row["path"])
         destination.unlink()
         _fsync_directory(destination.parent)
 
@@ -361,6 +366,7 @@ def _recover_journal_locked(
     foreign: list[str] = []
     new_count = 0
     for row in entries:
+        _assert_no_link_boundary(target_root, row["path"])
         destination = Path(safe_join_under_root(str(target_root), row["path"]))
         actual = _hash_if_file(destination)
         if actual == row["new_hash"]:
@@ -415,6 +421,12 @@ def _recover_journal_locked(
 
 def recover_publish_journal(run_dir: str | Path) -> dict[str, Any] | None:
     """Idempotentně dokončí commit nebo rollback po tvrdém pádu procesu."""
+    with ExecutionLock(Path(run_dir) / "execution.lock"):
+        return recover_publish_journal_already_locked(run_dir)
+
+
+def recover_publish_journal_already_locked(run_dir: str | Path) -> dict[str, Any] | None:
+    """Obnova pro volajícího, který už drží execution.lock tohoto běhu."""
     run_root = Path(run_dir).resolve()
     journal_path = run_root / "manifests" / "publish_journal.json"
     if not journal_path.is_file():
@@ -424,17 +436,23 @@ def recover_publish_journal(run_dir: str | Path) -> dict[str, Any] | None:
         target_root = Path(journal["plan"]["target_root"]).resolve()
     except (KeyError, TypeError) as exc:
         raise OrchestrationError("PUBLISH_JOURNAL_INVALID", str(journal_path)) from exc
-    with _TargetPublishLock(target_root):
+    with TargetPublishLock(target_root):
         return _recover_journal_locked(journal_path, run_root, journal)
 
 
 def commit_publish(plan: PublishPlan, *, run_dir: str | Path) -> dict[str, Any]:
+    with ExecutionLock(Path(run_dir) / "execution.lock"):
+        return commit_publish_already_locked(plan, run_dir=run_dir)
+
+
+def commit_publish_already_locked(plan: PublishPlan, *, run_dir: str | Path) -> dict[str, Any]:
+    """Commit pro volajícího, který už drží execution.lock tohoto běhu."""
     run_root = Path(run_dir).resolve()
     target_root = Path(plan.target_root).resolve()
     journal_path = run_root / "manifests" / "publish_journal.json"
     journal_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with _TargetPublishLock(target_root):
+    with TargetPublishLock(target_root):
         if journal_path.is_file():
             existing = _read_journal(journal_path)
             report = _recover_journal_locked(journal_path, run_root, existing)
@@ -519,17 +537,46 @@ def _apply_committed_report_to_state(
     )
 
 
+def _record_publication(run_root: Path, report: dict[str, Any]) -> None:
+    """Dokončí evidenci i po pádu mezi publikací a zapečetěním běhu."""
+    from ..run_bundle import LegacyRunAdapter, RunBundle
+    if not (run_root / "bundle.json").is_file():
+        return
+    bundle = RunBundle(run_root)
+    bundle.update_run({"status": "completed_unverified", "result_class": "completed_unverified"})
+    recorded = any(
+        event.get("event_type") == "publication.completed_unverified"
+        and (event.get("data") or {}).get("plan_id") == report["plan_id"]
+        for event in LegacyRunAdapter(run_root).events()
+    )
+    if not recorded:
+        bundle.append_event(
+            "publication.completed_unverified",
+            {"plan_id": report["plan_id"], "published": report["published"], "explicit_user_take": True},
+            source_module="orchestration.publish", operation="PUBLISH",
+            human_message="Uživatel výslovně převzal staged artefakty.",
+        )
+    bundle.seal()
+
+
 def publish_staged_run(run_dir: str | Path) -> dict[str, Any]:
-    """Explicit user action; recovers any prior transaction before new publication."""
+    """Publikuje stabilní staging pod společným zámkem běhu."""
+    with ExecutionLock(Path(run_dir) / "execution.lock"):
+        return publish_staged_run_already_locked(run_dir)
+
+
+def publish_staged_run_already_locked(run_dir: str | Path) -> dict[str, Any]:
+    """Publikace pro volajícího, který už drží execution.lock tohoto běhu."""
     run_root = Path(run_dir).resolve()
     state_path = run_root / "run_state.json"
     if not state_path.is_file():
         raise OrchestrationError("PUBLISH_RUN_MISSING", str(run_root))
 
-    recovery = recover_publish_journal(run_root)
+    recovery = recover_publish_journal_already_locked(run_root)
     state = parse_json_strict(state_path.read_text(encoding="utf-8"))
     if recovery and recovery.get("status") == "committed":
         _apply_committed_report_to_state(state_path, state, recovery)
+        _record_publication(run_root, recovery)
         return recovery
 
     if state.get("dry_run"):
@@ -555,24 +602,7 @@ def publish_staged_run(run_dir: str | Path) -> dict[str, Any]:
         expected[str(row["path"])] = row["expected_target_hash"]
 
     plan = prepare_publish(staged, out_dir, expected, run_dir=run_root)
-    report = commit_publish(plan, run_dir=run_root)
+    report = commit_publish_already_locked(plan, run_dir=run_root)
     _apply_committed_report_to_state(state_path, state, report)
-    try:
-        from ..run_bundle import RunBundle
-        bundle = RunBundle(run_root)
-        bundle.update_run({"status": "completed_unverified", "result_class": "completed_unverified"})
-        bundle.append_event(
-            "publication.completed_unverified",
-            {
-                "plan_id": report["plan_id"],
-                "published": report["published"],
-                "explicit_user_take": True,
-            },
-            source_module="orchestration.publish",
-            operation="PUBLISH",
-            human_message="Uživatel výslovně převzal staged artefakty bez úplného funkčního ověření.",
-        )
-        bundle.seal()
-    except (OSError, ValueError, KeyError):
-        pass
+    _record_publication(run_root, report)
     return report

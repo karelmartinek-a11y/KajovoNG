@@ -188,6 +188,7 @@ def operation_spec(method: str, path: str) -> OperationSpec:
 
     patterns: tuple[tuple[str, str, OperationSpec], ...] = (
         ("GET", r"/files/[A-Za-z0-9_-]+/content", FILE_CONTENT),
+        ("GET", r"/containers/[A-Za-z0-9_-]+/files/[A-Za-z0-9_-]+/content", FILE_CONTENT),
         ("GET", r"/files/[A-Za-z0-9_-]+", RETRIEVE_FILE),
         ("DELETE", r"/files/[A-Za-z0-9_-]+", DELETE_FILE),
         ("GET", r"/responses/[A-Za-z0-9_-]+", RETRIEVE_RESPONSE),
@@ -278,6 +279,7 @@ class OpenAITransport:
         files: dict[str, Any] | None = None,
         timeout: float | None = None,
         max_attempts: int | None = None,
+        observer=None,
     ) -> Any:
         if files is None and json_body is not None:
             try:
@@ -307,6 +309,16 @@ class OpenAITransport:
             for stream, position in file_positions:
                 stream.seek(position)
             try:
+                if observer:
+                    try:
+                        observer("dispatch_started")
+                    except Exception as exc:
+                        error = OpenAIError(
+                            "Požadavek nebyl odeslán: selhala místní evidence požadavku.",
+                            code="local_request_evidence_failed",
+                        )
+                        error.request_sent = False
+                        raise error from exc
                 headers = {"Authorization": f"Bearer {self.api_key}"}
                 if files is None:
                     headers["Content-Type"] = "application/json"
@@ -327,6 +339,8 @@ class OpenAITransport:
                         timeout=req_timeout,
                     )
             except (requests.Timeout, requests.ConnectionError) as exc:
+                if observer:
+                    observer("submission_unknown")
                 if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
                     raise SubmissionOutcomeUnknown(
                         spec.name, method, path, cause=exc
@@ -336,11 +350,15 @@ class OpenAITransport:
                     continue
                 raise OpenAIError(f"{method} {path} failed: {exc}") from exc
             except requests.RequestException as exc:
+                if observer:
+                    observer("submission_unknown")
                 if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
                     raise SubmissionOutcomeUnknown(spec.name, method, path, cause=exc) from exc
                 raise OpenAIError(f"{method} {path} failed: {exc}") from exc
 
             request_id = response.headers.get("x-request-id")
+            if observer:
+                observer("response_received", remote_request_id=request_id, status_code=response.status_code)
             if response.status_code >= 400:
                 excerpt = self._safe_excerpt(getattr(response, "text", ""))
                 transient = response.status_code in spec.retry_http_statuses
@@ -376,6 +394,8 @@ class OpenAITransport:
             content_type = str(response.headers.get("content-type", "")).lower()
             raw_content = getattr(response, "content", None)
             if not content_type.startswith("application/json"):
+                if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
+                    raise SubmissionOutcomeUnknown(spec.name, method, path, request_id=request_id)
                 return raw_content if isinstance(raw_content, bytes) else response.content
 
             try:

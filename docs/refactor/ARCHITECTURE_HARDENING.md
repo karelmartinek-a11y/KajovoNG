@@ -5,7 +5,7 @@ Tento dokument eviduje uzavřený refaktor vzniklý z forenzního auditu repozit
 ## Runtime hranice
 
 - Produkční desktopové UI je výhradně `kajovo.studio` a vstupní bod `kajovo.app.main` používá `kajovo.studio.application.create_window`.
-- `kajovo.desktop` zůstává pouze zdrojový regresní referenční materiál. Není součástí instalovaného ani distribuovaného balíku a produkční `app`/`studio` jej nesmí importovat.
+- `kajovo.desktop` je odstraněný. Produkční vstup, regresní testy i snímkování používají `kajovo.studio` nebo neutrální core vrstvy; žádná cesta nesmí spoléhat na chybějící legacy strom.
 - Historický `scripts/render_ui.py` je kompatibilní vstup, který deleguje na produkční `scripts/render_studio.py`.
 - `kajovo.core` nesmí záviset na žádném UI balíku.
 

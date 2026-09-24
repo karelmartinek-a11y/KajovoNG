@@ -4,6 +4,25 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from .request_rules import validate_response_payload
+from .contracts import ContractError
+from .openai_transport import SubmissionOutcomeUnknown
+
+
+def validate_batch_identity(payload, *, input_file_id=None, batch_id=None, endpoint="/v1/responses"):
+    """Ověří identitu skutečné dávky, nikoli pouze její stav."""
+    if not isinstance(payload, dict):
+        raise ContractError("BATCH odpověď musí být objekt.")
+    if not isinstance(payload.get("id"), str) or not payload["id"]:
+        raise ContractError("BATCH odpověď nemá provider ID.")
+    if batch_id is not None and payload["id"] != batch_id:
+        raise ContractError("BATCH provider ID neodpovídá požadované dávce.")
+    if not isinstance(payload.get("input_file_id"), str) or not payload["input_file_id"]:
+        raise ContractError("BATCH odpověď nemá input_file_id.")
+    if input_file_id is not None and payload["input_file_id"] != input_file_id:
+        raise ContractError("BATCH input_file_id neodpovídá zmrazenému vstupu.")
+    if payload.get("endpoint") != endpoint:
+        raise ContractError("BATCH endpoint neodpovídá zmrazenému endpointu.")
+    return payload
 
 
 def response_batch_submit_payload(
@@ -63,12 +82,16 @@ def submit_verified_batch(
     # OpenAIClient dostane přesně řádky z pracovního JSONL, které již prošly
     # deterministickou lokální validací. create_batch proto neprovádí žádný
     # další placený test a zachovává jedinou veřejnou transportní cestu.
-    return client.create_batch(
+    result = client.create_batch(
         input_file_id=submit_payload["input_file_id"],
         endpoint=submit_payload["endpoint"],
         completion_window=submit_payload["completion_window"],
         _prevalidated_rows=verified_rows,
     )
+    try:
+        return validate_batch_identity(result, input_file_id=input_file_id, endpoint=endpoint)
+    except ContractError as exc:
+        raise SubmissionOutcomeUnknown("batch.create", "POST", "/v1/batches", cause=exc) from exc
 
 
 def exact_batch_matches(
@@ -82,5 +105,5 @@ def exact_batch_matches(
         for record in records
         if isinstance(record, dict)
         and record.get("input_file_id") == input_file_id
-        and (record.get("endpoint") or "/v1/responses") == endpoint
+        and record.get("endpoint") == endpoint
     ]

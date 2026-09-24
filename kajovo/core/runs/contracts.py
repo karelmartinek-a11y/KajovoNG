@@ -65,7 +65,8 @@ TERMINAL_STATUSES = frozenset(
 _ALLOWED_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = MappingProxyType(
     {
         RunStatus.CREATED: frozenset(
-            {RunStatus.PREPARING, RunStatus.CANCELLED, RunStatus.FAILED}
+            {RunStatus.PREPARING, RunStatus.CANCELLED, RunStatus.FAILED,
+             RunStatus.INTERRUPTED}
         ),
         RunStatus.PREPARING: frozenset(
             {
@@ -87,6 +88,7 @@ _ALLOWED_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = MappingProxyTyp
         RunStatus.PROCESSING_RESPONSE: frozenset(
             {
                 RunStatus.DELIVERING,
+                RunStatus.UNKNOWN_REMOTE_SUBMISSION,
                 RunStatus.FINALIZING,
                 RunStatus.CANCELLED,
                 RunStatus.FAILED,
@@ -103,6 +105,7 @@ _ALLOWED_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = MappingProxyTyp
         ),
         RunStatus.FINALIZING: frozenset(
             {
+                RunStatus.CANCELLED,
                 RunStatus.COMPLETED,
                 RunStatus.FAILED,
                 RunStatus.INTERRUPTED,

@@ -10,6 +10,7 @@ from .structured_output import array, obj
 from .orchestration.contracts import canonical_bytes
 
 IMAGE_MODEL = "gpt-image-2.5-sunburst-2026-09-08"
+DEFAULT_PANEL_FORMAT = {"width": 2048, "height": 2048, "dpi": 300, "fit": "pad", "experimental": False}
 TEXT_MODEL = "gpt-6-astra"
 BIBLE_FIELDS = (
     "art_direction", "linework_rules", "color_rules", "lighting_rules", "materials",

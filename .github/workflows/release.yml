@@ -212,8 +212,11 @@ jobs:
         shell: pwsh
         run: |
           python tools/compatibility_smoke.py
+          if ($LASTEXITCODE -ne 0) { throw "Kontrola kompatibility selhala." }
           python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw "Kontrola závislostí selhala." }
           python -m pip_audit
+          if ($LASTEXITCODE -ne 0) { throw "Audit závislostí selhal." }
       - name: Validate, archive and checksum Windows build
         shell: pwsh
         env:
@@ -234,7 +237,9 @@ jobs:
 
           $releaseDir = Join-Path $PWD "release"
           New-Item -ItemType Directory -Force $releaseDir | Out-Null
-          Copy-Item "build-metadata/*" $releaseDir -Force
+          Get-ChildItem "build-metadata" -File | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $releaseDir ("windows-x64-" + $_.Name))
+          }
           $archiveName = "$env:ASSET_STEM-windows-x64.zip"
           $archivePath = Join-Path $releaseDir $archiveName
           Push-Location "dist"
@@ -349,7 +354,9 @@ jobs:
           esac
 
           mkdir -p release
-          cp build-metadata/* release/
+          for metadata_file in build-metadata/*; do
+            cp "$metadata_file" "release/${platform}-$(basename "$metadata_file")"
+          done
           archive_name="${ASSET_STEM}-${platform}.zip"
           archive_path="release/${archive_name}"
           ditto -c -k --sequesterRsrc --keepParent dist/Kajovo.app "$archive_path"

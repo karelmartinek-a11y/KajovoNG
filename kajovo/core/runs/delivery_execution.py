@@ -38,6 +38,9 @@ def _create_snapshot(self: RunContext, root: str) -> str:
 
 
 def _save_out_files(self: RunContext, files: list[dict[str, Any]]) -> dict[str, Any]:
+    if self.lifecycle_status is RunStatus.REMOTE_WORK:
+        # Obnovené výsledky i ruční podklady mohou dojít k dodání bez nového API volání.
+        self.transition(RunStatus.PROCESSING_RESPONSE)
     if self.lifecycle_status is not RunStatus.CREATED:
         self.transition(RunStatus.DELIVERING)
     # Tenký Qt adaptér. Vlastní validace, hash guardy a durable zápis jsou
@@ -64,6 +67,7 @@ def _save_out_files(self: RunContext, files: list[dict[str, Any]]) -> dict[str, 
             frozen_targets if strict_targets else None
         ),
         additional_staged=staged_resources,
+        originals=getattr(self, "_delivery_originals", None),
     )
     self._progress_stage = "Ukládání"
     return save_out_files(context, files)

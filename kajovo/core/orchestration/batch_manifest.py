@@ -17,10 +17,11 @@ BATCH_MANIFEST_V4_SCHEMA: dict[str, Any] = {
         "manifest_id": {"type": "string"},
         "route": {"type": "string", "enum": ["responses_batch", "image_batch"]},
         "model": {"type": "string"},
-        "endpoint": {"type": "string"},
-        "wave_no": {"type": "integer"},
+        "endpoint": {"type": "string", "enum": ["/v1/responses", "/v1/images/edits", "/v1/images/generations"]},
+        "wave_no": {"type": "integer", "minimum": 0},
         "rows": {
             "type": "array",
+            "minItems": 1,
             "items": {
                 "type": "object",
                 "properties": {
@@ -57,6 +58,18 @@ BATCH_MANIFEST_V4_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+for _key in ("run_id", "manifest_id", "model"):
+    BATCH_MANIFEST_V4_SCHEMA["properties"][_key]["pattern"] = r"\S"
+for _key in ("input_file_id", "provider_batch_id"):
+    BATCH_MANIFEST_V4_SCHEMA["properties"][_key]["anyOf"][0]["pattern"] = r"\S"
+_row_properties = BATCH_MANIFEST_V4_SCHEMA["properties"]["rows"]["items"]["properties"]
+for _key in ("custom_id", "target_id"):
+    _row_properties[_key]["pattern"] = r"\S"
+for _key in ("work_order_hash", "body_hash"):
+    _row_properties[_key]["pattern"] = "^[0-9a-f]{64}$"
+_row_properties["expected_target_hash"]["anyOf"][0]["pattern"] = "^[0-9a-f]{64}$"
+_row_properties["target_path"]["anyOf"][0]["pattern"] = r"\S"
+
 
 def validate_batch_manifest_v4(value: dict[str, Any]) -> None:
     try:
@@ -64,6 +77,13 @@ def validate_batch_manifest_v4(value: dict[str, Any]) -> None:
     except jsonschema.ValidationError as exc:
         raise OrchestrationError("BATCH_MANIFEST_INVALID", exc.message) from exc
     ids = [row["custom_id"] for row in value["rows"]]
+    endpoints = {"responses_batch": {"/v1/responses"}, "image_batch": {"/v1/images/edits", "/v1/images/generations"}}
+    if value["endpoint"] not in endpoints[value["route"]]:
+        raise OrchestrationError("BATCH_ENDPOINT_INVALID", value["endpoint"])
+    if value["state"] not in {"prepared", "failed"} and not value["input_file_id"]:
+        raise OrchestrationError("BATCH_INPUT_MISSING", value["manifest_id"])
+    if value["state"] in {"submitted", "remote_terminal", "imported", "partial"} and not value["provider_batch_id"]:
+        raise OrchestrationError("BATCH_PROVIDER_ID_MISSING", value["manifest_id"])
     if not ids or len(ids) != len(set(ids)):
         raise OrchestrationError(
             "BATCH_CUSTOM_ID_INVALID",
@@ -133,7 +153,7 @@ _ALLOWED = {
     "submitted": {"remote_terminal", "failed"},
     "remote_terminal": {"imported", "partial", "failed"},
     "imported": set(),
-    "partial": set(),
+    "partial": {"imported"},
     "failed": set(),
 }
 

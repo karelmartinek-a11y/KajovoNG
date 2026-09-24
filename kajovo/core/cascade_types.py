@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -33,6 +33,12 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
+def _closed_fields(cls, data):
+    unknown = set(data) - {item.name for item in fields(cls)}
+    if unknown:
+        raise ValueError(f"{cls.__name__}: neznámá pole {sorted(unknown)}.")
+
+
 @dataclass
 class CascadeDecisionOption:
     value: str = ""
@@ -50,6 +56,7 @@ class CascadeDecisionOption:
     def from_dict(cls, data: Dict[str, Any]) -> "CascadeDecisionOption":
         if not isinstance(data, dict):
             raise ValueError("Volba rozhodnutí musí být objekt.")
+        _closed_fields(cls, data)
         value = data.get("value", "")
         target_step_id = data.get("target_step_id", "")
         target_step_number = data.get("target_step_number", 0)
@@ -87,6 +94,7 @@ class CascadeInput:
     def from_dict(cls, data: Dict[str, Any]) -> "CascadeInput":
         if not isinstance(data, dict):
             raise ValueError("Vstup kroku musí být objekt.")
+        _closed_fields(cls, data)
         for key in ("id", "name", "source", "value", "source_step_id", "source_output_id"):
             if key in data and not isinstance(data[key], str):
                 raise ValueError(f"{key} vstupu musí být text.")
@@ -132,6 +140,7 @@ class CascadeOutput:
     def from_dict(cls, data: Dict[str, Any]) -> "CascadeOutput":
         if not isinstance(data, dict):
             raise ValueError("Výstup kroku musí být objekt.")
+        _closed_fields(cls, data)
         for key in ("id", "name", "kind", "file_type", "file_name", "file_mode", "modify_input_id"):
             if key in data and not isinstance(data[key], str):
                 raise ValueError(f"{key} výstupu musí být text.")
@@ -175,6 +184,7 @@ class CascadeOutputRef:
     def from_dict(cls, data: Dict[str, Any]) -> "CascadeOutputRef":
         if not isinstance(data, dict):
             raise ValueError("Odkaz na finální výstup musí být objekt.")
+        _closed_fields(cls, data)
         step_id = data.get("step_id", "")
         output_id = data.get("output_id", "")
         if not isinstance(step_id, str) or not isinstance(output_id, str):
@@ -277,6 +287,7 @@ class CascadeStep:
     def from_dict(cls, data: Dict[str, Any]) -> "CascadeStep":
         if not isinstance(data, dict):
             raise ValueError("Krok kaskády musí být objekt.")
+        _closed_fields(cls, data)
         for key in (
             "id",
             "title",
@@ -362,7 +373,8 @@ class CascadeStep:
                 str(x) for x in (data.get("expected_out_files") or []) if str(x).strip()
             ],
         )
-        step.ensure_inputs()
+        if step.deterministic:
+            step.ensure_inputs()
         step.ensure_outputs()
         return step
 
@@ -404,6 +416,7 @@ class CascadeDefinition:
     def from_dict(cls, data: Dict[str, Any]) -> "CascadeDefinition":
         if not isinstance(data, dict):
             raise ValueError("Definice kaskády musí být objekt.")
+        _closed_fields(cls, data)
         for key in ("name", "default_out_dir", "run_from_step_id"):
             if key in data and not isinstance(data[key], str):
                 raise ValueError(f"{key} musí být text.")
@@ -421,8 +434,8 @@ class CascadeDefinition:
             if type(timestamp) not in (int, float) or not math.isfinite(timestamp) or timestamp < 0:
                 raise ValueError("Čas kaskády musí být konečné nezáporné číslo.")
         version = data.get("version", 1)
-        if type(version) is not int or version <= 0:
-            raise ValueError("Verze kaskády musí být kladné celé číslo.")
+        if type(version) is not int or version not in {1, 2}:
+            raise ValueError("Podporované verze kaskády jsou pouze 1 a 2.")
         return cls(
             name=str(data.get("name") or "Unnamed Cascade"),
             steps=steps,

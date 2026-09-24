@@ -86,8 +86,8 @@ def test_find_incomplete_run_skips_corrupt_terminal_and_unrelated_entries(tmp_pa
     corrupt = tmp_path / "RUN_004" / "run_state.json"
     corrupt.parent.mkdir()
     corrupt.write_text("{neúplný JSON", encoding="utf-8")
-    write_json(tmp_path / "RUN_003" / "run_state.json", {"status": "response_pending"})
-    write_json(tmp_path / "RUN_002" / "run_state.json", {"status": "running"})
+    write_json(tmp_path / "RUN_003" / "run_state.json", {"status": "response_pending", "created_at": 3})
+    write_json(tmp_path / "RUN_002" / "run_state.json", {"status": "running", "created_at": 2})
     (tmp_path / "RUN_006").write_text("soubor není běh", encoding="utf-8")
     before = file_snapshot(tmp_path)
     assert find_last_incomplete_run(str(tmp_path)) == "RUN_003"
@@ -184,6 +184,6 @@ def test_find_incomplete_run_skips_ambiguous_duplicate_key_state(tmp_path):
     )
     write_json(
         tmp_path / "RUN_998" / "run_state.json",
-        {"status": "response_pending"},
+        {"status": "response_pending", "created_at": 998},
     )
     assert find_last_incomplete_run(str(tmp_path)) == "RUN_998"

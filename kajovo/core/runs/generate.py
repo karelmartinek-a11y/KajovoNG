@@ -35,7 +35,6 @@ def _run_v3_generate_production(
     files_by_path = {
         str(row["path"]): row for row in struct["spine"]["files"]
     }
-    self._delivery_verified_artifacts = {}
     generated_text: dict[str, str] = {}
     resource_pending: list[dict[str, Any]] = []
 
@@ -139,12 +138,15 @@ def _run_v3_generate_production(
             ),
             text_scope,
             requirements=self._delivery_snapshot["requirements"],
+            source_segments=self._delivery_snapshot.get("source_segments"),
+            requirements_wrapper=self._delivery_snapshot.get("requirements_wrapper"),
             maximum_quality=self.cfg.maximum_quality,
             recovery_instruction=self.cfg.recovery_instruction,
             run_config=self.cfg,
             expected_target_hashes=expected,
             approved_paths=text_scope,
             completed_targets=completed,
+            verified_artifacts=self._delivery_verified_artifacts,
         )
         manifest["resource_completed_paths"] = sorted(
             path
@@ -430,20 +432,7 @@ def _run_a_generate(
             "missing_deliverables": missing,
         }
 
-    a1_text = self.cfg.prompt or ""
-    if self.cfg.recovery_instruction:
-        a1_text += self._recovery_suffix()
-    a1_text = self._with_diag_text(
-        self._append_io_reference(
-            a1_text,
-            self._files_with_in_dir(
-                self.cfg.attached_file_ids + diag_file_ids
-            ),
-        )
-    )
     note = self._in_dir_fallback_note()
-    if note:
-        a1_text += "\n\n" + note
     input_files, input_images = self._build_input_attachments(
         client, self._input_file_ids()
     )
@@ -452,7 +441,10 @@ def _run_a_generate(
         client,
         "GENERATE",
         base_prev_id,
-        a1_text,
+        {"recovery_instruction": self.cfg.recovery_instruction,
+         "diagnostics": self._diag_text if self._should_inline_diag_text() else "",
+         "input_inventory_note": note or "",
+         "reference_file_ids": self._files_with_in_dir(self.cfg.attached_file_ids + diag_file_ids)},
         input_files,
         input_images,
         self._fs_tools,

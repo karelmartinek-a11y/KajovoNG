@@ -9,7 +9,7 @@ def chunk(index, count, more, following):
 
 
 def raw(*payloads):
-    return '\n'.join(json.dumps({'response': {'body': {'status': 'completed', 'output_text': json.dumps(payload)}}}) for payload in payloads).encode()
+    return '\n'.join(json.dumps({'response': {'status_code': 200, 'body': {'status': 'completed', 'output_text': json.dumps(payload)}}}) for payload in payloads).encode()
 
 
 @pytest.mark.parametrize('metadata', [chunk(0, 3, False, None), chunk(0, 1, True, 1), chunk(0, True, False, None), chunk(0, 10**12, False, None), chunk(0, 1, False, 1), chunk(0, 0, True, True)])

@@ -36,6 +36,10 @@ class ModelsPage(QWidget):
         self.search = form.text("models.search", "Vyhledat model")
         self.compatible = form.check("models.compatible", "Pouze modely vhodné pro práci s projektem", True)
         self.batch = form.check("models.batch", "Podpora dávkového zpracování")
+        self.batch_endpoint = form.choice("models.batch_endpoint", "Endpoint dávky", [
+            ("Responses", "/v1/responses"), ("Obrazová editace", "/v1/images/edits"),
+            ("Generování obrazů", "/v1/images/generations"),
+        ])
         self.images = form.check("models.images", "Podpora obrazového vstupu")
         root.addWidget(form)
         self.listing = QListWidget()
@@ -66,10 +70,13 @@ class ModelsPage(QWidget):
                 spec = model_spec(model)
             except ValueError:
                 spec = {}
-            if self.compatible.isChecked() and not selectable(model):
+            image_batch = self.batch.isChecked() and self.batch_endpoint.currentData() != "/v1/responses"
+            if self.compatible.isChecked() and not image_batch and not selectable(model):
                 continue
-            if self.batch.isChecked() and not spec.get("batch"):
-                continue
+            if self.batch.isChecked():
+                from kajovo.core.model_registry import supports_batch_endpoint
+                if not spec or not supports_batch_endpoint(model, self.batch_endpoint.currentData()):
+                    continue
             if self.images.isChecked() and "image_input" not in spec.get("features", []):
                 continue
             text = model + (" · výchozí" if model == self.context.settings.default_model else "")
@@ -243,7 +250,7 @@ class StudioWindow(QMainWindow):
             operation = self.comics.service.store.get("operations", identifier)
             self.comics.project_id = operation["project_id"]
             self.comics.refresh_projects()
-            self.comics.tabs.setCurrentIndex(4)
+            self.comics.tabs.setCurrentWidget(self.comics.history_page)
             self.select_page("comics")
         except ValueError as error:
             self.history.notice.setText(str(error))

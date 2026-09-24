@@ -1,6 +1,6 @@
 # Pevná matice modelů OpenAI
 
-Verze 2026-09-14.1. 169 přesných identifikátorů a snapshotů; 65 povolených pro pracovní Responses.
+Verze 2026-09-22.2. 169 přesných identifikátorů a snapshotů; 65 povolených pro pracovní Responses.
 
 Úplná pole obsahuje [CSV](MODEL_MATRIX.csv); kombinace pracovních postupů [matice požadavků](REQUEST_MATRIX.md). Pravidla jsou součástí balíčku `kajovo/core/openai_model_matrix.json`. Za běhu se nestahují ani neodvozují z názvů modelů.
 

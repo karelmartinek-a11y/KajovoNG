@@ -44,7 +44,7 @@ Na hlavní ploše zůstává hledání, projekt, druh a stav. Datum, model, tran
 
 ## Typové detaily
 
-- **GENERATE:** A0R → A1 → A2 → volitelně A2Q → A3, původní zadání, LIVE/BATCH hranice, request/response, tokeny, retry, artefakty a validace. Cena je `Není evidováno`, pokud v evidence není číselná hodnota.
+- **GENERATE:** A0R → A1 → A2 → volitelně A2Q → A3, původní zadání, LIVE/BATCH hranice, request/response, tokeny, retry, artefakty a validace. Peněžní odhady ani ceny se nepočítají a nezobrazují.
 - **MODIFY:** B0R → B1 → B2 → volitelně B2Q → B3 a deterministická mapa změněné/nové/zachované/odstraněné/chybové/přeskočené. Textový diff používá archivovaný originál a výsledek; velké nebo binární soubory ukazují metadata a hashe. Dry-run je návrh a ne hotový zápis do OUT.
 - **QA:** zadání, přílohy, lidský text odpovědi, response/request ID, model, tokeny, incomplete reason a error.
 - **QFILE:** zadání, výsledný ArtifactRecord, MIME preview a samostatné stavy `souborový kontrakt platný` a `obsah ověřen`. Text, obrázek a PDF mají read-only náhled; ostatní formáty metadata a externí otevření.

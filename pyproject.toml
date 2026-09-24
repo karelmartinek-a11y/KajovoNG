@@ -49,6 +49,8 @@ namespaces = false
 
 [tool.setuptools.data-files]
 "resources" = ["resources/studio-symbol.png", "resources/Kajovo_new.png", "resources/montserrat_regular.ttf", "resources/montserrat_bold.ttf"]
+"resources/orchestration/contracts/local" = ["resources/orchestration/contracts/local/*.schema.json"]
+"resources/orchestration/contracts/wire" = ["resources/orchestration/contracts/wire/*.schema.json"]
 
 [tool.ruff]
 line-length = 100

@@ -52,17 +52,19 @@ def test_manifest_path_conflicts(paths):
         validate_paths([{"path": path} for path in paths])
 
 
-def test_invalid_generated_json_fails_instead_of_returning_empty_file(tmp_path):
+@pytest.mark.parametrize("policy,attempts", [("off", 1), ("within_approval", 3)])
+def test_invalid_generated_json_fails_instead_of_returning_empty_file(tmp_path, policy, attempts):
     from test_workflows import make_worker
     from delivery_fixtures import delivery_payloads
     worker = make_worker(tmp_path, "GENERATE")
+    worker.cfg.auto_repair = policy
     req, plan, struct = delivery_payloads(files=[{"path": "keep.txt"}])
     worker._delivery_snapshot = {"requirements": req, "plan": plan, "structure": struct}
     client = Mock()
     client.create_response.return_value = {"id": "response", "status": "completed", "output_text": "invalid"}
     with pytest.raises(ContractError):
         worker._gen_file_chunks(client, "previous", "A3_FILE", "keep.txt", None, [])
-    assert client.create_response.call_count == 3
+    assert client.create_response.call_count == attempts
 
 
 class ContractsTests(unittest.TestCase):

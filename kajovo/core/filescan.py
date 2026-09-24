@@ -21,6 +21,7 @@ class ScanItem:
     uploadable: bool
     reason: str
     sensitive: bool
+    inventory_only: bool = False
 
 def is_probably_binary(path: str) -> bool:
     try:
@@ -96,10 +97,6 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
                 items.append(ScanItem(rel_path, abs_path, size, None, False, "denied_extension", False))
                 continue
 
-            if size == 0:
-                items.append(ScanItem(rel_path, abs_path, size, None, False, "empty_file", False))
-                continue
-
             sensitive = (fn.lower() in SENSITIVE_NAMES) or fn.lower().startswith(".env.") or rel_path.lower().endswith(".env")
             if size > max_size_bytes:
                 items.append(ScanItem(rel_path, abs_path, size, None, False, "too_large", sensitive))
@@ -130,7 +127,9 @@ def scan_tree(root_dir: str, root_name: str, deny_dirs: List[str], deny_exts: Op
                 items.append(ScanItem(rel_path, abs_path, size, None, False, "read_failed", True))
                 continue
 
-            items.append(ScanItem(rel_path, abs_path, size, sha, True, "ok", sensitive or secret_hit))
+            items.append(ScanItem(rel_path, abs_path, size, sha, size != 0,
+                                  "ok" if size else "empty_file", sensitive or secret_hit,
+                                  inventory_only=size == 0))
 
     items.sort(key=lambda x: x.rel_path)
     return items
@@ -145,6 +144,7 @@ def build_manifest(root_dir: str, items: List[ScanItem], extra: Optional[Dict[st
                 "size": it.size,
                 "sha256": it.sha256,
                 "uploadable": it.uploadable,
+                "inventory_only": it.inventory_only,
                 "reason": it.reason,
                 "sensitive": it.sensitive,
             } for it in items

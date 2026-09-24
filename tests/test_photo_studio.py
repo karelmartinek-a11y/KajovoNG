@@ -110,6 +110,66 @@ def _image_model():
     return models[0]
 
 
+def _frozen_job(tmp_path):
+    source = tmp_path / "input.png"
+    source.write_bytes(_image_bytes())
+    return source, new_job(
+        source_paths=[str(source)], human_prompt="Upravit", professional_prompt="", final_prompt="Upravit",
+        prompt_source="manual", template_id="", prompt_model="", prompt_response_id="",
+        image_model=_image_model(), quality="high", size="auto", output_format="png",
+        output_dir=str(tmp_path / "out"),
+    )
+
+
+def _prepare_import_job(job, log_dir):
+    from kajovo.core.photo_batch import _prepare_photo_submit, _mark_photo_submission
+    job.input_file_id = job.input_file_id or "file_input"
+    for item in job.items:
+        item.uploaded_file_id = "file_source"
+    rows = [image_edit_row(item, model=job.image_model, prompt=job.final_prompt,
+                           quality=job.quality, size=job.size, output_format=job.output_format)
+            for item in job.items]
+    _prepare_photo_submit(job, rows, log_dir)
+    _mark_photo_submission(job, rows, log_dir, job.batch_id or None, unknown=not bool(job.batch_id))
+
+
+def _complete_identity(job, client):
+    client.retrieve_batch.return_value.update(id=job.batch_id or "batch_recovered",
+                                              input_file_id=job.input_file_id, endpoint="/v1/images/edits")
+
+
+def test_photo_changed_source_is_rejected_before_upload(tmp_path):
+    source, job = _frozen_job(tmp_path)
+    source.write_bytes(b"changed")
+    client = Mock()
+    with pytest.raises(ValueError, match="změnil"):
+        prepare_and_submit(client, job, tmp_path / "LOG")
+    client.upload_file.assert_not_called()
+
+
+@pytest.mark.parametrize("fault", ["duplicate", "conflict", "unknown_error"])
+def test_photo_result_identity_is_checked_before_first_image_write(tmp_path, fault):
+    _, job = _frozen_job(tmp_path)
+    job.batch_id = "batch_identity"
+    _prepare_import_job(job, tmp_path / "LOG")
+    line = {"custom_id": job.items[0].custom_id, "error": None,
+            "response": {"status_code": 200, "body": {"data": [{"b64_json": base64.b64encode(_image_bytes()).decode()}]}}}
+    client = Mock()
+    client.retrieve_batch.return_value = {"id": job.batch_id, "status": "completed",
+        "output_file_id": "file_output", "error_file_id": "file_error" if fault != "duplicate" else None,
+        "request_counts": {"total": 1, "completed": 1, "failed": 0}}
+    output = [line, line] if fault == "duplicate" else [line]
+    error = {"custom_id": line["custom_id"] if fault == "conflict" else "unknown", "error": {"message": "error"}}
+    contents = {"file_output": "\n".join(json.dumps(row) for row in output).encode(),
+                "file_error": json.dumps(error).encode()}
+    client.file_content.side_effect = contents.__getitem__
+    _complete_identity(job, client)
+    with pytest.raises(ValueError, match="custom_id"):
+        download_results(client, job, tmp_path / "LOG")
+    assert job.items[0].status != "downloaded"
+    assert not list((tmp_path / "out").glob("*"))
+
+
 def test_image_model_selector_excludes_general_responses_models():
     models = image_edit_model_ids()
     assert "gpt-5.6-luna" not in models
@@ -126,6 +186,60 @@ def test_image_model_selector_excludes_general_responses_models():
             and endpoint[1] == "v1/images/edits"
             for endpoint in spec["endpoints"]
         )
+
+
+@pytest.mark.parametrize("fault", ["version", "bool_version", "count", "status", "hash", "duplicate"])
+def test_photo_persistence_rejects_invalid_contract(tmp_path, fault):
+    from kajovo.core.photo_batch import save_job, load_jobs
+    _, job = _frozen_job(tmp_path)
+    path = save_job(job, tmp_path / "LOG") / "photo_job.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if fault == "version":
+        data["schema_version"] = 99
+    elif fault == "bool_version":
+        data["schema_version"] = True
+    elif fault == "count":
+        data["request_total"] = "1"
+    elif fault == "status":
+        data["items"][0]["status"] = "unknown"
+    elif fault == "hash":
+        data["final_prompt_sha256"] = "a" * 64
+    else:
+        data["items"].append(data["items"][0])
+        data["request_total"] = 2
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_jobs(tmp_path / "LOG")
+
+
+@pytest.mark.parametrize("response", [{"body": {"data": []}}, {"status_code": "200", "body": {}}, {"status_code": 200, "body": []}])
+def test_photo_import_rejects_malformed_response_envelope(tmp_path, response):
+    _, job = _frozen_job(tmp_path)
+    job.batch_id = "batch_contract"
+    _prepare_import_job(job, tmp_path / "LOG")
+    client = Mock()
+    client.retrieve_batch.return_value = {"id": job.batch_id, "status": "completed", "output_file_id": "file_output",
+                                           "request_counts": {"total": 1, "completed": 1, "failed": 0}}
+    client.file_content.return_value = json.dumps({"custom_id": job.items[0].custom_id, "response": response}).encode()
+    _complete_identity(job, client)
+    download_results(client, job, tmp_path / "LOG")
+    assert job.items[0].status == "failed"
+    assert not job.items[0].output_path
+
+
+def test_missing_terminal_photo_row_is_failed_not_pending(tmp_path):
+    _, job = _frozen_job(tmp_path)
+    job.batch_id = "batch_missing"
+    _prepare_import_job(job, tmp_path / "LOG")
+    client = Mock()
+    client.retrieve_batch.return_value = {"id": job.batch_id, "status": "completed", "output_file_id": "file_output",
+                                           "request_counts": {"total": 1, "completed": 1, "failed": 0}}
+    client.file_content.return_value = b""
+    _complete_identity(job, client)
+    download_results(client, job, tmp_path / "LOG")
+    assert job.items[0].status == "failed"
+    assert "missing_result" in job.items[0].error_message
+    assert job.request_failed == 1
 
 
 def test_image_edit_batch_row_uses_image_endpoint():
@@ -185,6 +299,7 @@ def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
     )
     item = job.items[0]
     job.batch_id = "batch_test"
+    _prepare_import_job(job, log_dir)
     job.output_file_id = "file_output"
     generated = _image_bytes("PNG")
     line = {
@@ -200,6 +315,7 @@ def test_download_results_preserves_original_and_maps_custom_id(tmp_path):
         "request_counts": {"total": 1, "completed": 1, "failed": 0},
     }
     client.file_content.return_value = (json.dumps(line) + "\n").encode()
+    _complete_identity(job, client)
     result = download_results(client, job, log_dir)
     assert source.read_bytes() == original
     assert result.items[0].status == "downloaded"
@@ -221,6 +337,7 @@ def test_corrupt_image_payload_is_not_marked_downloaded(tmp_path):
         output_dir=str(tmp_path / "out"),
     )
     job.batch_id = "batch_bad_image"
+    _prepare_import_job(job, tmp_path / "log")
     job.output_file_id = "file_bad_image"
     item = job.items[0]
     line = {
@@ -235,6 +352,7 @@ def test_corrupt_image_payload_is_not_marked_downloaded(tmp_path):
         "request_counts": {"total": 1, "completed": 1, "failed": 0},
     }
     client.file_content.return_value = (json.dumps(line) + "\n").encode()
+    _complete_identity(job, client)
     result = download_results(client, job, tmp_path / "log")
     assert result.status == "failed"
     assert result.items[0].status == "failed"
@@ -252,6 +370,7 @@ def test_unknown_photo_batch_submit_recovers_exact_remote_match(tmp_path):
     )
     job.status = "submission_unknown"
     job.input_file_id = "file_input"
+    _prepare_import_job(job, tmp_path / "log")
     client = Mock()
     client.list_batches.return_value = [{
         "id": "batch_recovered",
@@ -266,6 +385,7 @@ def test_unknown_photo_batch_submit_recovers_exact_remote_match(tmp_path):
         "request_counts": {"total": 1, "completed": 0, "failed": 0},
     }
 
+    _complete_identity(job, client)
     recovered = refresh_job(client, job, tmp_path / "log")
 
     assert recovered.batch_id == "batch_recovered"
@@ -285,10 +405,12 @@ def test_invalid_jsonl_is_not_silently_ignored(tmp_path):
         output_dir=str(tmp_path / "out"),
     )
     job.batch_id = "batch_bad"
+    _prepare_import_job(job, tmp_path / "log")
     job.output_file_id = "file_bad"
     client = Mock()
     client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_bad", "request_counts": {"total": 1}}
     client.file_content.return_value = b"not-json\n"
+    _complete_identity(job, client)
     with pytest.raises(ValueError, match="neplatný JSON"):
         download_results(client, job, tmp_path / "log")
 

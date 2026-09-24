@@ -10,13 +10,14 @@ from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
-from .batch_submit import exact_batch_matches
+from .batch_submit import exact_batch_matches, validate_batch_identity
 from .comic_store import ComicStore, now, uid
 from .contracts import ContractError, parse_json_strict
 from .comic_types import (
     BIBLE_SCHEMA,
     CONTINUITY_SCHEMA,
     DESCRIPTOR_SCHEMA,
+    DEFAULT_PANEL_FORMAT,
     IMAGE_MODEL,
     SCRIPT_SCHEMA,
     STORYBOARD_SCHEMA,
@@ -49,7 +50,7 @@ from .orchestration.repository import repository_for_logger
 from .orchestration.run_config import build_run_config_v2
 from .orchestration.work_order import freeze_order
 from .orchestration.image_slots import (
-    FrozenAssetIndex, FrozenImageAsset, ImageRole, compile_slots, normalization_policy_hash,
+    FrozenAssetIndex, FrozenImageAsset, ImageRole, compile_slots, normalization_policy_hash, image_policy,
 )
 from .progress import ProgressEvent
 from .response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
@@ -60,12 +61,13 @@ TERMINAL = {"completed", "failed", "cancelled", "expired"}
 
 
 class ComicService:
-    def __init__(self, settings, client=None, emit=None, stopped=None):
+    def __init__(self, settings, client=None, emit=None, stopped=None, storyboard_layout=None):
         self.settings = copy.deepcopy(settings)
         self.store = ComicStore(settings.comic_library_dir)
         self.client = client
         self.emit = emit or (lambda event: None)
         self.stopped = stopped or (lambda: False)
+        self.storyboard_layout = storyboard_layout
 
     def progress(self, stage, completed=None, total=None, detail=""):
         stage = {"COMIC_RESPONSES": "Sestavuji textová pravidla", "COMIC_REFERENCE": "Vytvářím obrazovou referenci",
@@ -94,6 +96,7 @@ class ComicService:
         project = self.store.get("projects", operation["project_id"])
         exists = (Path(self.settings.log_dir) / operation["run_id"] / "run_state.json").exists()
         log = RunLogger(self.settings.log_dir, operation["run_id"], project_name=project["name"], resume=exists, comic_operation_id=operation["id"])
+        self.client.evidence_bundle = log.bundle
         log.update_state({"mode": "COMIC", "comic_operation_id": operation["id"], "comic_library_dir": str(self.store.root),
                           "project": project["name"], "status": operation["status"]})
         return log
@@ -207,6 +210,7 @@ class ComicService:
         target_id,
         body,
         projection,
+        endpoint,
     ):
         execution = "batch" if route == "image_batch" else "live"
         repo = self._ensure_image_run(
@@ -226,7 +230,7 @@ class ComicService:
         if previous:
             prior_attempt = int(previous[0])
             prior_state = str(previous[1] or "")
-            if prior_state == "not_submitted":
+            if prior_state in {"", "prepared", "not_submitted"}:
                 attempt_no = prior_attempt + 1
                 if attempt_no > 3:
                     raise ComicError(
@@ -249,7 +253,7 @@ class ComicService:
                 "provider_endpoint": (
                     "/v1/batches"
                     if route == "image_batch"
-                    else str(body.get("endpoint") or "/v1/images/edits")
+                    else endpoint
                 ),
                 "target_id": target_id,
                 "target_path": None,
@@ -260,9 +264,7 @@ class ComicService:
                     else "COMIC_IMAGE_V1"
                 ),
                 "schema": {
-                    "endpoint": body.get("endpoint")
-                    or body.get("url")
-                    or "/v1/images",
+                    "endpoint": endpoint,
                     "model": IMAGE_MODEL,
                 },
                 "prompt": str(
@@ -467,11 +469,20 @@ class ComicService:
                 for asset in assets
             ],
         }
+        step_id = log.begin_validated_step(
+            "COMIC_" + operation["kind"].upper(),
+            kind="preparation",
+            model=model,
+        )
+        step = next(
+            row for row in log.bundle.steps()
+            if row["step_id"] == step_id
+        )
         order = freeze_order(
             cfg,
             {
                 "run_id": operation["run_id"],
-                "step_id": "COMIC_" + operation["kind"].upper(),
+                "step_id": step["step_id"],
                 "task_id": operation["id"],
                 "stage": "COMIC",
                 "route": "responses_live",
@@ -487,6 +498,7 @@ class ComicService:
                 ),
                 "schema": schema,
                 "prompt": instructions,
+                "request_payload": body,
                 "model": model,
                 "model_capability": model_spec(model),
                 "source_snapshot": projection,
@@ -600,7 +612,13 @@ class ComicService:
         project = self.store.get("projects", project_id)
         if not project["bible_id"]:
             raise ComicError("bible_missing", "Nejprve sestavte bibli komiksu.")
-        return project, self.store.get("bibles", project["bible_id"])
+        bible = self.store.get("bibles", project["bible_id"])
+        refs = [row["asset_id"] for row in self.store.references(project_id)]
+        if (bible["project_id"] != project_id or bible["input"]["style"] != project["style"]
+                or bible["input"].get("description") != project["description"]
+                or bible["input"].get("assets", []) != refs):
+            raise ComicError("bible_stale", "Popis, nastavení stylu nebo reference se změnily. Znovu sestavte bibli.")
+        return project, bible
 
     def start_story(self, project_id):
         project, bible = self._require_bible(project_id)
@@ -623,6 +641,8 @@ class ComicService:
         story = self.latest_document(project_id, "story")
         if story is None:
             raise ComicError("story_missing", "Nejprve vytvořte Story.")
+        if story["input"].get("bible_id") != bible["id"]:
+            raise ComicError("document_stale", "Story nepatří aktuální bibli komiksu.")
         snapshot = {
             "project_revision": project["revision"],
             "bible_id": bible["id"],
@@ -638,6 +658,8 @@ class ComicService:
         script = self.latest_document(project_id, "script")
         if script is None:
             raise ComicError("script_missing", "Nejprve vytvořte Script.")
+        if script["input"].get("bible_id") != bible["id"]:
+            raise ComicError("document_stale", "Script nepatří aktuální bibli komiksu.")
         snapshot = {
             "project_revision": project["revision"],
             "bible_id": bible["id"],
@@ -651,12 +673,18 @@ class ComicService:
     def start_continuity(self, project_id):
         project, bible = self._require_bible(project_id)
         storyboard = self.latest_document(project_id, "storyboard")
-        script = self.latest_document(project_id, "script")
+        if storyboard is not None:
+            storyboard = self._effective_storyboard(storyboard)
+        script = self.store.get("comic_documents", storyboard["source_id"]) if storyboard and storyboard["source_id"] else None
         if storyboard is None or script is None:
             raise ComicError(
                 "storyboard_missing",
                 "Continuity vyžaduje uložený Script a Storyboard.",
             )
+        if (script["kind"] != "script" or script["project_id"] != project_id
+                or storyboard["input"].get("bible_id") != bible["id"]
+                or script["input"].get("bible_id") != bible["id"]):
+            raise ComicError("document_stale", "Storyboard a jeho Script nepatří aktuální bibli komiksu.")
         snapshot = {
             "project_revision": project["revision"],
             "bible_id": bible["id"],
@@ -670,16 +698,13 @@ class ComicService:
 
     def start_entity(self, entity_id):
         entity = self.store.get("entities", entity_id)
-        project = self.store.get("projects", entity["project_id"])
-        if not project["bible_id"]:
-            raise ComicError("bible_missing", "Nejprve sestavte bibli komiksu.")
+        project, bible = self._require_bible(entity["project_id"])
         refs = [r["asset_id"] for r in self.store.references(project["id"], entity_id) if r["role"] == "working"]
         style = [r["asset_id"] for r in self.store.references(project["id"])]
         if not refs:
             raise ComicError("missing_reference", "Přidejte alespoň jednu referenci entity.")
         if len(refs) + len(style) > image_capability()["max_references"]:
             raise ComicError("too_many_references", "Reference entity a stylu dohromady přesahují 16 obrázků.")
-        bible = self.store.get("bibles", project["bible_id"])
         return self.new_operation(project["id"], "entity", {"entity": entity, "bible": bible, "assets": refs + style}, entity_id)
 
     def run(self, identifier, *, allow_submit=True):
@@ -766,7 +791,7 @@ class ComicService:
         existing = self._document_for_operation(operation)
         if existing is not None:
             self.update_operation(operation["id"], "completed")
-            return existing
+            return self._effective_storyboard(existing) if kind == "storyboard" else existing
         snapshot = operation["snapshot"]
         result, provenance = self.text_request(
             operation,
@@ -804,7 +829,27 @@ class ComicService:
                 },
             )
         self.update_operation(operation["id"], "completed")
-        return self.store.get("comic_documents", document_id)
+        document = self.store.get("comic_documents", document_id)
+        return self._effective_storyboard(document) if kind == "storyboard" else document
+
+    def _effective_storyboard(self, document):
+        if document["provenance"].get("text_layout"):
+            return document
+        result, layout = self._layout_storyboard(document["result"], document["project_id"])
+        identifier = uid()
+        provenance = {**document["provenance"], "derived_from": document["id"], "text_layout": layout}
+        with self.store.transaction() as db:
+            db.execute(
+                "INSERT INTO comic_documents(id,project_id,kind,source_id,input,result,provenance,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (identifier, document["project_id"], "storyboard", document["source_id"],
+                 canonical(document["input"]), canonical(result), canonical(provenance), now()),
+            )
+        return self.store.get("comic_documents", identifier)
+
+    def _layout_storyboard(self, storyboard, project_id):
+        if self.storyboard_layout is None:
+            raise ComicError("text_layout", "Pro přípravu storyboardu není připojena sazba komiksu.")
+        return self.storyboard_layout(storyboard, style=self.store.get("projects", project_id)["style"])
 
     def _story(self, operation):
         return self._save_text_document(
@@ -949,13 +994,12 @@ class ComicService:
                 "Storyboard obsahuje duplicitní pozici panelu.",
             )
 
-        default_format = {
-            "width": 2048,
-            "height": 2048,
-            "dpi": 300,
-            "fit": "pad",
-            "experimental": False,
-        }
+        layout = storyboard["provenance"].get("text_layout")
+        if not layout:
+            effective, layout = self._layout_storyboard(storyboard["result"], project_id)
+            if effective != storyboard["result"]:
+                raise ComicError("continuity_stale", "Text vyžaduje další panely; spusťte kontinuitu účinného storyboardu.")
+        default_format = dict(layout.get("format") or DEFAULT_PANEL_FORMAT)
         prepared = []
         for panel_spec in specs:
             nodes = [
@@ -980,35 +1024,7 @@ class ComicService:
                         "entity_id": entity_id,
                     }
                 )
-            overlays = []
-            for line in panel_spec["dialogue"]:
-                overlays.append(
-                    {
-                        "kind": "dialog",
-                        "text": f"{line['speaker']}: {line['text']}",
-                        "x": 0.08,
-                        "y": min(0.08 + 0.14 * len(overlays), 0.64),
-                        "w": 0.42,
-                        "h": 0.12,
-                        "tail_x": 0.50,
-                        "tail_y": 0.50,
-                        "font_size": 0.04,
-                    }
-                )
-            if panel_spec["caption"]:
-                overlays.append(
-                    {
-                        "kind": "caption",
-                        "text": panel_spec["caption"],
-                        "x": 0.08,
-                        "y": 0.82,
-                        "w": 0.84,
-                        "h": 0.10,
-                        "tail_x": 0.50,
-                        "tail_y": 0.50,
-                        "font_size": 0.035,
-                    }
-                )
+            overlays = copy.deepcopy(layout["overlays"][panel_spec["id"]])
             prepared.append(
                 {
                     "storyboard_position": int(panel_spec["position"]),
@@ -1062,8 +1078,6 @@ class ComicService:
                 validate_image_request("/v1/images/edits", body)
                 log.bundle.record_request(body, endpoint="/v1/images/edits", name="COMIC_REFERENCE")
                 self.check_stop()
-                snap["image_submitting"] = True
-                self.update_operation(operation["id"], snapshot=snap)
                 self.progress("COMIC_REFERENCE", detail="Vytvářím obrazovou referenci")
                 projection = {
                     "entity_id": snap["entity"]["id"],
@@ -1082,13 +1096,19 @@ class ComicService:
                     task_id="entity-image-" + snap["entity"]["id"],
                     route="image_live",
                     target_id=snap["entity"]["id"],
-                    body={
-                        "endpoint": "/v1/images/edits",
-                        **body,
-                    },
+                    body=body,
+                    endpoint="/v1/images/edits",
                     projection=projection,
                 )
-                mark_submission_started(log, image_order)
+                try:
+                    mark_submission_started(log, image_order)
+                    snap["image_submitting"] = True
+                    self.update_operation(operation["id"], snapshot=snap)
+                except Exception:
+                    # POST ještě nezačal; zachycená lokální chyba není neurčitý submit.
+                    mark_not_submitted(log, image_order)
+                    snap["image_submitting"] = False
+                    raise
                 try:
                     response = self.client.create_image(
                         "/v1/images/edits", body
@@ -1151,7 +1171,7 @@ class ComicService:
         self.update_operation(operation["id"], "completed")
 
     def image_body(self, prompt, size, refs):
-        body = {"model": IMAGE_MODEL, "prompt": prompt, "size": size, "quality": "max", "n": 1,
+        body = {"model": IMAGE_MODEL, "prompt": prompt, "size": size, "quality": image_policy()["quality"], "n": 1,
                 "output_format": "png", "background": "opaque"}
         if refs:
             body.update(images=[{"file_id": ref} for ref in refs])
@@ -1204,10 +1224,7 @@ class ComicService:
         project = self.store.get("projects", panel["project_id"])
         if panel["deleted"] or not project["bible_id"]:
             raise ComicError("bible_missing", "Panel musí být aktivní a komiks musí mít sestavenou bibli.")
-        bible = self.store.get("bibles", project["bible_id"])
-        current_refs = [r["asset_id"] for r in self.store.references(project["id"])]
-        if bible["input"]["style"] != project["style"] or bible["input"].get("assets", []) != current_refs:
-            raise ComicError("bible_stale", "Nastavení stylu se změnilo. Znovu sestavte bibli.")
+        project, bible = self._require_bible(project["id"])
         document = self.store.get("prompts", panel["prompt_id"])["document"]
         validate_document(document)
         validate_overlays(panel["overlays"], project["style"]["sfx"])
@@ -1325,6 +1342,9 @@ class ComicService:
                     matches = exact_batch_matches(self.client.list_batches(), batch["input_file_id"], batch["endpoint"])
                     if len(matches) != 1:
                         raise SubmissionUnknown("Neurčitý submit nelze jednoznačně dohledat. Novou dávku neposílám.")
+                    validate_batch_identity(matches[0], input_file_id=batch["input_file_id"], endpoint=batch["endpoint"])
+                    if matches[0].get("status") not in TERMINAL | {"validating", "in_progress", "finalizing", "cancelling"}:
+                        raise ComicError("invalid_batch_response", "Dohledaná dávka nemá platný stav.")
                     provider_id = str(matches[0].get("id") or "")
                     if not provider_id:
                         raise SubmissionUnknown(
@@ -1369,7 +1389,7 @@ class ComicService:
                     uploaded = self.client.upload_file(str(path), purpose="batch")
                     file_id = uploaded["id"]
                     with self.store.transaction() as db:
-                        db.execute("UPDATE batches SET input_file_id=?,status='submitting' WHERE id=?", (file_id, batch["id"]))
+                        db.execute("UPDATE batches SET input_file_id=? WHERE id=?", (file_id, batch["id"]))
                     for row in rows:
                         log.bundle.record_request(row["body"], name=row["custom_id"], endpoint=row["url"])
                     projection = {
@@ -1390,6 +1410,7 @@ class ComicService:
                         operation,
                         log,
                         task_id="batch-" + batch["id"],
+                        endpoint=batch["endpoint"],
                         route="image_batch",
                         target_id=batch["id"],
                         body={
@@ -1406,10 +1427,20 @@ class ComicService:
                         ),
                         remote_input_file_id=file_id,
                     )
-                    mark_submission_started(log, batch_order)
                     self.progress("COMIC_SUBMITTING", detail="Odesílám pracovní dávku")
                     try:
+                        mark_submission_started(log, batch_order)
+                        with self.store.transaction() as db:
+                            db.execute("UPDATE batches SET status='submitting' WHERE id=?", (batch["id"],))
+                    except Exception:
+                        # Lokální transakce selhala před pracovním POST.
+                        mark_not_submitted(log, batch_order)
+                        raise
+                    try:
                         payload = self.client.create_image_batch(file_id, rows)
+                        validate_batch_identity(payload, input_file_id=file_id, endpoint=batch["endpoint"])
+                        if payload.get("status") not in TERMINAL | {"validating", "in_progress", "finalizing", "cancelling"}:
+                            raise ContractError("Provider batch odpověď nemá platný stav.")
                     except Exception as exc:
                         if getattr(exc, "status_code", None) in (
                             400, 401, 403, 404, 422, 429
@@ -1417,6 +1448,10 @@ class ComicService:
                             mark_not_submitted(log, batch_order)
                             with self.store.transaction() as db:
                                 db.execute("UPDATE batches SET status='rejected' WHERE id=?", (batch["id"],))
+                                db.execute(
+                                    "UPDATE batch_items SET status='failed',error=? WHERE batch_id=? AND status='prepared'",
+                                    (canonical({"code": "submission_rejected", "message": str(exc)}), batch["id"]),
+                                )
                             raise
                         mark_submission(
                             log,
@@ -1478,6 +1513,11 @@ class ComicService:
             raise ComicError("invalid_batch_response", "Provider batch odpověď musí být objekt.")
         payload = copy.deepcopy(payload)
         current = self.store.get("batches", identifier)
+        try:
+            validate_batch_identity(payload, input_file_id=current["input_file_id"],
+                                    batch_id=current["provider_id"] or None, endpoint=current["endpoint"])
+        except ContractError as exc:
+            raise ComicError("batch_binding_mismatch", str(exc)) from exc
         provider_id = str(payload.get("id") or "")
         status = str(payload.get("status") or "")
         allowed_statuses = TERMINAL | {
@@ -1492,18 +1532,6 @@ class ComicService:
             raise ComicError(
                 "batch_binding_mismatch",
                 "Provider batch ID se liší od již uložené identity dávky.",
-            )
-        response_input = str(payload.get("input_file_id") or "")
-        if response_input and response_input != str(current["input_file_id"] or ""):
-            raise ComicError(
-                "batch_binding_mismatch",
-                "Provider batch odpověď odkazuje na jiné input_file_id.",
-            )
-        response_endpoint = str(payload.get("endpoint") or "")
-        if response_endpoint and response_endpoint != str(current["endpoint"] or ""):
-            raise ComicError(
-                "batch_binding_mismatch",
-                "Provider batch odpověď odkazuje na jiný řádkový endpoint.",
             )
         previous = current["payload"]
         if previous.get("_local_results"):
@@ -1576,8 +1604,8 @@ class ComicService:
             if item["status"] == "completed":
                 continue
             self.check_stop()
-            response = row.get("response") or {}
-            body = response.get("body") or {}
+            from .batch_result import response_body
+            body, error = response_body(row)
             repo, attempt_id = self._image_attempt_for_task(
                 log, "batch-" + batch["id"]
             )
@@ -1592,13 +1620,12 @@ class ComicService:
                     ),
                     usage=body.get("usage") or {},
                 )
-            if row.get("error") or response.get("status_code", 200) >= 400:
-                error = row.get("error") or (response.get("body") or {}).get("error") or {"code": "openai_error"}
+            if error is not None:
                 self.item_error(item["id"], error)
                 continue
             if item["status"] != "received":
                 try:
-                    captured = self.capture_image(operation, response.get("body") or {}, log)
+                    captured = self.capture_image(operation, body, log)
                     with self.store.transaction() as db:
                         db.execute("UPDATE batch_items SET result=?,status='received' WHERE id=?", (canonical(captured), item["id"]))
                     item["result"] = captured
@@ -1673,101 +1700,5 @@ class ComicService:
         return self.run(identifier)
 
     def duplicate_project(self, project_id):
-        """Kopie remapuje entity a verze; aktivní dávky nepřebírá."""
-        store = self.store
-        with store.execution_lock(project_id):
-            source = store.get("projects", project_id)
-            target = store.project(source["name"] + " – kopie", source["description"], source["style"])
-            asset_map, bible_map, entity_map = {}, {}, {}
-            def clone_asset(identifier):
-                if identifier not in asset_map:
-                    old = store.get("assets", identifier)
-                    asset_map[identifier] = store.asset(target, store.asset_path(identifier).read_bytes(), {**old["metadata"], "copied_from": identifier})
-                return asset_map[identifier]
-            for ref in store.references(project_id):
-                store.add_reference(target, clone_asset(ref["asset_id"]))
-            for bible in store.rows("bibles", "project_id=?", (project_id,)):
-                bible_map[bible["id"]] = uid()
-                source_input = copy.deepcopy(bible["input"])
-                source_input["assets"] = [clone_asset(value) for value in source_input.get("assets", [])]
-                with store.transaction() as db:
-                    db.execute("INSERT INTO bibles VALUES(?,?,?,?,?,?)", (bible_map[bible["id"]], target, canonical(source_input), canonical(bible["result"]), canonical({"copied_from": bible["id"], "provenance": bible["provenance"]}), now()))
-            with store.transaction() as db:
-                if source["bible_id"]:
-                    db.execute("UPDATE projects SET bible_id=? WHERE id=?", (bible_map[source["bible_id"]], target))
-            for entity in store.rows("entities", "project_id=?", (project_id,)):
-                self.check_stop()
-                new = store.entity(target, entity["kind"], entity["name"], entity["description"])
-                entity_map[entity["id"]] = new
-                for ref in store.references(project_id, entity["id"]):
-                    store.add_reference(target, clone_asset(ref["asset_id"]), new, ref["role"])
-                for revision in store.rows("entity_revisions", "entity_id=?", (entity["id"],)):
-                    asset = clone_asset(revision["asset_id"])
-                    new_revision = uid()
-                    with store.transaction() as db:
-                        db.execute("INSERT INTO entity_revisions VALUES(?,?,?,?,?,?,?)", (new_revision, new, bible_map[revision["bible_id"]], revision["descriptor"], asset, canonical({"copied_from": revision["id"]}), now()))
-                        if revision["id"] == entity["active_revision"]:
-                            db.execute("UPDATE entities SET active_revision=? WHERE id=?", (new_revision, new))
-                if entity["archived"]:
-                    store.archive_entity(new)
-            document_map = {}
-
-            def remap_document_value(value):
-                if isinstance(value, str):
-                    return entity_map.get(value, value)
-                if isinstance(value, list):
-                    return [remap_document_value(item) for item in value]
-                if isinstance(value, dict):
-                    return {
-                        key: remap_document_value(item)
-                        for key, item in value.items()
-                    }
-                return value
-
-            for document in store.rows(
-                "comic_documents",
-                "project_id=?",
-                (project_id,),
-                order="created_at",
-            ):
-                new_document = uid()
-                document_map[document["id"]] = new_document
-                with store.transaction() as db:
-                    db.execute(
-                        "INSERT INTO comic_documents"
-                        "(id,project_id,kind,source_id,input,result,provenance,created_at) "
-                        "VALUES(?,?,?,?,?,?,?,?)",
-                        (
-                            new_document,
-                            target,
-                            document["kind"],
-                            document_map.get(document["source_id"]),
-                            canonical(remap_document_value(document["input"])),
-                            canonical(remap_document_value(document["result"])),
-                            canonical({
-                                "copied_from": document["id"],
-                                "provenance": remap_document_value(
-                                    document["provenance"]
-                                ),
-                            }),
-                            now(),
-                        ),
-                    )
-            for panel in store.rows("panels", "project_id=? AND deleted=0", (project_id,), order="position,created_at"):
-                self.check_stop()
-                new = store.panel(target, panel["name"])
-                document = store.get("prompts", panel["prompt_id"])["document"]
-                for node in document["nodes"]:
-                    if node["type"] != "text":
-                        node["entity_id"] = entity_map[node["entity_id"]]
-                store.save_panel(new, 2, panel["name"], document, panel["format"], panel["overlays"])
-                version_map = {}
-                for version in store.rows("panel_versions", "panel_id=?", (panel["id"],)):
-                    final, raw = clone_asset(version["asset_id"]), clone_asset(version["raw_asset_id"])
-                    new_version = uid()
-                    version_map[version["id"]] = new_version
-                    with store.transaction() as db:
-                        db.execute("INSERT INTO panel_versions VALUES(?,?,?,?,?,?,?,?,?)", (new_version, new, None, version_map.get(version["base_version"]), final, raw, canonical(version["overlays"]), canonical({"copied_from": version["id"]}), now()))
-                        if version["id"] == panel["active_version"]:
-                            db.execute("UPDATE panels SET active_version=? WHERE id=?", (new_version, new))
-            return target
+        from .comic_clone import duplicate_project
+        return duplicate_project(self.store, project_id, self.check_stop)

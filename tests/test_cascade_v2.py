@@ -75,6 +75,23 @@ def _run_dir(tmp_path):
     return next(path for path in (tmp_path / "LOG").iterdir() if path.is_dir())
 
 
+def test_cascade_local_input_upload_uses_archived_bytes(tmp_path):
+    from kajovo.core.cascade_log import CascadeLogger
+    source = tmp_path / "input.txt"
+    source.write_text("frozen", encoding="utf-8")
+    step = _text_step("Vstup")
+    item = CascadeInput(name="Podklad", source="local_file", value=str(source))
+    step.inputs = [item]
+    worker = _worker(CascadeDefinition("freeze", steps=[step]), tmp_path)
+    worker.logger = CascadeLogger(str(tmp_path / "LOG"), "RUN_FREEZE")
+    worker._archive_cascade_inputs()
+    source.write_text("changed", encoding="utf-8")
+    archived = worker._frozen_input_path(step.id, "input", item.id)
+    from pathlib import Path
+    assert Path(archived).read_text(encoding="utf-8") == "frozen"
+    assert Path(archived) != source
+
+
 def test_forward_decision_target_is_allowed_in_draft_but_not_at_run():
     decision = CascadeOutput(
         name="Verdikt",

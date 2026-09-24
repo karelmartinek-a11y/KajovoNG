@@ -24,7 +24,7 @@ GENERATE BATCH ponechává aktivní modely A1/A2/A3. Oba souborové režimy BATC
 
 Standard (`maximum_quality=false`) zahrnuje A0R/B0R a zachovává běžnou politiku reasoning bez quality gate. Maximum Quality přidává živý A2Q/B2Q, jehož opravená struktura je kanonická pro soubory, a volí nejvyšší effort podporovaný konkrétním řádkem modelové matice. Nepodporovaný reasoning se neposílá a sampling musí zůstat kompatibilní. A0R sdílí model A1, A2Q model A2; všechny B fáze používají hlavní model MODIFY. Osm boolean os CSV nezahrnuje Maximum Quality; tato volba a pořadí fází mají samostatné testy v `tests/test_requirements.py` a `tests/test_modify_batch.py`.
 
-Technický příjem delšího zadání uloží přesný lokální artefakt bez placených potvrzení částí; celý vstup přijímá pracovní requirements fáze. LIVE A3/B3 má 500 řádků na chunk a návaznost pouze uvnitř téhož souboru. Souborové Batch úlohy vyžadují celý soubor v jediné části. Přípravný checkpoint verze 1 a souborový manifest verze 3 s `mode` a FileContexty mají odlišné účely; jejich pole a pravidla ReRun uvádí [SSOT](SSOT.md).
+Technický příjem delšího zadání uloží přesný lokální artefakt bez placených potvrzení částí; celý vstup přijímá pracovní requirements fáze. LIVE i BATCH A3/B3 vracejí celý soubor přes `FILE_CONTENT_V1`, bez automatické historie mezi soubory. Přípravný checkpoint verze 2 obsahuje graf verze 3; souborový manifest verze 3 zmrazuje FileContext a requesty. Nové manifesty označují compiler revizi 2; import archivované dávky nepřekompiluje původní request novým compilerem. Podrobnosti uvádí [SSOT](SSOT.md).
 
 ### Historie a Run Explorer
 
@@ -132,4 +132,4 @@ Offline testy odděleně pokrývají kombinace režimu, Batch, návaznosti, úlo
 
 ## Souborové kontexty a měření
 
-A3/B3 LIVE i Batch vyžaduje implementační kontrakt v1 s působností globálních povinností, přesnými verzovanými rozhraními a akceptací. Legacy struktura se může číst, ale neodesílá se jako náhrada FileContextu. Souborové modely se automaticky nemění; effort a technický výstupní limit stanovuje transparentní klasifikace a capability registry. Měření a blokace jsou lokální, nikdy generativní. POST /responses/input_tokens je samostatné ne-generativní měření použitelné i pro historii chunků. Technické limity, migraci a skutečné hranice integrace uvádí [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).
+A3/B3 LIVE i BATCH používá přípravný graf V3: SPINE, FILE_SPEC, působnost globálních povinností a přesná rozhraní. Legacy struktura se může číst, ale nenahrazuje přípravu nového requestu. Souborové modely se automaticky nemění; effort a technický výstupní limit stanovuje klasifikace a capability registry. Měření nikdy negeneruje produkt; POST /responses/input_tokens je ne-generativní měření přesného payloadu. Technické limity a hranice ověření uvádí [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).

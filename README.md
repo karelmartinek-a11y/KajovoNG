@@ -38,6 +38,8 @@ Testy používají náhrady API a nevyžadují skutečný klíč. Standardní CI
 
 ## Práce s aplikací
 
+Pokud k řešení chybí informace nebo si zadání odporuje, aplikace zobrazí doplňující otázky. Odpověď doplní do zadání; další iteraci spustíte tlačítkem **Spustit práci**, bez automatického připojení staré historie. Nejde o schvalování technických chyb.
+
 V levé navigaci jsou **Zadání, Fotografie, Komiks, Kaskády, Zdroje, Dávky, Historie, Verze projektu, Modely, Nastavení a Nápověda**. [Úplný inventář a návrh](docs/UI_DESIGN.md) obsahuje mapu funkcí, parametrů a validačních pravidel.
 
 V **Komiksu** založte projekt, nastavte styl a sestavte bibli. Přidejte referenční fotografie postav a prostředí, vytvořte jejich komiksové reference a vkládejte je do zadání panelů jako nedělitelné tokeny. Vybrané panely se generují v obnovitelných dávkách. Každý má vlastní rozměry, editovatelné textové bubliny, historii verzí a export. Následná úprava kresby zachová původní verzi. Knihovnu `COMICS` zálohujte celou; cestu lze změnit v Nastavení. [Podrobná obsluha, limity API a obnova](docs/COMICS.md).
@@ -64,13 +66,13 @@ MODIFY potřebuje existující adresář IN i při odeslání do BATCH. Navazuj�
 
 Při **SEND AS BATCH** proběhnou requirements, plán, struktura i případný quality gate živě v obou režimech. Pouze A3/B3 vytváří samostatné úlohy na kompletní textové soubory; MODIFY přikládá původní obsah měněného souboru. Modely GENERATE A1/A2/A3 lze vybrat samostatně. Návaznost response_id, technický příjem dlouhého zadání A0, přílohy, diagnostika IN a file search podle pevné matice slouží živé přípravě; diagnostika OUT je při odesílání vypnutá. Starý kontrakt `C_FILES_ALL` slouží pouze kompatibilnímu importu starších dávek.
 
-V sekci Dávky zvolte dokončenou pracovní dávku a stáhněte výsledek. Import kontroluje ID, cesty, úplnost a změny existujících souborů. „Soubory kompletní, funkčnost neověřena“ znamená, že je ještě nutné ručně spustit sestavení a integrační testy projektu; u GENERATE vycházejte z `build_run` uloženého plánu. Aplikace vygenerovaný kód automaticky nespouští. „Opakovat soubory…“ odešle zvolené cesty znovu bez opakování živé přípravy; „Opravit podle připomínky…“ přidá aktuální obsah a popis chyby. Obě akce vytvářejí přímo novou pracovní placenou dávku, nikoli nejprve zkušební dávku. Cesty zadejte jako JSON pole, např. `["main.py", "maths.py"]`. Evidence, specifikace a výsledky zůstávají dostupné po restartu aplikace.
+V sekci Dávky zvolte dokončenou pracovní dávku a stáhněte výsledek. Import kontroluje ID, cesty, úplnost a změny existujících souborů. „Soubory kompletní, funkčnost neověřena“ popisuje převzetí souborů bez dodatečného testování produktu. Aplikace vygenerovaný kód automaticky nespouští ani nad ním nezavádí další ověřovací bránu. „Opakovat soubory…“ odešle zvolené cesty znovu bez opakování živé přípravy; „Opravit podle připomínky…“ přidá aktuální obsah a popis chyby. Obě akce vytvářejí přímo novou pracovní placenou dávku, nikoli nejprve zkušební dávku. Cesty zadejte jako JSON pole, např. `["main.py", "maths.py"]`. Evidence, specifikace a výsledky zůstávají dostupné po restartu aplikace.
 
 IN se odesílá jako filtrovaný textový balíček. Ruční přílohy a očekávané soubory kaskády se také nahrávají do API. Vzdálené soubory a úložiště spravujte v sekci Zdroje; dokončení běhu je automaticky nemaže.
 
 **Zastavit** přeruší místní sledování; vzdálená generace může pokračovat. **Zrušit generování** v okně průběhu GENERATE/MODIFY požádá o zrušení na serveru; zrušení platí až po potvrzení API. Obě akce mohou čekat na dokončení právě probíhajícího HTTP požadavku. Snapshot vytváří snapshot v OUT. Nastavení je v `kajovo_settings.json` a běhy v LOG; relativní cesty se vztahují k pracovnímu adresáři aplikace.
 
-Cena tokenů = (běžný vstup × vstupní sazba + cache × její sazba + výstup × výstupní sazba) / 1 000 000. Reasoning se nepřičítá podruhé. Skutečný file search přidá poplatek za volání; průběžné úložiště je oddělené. Přesné sazby se liší podle modelu, režimu a délky kontextu.
+Aplikace nepočítá ceny, předběžné finanční odhady ani rozpočty. Uchovává skutečné provider usage a kontroluje pouze technické limity požadavků.
 
 Run Bundle obsahuje zadání, requesty, response, případně zdrojový kód a další důkazní artefakty. V tomto důvěrném prostředí se kanonická evidence **obsahově nerediguje ani nemaskuje**; ochrana je založena na přístupu k pracovnímu prostředí. Legacy běhy ze starších verzí mohou obsahovat historicky redigovaná data a chybějící původní obsah se nedoplňuje odhadem. Podrobnosti jsou v [Run Bundle specifikaci](docs/RUN_BUNDLE_SPEC.md) a [Run Exploreru](docs/HISTORY_RUN_EXPLORER.md).
 

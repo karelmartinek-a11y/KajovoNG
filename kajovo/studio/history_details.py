@@ -19,6 +19,7 @@ from .components import action, actions, caption, scroll, vertical
 from .evidence import EvidenceView
 from .history_artifacts import ArtifactBrowser, ArtifactGuard, TEXT_DIFF_LIMIT
 from .history_models import RunView, format_duration
+from kajovo.core.run_bundle import OUTPUT_ARTIFACT_ROLES
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,10 @@ def classify_modify_files(payload: dict[str, Any], state: dict[str, Any]) -> lis
     structure = snapshot.get("structure") if isinstance(snapshot.get("structure"), dict) else {}
     touched = {str(row.get("path")): row for row in structure.get("touched_files") or [] if isinstance(row, dict) and row.get("path")}
     preserved = {str(row.get("path")) for row in structure.get("preserved_files") or [] if isinstance(row, dict) and row.get("path")}
+    if isinstance(snapshot.get("graph"), dict):
+        files = (snapshot["graph"].get("spine") or {}).get("files") or []
+        touched = {row["path"]: row for row in files if row.get("action") in {"add", "modify"}}
+        preserved = {row["path"] for row in files if row.get("action") == "preserve"}
     skipped = set(state.get("_verified_skip_paths") or [])
     failed = {str(row.get("path")) for row in state.get("missing_deliverables") or [] if isinstance(row, dict) and row.get("path")}
     artifacts = {}
@@ -303,7 +308,7 @@ class RunDetailView(QWidget):
             else:
                 output = ArtifactBrowser(context=context)
                 records = [row for row in payload.get("artifacts") or []
-                           if row.get("role") in {"generated_file", "modified_file", "batch_output", "output", "log_export"}]
+                           if row.get("role") in OUTPUT_ARTIFACT_ROLES]
                 output.set_artifacts(adapter.root, records)
                 output.table.setMaximumHeight(110)
                 if len(records) == 1:
@@ -356,9 +361,9 @@ class RunDetailView(QWidget):
                            if event.get("type") in {"response.poll_error", "validation.recovered", "response.poll_recovered"}]
         if state.get("failure_detail") or state.get("error") or failed_validations or any(batch_errors.values()) or recovery_events:
             errors_view = EvidenceView("Chyby, opravy a jejich důkazy")
-            errors_view.set_value({"poslední_chyba": state.get("failure_detail") or state.get("error"),
-                                   "validace": payload.get("validations") or [], "dávky": batch_errors,
-                                   "zotavení": recovery_events})
+            errors_view.set_value({"last_error": state.get("failure_detail") or state.get("error"),
+                                   "validations": payload.get("validations") or [], "batch_errors": batch_errors,
+                                   "recovery_events": recovery_events})
             self.tabs.addTab(errors_view, "Chyby")
         root.addWidget(self.tabs, 1)
         if run.mode in {"QA", "QFILE"}:

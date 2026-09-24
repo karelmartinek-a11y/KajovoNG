@@ -4,6 +4,16 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, BinaryIO
+from functools import wraps
+
+
+def locked_run_operation(function):
+    """Serializuje import i opakování dávky vůči živému executorovi."""
+    @wraps(function)
+    def wrapped(client, run_dir, *args, **kwargs):
+        with ExecutionLock(Path(run_dir) / "execution.lock"):
+            return function(client, run_dir, *args, **kwargs)
+    return wrapped
 
 
 class ExecutionLock:

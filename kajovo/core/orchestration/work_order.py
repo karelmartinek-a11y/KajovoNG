@@ -39,6 +39,7 @@ WORK_ORDER_V2_SCHEMA: dict[str, Any] = {
         "contract_name": {"type": "string"},
         "schema_hash": {"type": "string"},
         "prompt_hash": {"type": "string"},
+        "request_payload_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "model": {"type": "string"},
         "model_capability_hash": {"type": "string"},
         "policy_hash": {"type": "string"},
@@ -74,6 +75,13 @@ WORK_ORDER_V2_SCHEMA: dict[str, Any] = {
 }
 
 
+WORK_ORDER_V3_SCHEMA = copy.deepcopy(WORK_ORDER_V2_SCHEMA)
+WORK_ORDER_V3_SCHEMA["properties"]["version"]["enum"] = [3]
+WORK_ORDER_V3_SCHEMA["properties"]["attempt_no"].pop("maximum")
+WORK_ORDER_V3_SCHEMA["properties"]["attempt_kind"] = {"type": "string", "enum": ["automatic", "manual"]}
+WORK_ORDER_V3_SCHEMA["required"].append("attempt_kind")
+
+
 @dataclass(frozen=True)
 class WorkOrder:
     version: int
@@ -97,9 +105,15 @@ class WorkOrder:
     attempt_id: str
     approval_id: str
     attempt_no: int
+    request_payload_hash: str | None = None
+    attempt_kind: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
+        if self.request_payload_hash is None:
+            value.pop("request_payload_hash")
+        if self.attempt_kind is None:
+            value.pop("attempt_kind")
         validate_work_order_v2(value)
         return value
 
@@ -110,10 +124,11 @@ class WorkOrder:
 
 def validate_work_order_v2(value: dict[str, Any]) -> None:
     try:
-        jsonschema.Draft202012Validator(WORK_ORDER_V2_SCHEMA).validate(value)
+        schema = WORK_ORDER_V3_SCHEMA if value.get("version") == 3 else WORK_ORDER_V2_SCHEMA
+        jsonschema.Draft202012Validator(schema).validate(value)
     except jsonschema.ValidationError as exc:
         raise ValueError(f"WORK_ORDER_V2: {exc.message}") from exc
-    if not 1 <= value["attempt_no"] <= 3:
+    if not 1 <= value["attempt_no"] or (value.get("attempt_kind") != "manual" and value["attempt_no"] > 3):
         raise ValueError("WORK_ORDER_V2.attempt_no musí být v rozsahu 1 až 3.")
     for key in (
         "run_id",
@@ -221,6 +236,12 @@ def work_order_from_mapping(raw_value: dict[str, Any]) -> WorkOrder:
     return order
 
 
+def response_payload_hash(payload: dict[str, Any]) -> str:
+    """Identita práce bez čistě transportních a diagnostických atributů."""
+    return canonical_sha256({key: value for key, value in payload.items()
+                             if key not in {"background", "store", "metadata"}})
+
+
 def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrder:
     """Zmrazí kanonický V2 WorkOrder před transportem."""
     stage = str(task["stage"])
@@ -302,6 +323,8 @@ def freeze_order(config: Any, task: dict[str, Any], projection: Any) -> WorkOrde
         attempt_id=attempt_identity(str(task["run_id"]), task_id, attempt_no),
         approval_id=approval_id,
         attempt_no=attempt_no,
+        request_payload_hash=(response_payload_hash(task["request_payload"])
+                              if "request_payload" in task else None),
     )
     validate_work_order_v2(order.to_dict())
     return order

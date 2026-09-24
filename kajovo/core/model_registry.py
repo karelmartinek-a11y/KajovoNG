@@ -170,6 +170,17 @@ _USAGE_PREFERENCES = {
 }
 
 
+def supports_batch_endpoint(model, endpoint):
+    """Dávková schopnost patří konkrétnímu endpointu, nikoli názvu modelu."""
+    spec = model_spec(model)
+    if endpoint == "/v1/responses":
+        return bool(spec.get("responses") and spec.get("batch"))
+    if endpoint in {"/v1/images/edits", "/v1/images/generations"}:
+        cap = spec.get("image_capabilities") or {}
+        return cap.get("batch") is True and endpoint in cap.get("endpoints", [])
+    return False
+
+
 def usage_names():
     return tuple(_USAGE_PREFERENCES)
 

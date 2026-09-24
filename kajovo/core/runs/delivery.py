@@ -35,6 +35,7 @@ class DeliveryContext:
     overwrite_hashes: Mapping[str, str | None] | None = None
     expected_target_hashes: Mapping[str, str | None] | None = None
     additional_staged: Mapping[str, dict[str, Any]] | None = None
+    originals: Mapping[str, str] | None = None
 
 
 def _expected_target_hash(
@@ -153,7 +154,9 @@ def save_out_files(
         source_text = ""
         if cfg.mode == "MODIFY" and cfg.in_dir:
             source_path = safe_join_under_root(cfg.in_dir, relative)
-            if os.path.isfile(source_path):
+            if context.originals is not None:
+                source_text = context.originals.get(relative, "")
+            elif os.path.isfile(source_path):
                 try:
                     source_text = Path(source_path).read_text(encoding="utf-8")
                 except UnicodeDecodeError as exc:

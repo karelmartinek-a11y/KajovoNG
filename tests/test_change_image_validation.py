@@ -92,9 +92,12 @@ def test_photo_result_requires_exactly_one_image_without_output_write(tmp_path, 
         size='auto', output_format='png', output_dir=str(tmp_path / 'out'),
     )
     job.batch_id = 'batch_offline'
+    from test_photo_studio import _prepare_import_job
+    _prepare_import_job(job, tmp_path / 'log')
     client = Mock()
     client.retrieve_batch.return_value = {
         'id': job.batch_id, 'status': 'completed', 'output_file_id': 'file_result',
+        'input_file_id': job.input_file_id, 'endpoint': '/v1/images/edits',
     }
     client.file_content.return_value = (json.dumps({
         'custom_id': job.items[0].custom_id, 'response': {'status_code': 200, 'body': body},

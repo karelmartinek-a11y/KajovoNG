@@ -109,10 +109,13 @@ class PhotoTemplateStore:
         if not self.path.exists():
             return []
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            from .orchestration.contracts import parse_json_strict
+            payload = parse_json_strict(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
             raise ValueError(f"Soubor šablon nelze načíst: {exc}") from exc
-        if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA_VERSION:
+        if (not isinstance(payload, dict) or set(payload) != {"schema_version", "templates"}
+                or type(payload.get("schema_version")) is not int
+                or payload["schema_version"] != SCHEMA_VERSION):
             raise ValueError("Soubor šablon má nepodporovanou verzi.")
         rows = payload.get("templates")
         if not isinstance(rows, list):
@@ -125,6 +128,19 @@ class PhotoTemplateStore:
             required = {"template_id", "name", "description", "category", "prompt", "builtin", "created_at", "updated_at"}
             if set(row) != required:
                 raise ValueError("Záznam šablony má neplatná pole.")
+            if row["builtin"] is not False or any(
+                not isinstance(row[key], str) for key in required - {"builtin"}
+            ):
+                raise ValueError("Záznam šablony má neplatné typy polí.")
+            if row["template_id"].startswith("builtin-"):
+                raise ValueError("Identifikátor vestavěné šablony je vyhrazený.")
+            for key in ("created_at", "updated_at"):
+                try:
+                    stamp = datetime.fromisoformat(row[key])
+                    if stamp.tzinfo is None:
+                        raise ValueError("Chybí časové pásmo.")
+                except ValueError as exc:
+                    raise ValueError(f"Šablona má neplatný čas {key}.") from exc
             item = PhotoPromptTemplate(**row)
             if item.builtin:
                 raise ValueError("Uživatelský soubor nesmí předefinovat vestavěnou šablonu.")

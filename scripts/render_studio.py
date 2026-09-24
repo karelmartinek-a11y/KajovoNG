@@ -239,7 +239,7 @@ def main():
                 fill_records(window.resources.lists["stores"], [{"id": "vs_ukazka", "name": "Dokumentace projektu"}])
                 window.cascades.add_step()
                 window.cascades.title.setText("Připravit návrh řešení")
-                window.cascades.model.setText("gpt-4.1")
+                window.cascades.model.setCurrentText("gpt-4.1")
                 window.cascades.commit_step()
                 window.batches.records = [{"id": "batch_ukazka", "remote": {"status": "in_progress", "request_counts": {"completed": 8, "failed": 1, "total": 12}}, "state": {"project": "Rezervace", "status": "batch_pending"}, "run_dir": str(workspace / "LOG" / "RUN_ukazka")}]
                 window.batches.render()

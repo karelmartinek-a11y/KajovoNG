@@ -11,9 +11,9 @@ from uuid import uuid4
 
 from PySide6.QtCore import QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit, QMenu, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QWidget
 
-from kajovo.core.batch_completion import complete_saved_batch, pending_batch_ids, read_state
+from kajovo.core.batch_completion import batch_ids, complete_saved_batch, pending_batch_ids, read_state
 from kajovo.core.run_bundle import HistoryIndex
 from kajovo.core.orchestration.publish import publish_staged_run
 from kajovo.core.utils import safe_join_under_root
@@ -51,6 +51,7 @@ class HistoryPage(QWidget):
         self.records, self.reverse_lineage = [], {}
         self.adapter, self.payload, self.run, self.selected_step = None, {}, None, None
         self.generation, self.zoom = 0, 1.0
+        self._clone_generation = 0
 
         root = vertical(self, 0)
         root.addWidget(caption("Run Studio · průběh, výsledky a nové větve", "muted"))
@@ -72,6 +73,7 @@ class HistoryPage(QWidget):
         self.selected_files = caption("", "muted")
         body.addWidget(self.selected_files)
         self.buttons = {
+            "manual_resource": action("history.resource.attach", "Dodat podklad", self.attach_manual_resource),
             "continue": action("history.continue", "Pokračovat", lambda: self.branch("continue")),
             "rerun": action("history.rerun", "Znovu spustit", lambda: self.branch("rerun")),
             "repair": action("history.repair", "Opravit", lambda: self.branch("repair")),
@@ -109,6 +111,7 @@ class HistoryPage(QWidget):
             self.buttons["repair"],
             self.buttons["complete_batch"],
             self.buttons["publish_staged"],
+            self.buttons["manual_resource"],
             self.more,
         ))
         root.addWidget(inspector)
@@ -225,12 +228,14 @@ class HistoryPage(QWidget):
         if not text.strip():
             return None
         value = datetime.strptime(text.strip(), "%d.%m.%Y")
-        return value.timestamp() + (86399 if end else 0)
+        from datetime import timedelta
+
+        return (value + timedelta(days=1) if end else value).timestamp()
 
     def apply_filters(self):
         try:
             lower, upper = self._date_value(self.date_from.text()), self._date_value(self.date_to.text(), end=True)
-            if lower is not None and upper is not None and lower > upper:
+            if lower is not None and upper is not None and lower >= upper:
                 raise ValueError
         except ValueError:
             self.notice.setText("Zadejte platný a správně seřazený interval DD.MM.RRRR.")
@@ -410,23 +415,60 @@ class HistoryPage(QWidget):
     def clone(self):
         if not self.adapter:
             return
-        state = getattr(self, "_state", None) or read_state(self.adapter.root)
-        self.clone_source(self.adapter, state)
+        self.clone_source(self.adapter, None)
 
-    def clone_source(self, adapter, state):
-        ui = state.get("ui_state")
-        if not isinstance(ui, dict) or not ui:
-            self.notice.setText("Běh nemá přesně uložený ui_state.")
-            return
-        cloned = copy.deepcopy(ui)
-        for key in ("response_id", "resume_prev_id", "resume_files", "preparation_snapshot", "skip_paths",
-                    "completed_hashes", "recovery_instruction", "source_checkpoint_id"):
-            cloned.pop(key, None)
-        self.workbench.reset()
-        self.workbench.apply_state(cloned)
-        self.workbench.widgets["response_id"].clear()
-        self.workbench.pending_lineage = {"source_run_id": adapter.run_id, "relation_type": "clone"}
-        self.activate_workbench.emit()
+    def clone_source(self, adapter, state, *, artifact=None):
+        self._clone_generation += 1
+        clone_generation = self._clone_generation
+        selection_generation = self.generation
+        revision = self.workbench._revision
+        request_state = self.workbench.state(secrets=True)
+        key = self.context.api_key
+        artifact = copy.deepcopy(artifact)
+        cache_dir = self.context.settings.cache_dir
+
+        def read(task):
+            try:
+                canonical = read_state(adapter.root)
+                ui = canonical.get("ui_state")
+                if not isinstance(ui, dict) or not ui:
+                    raise ValueError("Běh nemá přesně uložený ui_state.")
+                cloned = copy.deepcopy(ui)
+                for name in ("response_id", "resume_prev_id", "resume_files", "preparation_snapshot",
+                             "skip_paths", "completed_hashes", "recovery_instruction", "source_checkpoint_id"):
+                    cloned.pop(name, None)
+                # Heslo není přenositelným vstupem; zadání se obsahově nerediguje.
+                cloned["ssh_password"] = ""
+                lineage = {"source_run_id": adapter.run_id, "relation_type": "clone"}
+                if artifact is not None:
+                    source = ArtifactGuard(adapter.root).resolve(artifact)
+                    staging = Path(cache_dir).resolve() / "history_reuse" / uuid4().hex
+                    staging.mkdir(parents=True, exist_ok=False)
+                    shutil.copy2(source, staging / source.name)
+                    cloned["in_dir"] = str(staging)
+                    lineage["inherited_artifact_ids"] = [artifact.get("artifact_id")]
+                return cloned, lineage, ""
+            except (OSError, ValueError, TypeError) as error:
+                return None, None, str(error)
+
+        def receive(value):
+            if clone_generation != self._clone_generation:
+                return
+            if (selection_generation != self.generation or revision != self.workbench._revision
+                    or request_state != self.workbench.state(secrets=True) or key != self.context.api_key):
+                self.notice.setText("Zadání, účet nebo výběr se mezitím změnily; klon nebyl použit.")
+                return
+            cloned, lineage, error = value
+            if error:
+                self.notice.setText(error)
+                return
+            self.workbench.reset()
+            self.workbench.apply_state(cloned)
+            self.workbench.widgets["response_id"].clear()
+            self.workbench.pending_lineage = lineage
+            self.activate_workbench.emit()
+
+        return self.context.operations.start_read("Načtení kanonického zadání pro klon", read, receive, popup=False)
 
     def publish_staged(self):
         if not self.adapter:
@@ -455,6 +497,29 @@ class HistoryPage(QWidget):
             identifier=f"publish.staged:{self.adapter.run_id}",
         )
 
+    def attach_manual_resource(self):
+        if not self.adapter:
+            return
+        from kajovo.core.orchestration.manual_resources import bind_manual_resource, graph_from_state
+        from kajovo.core.orchestration.resource_delivery import resource_delivery_index
+        root = str(self.adapter.root)
+        try:
+            state = read_state(root)
+            deliveries = resource_delivery_index(graph_from_state(state))
+            targets = sorted(path for path, row in deliveries.items() if row["producer"] == "manual_input")
+            target, accepted = QInputDialog.getItem(self, "Dodat podklad", "Cílový soubor", targets, 0, False)
+            if not accepted:
+                return
+            source, _ = QFileDialog.getOpenFileName(self, "Zdroj podkladu pro " + target)
+            if not source:
+                return
+            self.context.operations.start(
+                "Archivace ručního podkladu", lambda task: bind_manual_resource(root, target, source),
+                lambda value: self.refresh(), write_roots=(root,),
+            )
+        except (ValueError, OSError) as exc:
+            self.notice.setText(str(exc))
+
     def complete_batch(self):
         if not self.adapter:
             return
@@ -465,6 +530,9 @@ class HistoryPage(QWidget):
         records = state.get("batch_records") if isinstance(state.get("batch_records"), dict) else {}
         pending = [identifier for identifier in pending_batch_ids(state)
                    if isinstance(records.get(identifier), dict) and records[identifier].get("status") == "completed"]
+        if state.get("status") == "waiting_manual_resource":
+            pending = [identifier for identifier in batch_ids(state)
+                       if (records.get(identifier) or {}).get("status") in {"completed", "failed", "expired", "cancelled"}]
         if not pending:
             self.notice.setText("Žádná existující dávka nečeká na místní převzetí.")
             return
@@ -580,14 +648,7 @@ class HistoryPage(QWidget):
         """Sekundární clone varianta; reuse nikdy skrytě nepřepne do Zadání."""
         if not self.adapter or not record.get("reusable"):
             raise ValueError("Artefakt není označen jako reusable.")
-        source = ArtifactGuard(self.adapter.root).resolve(record)
-        staging = Path(self.context.settings.cache_dir).resolve() / "history_reuse" / uuid4().hex
-        staging.mkdir(parents=True, exist_ok=False)
-        shutil.copy2(source, staging / source.name)
-        self.clone()
-        self.workbench.widgets["in_dir"].setText(str(staging))
-        self.workbench.pending_lineage = {"source_run_id": self.adapter.run_id, "relation_type": "clone",
-                                          "inherited_artifact_ids": [record.get("artifact_id")]}
+        return self.clone_source(self.adapter, None, artifact=record)
 
     def choose_reusable_clone(self):
         records = [row for row in self.payload.get("artifacts") or [] if row.get("reusable")]

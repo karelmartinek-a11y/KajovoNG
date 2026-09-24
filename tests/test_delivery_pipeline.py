@@ -69,10 +69,10 @@ def test_delivery_eight_variants_use_v2_preparation_and_truthful_boundary(
     assert names[:4] == [
         f"{prefix}0R_REQUIREMENTS_V2",
         f"{prefix}1_PLAN_V2",
-        f"{prefix}2_SPINE_V1",
+        f"{prefix}2_SPINE_V2",
         f"{prefix}2_FILE_SPEC_V1",
     ]
-    quality_name = f"{prefix}2Q_QUALITY_GATE_V2"
+    quality_name = f"{prefix}2Q_QUALITY_GATE_V3"
     assert (quality_name in names) is maximum_quality
     assert all("previous_response_id" not in call for call in responder.calls)
 
@@ -109,7 +109,8 @@ def test_delivery_eight_variants_use_v2_preparation_and_truthful_boundary(
         assert staged.read_text(encoding="utf-8") == "content:hello.txt\n"
         state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
         assert state["publication_state"] == "awaiting_verification_or_explicit_take"
-        assert state["verification_evidence"]["result"] == "needs_human"
+        assert state["verification_evidence"]["functional_result"] == "not_run"
+        assert all(row["status"] == "skipped" for row in state["verification_evidence"]["checks"])
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
@@ -129,7 +130,7 @@ def test_stop_after_plan_finishes_after_optional_quality_gate_without_production
     assert results[0]["status"] == "plan_ready"
     names = format_names(responder)
     assert "FILE_CONTENT_V1" not in names
-    assert (("A2Q_QUALITY_GATE_V2" if mode == "GENERATE" else "B2Q_QUALITY_GATE_V2") in names) is maximum_quality
+    assert (("A2Q_QUALITY_GATE_V3" if mode == "GENERATE" else "B2Q_QUALITY_GATE_V3") in names) is maximum_quality
     client.create_batch.assert_not_called()
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert state["status"] == "plan_ready"
@@ -197,6 +198,54 @@ def test_publish_conflict_preserves_user_change(tmp_path):
     with pytest.raises(Exception, match="PUBLISH_CONFLICT|expected"):
         publish_staged_run(worker.log.paths.run_dir)
     assert target.read_text(encoding="utf-8") == "new user work\n"
+
+
+def test_publication_recovery_completes_bundle_evidence(tmp_path, monkeypatch):
+    from kajovo.core.run_bundle import LegacyRunAdapter, RunBundle
+    worker, client, _ = scenario(tmp_path, "GENERATE")
+    _, errors = run(worker, client)
+    assert not errors
+    original = RunBundle.update_run
+    monkeypatch.setattr(RunBundle, "update_run", lambda *args: (_ for _ in ()).throw(OSError("disk")))
+    with pytest.raises(OSError, match="disk"):
+        publish_staged_run(worker.log.paths.run_dir)
+    monkeypatch.setattr(RunBundle, "update_run", original)
+    publish_staged_run(worker.log.paths.run_dir)
+    publish_staged_run(worker.log.paths.run_dir)
+    adapter = LegacyRunAdapter(worker.log.paths.run_dir)
+    assert adapter.run_record()["status"] == "completed_unverified"
+    events = [row for row in adapter.events() if row["event_type"] == "publication.completed_unverified"]
+    assert len(events) == 1
+    assert adapter.bundle.verify_integrity()["valid"]
+
+
+def test_delivery_does_not_run_product_checks(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Dodání nesmí spouštět produktové testy.")
+    monkeypatch.setattr("kajovo.core.orchestration.verification.technical_staging_report", forbidden)
+    monkeypatch.setattr("kajovo.core.orchestration.verification.build_verification_candidate", forbidden)
+    worker, client, _ = scenario(tmp_path, "GENERATE")
+    results, errors = run(worker, client)
+    assert not errors and results
+
+
+def test_modify_diff_uses_original_generation_input(tmp_path):
+    files = [{**default_files("MODIFY")[0], "action": "modify"}]
+    worker, client, responder = scenario(tmp_path, "MODIFY", files=files, content_by_path={"hello.txt": "new\n"})
+    source = Path(worker.cfg.in_dir) / "hello.txt"
+    source.write_text("original\n", encoding="utf-8")
+    original = source.read_text(encoding="utf-8")
+    def respond(payload):
+        if payload["text"]["format"]["name"] == "FILE_CONTENT_V1":
+            source.write_text("concurrent edit\n", encoding="utf-8")
+        return responder(payload)
+    client.create_response.side_effect = respond
+    _, errors = run(worker, client)
+    assert not errors
+    diffs = list(Path(worker.log.paths.run_dir).rglob("changes.diff"))
+    text = diffs[0].read_text(encoding="utf-8")
+    assert "concurrent edit" not in text
+    assert "-" + original.rstrip() in text
 
 
 def test_publish_recovers_after_hard_process_exit_between_write_and_journal(tmp_path):
@@ -279,7 +328,7 @@ def test_invalid_spine_dependency_blocks_before_a3_b3_or_batch(tmp_path, mode):
     def invalid(payload):
         value = original(payload)
         name = ((payload.get("text") or {}).get("format") or {}).get("name")
-        if name in {"A2_SPINE_V1", "B2_SPINE_V1"}:
+        if name in {"A2_SPINE_V2", "B2_SPINE_V2"}:
             decoded = json.loads(value["output_text"])
             decoded["result"]["data"]["files"][0]["dependencies"] = ["missing.py"]
             value["output_text"] = json.dumps(decoded)

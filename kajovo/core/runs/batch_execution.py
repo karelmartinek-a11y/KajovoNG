@@ -10,9 +10,7 @@ from ..generate_batch import encode_requests
 from ..orchestration.batch_manifest import from_file_manifest, transition
 from ..orchestration.provider_operations import (
     bind_physical_request,
-    mark_not_submitted,
     mark_submission,
-    mark_submission_started,
     prepare_batch,
 )
 from ..orchestration.work_order import WorkOrder, work_order_from_mapping
@@ -180,8 +178,8 @@ def _submit_generate_batch(self: RunContext, client, manifest):
     manifest_v4 = transition(manifest_v4, "submitting")
     _save_v4(self.log, manifest_v4)
     self.log.update_state({"submission_unknown": True})
-    for order in work_orders.values():
-        mark_submission_started(self.log, order)
+    repo = repository_for_logger(self.log)
+    repo.mark_batch_dispatch(order.attempt_id for order in work_orders.values())
     try:
         batch = submit_verified_batch(
             client, input_file_id, manifest["requests"]
@@ -193,8 +191,7 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             in {400, 401, 403, 404, 422, 429}
         )
         if definite_reject:
-            for order in work_orders.values():
-                mark_not_submitted(self.log, order)
+            repo.mark_batch_dispatch((order.attempt_id for order in work_orders.values()), rejected=True)
             manifest_v4 = transition(manifest_v4, "failed")
             _save_v4(self.log, manifest_v4)
             self.log.update_state({"submission_unknown": False})

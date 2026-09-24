@@ -1,6 +1,7 @@
 """Regrese kontraktů, které zůstávají nezávislé na odstraněném legacy UI."""
 
 import json
+import pytest
 
 from test_output_chunks import raw
 
@@ -34,7 +35,7 @@ def test_recovery_uses_events_and_related_structure(tmp_path):
     )
     (current / "events.jsonl").write_text(
         json.dumps({"type": "api.trace", "data": {"action": "complete", "response_id": "resp_latest"}})
-        + "\ninvalid"
+        + "\n"
     )
     related = tmp_path / "related"
     (related / "manifests").mkdir(parents=True)
@@ -46,6 +47,10 @@ def test_recovery_uses_events_and_related_structure(tmp_path):
     assert ui["project"] == "demo"
     assert previous == "resp_latest"
     assert files == [{"path": "main.py"}]
+
+    (current / "events.jsonl").write_text("invalid", encoding="utf-8")
+    with pytest.raises(ValueError, match="poškozený"):
+        recover_run(tmp_path, "run")
 
 
 def test_recovery_saved_map_rejects_unsafe_paths(tmp_path):

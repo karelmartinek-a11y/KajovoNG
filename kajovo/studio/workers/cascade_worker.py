@@ -57,4 +57,7 @@ class CascadeRunWorker(QThread):
         self._executor.request_stop()
 
     def run(self) -> None:
-        self._executor.execute()
+        try:
+            self._executor.execute()
+        except Exception as exc:
+            self._executor._emit_boundary_error(exc)

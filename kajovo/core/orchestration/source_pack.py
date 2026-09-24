@@ -353,7 +353,7 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
         is_junction = getattr(os.path, "isjunction", lambda value: False)
         for item in items:
             asset_candidate = project_binary_asset_candidate(item)
-            if not item.uploadable and not asset_candidate:
+            if not item.uploadable and not item.inventory_only and not asset_candidate:
                 rejected.append({
                     "path": item.rel_path,
                     "size": item.size,
@@ -375,7 +375,7 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
                     "SOURCE_PATH_UNSAFE",
                     f"Schválený zdroj změnil typ nebo je odkaz: {item.rel_path}",
                 )
-            if item.uploadable and not item.sha256:
+            if (item.uploadable or item.inventory_only) and not item.sha256:
                 raise OrchestrationError(
                     "SOURCE_APPROVAL_HASH_MISSING",
                     f"Schválený zdroj nemá hash politiky: {item.rel_path}",
@@ -397,13 +397,13 @@ def freeze_run_sources(cfg, settings, log, client=None) -> SourcePack:
                     f"Zdroj se změnil během zmrazení: {item.rel_path}",
                 )
             digest = hashlib.sha256(data).hexdigest()
-            if item.uploadable and item.sha256 != digest:
+            if (item.uploadable or item.inventory_only) and item.sha256 != digest:
                 raise OrchestrationError(
                     "SOURCE_CHANGED_DURING_FREEZE",
                     f"Hash zdroje se po schválení změnil: {item.rel_path}",
                 )
             media = mimetypes.guess_type(item.rel_path)[0] or "application/octet-stream"
-            decision = "approved"
+            decision = "inventory_only" if item.inventory_only else "approved"
             source_kind = "existing_project"
             if asset_candidate:
                 try:
@@ -509,6 +509,8 @@ def source_context(log, pack: SourcePack) -> dict:
         if hashlib.sha256(data).hexdigest() != source.sha256:
             raise OrchestrationError("SOURCE_HASH_MISMATCH", source.id)
         metadata = artifact.get("metadata") or {}
+        if metadata.get("policy_decision") == "inventory_only":
+            continue
         filename = str(
             metadata.get("filename")
             or metadata.get("relative_path")

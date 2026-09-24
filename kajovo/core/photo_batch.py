@@ -9,13 +9,13 @@ import os
 import re
 import tempfile
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterable
 
-from .batch_submit import exact_batch_matches
+from .batch_submit import exact_batch_matches, validate_batch_identity
 from .comic_types import IMAGE_MODEL, ComicError
 from .contracts import ContractError, parse_json_strict
 from .image_runtime import image_capability, inspect_image, preferred_input_fidelity, validate_image_request
@@ -23,11 +23,13 @@ from .orchestration.contracts import canonical_bytes, canonical_sha256
 from .orchestration.errors import OrchestrationError
 from .orchestration.image_slots import image_policy
 from .orchestration.repository import OrchestrationRepository
+from .orchestration.publish import TargetPublishLock
 from .orchestration.run_config import build_run_config_v2
 from .orchestration.work_order import freeze_order
 from .model_registry import model_spec, models_for_usage
 from .openai_client import image_batch_submit_payload
 from .photo_prompt import manual_photo_plan
+from .runs.locking import ExecutionLock
 from .utils import atomic_write_text
 
 IMAGE_EDIT_ENDPOINT = "/v1/images/edits"
@@ -134,7 +136,7 @@ def response_prompt_models(available_models: Iterable[str] | None = None) -> lis
     return models_for_usage(available_models, "photo_prompt")
 
 
-def inspect_photo_bytes(data: bytes, expected_format: str | None = None, *, model=IMAGE_MODEL) -> dict:
+def inspect_photo_bytes(data: bytes, expected_format: str | None = None, *, model=IMAGE_MODEL, size="auto") -> dict:
     """Společná technická validace PHOTO/COMIC; base64 samo není důkaz obrazu."""
     try:
         info = inspect_image(data, model)
@@ -145,6 +147,8 @@ def inspect_photo_bytes(data: bytes, expected_format: str | None = None, *, mode
     )
     if expected and info["format"] != expected:
         raise OrchestrationError("IMAGE_INVALID", f"Výsledek má formát {info['format']}, očekáván byl {expected}.")
+    if size != "auto" and (info["width"], info["height"]) != tuple(map(int, size.split("x"))):
+        raise OrchestrationError("IMAGE_INVALID", f"Rozměry výsledku neodpovídají požadované velikosti {size}.")
     return {key: info[key] for key in ("format", "width", "height")}
 
 
@@ -352,7 +356,7 @@ class ImageEditBatchAdapter:
 
 
 def copy_photo_plan(value, final_prompt: str) -> dict:
-    if not isinstance(value, dict) or value.get("version") != 1:
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value.get("version") != 1:
         raise ValueError("PHOTO_PLAN_V1 má neplatnou verzi.")
     required = {
         "version",
@@ -363,7 +367,7 @@ def copy_photo_plan(value, final_prompt: str) -> dict:
     }
     if set(value) != required:
         raise ValueError("PHOTO_PLAN_V1 má neplatná pole.")
-    if str(value["professional_prompt"]).strip() != final_prompt.strip():
+    if not isinstance(value["professional_prompt"], str) or not isinstance(final_prompt, str) or not final_prompt.strip() or value["professional_prompt"].strip() != final_prompt.strip():
         raise ValueError("PHOTO_PLAN_V1 neodpovídá finálnímu promptu.")
     for key in ("edit_actions", "preserve_invariants", "acceptance_criteria"):
         rows = value[key]
@@ -405,7 +409,7 @@ def new_job(
     plan_hash = canonical_sha256(plan)
     stamp = _now()
     items = make_items(source_paths)
-    return PhotoBatchJob(
+    job = PhotoBatchJob(
         3,
         "photojob_" + uuid.uuid4().hex,
         stamp,
@@ -429,9 +433,12 @@ def new_job(
         request_total=len(items),
         items=items,
     )
+    validate_photo_job(job)
+    return job
 
 
 def save_job(job: PhotoBatchJob, log_dir: str | Path) -> Path:
+    validate_photo_job(job)
     root = Path(log_dir) / "PHOTO" / job.job_id
     root.mkdir(parents=True, exist_ok=True)
     job.updated_at = _now()
@@ -460,15 +467,65 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
             for item in items:
                 item.setdefault("provider_result_sha256", "")
             data["items"] = [PhotoBatchItem(**item) for item in items]
-            data["schema_version"] = max(3, int(data.get("schema_version") or 1))
-            if not data.get("photo_plan"):
-                data["photo_plan"] = manual_photo_plan(data.get("final_prompt", ""))
-            if not data.get("photo_plan_sha256"):
-                data["photo_plan_sha256"] = canonical_sha256(data["photo_plan"])
-            jobs.append(PhotoBatchJob(**data))
+            data.setdefault("schema_version", 1)
+            job = PhotoBatchJob(**data)
+            validate_photo_job(job)
+            if job.job_id != path.parent.name:
+                raise ValueError("Photo job identity neodpovídá adresáři.")
+            jobs.append(job)
         except (OSError, ContractError, ValueError, TypeError) as exc:
             raise ValueError(f"Photo job evidence je poškozená: {path}") from exc
     return jobs
+
+
+def validate_photo_job(job: PhotoBatchJob) -> None:
+    """Stejná hranice pro nové i obnovené úlohy; legacy evidence se nedoplňuje."""
+    if not isinstance(job, PhotoBatchJob):
+        raise ValueError("PHOTO: úloha nemá platný datový kontrakt.")
+    def types(record):
+        for spec in fields(record):
+            value = getattr(record, spec.name)
+            expected = {"str": str, "int": int, "dict": dict, "list[PhotoBatchItem]": list}[spec.type]
+            if type(value) is not expected or (expected is int and value < 0):
+                raise ValueError(f"PHOTO: neplatný typ nebo rozsah {spec.name}.")
+    def digest(value, optional=False):
+        if optional and value == "":
+            return
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError("PHOTO: neplatný SHA-256.")
+    types(job)
+    if job.schema_version not in {1, 2, 3}:
+        raise ValueError("PHOTO: neznámá verze úlohy.")
+    if not re.fullmatch(r"photojob_[A-Za-z0-9_-]+", job.job_id):
+        raise ValueError("PHOTO: neplatná identita úlohy.")
+    if job.status not in {"preparing", "submission_unknown", "validating", "in_progress", "finalizing", "completed", "failed", "expired", "cancelling", "cancelled", "downloaded", "partial", "submitted"}:
+        raise ValueError("PHOTO: neplatný stav úlohy.")
+    digest(job.final_prompt_sha256)
+    if not job.final_prompt.strip() or hashlib.sha256(job.final_prompt.encode("utf-8")).hexdigest() != job.final_prompt_sha256:
+        raise ValueError("PHOTO: změněný finální prompt.")
+    if job.schema_version == 3 or job.photo_plan:
+        plan = copy_photo_plan(job.photo_plan, job.final_prompt)
+        if canonical_sha256(plan) != job.photo_plan_sha256:
+            raise ValueError("PHOTO: změněný plán.")
+    if not job.items or job.request_total != len(job.items):
+        raise ValueError("PHOTO: nesouhlasí počet položek.")
+    if job.request_completed + job.request_failed > job.request_total:
+        raise ValueError("PHOTO: nesouhlasí počty výsledků.")
+    for identity in ("item_id", "custom_id"):
+        values = [getattr(item, identity) for item in job.items if isinstance(item, PhotoBatchItem)]
+        if len(values) != len(job.items) or len(set(values)) != len(values) or any(not isinstance(value, str) or not value.strip() for value in values):
+            raise ValueError("PHOTO: neplatné nebo duplicitní identity položek.")
+    for item in job.items:
+        types(item)
+        digest(item.source_sha256)
+        digest(item.output_sha256, True)
+        digest(item.provider_result_sha256, True)
+        if item.status not in {"pending", "uploaded", "failed", "downloaded"}:
+            raise ValueError("PHOTO: neplatný stav položky.")
+        if item.technical_validation not in {"pending", "passed", "failed"} or item.content_acceptance not in {"unverified", "accepted", "rejected"}:
+            raise ValueError("PHOTO: neplatná evidence přijetí položky.")
+        if item.status == "downloaded" and (not item.output_path or not item.output_sha256):
+            raise ValueError("PHOTO: převzatá položka nemá výstup.")
 
 
 def _photo_cfg(job):
@@ -592,12 +649,15 @@ def _prepare_photo_submit(job, rows, log_dir):
 
 
 def _photo_operation_present(job, log_dir):
-    return (
+    present = (
         Path(log_dir)
         / "PHOTO"
         / job.job_id
         / "work_order_v2.json"
     ).is_file()
+    if not present and job.schema_version >= 2:
+        raise ValueError("Moderní PHOTO job nemá povinný WorkOrder work_order_v2.json.")
+    return present
 
 
 def _verify_photo_operation_binding(job, rows, log_dir) -> None:
@@ -700,7 +760,18 @@ def _record_photo_usage(job, custom_id, usage, log_dir):
 
 
 def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
+    validate_photo_job(job)
     validate_image_edit_parameters(job.image_model, job.quality, job.size, job.output_format)
+    root = save_job(job, log_dir)
+    frozen_sources = {}
+    for item in job.items:
+        target = root / "sources" / (item.source_sha256 + Path(item.source_name).suffix)
+        raw = target.read_bytes() if target.is_file() else Path(item.source_path).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != item.source_sha256:
+            raise ValueError(f"{item.source_name}: vstup se od výběru změnil.")
+        if not target.is_file():
+            _atomic_bytes(target, raw)
+        frozen_sources[item.custom_id] = str(target)
     def report(text: str, pct: int) -> None:
         if reporter:
             reporter(text)
@@ -712,7 +783,7 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
             f"Nahrávám {index}/{len(job.items)}: {item.source_name}",
             int(index / len(job.items) * 70),
         )
-        uploaded = client.upload_file(item.source_path, purpose="user_data")
+        uploaded = client.upload_file(frozen_sources[item.custom_id], purpose="user_data")
         item.uploaded_file_id = str(uploaded.get("id") or "")
         item.status = "uploaded"
         client._validate_resource_id(item.uploaded_file_id)
@@ -788,24 +859,19 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
 
 
 def apply_batch_status(job: PhotoBatchJob, payload: dict) -> PhotoBatchJob:
-    if not isinstance(payload, dict):
-        raise ValueError("Image Edit BATCH odpověď musí být objekt.")
-    provider_id = str(payload.get("id") or "")
-    if job.batch_id and provider_id and provider_id != job.batch_id:
-        raise ValueError("Image Edit BATCH provider ID se změnilo.")
-    response_input = str(payload.get("input_file_id") or "")
-    if response_input and response_input != job.input_file_id:
-        raise ValueError("Image Edit BATCH odpověď odkazuje na jiné input_file_id.")
-    response_endpoint = str(payload.get("endpoint") or "")
-    if response_endpoint and response_endpoint != IMAGE_EDIT_ENDPOINT:
-        raise ValueError("Image Edit BATCH odpověď odkazuje na jiný endpoint.")
-    status = str(payload.get("status") or job.status)
+    try:
+        validate_batch_identity(payload, input_file_id=job.input_file_id,
+                                batch_id=job.batch_id or None, endpoint=IMAGE_EDIT_ENDPOINT)
+    except ContractError as exc:
+        raise ValueError(str(exc)) from exc
+    provider_id = payload["id"]
+    status = payload.get("status")
     allowed = {
-        "preparing", "submission_unknown", "validating", "in_progress",
+        "validating", "in_progress",
         "finalizing", "cancelling", "completed", "failed", "expired",
         "cancelled",
     }
-    if status not in allowed:
+    if not isinstance(status, str) or status not in allowed:
         raise ValueError("Image Edit BATCH vrátil neznámý stav.")
     counts = payload.get("request_counts") or {}
     if not isinstance(counts, dict):
@@ -829,6 +895,7 @@ def apply_batch_status(job: PhotoBatchJob, payload: dict) -> PhotoBatchJob:
 
 
 def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJob:
+    _photo_operation_present(job, log_dir)
     if not job.batch_id:
         if job.status != "submission_unknown" or not job.input_file_id:
             raise ValueError("Photo Job nemá batch_id.")
@@ -974,7 +1041,19 @@ def _stable_output_target(
     )
 
 
+def _photo_job_lock(root: Path) -> ExecutionLock:
+    key = hashlib.sha256(os.path.normcase(str(root.resolve())).encode("utf-8")).hexdigest()
+    return ExecutionLock(Path(tempfile.gettempdir()) / "kajovo-photo-job-locks" / (key + ".lock"))
+
+
 def download_results(client, job, log_dir, reporter=None, progress=None):
+    validate_photo_job(job)
+    root = Path(log_dir) / "PHOTO" / job.job_id
+    with _photo_job_lock(root):
+        return _download_results_locked(client, job, log_dir, reporter, progress)
+
+
+def _download_results_locked(client, job, log_dir, reporter=None, progress=None):
     refresh_job(client, job, log_dir)
     terminal = {"completed", "failed", "expired", "cancelled"}
     if job.status not in terminal:
@@ -991,25 +1070,35 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
     by_id = {item.custom_id: item for item in job.items}
     seen: set[str] = set()
 
-    if job.output_file_id:
-        raw = client.file_content(job.output_file_id)
-        _atomic_bytes(root / "batch_output.jsonl", raw)
-        rows = _jsonl(raw, "batch_output.jsonl")
-        for index, row in enumerate(rows, 1):
+    result_sets = {}
+    for file_id, name in ((job.output_file_id, "batch_output.jsonl"),
+                          (job.error_file_id, "batch_errors.jsonl")):
+        rows = []
+        if file_id:
+            raw = client.file_content(file_id)
+            _atomic_bytes(root / name, raw)
+            rows = _jsonl(raw, name)
+        for row in rows:
             cid = str(row.get("custom_id") or "")
             if cid not in by_id or cid in seen:
                 raise ValueError(f"Neznámé nebo duplicitní custom_id: {cid}")
             seen.add(cid)
+        result_sets[name] = rows
+
+    if job.output_file_id:
+        rows = result_sets["batch_output.jsonl"]
+        for index, row in enumerate(rows, 1):
+            cid = str(row.get("custom_id") or "")
             item = by_id[cid]
-            response = row.get("response") or {}
-            body = response.get("body") or {}
+            from .batch_result import response_body
+            body, error = response_body(row)
             provider_result_hash = canonical_sha256(row)
             if job.schema_version >= 2 and isinstance(body, dict):
                 _record_photo_usage(job, cid, body.get("usage") or {}, log_dir)
-            if row.get("error") or int(response.get("status_code") or 200) >= 400:
+            if error is not None:
                 item.status = "failed"
                 item.error_message = json.dumps(
-                    row.get("error") or body, ensure_ascii=False
+                    error, ensure_ascii=False
                 )
                 item.provider_result_sha256 = provider_result_hash
                 save_job(job, log_dir)
@@ -1032,7 +1121,7 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             try:
                 binary = base64.b64decode(data[0]["b64_json"], validate=True)
                 image_info = inspect_photo_bytes(
-                    binary, job.output_format, model=job.image_model
+                    binary, job.output_format, model=job.image_model, size=job.size
                 )
             except (ValueError, TypeError, OrchestrationError) as exc:
                 item.status = "failed"
@@ -1047,21 +1136,22 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
             previous_acceptance = item.content_acceptance
             previous_note = item.content_acceptance_note
             existing = Path(item.output_path) if item.output_path else None
-            if (
-                existing
-                and existing.is_file()
-                and _hash_file(existing) == result_hash
-            ):
-                target = existing
-            else:
-                ext = "jpg" if job.output_format == "jpeg" else job.output_format
-                target = _stable_output_target(output, item, ext, result_hash)
-                if not target.exists():
-                    _atomic_bytes(target, binary)
-                elif _hash_file(target) != result_hash:
-                    raise ValueError(
-                        f"{item.source_name}: existující cizí výstup nebyl přepsán."
-                    )
+            with TargetPublishLock(output):
+                if (
+                    existing
+                    and existing.is_file()
+                    and _hash_file(existing) == result_hash
+                ):
+                    target = existing
+                else:
+                    ext = "jpg" if job.output_format == "jpeg" else job.output_format
+                    target = _stable_output_target(output, item, ext, result_hash)
+                    if not target.exists():
+                        _atomic_bytes(target, binary)
+                    elif _hash_file(target) != result_hash:
+                        raise ValueError(
+                            f"{item.source_name}: existující cizí výstup nebyl přepsán."
+                        )
 
             item.output_path = str(target)
             item.output_sha256 = result_hash
@@ -1088,9 +1178,7 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
                 progress(10 + int(index / max(len(rows), 1) * 80))
 
     if job.error_file_id:
-        raw = client.file_content(job.error_file_id)
-        _atomic_bytes(root / "batch_errors.jsonl", raw)
-        for row in _jsonl(raw, "batch_errors.jsonl"):
+        for row in result_sets["batch_errors.jsonl"]:
             cid = str(row.get("custom_id") or "")
             item = by_id.get(cid)
             if item and item.status != "downloaded":
@@ -1101,6 +1189,10 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
                 )
                 save_job(job, log_dir)
 
+    for cid, item in by_id.items():
+        if cid not in seen and item.status != "downloaded":
+            item.status = "failed"
+            item.error_message = "missing_result: terminální dávka neobsahuje výsledek položky."
     done = sum(item.status == "downloaded" for item in job.items)
     failed = sum(item.status == "failed" for item in job.items)
     job.request_completed = done

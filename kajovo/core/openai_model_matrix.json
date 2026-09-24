@@ -1,5 +1,5 @@
 {
-  "version": "2026-09-22.1",
+  "version": "2026-09-22.2",
   "checked_at": "2026-09-22",
   "sources": {
     "batch": {
@@ -3074,7 +3074,7 @@
         "file_uploads"
       ],
       "context_window": 128000,
-      "max_input_tokens": 272000,
+      "max_input_tokens": null,
       "max_output_tokens": 16384,
       "reasoning": [],
       "reasoning_supported": false,
@@ -3706,7 +3706,7 @@
         "file_uploads"
       ],
       "context_window": 128000,
-      "max_input_tokens": 272000,
+      "max_input_tokens": null,
       "max_output_tokens": 16384,
       "reasoning": [],
       "reasoning_supported": false,
@@ -4078,7 +4078,7 @@
         "file_uploads"
       ],
       "context_window": 128000,
-      "max_input_tokens": 272000,
+      "max_input_tokens": null,
       "max_output_tokens": 16384,
       "reasoning": [],
       "reasoning_supported": false,
@@ -4296,7 +4296,7 @@
         "file_uploads"
       ],
       "context_window": 128000,
-      "max_input_tokens": 272000,
+      "max_input_tokens": null,
       "max_output_tokens": 16384,
       "reasoning": [],
       "reasoning_supported": false,

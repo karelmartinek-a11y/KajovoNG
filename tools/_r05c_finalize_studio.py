@@ -573,8 +573,13 @@ def update_architecture_contracts() -> None:
 
 
 def cleanup_repo() -> None:
-    shutil.rmtree(ROOT / "kajovo/desktop")
-    shutil.rmtree(ROOT / "LOG")
+    desktop = ROOT / "kajovo" / "desktop"
+    if desktop.exists():
+        if desktop.is_symlink() or desktop.resolve() != ROOT.resolve() / "kajovo" / "desktop":
+            raise ValueError("Neplatný cílový adresář desktopu.")
+        if not desktop.is_dir():
+            raise ValueError("Cíl desktopu není adresář.")
+        shutil.rmtree(desktop)
     for relative in (
         "tests/test_desktop.py",
         "aa.txt",

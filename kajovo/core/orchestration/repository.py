@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS work_orders(
     work_order_hash TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(run_id),
     task_id TEXT NOT NULL,
-    attempt_no INTEGER NOT NULL CHECK(attempt_no BETWEEN 1 AND 3),
+    attempt_no INTEGER NOT NULL CHECK(attempt_no >= 1),
     body_ref TEXT NOT NULL,
     input_hash TEXT NOT NULL,
     schema_hash TEXT NOT NULL,
@@ -368,6 +368,29 @@ def _migrate_legacy_economic_schema(db: sqlite3.Connection) -> None:
     db.row_factory = None
 
 
+def _migrate_attempt_ordinals(db):
+    """Ruční pokusy mají vlastní pořadí; automatický limit určuje WorkOrder."""
+    sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='work_orders'").fetchone()[0]
+    if "attempt_no BETWEEN 1 AND 3" not in sql:
+        return
+    db.commit()
+    db.execute("PRAGMA foreign_keys=OFF")
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        definition = sql.replace("work_orders", "work_orders_attempt_migration", 1).replace("attempt_no BETWEEN 1 AND 3", "attempt_no >= 1")
+        db.execute(definition)
+        columns = ",".join('"' + row[1] + '"' for row in db.execute("PRAGMA table_info(work_orders)"))
+        db.execute(f"INSERT INTO work_orders_attempt_migration ({columns}) SELECT {columns} FROM work_orders")
+        db.execute("DROP TABLE work_orders")
+        db.execute("ALTER TABLE work_orders_attempt_migration RENAME TO work_orders")
+        if db.execute("PRAGMA foreign_key_check").fetchone():
+            raise ValueError("Migrace pořadí pokusů porušila reference evidence.")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
 class OrchestrationRepository:
     def __init__(self, path: str | Path):
         self.path = str(Path(path))
@@ -379,6 +402,9 @@ class OrchestrationRepository:
             db.executescript(_SCHEMA)
             _migrate_work_order_contract(db)
             _migrate_provider_operation_contract(db)
+            _migrate_attempt_ordinals(db)
+            db.executescript(_SCHEMA)
+            db.execute("INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(4,?)", (_now(),))
             db.execute(
                 "INSERT OR IGNORE INTO schema_version(version,installed_at) VALUES(2,?)",
                 (_now(),),
@@ -640,7 +666,10 @@ class OrchestrationRepository:
                         f"{attempt_id}: provider operace už mohla být odeslána.",
                     )
                 db.execute(
-                    "UPDATE provider_operations SET state='prepared',updated_at=? WHERE attempt_id=?",
+                    "UPDATE provider_operations SET state='prepared',updated_at=?,"
+                    "physical_request_hash=CASE WHEN state='not_submitted' AND endpoint='/v1/batches' THEN NULL ELSE physical_request_hash END,"
+                    "remote_input_file_id=CASE WHEN state='not_submitted' AND endpoint='/v1/batches' THEN NULL ELSE remote_input_file_id END "
+                    "WHERE attempt_id=?",
                     (_now(), attempt_id),
                 )
                 db.commit()
@@ -848,6 +877,64 @@ class OrchestrationRepository:
                 """,
                 (file_id, _now(), attempt_id),
             )
+            db.commit()
+
+    def latest_target_attempts(self, run_id):
+        with self.connect() as db:
+            return dict(db.execute(
+                "SELECT json_extract(work_order_json,'$.target_path'),MAX(attempt_no) "
+                "FROM work_orders WHERE run_id=? "
+                "AND json_extract(work_order_json,'$.target_path') IS NOT NULL "
+                "GROUP BY json_extract(work_order_json,'$.target_path')", (run_id,),
+            ))
+
+    def mark_batch_dispatch(self, attempt_ids, *, rejected=False):
+        """Jedna fyzická dávka mění všechny pracovní pokusy v jedné transakci."""
+        attempt_ids = list(attempt_ids)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for identifier in attempt_ids:
+                row = db.execute("SELECT state,physical_request_hash,remote_input_file_id FROM provider_operations WHERE attempt_id=?",
+                                 (identifier,)).fetchone()
+                allowed = {"prepared", "not_submitted", "submission_unknown"} if rejected else {"prepared", "not_submitted"}
+                if not row or row[0] not in allowed or (not rejected and (not row[1] or not row[2])):
+                    raise OrchestrationError("PROVIDER_OPERATION_STATE", identifier)
+            for identifier in attempt_ids:
+                db.execute("UPDATE provider_operations SET state=?,updated_at=? WHERE attempt_id=?",
+                           ("not_submitted" if rejected else "submission_unknown", _now(), identifier))
+            db.commit()
+
+    def recover_batch_identity(self, orders, *, batch_id: str, input_file_id: str) -> None:
+        """Obnoví všechny vazby jedné doložené dávky v jediné transakci."""
+        if not batch_id or not input_file_id:
+            raise OrchestrationError("BATCH_IDENTITY_MISSING", "Chybí identita dávky nebo vstupu.")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for order in orders:
+                row = db.execute(
+                    "SELECT work_order_hash,endpoint,provider_id,remote_input_file_id FROM provider_operations WHERE attempt_id=?",
+                    (order.attempt_id,),
+                ).fetchone()
+                if not row or row[0] != order.order_hash or row[1] != "/v1/batches":
+                    raise OrchestrationError("PROVIDER_OPERATION_CONFLICT", order.attempt_id)
+                if row[2] not in {None, batch_id} or row[3] not in {None, input_file_id}:
+                    raise OrchestrationError("PROVIDER_ID_CONFLICT", order.attempt_id)
+            for order in orders:
+                db.execute(
+                    "UPDATE provider_operations SET state=CASE WHEN state='completed' THEN state ELSE 'submitted' END,"
+                    "provider_id=?,remote_input_file_id=?,updated_at=? WHERE attempt_id=?",
+                    (batch_id, input_file_id, _now(), order.attempt_id),
+                )
+            db.commit()
+
+    def mark_terminal(self, attempt_id: str, provider_id: str) -> None:
+        """Uzavře doložený vzdálený pokus, i když poskytovatel nevrátil usage."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state,provider_id FROM provider_operations WHERE attempt_id=?", (attempt_id,)).fetchone()
+            if not row or row[0] not in {"submitted", "completed"} or row[1] != provider_id or not provider_id:
+                raise OrchestrationError("PROVIDER_OPERATION_NOT_CONFIRMED", attempt_id)
+            db.execute("UPDATE provider_operations SET state='completed',updated_at=? WHERE attempt_id=?", (_now(), attempt_id))
             db.commit()
 
     def record_usage(

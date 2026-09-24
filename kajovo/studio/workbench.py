@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QPlainTextEdit, QTabWidget, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QInputDialog, QPlainTextEdit, QTabWidget, QWidget,
 )
 
 from kajovo.core.model_capabilities import ModelCapabilitiesCache
@@ -59,6 +59,9 @@ class Workbench(QWidget):
         self.saved_extras = {}
         self.busy_outputs = {}
         self.pending_lineage = None
+        self._revision = 0
+        self._modify_dry_run = bool(context.settings.dry_run_modify)
+        self._dry_run_mode = ""
         root = vertical(self, 0)
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
@@ -137,10 +140,14 @@ class Workbench(QWidget):
                                action("run.load", "Načíst zadání", self.load)))
         self.widgets = {**self.form.fields, **self.options.fields, **self.diagnostics.fields}
         for form in (self.form, self.options, self.diagnostics):
+            form.changed.connect(self._edited)
             form.changed.connect(self.validate)
+        self.prompt.textChanged.connect(self._edited)
         self.prompt.textChanged.connect(self.validate)
         context.models_changed.connect(self.refresh_models)
         context.attachments_changed.connect(self.update_attachments)
+        context.attachments_changed.connect(self._edited)
+        context.key_changed.connect(self._edited)
         context.key_changed.connect(self.validate)
         self.widgets["mode"].currentIndexChanged.connect(self.refresh_models)
         self.widgets["send_as_c"].toggled.connect(self.refresh_models)
@@ -152,6 +159,9 @@ class Workbench(QWidget):
         if value:
             field.setText(value)
 
+    def _edited(self, *_):
+        self._revision += 1
+
     def reset(self):
         self.pending_lineage = None
         self.apply_state(default_state(self.context.settings))
@@ -160,6 +170,13 @@ class Workbench(QWidget):
     def apply_state(self, state):
         if not isinstance(state, dict):
             raise ValueError("Zadání musí být objekt.")
+        self._edited()
+        self._modify_dry_run = (
+            state["dry_run"] is True
+            if state.get("mode") == "MODIFY" and "dry_run" in state
+            else bool(self.context.settings.dry_run_modify)
+        )
+        self._dry_run_mode = ""
         self.saved_extras = copy.deepcopy(state)
         for key, widget in self.widgets.items():
             value = state.get(key, default_state(self.context.settings).get(key))
@@ -197,12 +214,16 @@ class Workbench(QWidget):
             state[key] = value
         state.update(prompt=self.prompt.toPlainText(), attached_file_ids=list(self.context.files),
                      input_file_ids=list(self.context.files), attached_vector_store_ids=list(self.context.stores))
+        if state["mode"] != "MODIFY":
+            state["dry_run"] = False
         if not secrets:
             state["ssh_password"] = ""
         return state
 
     def config(self):
         state = {**default_state(self.context.settings), **self.state(secrets=True)}
+        if state["mode"] != "MODIFY":
+            state["dry_run"] = False
         cache = ModelCapabilitiesCache("")
         state["available_models"] = list(self.context.models)
         state["caps_by_model"] = {model: cache.get(model).to_dict() for model in self.context.models if cache.get(model)}
@@ -238,17 +259,9 @@ class Workbench(QWidget):
             usage = self._model_usage(key)
             values = self.context.models_for_usage(usage)
             recommended = self.context.recommended_model(usage)
-            widget.blockSignals(True)
-            widget.clear()
-            if key != "model":
-                widget.addItem("Použít hlavní model", "")
-            for model in values:
-                widget.addItem(model, model)
-            target = widget.findData(recommended) if recommended else -1
-            if target < 0 and key != "model":
-                target = 0
-            widget.setCurrentIndex(target)
-            widget.blockSignals(False)
+            from .model_selection import refill_models
+
+            refill_models(widget, values, recommended, inherit=key != "model")
         self.validate()
 
     def update_attachments(self):
@@ -268,11 +281,14 @@ class Workbench(QWidget):
                 widget.setChecked(False)
                 widget.blockSignals(False)
         dry_run = self.widgets["dry_run"]
-        dry_run.setEnabled(mode == "MODIFY")
-        if mode != "MODIFY":
+        if self._dry_run_mode == "MODIFY":
+            self._modify_dry_run = dry_run.isChecked()
+        if mode != self._dry_run_mode or mode != "MODIFY":
             dry_run.blockSignals(True)
-            dry_run.setChecked(False)
+            dry_run.setChecked(self._modify_dry_run if mode == "MODIFY" else False)
             dry_run.blockSignals(False)
+        self._dry_run_mode = mode
+        dry_run.setEnabled(mode == "MODIFY")
         qfile = mode == "QFILE"
         for key in ("qfile_output_path", "qfile_output_format", "qfile_suggest_path"):
             self.widgets[key].setEnabled(qfile)
@@ -301,6 +317,11 @@ class Workbench(QWidget):
         self.widgets["temperature"].setEnabled(bool(capability and capability.supports_temperature))
         try:
             cfg = self.config()
+            keys = ("model", "model_a1", "model_a2", "model_a3") if mode == "GENERATE" else ("model",)
+            if any(self.widgets[key].property("model_unavailable")
+                   and self.widgets[key].currentData() not in self.context.models_for_usage(self._model_usage(key))
+                   and self.widgets[key].currentData() for key in keys):
+                raise ValueError("Zvolený model není dostupný pro tento režim; vyberte jiný model.")
             if not cfg.project.strip() or not cfg.prompt.strip():
                 raise ValueError("Vyplňte projekt a zadání.")
             if mode == "MODIFY" and (not cfg.in_dir or not Path(cfg.in_dir).is_dir()):
@@ -359,32 +380,15 @@ class Workbench(QWidget):
         worker = RunWorker(cfg, settings, self.context.api_key, logger)
         if target:
             self.busy_outputs[run_id] = target
+        self._edited()
+        revision = self._revision
+        request_state = self.state(secrets=True)
 
         def receive(value):
             self.result.setPlainText(json.dumps(value, ensure_ascii=False, indent=2, default=str))
             self.result_ready.emit(value)
-            previous = value.get("last_response_id") or value.get("response_id")
-            if previous:
-                self.widgets["response_id"].setText(previous)
-            if cfg.mode == "QA":
-                # Provider historii nikdy nezapínáme automaticky; ID pouze zpřístupníme.
-                self.widgets["qa_continue_conversation"].setChecked(False)
-            if value.get("status") == "qfile_plan_ready":
-                plan = value.get("qfile_plan") or {}
-                self.saved_extras["qfile_plan"] = copy.deepcopy(plan)
-                proposed = plan.get("proposed_path")
-                fmt = plan.get("format")
-                if proposed:
-                    self.widgets["qfile_output_path"].setText(str(proposed))
-                if fmt:
-                    index = self.widgets["qfile_output_format"].findData(fmt)
-                    if index >= 0:
-                        self.widgets["qfile_output_format"].setCurrentIndex(index)
-                self.widgets["qfile_suggest_path"].setChecked(False)
-                self.validation.setText(
-                    "QFILE: návrh cesty je připraven. Zkontrolujte jej a znovu klikněte "
-                    "Spustit práci; tím cestu výslovně potvrdíte před výrobou souboru."
-                )
+            if revision == self._revision and request_state == self.state(secrets=True):
+                self._apply_run_result(value, cfg)
             if (
                 value.get("status") == "completed_unverified"
                 and value.get("published_files")
@@ -409,6 +413,48 @@ class Workbench(QWidget):
         worker.finished.connect(lambda: self.busy_outputs.pop(run_id, None))
         self.pending_lineage = None
         return record
+
+    def _apply_run_result(self, value, cfg):
+        previous = value.get("last_response_id") or value.get("response_id")
+        if previous:
+            self.widgets["response_id"].setText(previous)
+        if cfg.mode == "QA":
+            # Provider historii zapíná pouze uživatel.
+            self.widgets["qa_continue_conversation"].setChecked(False)
+        if value.get("status") == "needs_clarification":
+            self.resolve_questions(value, cfg.prompt)
+        if value.get("status") == "qfile_plan_ready":
+            plan = value.get("qfile_plan") or {}
+            self.saved_extras["qfile_plan"] = copy.deepcopy(plan)
+            if plan.get("proposed_path"):
+                self.widgets["qfile_output_path"].setText(str(plan["proposed_path"]))
+            if plan.get("format"):
+                index = self.widgets["qfile_output_format"].findData(plan["format"])
+                if index >= 0:
+                    self.widgets["qfile_output_format"].setCurrentIndex(index)
+            self.widgets["qfile_suggest_path"].setChecked(False)
+            self.validation.setText(
+                "QFILE: návrh cesty je připraven. Zkontrolujte jej a znovu klikněte "
+                "Spustit práci; tím cestu výslovně potvrdíte před výrobou souboru."
+            )
+
+    def resolve_questions(self, result, original_prompt):
+        revision = self._revision
+        questions = "\n".join(str(row["question"]) for row in result.get("questions", []) if row.get("question"))
+        answer, accepted = QInputDialog.getMultiLineText(
+            self, "Upřesnění zadání", questions + "\n\nDoplňte zadání nebo vyřešte uvedený rozpor:",
+        )
+        if revision != self._revision:
+            return
+        if accepted and answer.strip():
+            self.prompt.setPlainText(
+                original_prompt + "\n\nUpřesnění zadání:\n" + questions + "\nOdpověď uživatele:\n" + answer.strip()
+            )
+            self.widgets["response_id"].setText("")
+            self.saved_extras.pop("preparation_snapshot", None)
+            self.validation.setText("Upřesnění je v zadání. Tlačítkem Spustit práci zahájíte novou iteraci bez řetězení historie.")
+        else:
+            self.validation.setText("Otázky zůstávají ve výsledku. Doplňte zadání před další iterací.")
 
     def offer_repair_from_publish(self, run_dir, state, cfg=None):
         from kajovo.core.repair_execution import claim_published_repair_offer
@@ -468,7 +514,8 @@ class Workbench(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Načíst zadání", "", "Zadání (*.json)")
         if path:
             try:
-                loaded = json.loads(Path(path).read_text(encoding="utf-8"))
+                from kajovo.core.orchestration.contracts import parse_json_strict
+                loaded = parse_json_strict(Path(path).read_text(encoding="utf-8"))
                 if not isinstance(loaded, dict):
                     raise ValueError("Zadání musí být objekt.")
                 self.reset()

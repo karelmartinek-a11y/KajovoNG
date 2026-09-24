@@ -64,6 +64,16 @@ def validate_response_payload(payload: dict[str, Any], batch=False) -> None:
     if not isinstance(tools, list):
         raise ValueError("tools musí být seznam.")
     for tool in tools:
+        if isinstance(tool, dict) and tool.get("type") == "code_interpreter":
+            if batch or set(tool) != {"type", "container"}:
+                raise ValueError("Code Interpreter vyžaduje samostatný LIVE požadavek a explicitní kontejner.")
+            container = tool["container"]
+            if not isinstance(container, dict) or set(container) - {"type", "file_ids"} or container.get("type") != "auto":
+                raise ValueError("Code Interpreter vyžaduje izolovaný auto kontejner.")
+            ids = container.get("file_ids", [])
+            if not isinstance(ids, list) or any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", v) for v in ids):
+                raise ValueError("Neplatné soubory kontejneru.")
+            continue
         if not isinstance(tool, dict) or tool.get("type") != "file_search":
             raise ValueError("Program podporuje pouze ověřený nástroj file_search.")
         if set(tool) - {"type", "vector_store_ids", "max_num_results"}:
@@ -73,10 +83,13 @@ def validate_response_payload(payload: dict[str, Any], batch=False) -> None:
             raise ValueError("file_search vyžaduje platná vector_store_ids.")
         if "max_num_results" in tool and (type(tool["max_num_results"]) is not int or not 1 <= tool["max_num_results"] <= 50):
             raise ValueError("max_num_results musí být celé číslo od 1 do 50.")
-    if "tool_choice" in payload and payload["tool_choice"] not in ("auto", "none", "required", {"type": "file_search"}):
+    if "tool_choice" in payload and payload["tool_choice"] not in ("auto", "none", "required", {"type": "file_search"}, {"type": "code_interpreter"}):
         raise ValueError("Nepodporovaná volba nástroje.")
     if payload.get("tool_choice") not in (None, "none", "auto") and not tools:
         raise ValueError("Vynucení nástroje vyžaduje připojený nástroj.")
+    choice = payload.get("tool_choice")
+    if isinstance(choice, dict) and not any(tool["type"] == choice["type"] for tool in tools):
+        raise ValueError("Vynucený typ nástroje není připojen k požadavku.")
     model = payload.get("model")
     if not isinstance(model, str) or not model.strip():
         raise ValueError("Požadavek vyžaduje model.")

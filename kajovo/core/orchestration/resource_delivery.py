@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import io
 import os
@@ -20,6 +21,7 @@ from ..openai_transport import SubmissionOutcomeUnknown
 from ..utils import ensure_dir, safe_join_under_root, sha256_file
 from .contracts import canonical_sha256, parse_json_strict
 from .repository import repository_for_logger
+from .image_slots import image_policy
 from .work_order import freeze_order
 
 
@@ -107,6 +109,13 @@ def validate_resource_plan(worker, graph: dict[str, Any]) -> None:
         str(row.get("path") or ""): row for row in spine.get("files") or []
     }
     deliveries = resource_delivery_index(graph)
+    for path, target in files.items():
+        for dependency in target.get("content_dependencies", []):
+            provider = files.get(dependency)
+            if provider is None or provider.get("kind") != "text":
+                raise ContractError(
+                    f"{path}: content dependency {dependency} musí být textový provider."
+                )
     production_actions = (
         {"generate"}
         if graph.get("mode") == "GENERATE"
@@ -152,6 +161,8 @@ def validate_resource_plan(worker, graph: dict[str, Any]) -> None:
                 raise ContractError(
                     f"{path}: image_workflow podporuje PNG/JPEG/WebP."
                 )
+            if "image_production" in delivery:
+                _image_request_body(worker, graph, target, delivery)
         elif producer == "local_renderer":
             known = _known_source(worker, source)
             if known is None:
@@ -348,7 +359,7 @@ def _prepare_image_order(worker, path: str, body: dict[str, Any], projection: di
             "target_id": path,
             "target_path": path,
             "expected_target_hash": expected[path],
-            "contract_name": "PROJECT_IMAGE_RESOURCE_V1",
+            "contract_name": "PROJECT_IMAGE_RESOURCE_V2",
             "schema": {
                 "endpoint": "/v1/images/generations",
                 "model": IMAGE_MODEL,
@@ -381,35 +392,52 @@ def _prepare_image_order(worker, path: str, body: dict[str, Any], projection: di
         "resource_work_order_" + hashlib.sha256(path.encode()).hexdigest()[:16],
         {**order.to_dict(), "order_hash": order.order_hash},
     )
+    worker.log.save_json(
+        "requests",
+        "resource_image_request_" + hashlib.sha256(path.encode()).hexdigest()[:16],
+        {"work_order_hash": order.order_hash, "payload": copy.deepcopy(body),
+         "projection": copy.deepcopy(projection)},
+    )
     return repo, order
 
 
-def _generate_image(worker, client, graph, target, delivery) -> bytes:
+def _image_request_body(worker, graph, target, delivery):
+    """Převede explicitní výrobní parametry beze změny modelové politiky."""
     suffix = Path(target["path"]).suffix.lower()
     output_format = _SUPPORTED_IMAGE_SUFFIXES[suffix]
+    production = delivery.get("image_production")
+    if (not isinstance(production, dict)
+            or set(production) != {"version", "size", "background"}
+            or type(production["version"]) is not int
+            or production["version"] != 1):
+        raise ContractError(f"{target['path']}: chybí platné image_production V1; legacy plán nelze automaticky doplnit.")
+    body = {
+        "model": IMAGE_MODEL,
+        "prompt": _image_prompt(worker, graph, target, str(delivery["source_or_task_id"])),
+        "size": production["size"],
+        "quality": image_policy()["quality"],
+        "n": 1,
+        "output_format": output_format,
+        "background": production["background"],
+    }
+    validate_image_request("/v1/images/generations", body)
+    return body
+
+
+def _generate_image(worker, client, graph, target, delivery) -> bytes:
     saved_response = _load_saved_resource_image(worker, target["path"])
     if saved_response is not None:
         return _decode_resource_image_response(
             saved_response,
             target_path=target["path"],
         )
-    body = {
-        "model": IMAGE_MODEL,
-        "prompt": _image_prompt(
-            worker, graph, target, str(delivery["source_or_task_id"])
-        ),
-        "size": "1024x1024",
-        "quality": "max",
-        "n": 1,
-        "output_format": output_format,
-        "background": "opaque",
-    }
-    validate_image_request("/v1/images/generations", body)
+    body = _image_request_body(worker, graph, target, delivery)
     projection = {
         "target_path": target["path"],
         "producer": "image_workflow",
         "task_id": delivery["source_or_task_id"],
         "graph_hash": canonical_sha256(graph),
+        "image_production": copy.deepcopy(delivery["image_production"]),
     }
     repo, order = _prepare_image_order(
         worker, target["path"], body, projection
@@ -538,6 +566,10 @@ def _stage_resource(worker, path: str, data: bytes, producer: str) -> dict[str, 
     current = dict(getattr(worker, "_resource_staged_files", {}) or {})
     current[path] = row
     worker._resource_staged_files = current
+    worker._resource_states = {
+        **dict(getattr(worker, "_resource_states", {}) or {}),
+        path: {"status": "completed_unverified", "producer": producer, "sha256": digest},
+    }
     worker.log.update_state(
         {
             "resource_staged_files": [
@@ -586,6 +618,10 @@ def prepare_production_scope(
         for artifact in worker.log.bundle.artifacts()
         if artifact.get("role") == "in_project_file"
     }
+    from ..context_compiler import ContextCompiler
+
+    compiler = None
+    worker._delivery_verified_artifacts = {}
 
     for path, row in production.items():
         suffix = Path(path).suffix.lower()
@@ -599,21 +635,42 @@ def prepare_production_scope(
         approved_original = source_artifacts.get(path)
         completed_hash = (worker.cfg.completed_hashes or {}).get(path)
         suitable = False
+        data = None
+        origin = ""
         if approved_original is not None:
             metadata = approved_original.get("metadata") or {}
             expected = str(metadata.get("sha256") or approved_original.get("sha256") or "")
-            current = Path(safe_join_under_root(worker.cfg.in_dir, path)) if worker.cfg.in_dir else None
+            current = Path(safe_join_under_root(
+                worker.log.paths.run_dir, approved_original["path_in_bundle"]
+            ))
             suitable = bool(
                 current
                 and current.is_file()
                 and expected
                 and sha256_file(str(current)) == expected
             )
+            if suitable:
+                data = current.read_bytes()
+                suitable = hashlib.sha256(data).hexdigest() == expected
+                origin = "approved_original"
         if not suitable and completed_hash and worker.cfg.out_dir:
             output = Path(safe_join_under_root(worker.cfg.out_dir, path))
             suitable = output.is_file() and sha256_file(str(output)) == completed_hash
+            if suitable:
+                data = output.read_bytes()
+                suitable = hashlib.sha256(data).hexdigest() == completed_hash
+                origin = "completed_output"
         if suitable:
             completed.add(path)
+            if row.get("kind") == "text":
+                compiler = compiler or ContextCompiler(worker._delivery_snapshot)
+                content = data.decode("utf-8", errors="strict")
+                worker._delivery_verified_artifacts[path] = {
+                    "content": content,
+                    "output_hash": hashlib.sha256(data).hexdigest(),
+                    "contract_hash": compiler.provider_hash(path),
+                    "validation_status": "verified", "origin": origin,
+                }
         skipped.append({
             "path": path,
             "reason": (
@@ -645,6 +702,34 @@ def prepare_production_scope(
     worker._delivery_expected_target_hashes = expected
     worker._resource_staged_files = {}
     worker._resource_states = {}
+    from ..recoverable_artifacts import load_run_state
+    state = load_run_state(worker.log.paths.run_dir)
+    inherited = state.get("inherited_staged_files") or []
+    inherited_expectations = state.get("inherited_target_expectations")
+    if (inherited or inherited_expectations is not None) and state.get("inherited_graph_hash") != canonical_sha256(graph):
+        raise ContractError("Hotové podklady nepatří účinnému grafu.")
+    if inherited_expectations is not None:
+        if not set(selected) <= inherited_expectations.keys():
+            raise ContractError("Převzaté podklady nemají úplné původní hashe cílových souborů.")
+        expected.update(inherited_expectations)
+    for staged in inherited:
+        path = staged["path"]
+        if path not in production:
+            raise ContractError("Převzatý staging není výrobním cílem.")
+        data = Path(safe_join_under_root(worker.log.paths.run_dir, staged["staged_path"])).read_bytes()
+        if hashlib.sha256(data).hexdigest() != staged["sha256"]:
+            raise ContractError("Převzatý staging změnil hash.")
+        expected[path] = staged["expected_target_hash"]
+        selected.pop(path, None)
+        completed.add(path)
+        worker._resource_staged_files[path] = staged
+        if production[path]["kind"] == "text":
+            compiler = compiler or ContextCompiler(worker._delivery_snapshot)
+            worker._delivery_verified_artifacts[path] = {
+                "content": data.decode("utf-8"), "output_hash": staged["sha256"],
+                "contract_hash": compiler.provider_hash(path), "validation_status": "verified",
+            }
+    worker.log.update_state({"production_expected_target_hashes": expected})
     return selected, completed, skipped
 
 
@@ -668,6 +753,11 @@ def dispatch_resource_target(
     producer = str(delivery["producer"])
     source_id = str(delivery["source_or_task_id"])
     if producer == "manual_input":
+        from .manual_resources import manual_resource_bytes
+        data = manual_resource_bytes(worker, graph, path, source_id)
+        if data is not None:
+            row = _stage_resource(worker, path, data, producer)
+            return {"path": path, "status": "completed_unverified", "producer": producer, "staged": row}
         states = dict(getattr(worker, "_resource_states", {}) or {})
         states[path] = {
             "status": "waiting_manual",

@@ -48,7 +48,11 @@ def terminal_batch(state, *, status="completed", output=True):
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
-def test_completion_survives_restart_without_new_paid_calls(tmp_path, mode):
+def test_completion_survives_restart_without_new_paid_calls(tmp_path, mode, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Import dávky nesmí spouštět testy ani kopírovat projekt kvůli ověřování.")
+    monkeypatch.setattr("kajovo.core.orchestration.verification.technical_staging_report", forbidden)
+    monkeypatch.setattr("kajovo.core.orchestration.verification.build_verification_candidate", forbidden)
     worker, client, state = prepared_run(tmp_path, mode)
     manifest = state["generate_batch"]
     client.retrieve_batch.return_value = terminal_batch(state)
@@ -173,8 +177,24 @@ def test_completion_preserves_workflow_state_when_download_fails(tmp_path):
 
 
 def test_second_known_batch_remains_pending_after_first_import(tmp_path):
+    from dataclasses import replace
+    from kajovo.core.orchestration.repository import OrchestrationRepository
+    from kajovo.core.orchestration.work_order import work_order_from_mapping, attempt_identity
+    from kajovo.core.orchestration.contracts import canonical_sha256
     worker, client, state = prepared_run(tmp_path)
     second = copy.deepcopy(state["generate_batch"])
+    repo = OrchestrationRepository(Path(worker.settings.log_dir) / "orchestration.sqlite3")
+    for request in second["requests"]:
+        custom_id = request["custom_id"]
+        original = work_order_from_mapping(second["work_orders"][custom_id])
+        task_id = original.task_id + ":second"
+        order = replace(original, task_id=task_id, attempt_id=attempt_identity(original.run_id, task_id, 1))
+        second["work_orders"][custom_id] = {**order.to_dict(), "order_hash": order.order_hash}
+        body_hash = canonical_sha256(request["body"])
+        work_hash = repo.register_work_order(order, body_ref=body_hash, input_hash=order.input_projection_hash)
+        repo.prepare_provider_operation(attempt_id=order.attempt_id, work_order_hash=work_hash,
+                                        endpoint="/v1/batches", request_hash=body_hash)
+        repo.mark_submitted(order.attempt_id, "batch_second", unknown=False)
     state["generate_batches"] = {"batch_second": second}
     Path(worker.log.state_path).write_text(
         json.dumps(state, ensure_ascii=False), encoding="utf-8"
@@ -199,6 +219,10 @@ def test_second_known_batch_remains_pending_after_first_import(tmp_path):
         **terminal_batch(state),
         "id": "batch_second",
     }
+    rows = batch_output_rows(second)
+    for row in rows:
+        row["response"]["body"]["id"] += "_second"
+    client.file_content.return_value = raw_jsonl(rows)
     complete_saved_batch(
         client,
         worker.log.paths.run_dir,

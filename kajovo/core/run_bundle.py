@@ -14,6 +14,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from functools import wraps
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -23,9 +24,11 @@ from .orchestration.contracts import canonical_bytes
 
 BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_COMPATIBILITY_VERSION = 1
-INDEX_SCHEMA_VERSION = 3
+INDEX_SCHEMA_VERSION = 5
+OUTPUT_ARTIFACT_ROLES = frozenset({"generated_file", "modified_file", "batch_output", "log_export", "output"})
 
 RUN_STATUSES = {
+    "needs_clarification",
     "created",
     "preparing",
     "running",
@@ -49,7 +52,7 @@ RUN_STATUSES = {
     "unknown",
 }
 TERMINAL_STATUSES = {"completed", "partial", "failed", "cancelled", "stopped", "closed",
-                     "files_complete_unverified", "completed_unverified", "dry_run", "plan_ready", "qfile_plan_ready"}
+                     "files_complete_unverified", "completed_unverified", "dry_run", "plan_ready", "qfile_plan_ready", "needs_clarification"}
 ARTIFACT_BUCKETS = {"inputs", "intermediate", "outputs", "external"}
 
 
@@ -98,6 +101,28 @@ def _append_jsonl(path: Path, value: Any) -> None:
         stream.write(canonical_bytes(value).decode("utf-8") + "\n")
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def _serialized_events(function):
+    @wraps(function)
+    def wrapped(self, *args, **kwargs):
+        from .runs.locking import ExecutionLock
+
+        key = hashlib.sha256(os.path.normcase(str(self.events_path.resolve())).encode("utf-8")).hexdigest()
+        lock = ExecutionLock(Path(tempfile.gettempdir()) / "kajovo-event-locks" / (key + ".lock"))
+        deadline = time.monotonic() + 10
+        while not lock.acquire():
+            if time.monotonic() >= deadline:
+                raise BlockingIOError("Zápis události čeká na jiného zapisovatele.")
+            time.sleep(0.01)
+        try:
+            return function(self, *args, **kwargs)
+        except Exception:
+            self._event_cursor = None
+            raise
+        finally:
+            lock.release()
+    return wrapped
 
 
 def _read_json(path: Path, default: Any = None) -> Any:
@@ -287,7 +312,7 @@ class RequestRecord:
     run_id: str
     step_id: str
     created_at: str
-    sent_at: str
+    sent_at: str | None
     endpoint: str
     method: str
     model: str
@@ -300,6 +325,8 @@ class RequestRecord:
     request_role: str
     remote_request_id: str
     source_path: str = ""
+    dispatch_started_at: str | None = None
+    transmission_state: str = "prepared"
 
 
 @dataclass
@@ -448,6 +475,7 @@ class RunBundle:
         # Čtení metadat neprochází celý proud událostí. Čítač je zapotřebí
         # teprve při prvním skutečném zápisu do znovu otevřeného bundle.
         self._event_sequence = None
+        self._event_cursor = None
         self._step_sequence = None
         if create and not self.bundle_path.exists():
             bundle = {
@@ -493,6 +521,7 @@ class RunBundle:
         _atomic_json(self.run_path, current)
         return current
 
+    @_serialized_events
     def append_event(
         self,
         event_type: str,
@@ -508,7 +537,23 @@ class RunBundle:
         related_response_id: str = "",
         related_artifact_ids: Iterable[str] = (),
     ) -> dict[str, Any]:
-        if self._event_sequence is None:
+        try:
+            info = self.events_path.stat()
+        except FileNotFoundError:
+            info = None
+        cursor = self._event_cursor
+        if info is not None and cursor and (info.st_dev, info.st_ino) == cursor[:2] and info.st_size > cursor[2]:
+            with self.events_path.open("rb") as stream:
+                stream.seek(cursor[2])
+                lines = stream.read().decode("utf-8").splitlines()
+            for line in lines:
+                if not line.strip():
+                    continue
+                item = parse_json_value_strict(line)
+                if not isinstance(item, dict):
+                    raise ValueError("Proud událostí musí obsahovat JSON objekty.")
+                self._event_sequence = max(self._event_sequence or 0, int(item.get("sequence") or 0))
+        elif info is None or not cursor or (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != cursor:
             self._event_sequence = max([int(item.get("sequence") or 0) for item in _read_jsonl(self.events_path)] or [0])
         self._event_sequence += 1
         timestamp_epoch = time.time()
@@ -536,6 +581,8 @@ class RunBundle:
         record["ts"] = timestamp_epoch
         record["type"] = event_type
         _append_jsonl(self.events_path, record)
+        info = self.events_path.stat()
+        self._event_cursor = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
         return record
 
     def steps(self) -> list[dict[str, Any]]:
@@ -632,12 +679,12 @@ class RunBundle:
         identifier = "req_" + uuid.uuid4().hex
         record = asdict(
             RequestRecord(
-                BUNDLE_SCHEMA_VERSION,
+                2,
                 identifier,
                 self.run_id,
                 step_id,
                 _now_iso(),
-                _now_iso(),
+                None,
                 endpoint,
                 method,
                 model,
@@ -655,16 +702,42 @@ class RunBundle:
         path = self.requests_dir / f"_record_{identifier}.json"
         _atomic_json(path, record)
         if step_id:
-            self.update_step(step_id, request_ids=[identifier], model=model or None, reasoning_effort=reasoning_effort or None)
+            changes = {"request_ids": [identifier]}
+            if request_role != "transport" and isinstance(payload, dict) and model:
+                changes.update(model=model, reasoning_effort=reasoning_effort)
+            self.update_step(step_id, **changes)
         self.append_event(
-            "request.sent",
+            "request.prepared",
             {"endpoint": endpoint, "method": method, "model": model, "payload_sha256": record["payload_sha256"]},
             step_id=step_id,
             operation=stage,
             related_request_id=identifier,
-            human_message=f"Odeslán požadavek {stage}.",
+            human_message=f"Připraven požadavek {stage}.",
         )
         return record
+
+    def record_transport_event(self, request_id, event, *, remote_request_id="", status_code=None):
+        path = self.requests_dir / f"_record_{request_id}.json"
+        record = _read_json(path, {})
+        if record.get("schema_version") != 2:
+            raise ValueError("Transportní událost vyžaduje RequestRecord V2.")
+        stamp = _now_iso()
+        if event == "dispatch_started":
+            record["dispatch_started_at"] = stamp
+        elif event == "response_received":
+            record["sent_at"] = stamp
+            record["remote_request_id"] = remote_request_id or ""
+        elif event != "submission_unknown":
+            raise ValueError("Neznámá transportní událost.")
+        record["transmission_state"] = event
+        _atomic_json(path, record)
+        self.append_event(
+            "request." + event, {"status_code": status_code},
+            step_id=record["step_id"], related_request_id=request_id,
+            human_message={"dispatch_started": "Zahájeno předání požadavku transportu.",
+                           "response_received": "Přijetí požadavku doloženo HTTP odpovědí.",
+                           "submission_unknown": "Výsledek předání požadavku není doložen."}[event],
+        )
 
     def record_response(
         self,
@@ -767,10 +840,11 @@ class RunBundle:
             )
         )
         _atomic_json(self.validations_dir / f"{identifier}.json", record)
-        if target_type == "preparation":
+        if target_type in {"preparation", "preparation_v2"}:
+            response_id = (evidence or {}).get("response_id") or target_id
             for path in self.responses_dir.glob("_record_*.json"):
                 response = _read_json(path, {})
-                if response.get("step_id") == step_id and response.get("response_id") == target_id:
+                if response.get("step_id") == step_id and response.get("response_id") == response_id:
                     response["validation_status"] = status
                     _atomic_json(path, response)
         if step_id:
@@ -790,7 +864,7 @@ class RunBundle:
     def _artifact_bucket(self, role: str) -> str:
         if role in {"user_input", "attached_file", "in_project_file"}:
             return "inputs"
-        if role in {"generated_file", "modified_file", "batch_output", "log_export"}:
+        if role in OUTPUT_ARTIFACT_ROLES:
             return "outputs"
         if role in {"remote_file", "vector_store", "external_reference"}:
             return "external"
@@ -1002,6 +1076,11 @@ class RunBundle:
         if not checkpoint_id or Path(checkpoint_id).name != checkpoint_id or "\\" in checkpoint_id:
             raise ValueError("Neplatný identifikátor checkpointu.")
         path = self.checkpoints_dir / f"{checkpoint_id}.json"
+        if self.checksums_path.is_file() and self.run_record().get("status") in TERMINAL_STATUSES:
+            manifest = _read_json(self.checksums_path, {})
+            expected = (manifest.get("files") or {}).get(path.relative_to(self.root).as_posix())
+            if not expected or not path.is_file() or _sha256_file(path) != expected:
+                raise ValueError("Checkpoint není součástí zapečetěného běhu nebo byl změněn.")
         record = _read_json(path, {})
         if not isinstance(record, dict) or record.get("checkpoint_id") != checkpoint_id:
             raise ValueError("Checkpoint nebyl nalezen.")
@@ -1139,11 +1218,17 @@ class RunBundle:
             return {"status": "unsealed", "valid": False, "errors": ["Run Bundle ještě nemá integritní manifest."]}
         errors: list[str] = []
         files = expected["files"]
+        actual_paths = {path.relative_to(self.root).as_posix() for path in self._checksum_files()}
+        for relative in sorted(actual_paths - set(files)):
+            errors.append(f"Soubor není v integritním manifestu: {relative}.")
         for relative, digest in files.items():
             # Provozní QLockFile se po ukončení pracovníka odstraní; není důkazním artefaktem.
             if relative == "execution.lock":
                 continue
-            target = self.root / relative
+            target = (self.root / relative).resolve()
+            if not target.is_relative_to(self.root.resolve()):
+                errors.append(f"Cesta opouští Run Bundle: {relative}.")
+                continue
             if not target.is_file():
                 errors.append(f"Chybí {relative}.")
             elif _sha256_file(target) != digest:
@@ -1173,7 +1258,10 @@ class LegacyRunAdapter:
         return self.bundle is None
 
     def state(self) -> dict[str, Any]:
-        value = _read_json_legacy(self.root / "run_state.json", {})
+        reader = _read_json_legacy if self.legacy else _read_json
+        value = reader(self.root / "run_state.json", {})
+        if not self.legacy and not isinstance(value, dict):
+            raise ValueError(f"Stav běhu musí být objekt: {self.root / 'run_state.json'}")
         return value if isinstance(value, dict) else {}
 
     def run_record(self) -> dict[str, Any]:
@@ -1217,7 +1305,8 @@ class LegacyRunAdapter:
         return self.bundle.steps() if self.bundle else []
 
     def events(self) -> list[dict[str, Any]]:
-        records = _read_jsonl_legacy(self.root / "events.jsonl")
+        reader = _read_jsonl_legacy if self.legacy else _read_jsonl
+        records = reader(self.root / "events.jsonl")
         if not self.legacy:
             return records
         normalized = []
@@ -1238,7 +1327,9 @@ class LegacyRunAdapter:
         records = []
         pattern = "*.json" if self.legacy else "_record_*.json"
         for path in sorted(directory.glob(pattern)):
-            value = _read_json_legacy(path, None)
+            value = (_read_json_legacy if self.legacy else _read_json)(path, None)
+            if not self.legacy and (not isinstance(value, dict) or not value.get(key)):
+                raise ValueError(f"Neplatný záznam {key}: {path}")
             if isinstance(value, dict) and value.get(key):
                 records.append(value)
             elif self.legacy and isinstance(value, dict):
@@ -1335,26 +1426,33 @@ class HistoryIndex:
     def _load(self) -> dict[str, Any]:
         value = _read_json(self.path, {})
         if not isinstance(value, dict) or value.get("schema_version") != INDEX_SCHEMA_VERSION:
-            return {"schema_version": INDEX_SCHEMA_VERSION, "runs": {}}
+            return {"schema_version": INDEX_SCHEMA_VERSION, "runs": {}, "_rebuild": True}
         if not isinstance(value.get("runs"), dict):
-            return {"schema_version": INDEX_SCHEMA_VERSION, "runs": {}}
+            return {"schema_version": INDEX_SCHEMA_VERSION, "runs": {}, "_rebuild": True}
         return value
 
-    def _source_mtime(self, directory: Path) -> int:
+    def _source_signature(self, directory: Path) -> str:
         values = []
-        for name in ("run.json", "run_state.json", "events.jsonl", "steps.jsonl", "lineage.json", "checksums.json"):
-            path = directory / name
+        paths = [directory / name for name in (
+            "bundle.json", "run.json", "run_state.json", "events.jsonl", "steps.jsonl", "lineage.json", "checksums.json"
+        )]
+        for folder in ("requests", "responses", "checkpoints", "validations", "artifacts", "manifests", "reports"):
+            root = directory / folder
+            if root.is_symlink() or root.is_junction():
+                continue
+            for parent, directories, files in os.walk(root, followlinks=False):
+                directories[:] = sorted(
+                    name for name in directories
+                    if not (Path(parent) / name).is_symlink() and not (Path(parent) / name).is_junction()
+                )
+                paths.extend(Path(parent) / name for name in sorted(files))
+        for path in sorted(paths):
             try:
-                values.append(path.stat().st_mtime_ns)
+                info = path.lstat()
+                values.append([str(path.relative_to(directory)), info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns])
             except OSError:
-                pass
-        for folder in ("requests", "responses", "checkpoints", "validations", "artifacts"):
-            path = directory / folder
-            try:
-                values.append(path.stat().st_mtime_ns)
-            except OSError:
-                pass
-        return max(values or [0])
+                values.append([str(path.relative_to(directory)), None])
+        return _sha256_bytes(_json_bytes(values))
 
     def _summary(self, directory: Path) -> dict[str, Any]:
         adapter = LegacyRunAdapter(directory)
@@ -1385,7 +1483,7 @@ class HistoryIndex:
         ) or str(run.get("status") or "") in {"failed", "partial", "submission_unknown"}
         return {
             "run_id": self.run_id_from(directory),
-            "source_mtime_ns": self._source_mtime(directory),
+            "source_signature": self._source_signature(directory),
             "legacy": adapter.legacy,
             "project": str(run.get("project") or ""),
             "mode": str(run.get("mode") or ""),
@@ -1414,7 +1512,7 @@ class HistoryIndex:
             ),
             "output_count": sum(
                 1 for item in artifacts
-                if item.get("role") in {"generated_file", "modified_file", "batch_output", "log_export"}
+                if item.get("role") in OUTPUT_ARTIFACT_ROLES
             ),
             "error_count": sum(
                 1 for event in events
@@ -1426,7 +1524,7 @@ class HistoryIndex:
             "has_checkpoint": bool(checkpoints),
             "has_error": has_error,
             "has_batch": bool(run.get("related_batch_ids")) or bool(state.get("batch_id") or state.get("generate_batches")),
-            "has_output": any(item.get("role") in {"generated_file", "modified_file", "batch_output", "log_export"} for item in artifacts),
+            "has_output": any(item.get("role") in OUTPUT_ARTIFACT_ROLES for item in artifacts),
             "has_lineage": bool(lineage or run.get("parent_run_id")),
             "parent_run_id": str(run.get("parent_run_id") or (lineage[-1].get("source_run_id") if lineage else "")),
             "lineage_records": lineage,
@@ -1444,16 +1542,26 @@ class HistoryIndex:
     def refresh(self, *, force: bool = False) -> list[dict[str, Any]]:
         index = self._load()
         runs = index["runs"]
-        changed = not self.path.exists()
+        changed = bool(index.pop("_rebuild", False)) or not self.path.exists()
         existing = set()
         for directory in sorted(self.log_dir.glob("RUN_*")):
             if not directory.is_dir():
                 continue
             run_id = directory.name
             existing.add(run_id)
-            mtime = self._source_mtime(directory)
-            if force or run_id not in runs or int(runs[run_id].get("source_mtime_ns") or 0) != mtime:
-                runs[run_id] = self._summary(directory)
+            signature = self._source_signature(directory)
+            if force or run_id not in runs or runs[run_id].get("source_signature") != signature:
+                try:
+                    runs[run_id] = self._summary(directory)
+                    runs[run_id]["source_signature"] = signature
+                except (ValueError, UnicodeError, OSError) as exc:
+                    runs[run_id] = {
+                        "run_id": run_id, "status": "corrupt_state",
+                        "legacy": not (directory / "bundle.json").exists(),
+                        "source_signature": signature, "has_error": True,
+                        "error_count": 1, "error": str(exc),
+                        "search_text": (run_id + "\n" + str(exc)).casefold(),
+                    }
                 changed = True
         for stale in set(runs) - existing:
             runs.pop(stale, None)

@@ -17,6 +17,7 @@ from kajovo.core.model_capabilities import ModelCapabilitiesCache
 from kajovo.core.orchestration.run_config import require_resumable_run_config_v2
 from kajovo.core.runlog import RunLogger, verified_output_evidence
 from kajovo.core.runs.config import UiRunConfig
+from kajovo.core.runs.live_continuation import inherit_pending, pending_live, read_evidence
 from kajovo.core.utils import new_run_id
 from kajovo.studio.workers.cascade_worker import CascadeRunWorker
 from kajovo.studio.workers.run_worker import RunWorker
@@ -88,11 +89,18 @@ class HistoryBranchLauncher:
         state = checkpoint.get("state_snapshot")
         if not isinstance(state, dict):
             raise ValueError("Checkpoint nemá platný stavový snímek.")
-        self._source_state(adapter)
+        current_state = self._source_state(adapter)
+        preview_live = pending_live(current_state) and relation == "continue"
+        if preview_live:
+            read_evidence(adapter.root)
+        if (current_state.get("response_pending") or {}).get("status") in {"queued", "in_progress", "submitting"} and relation == "repair":
+            raise ValueError("Rozpracovanou LIVE odpověď nejprve převezměte přes Continue.")
         ui = state.get("ui_state") if isinstance(state.get("ui_state"), dict) else {}
         if ui.get("in_dir") and not (state.get("input_archive") or {}).get("complete"):
             raise ValueError("Bod obnovy nedokládá úplný archiv vstupního adresáře. Použijte klon a zkontrolujte jeho podklady.")
         mode = str(ui.get("mode") or state.get("mode") or adapter.run_record().get("mode") or "")
+        if preview_live and mode not in {"GENERATE", "MODIFY"}:
+            raise ValueError("Tento režim nemá doložený adaptér obnovy LIVE odpovědi.")
         if mode not in SUPPORTED_DIRECT_MODES:
             raise ValueError("Tento typ běhu nemá bezpečný přímý launcher; použijte jeho doménovou obrazovku.")
         require_resumable_run_config_v2(ui, mode)
@@ -111,20 +119,25 @@ class HistoryBranchLauncher:
         error = str(source_state.get("human_error") or source_state.get("error") or adapter.run_record().get("output_summary") or "Popis chyby nebyl uložen.")
         technical_error = str(source_state.get("technical_error") or source_state.get("error") or "Technický detail nebyl uložen.")
         checkpoint_type = str(checkpoint.get("checkpoint_type") or "")
-        output_ui = copy.deepcopy(ui)
-        if (
-            relation == "continue"
-            and checkpoint_type == "plan_ready"
-            and mode in {"GENERATE", "MODIFY"}
-        ):
-            output_ui["stop_after_plan"] = False
+        output_ui = self._branch_ui(ui, mode, relation, checkpoint_type)
         return BranchPreview(
             relation, adapter.run_id, checkpoint_id, checkpoint_type,
             selected_stage, tuple(inherited), skipped,
-            first_paid_operation(mode, checkpoint, selected_stage), error, technical_error,
+            ("GET existující odpovědi; bez nového POST" if preview_live
+             else first_paid_operation(mode, checkpoint, selected_stage)), error, technical_error,
             "Zdrojový běh zůstane neměnný; vznikne nový Run ID a nová lineage větev.",
             str(self._output_dir(mode, state, output_ui) or ""),
         )
+
+    @staticmethod
+    def _branch_ui(ui, mode, relation, checkpoint_type):
+        result = copy.deepcopy(ui)
+        if mode != "MODIFY":
+            result["dry_run"] = False
+        if relation == "continue" and checkpoint_type == "plan_ready" and mode in {"GENERATE", "MODIFY"}:
+            result["stop_after_plan"] = False
+            result["execution_approval_id"] = ""
+        return result
 
     @staticmethod
     def _output_dir(mode, state, ui):
@@ -194,7 +207,12 @@ class HistoryBranchLauncher:
         state = copy.deepcopy(checkpoint["state_snapshot"])
         ui = copy.deepcopy(state.get("ui_state") or {})
         mode = str(ui.get("mode") or state.get("mode") or adapter.run_record().get("mode") or "")
-        self._source_state(adapter)
+        ui = self._branch_ui(ui, mode, preview.relation, preview.checkpoint_type)
+        current_state = self._source_state(adapter)
+        if preview.relation == "continue" and pending_live(current_state) and mode not in {"GENERATE", "MODIFY"}:
+            raise ValueError("Tento režim nemá doložený adaptér obnovy LIVE odpovědi.")
+        if (current_state.get("response_pending") or {}).get("status") in {"queued", "in_progress", "submitting"} and preview.relation == "repair":
+            raise ValueError("Rozpracovanou LIVE odpověď nejprve převezměte přes Continue.")
         reserved_output = self._output_dir(mode, state, ui)
         if _prepare_only:
             if str(reserved_output or "") != preview.output_dir:
@@ -220,9 +238,19 @@ class HistoryBranchLauncher:
     def _standard_worker(self, run_id, adapter, ui, state, preview, repair_instruction):
         from .workbench import default_state
 
+        current = self._source_state(adapter)
+        live = read_evidence(adapter.root) if preview.relation == "continue" and pending_live(current) else None
+        if live:
+            if repair_instruction:
+                raise ValueError("Continue LIVE nesmí měnit zmrazené zadání.")
+            ui = copy.deepcopy(live["source_state"].get("ui_state") or {})
+            state = copy.deepcopy(live["source_state"])
         source_mode = str(ui.get("mode") or state.get("mode") or "")
         require_resumable_run_config_v2(ui, source_mode)
-        merged = {**default_state(self.context.settings), **ui}
+        merged = self._branch_ui(
+            {**default_state(self.context.settings), **ui}, source_mode,
+            preview.relation, preview.checkpoint_type,
+        )
         if merged.get("in_dir"):
             from kajovo.core.utils import safe_join_under_root
 
@@ -292,6 +320,14 @@ class HistoryBranchLauncher:
         merged["model_caps"] = capability.to_dict() if capability else dict(merged.get("model_caps") or {})
         config = UiRunConfig(**{field.name: copy.deepcopy(merged.get(field.name)) for field in fields(UiRunConfig)})
         logger = RunLogger(self.context.settings.log_dir, run_id, project_name=config.project)
+        if live:
+            from kajovo.core.safe_config import safe_ui_state
+            inherit_pending(adapter, logger, live, ui_state=safe_ui_state(config))
+        if preview.relation in {"continue", "repair"} and config.mode in {"GENERATE", "MODIFY"}:
+            current = read_state(adapter.root)
+            if current.get("manual_resource_bindings") or current.get("staged_files"):
+                from kajovo.core.orchestration.manual_resources import inherit_resources
+                inherit_resources(adapter.root, logger)
         logger.record_lineage(
             preview.source_run_id, preview.relation,
             source_checkpoint_id=preview.checkpoint_id,
@@ -303,7 +339,7 @@ class HistoryBranchLauncher:
             },
             notes=merged["recovery_instruction"],
         )
-        output = Path(config.out_dir).resolve() if config.out_dir and not config.send_as_c and config.mode != "QA" else None
+        output = self._output_dir(config.mode, state, merged)
         return RunWorker(config, copy.deepcopy(self.context.settings), self.context.api_key, logger), output, config.project
 
     def _cascade_worker(self, run_id, adapter, state, preview, repair_instruction):
@@ -312,26 +348,6 @@ class HistoryBranchLauncher:
             raise ValueError("Checkpoint kaskády nemá kanonickou definici kroků.")
         definition = CascadeDefinition.from_dict(definition_data)
         mappings = state.get("cascade_input_artifacts")
-        if isinstance(mappings, list):
-            by_step = {step.id: step for step in definition.steps}
-            for mapping in mappings:
-                if not isinstance(mapping, dict) or not mapping.get("path_in_bundle"):
-                    continue
-                step = by_step.get(str(mapping.get("step_id") or ""))
-                if not step:
-                    continue
-                source = str((Path(adapter.root) / str(mapping["path_in_bundle"])).resolve())
-                if mapping.get("field") == "input":
-                    item = next((row for row in step.inputs if row.id == mapping.get("input_id")), None)
-                    if item:
-                        item.value = source
-                elif mapping.get("field") == "files_local_paths":
-                    try:
-                        index = int(str(mapping.get("input_id") or ""))
-                    except ValueError:
-                        continue
-                    if 0 <= index < len(step.files_local_paths):
-                        step.files_local_paths[index] = source
         start_step = state.get("next_step_id") or state.get("failed_step_id") or preview.selected_stage
         if start_step:
             definition.run_from_step_id = str(start_step)
@@ -339,6 +355,8 @@ class HistoryBranchLauncher:
             str(state.get("project") or ""), definition, str(state.get("in_dir") or ""),
             str(state.get("out_dir") or ""), run_id,
             resume_snapshot=copy.deepcopy(state.get("cascade_runtime")),
+            resume_source_dir=str(adapter.root),
+            input_bindings=copy.deepcopy(mappings) if isinstance(mappings, list) else None,
             recovery_instruction=repair_instruction,
             lineage={"source_run_id": preview.source_run_id, "relation_type": preview.relation,
                      "source_checkpoint_id": preview.checkpoint_id, "notes": repair_instruction},

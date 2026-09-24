@@ -40,6 +40,17 @@ def test_resource_id_cannot_change_endpoint(identifier):
     client._sdk.files.delete.assert_not_called()
 
 
+def test_container_file_download_is_read_only_and_identifiers_are_validated():
+    client = OpenAIClient("test")
+    client._req = Mock(return_value=b"exact binary data")
+    assert client.container_file_content("cntr_1", "cfile_1") == b"exact binary data"
+    client._req.assert_called_once_with("GET", "/containers/cntr_1/files/cfile_1/content")
+    client._req.reset_mock()
+    with pytest.raises(ValueError):
+        client.container_file_content("cntr_1/../other", "cfile_1")
+    client._req.assert_not_called()
+
+
 def test_multipart_upload_timeout_is_not_retried_or_rewound():
     client = OpenAIClient("test")
     assert "Content-Type" not in client.session.headers

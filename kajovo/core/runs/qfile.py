@@ -51,12 +51,11 @@ def _validate_qfile_plan(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise ContractError("QFILE_PLAN_V1: chybí result.")
     if result.get("status") == "blocked":
+        from ..orchestration.preparation import PreparationBlocked
         questions = result.get("questions") or []
-        message = "; ".join(
-            str(row.get("question") or row.get("code") or "chybí podklad")
-            for row in questions if isinstance(row, dict)
-        )
-        raise ContractError("QFILE plán je zablokovaný: " + (message or "chybí zásadní podklad."))
+        if not questions:
+            raise ContractError("QFILE blocked odpověď nemá otázky.")
+        raise PreparationBlocked("QFILE", questions)
     if result.get("status") != "ready" or not isinstance(result.get("data"), dict):
         raise ContractError("QFILE_PLAN_V1: neplatný stav plánu.")
     plan = dict(result["data"])
@@ -106,13 +105,17 @@ def _run_qfile(
             prev_id=None,
         )
         payload["text"] = qfile_plan_format()
+        if self._fs_tools:
+            payload["tools"] = self._fs_tools
+            payload["include"] = ["file_search_call.results"]
         if (
             self.cfg.model_caps.get("supports_temperature", True)
             and not uses_reasoning_defaults(self.cfg.model)
         ):
             payload["temperature"] = 0.0
         self._log_request_attachments(
-            "QFILE_PLAN", qfile_ref_files, input_files, input_images, [], None
+            "QFILE_PLAN", qfile_ref_files, input_files, input_images,
+            self._vector_store_ids, self._fs_tools
         )
         step_id = self.log.begin_validated_step(
             "QFILE_PLAN", kind="preparation", model=self.cfg.model
@@ -201,12 +204,16 @@ def _run_qfile(
         prev_id=None,
     )
     payload["text"] = file_content_format()
+    if self._fs_tools:
+        payload["tools"] = self._fs_tools
+        payload["include"] = ["file_search_call.results"]
     if (
         self.cfg.model_caps.get("supports_temperature", True)
         and not uses_reasoning_defaults(self.cfg.model)
     ):
         payload["temperature"] = 0.0
-    self._log_request_attachments("QFILE", qfile_ref_files, input_files, input_images, [], None)
+    self._log_request_attachments("QFILE", qfile_ref_files, input_files, input_images,
+                                  self._vector_store_ids, self._fs_tools)
 
     expected_target_hash = None
     target = safe_join_under_root(self.cfg.out_dir, target_path)
@@ -234,6 +241,7 @@ def _run_qfile(
             "contract_name": "FILE_CONTENT_V1",
             "schema": payload["text"]["format"]["schema"],
             "prompt": QFILE_INSTRUCTIONS + "\n" + json.dumps(qfile_input, ensure_ascii=False),
+            "request_payload": payload,
             "model": self.cfg.model,
             "model_capability": self.cfg.model_caps,
             "source_snapshot": {

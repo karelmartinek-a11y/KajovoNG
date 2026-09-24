@@ -107,6 +107,15 @@ def test_binary_artifact_is_self_contained_and_tamper_is_detected(tmp_path):
     assert any("Hash nesouhlasí" in error for error in result["errors"])
 
 
+def test_sealed_bundle_rejects_unlisted_checkpoint(tmp_path):
+    bundle = RunBundle(tmp_path / "RUN_EXTRA", "RUN_EXTRA", create=True)
+    bundle.seal()
+    (bundle.root / "unlisted_checkpoint.json").write_text("{}", encoding="utf-8")
+    result = bundle.verify_integrity()
+    assert not result["valid"]
+    assert any("unlisted_checkpoint.json" in error for error in result["errors"])
+
+
 def test_checkpoint_validates_required_artifact_and_blocks_missing(tmp_path):
     bundle = RunBundle(tmp_path / "RUN_CP", "RUN_CP", create=True)
     source = tmp_path / "input.txt"

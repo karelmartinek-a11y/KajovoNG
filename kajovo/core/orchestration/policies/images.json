@@ -8,7 +8,7 @@
   "max_target_edge": 16384,
   "image_count": 1,
   "output_format": "png",
-  "quality": "high",
+  "quality": "max",
   "background": "opaque",
   "input_fidelity": "high_if_supported_else_omit",
   "exif_normalization": "transpose_once_then_strip_metadata",
@@ -27,9 +27,6 @@
   "actual_limit": "minimum of local policy and verified model capability",
   "fit_default": "pad",
   "crop_requires_explicit_user_choice": true,
-  "photo_review_default": "live",
-  "image_repair_max_additional_generations": 1,
-  "image_review_uncertain": "needs_human",
   "pixel_exact_protection": "local composition outside user-approved binary mask; equality of normalized decoded pixels, not JPEG bytes",
   "comic_overlay": {
     "max_items": 40,
@@ -37,15 +34,8 @@
     "max_font_points": 18,
     "default_font_points": 12,
     "max_text_characters": 3000,
-    "text_overflow": "block_no_truncation",
+    "text_overflow": "lossless_split_before_generation",
     "sfx_default": false,
     "model_draws_text": false
-  },
-  "story": {
-    "max_scenes": 64,
-    "max_panels": 512,
-    "script_unit": "scene",
-    "storyboard_unit": "scene",
-    "continuity_review_pair_window": 2
   }
 }

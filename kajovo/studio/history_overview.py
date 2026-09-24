@@ -47,20 +47,32 @@ class TextCard(QWidget):
                 self.notice.show()
 
 
+def _answer_text(value):
+    if not isinstance(value, dict):
+        return None
+    result = value.get("result")
+    data = result.get("data") if isinstance(result, dict) else None
+    if isinstance(data, dict) and isinstance(data.get("answer"), str):
+        return data["answer"]
+    return value.get("text") if isinstance(value.get("text"), str) else None
+
+
 def human_answer(payload, step_id=None):
     records = [row for row in payload.get("responses") or [] if not step_id or row.get("step_id") == step_id]
     values = unique_responses(records)
     texts = []
     for row in values:
         structured = row.get("structured_value") or row.get("structured_output")
-        if isinstance(structured, dict) and isinstance(structured.get("text"), str):
-            texts.append(structured["text"])
+        answer = _answer_text(structured)
+        if answer is not None:
+            texts.append(answer)
         elif row.get("output_text"):
             import json
             text = row["output_text"]
             try:
                 value = json.loads(text)
-                text = value.get("text", text) if isinstance(value, dict) else text
+                answer = _answer_text(value)
+                text = answer if answer is not None else text
             except (ValueError, TypeError):
                 pass
             texts.append(str(text))

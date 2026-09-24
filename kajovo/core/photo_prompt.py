@@ -139,11 +139,12 @@ def professionalize_prompt(
         "human_prompt": original,
         "contract": "PHOTO_PLAN_V1",
     }
+    step = log.bundle.ensure_step("PHOTO_PLAN", kind="preparation", model=model)
     order = freeze_order(
         cfg,
         {
             "run_id": run_id,
-            "step_id": "PHOTO_PLAN",
+            "step_id": step["step_id"],
             "task_id": "PHOTO_PLAN",
             "stage": "PHOTO",
             "route": "responses_live",
@@ -154,6 +155,7 @@ def professionalize_prompt(
             "contract_name": "PHOTO_PLAN_V1",
             "schema": schema,
             "prompt": payload["instructions"],
+            "request_payload": payload,
             "model": model,
             "model_capability": model_spec(model),
             "source_snapshot": projection,

@@ -26,7 +26,7 @@ def test_eta_requires_completed_samples_and_counts_down():
 
 def test_progress_display_explains_remote_work_and_remaining_steps():
     events = [
-        ProgressEvent("A1", detail="Odesílám architektonický plán.", source="api"),
+        ProgressEvent("A1", "completed", detail="Architektonický plán dokončen.", source="api"),
         ProgressEvent("A2", detail="Ověřuji přijatou strukturu.", source="api"),
     ]
     steps = build_steps(events, mode="GENERATE", quality=True)

@@ -247,7 +247,7 @@ def test_known_contracts_are_native_for_gpt52(tmp_path):
     assert not errors
     assert results[0]["status"] == "plan_ready"
     calls = client.create_response.call_args_list
-    assert format_names(responder) == ["B0R_REQUIREMENTS_V2", "B1_PLAN_V2", "B2_SPINE_V1", "B2_FILE_SPEC_V1"]
+    assert format_names(responder) == ["B0R_REQUIREMENTS_V2", "B1_PLAN_V2", "B2_SPINE_V2", "B2_FILE_SPEC_V1"]
     from pathlib import Path
     state = json.loads(Path(worker.log.state_path).read_text(encoding="utf-8"))
     assert "budget_ledger_summary" not in state

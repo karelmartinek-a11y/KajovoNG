@@ -21,7 +21,7 @@ comic.bible.generate,generate_bible,ComicService.start_bible/run,Validovaná rev
 comic.job.resume,resume_selected,ComicService.run,Pokračování uložené operace,submission_unknown,test_storage_failure_resumes_from_downloaded_archive
 comic.job.retry,retry_selected,ComicService.retry_failed,Nová operace jen pro chyby,nothing_to_retry,test_batch_partial_retry_and_resume
 comic.job.cancel,cancel_selected,ComicService.cancel,Zrušení a převzetí hotových položek,cancel_unavailable,test_cancel_before_submission_never_calls_provider
-comic.job.details,job_details,ComicStore.get/rows,"Snapshoty, usage, cena, výsledky a chyby",missing_record,test_batch_partial_retry_and_resume
+comic.job.details,job_details,ComicStore.get/rows,"Snapshoty, usage, výsledky a chyby",missing_record,test_batch_partial_retry_and_resume
 Přidat text / Odstranit text / textová pole / posun bubliny,OverlayEditor,ComicStore.save_panel,Verzované přesné textové vrstvy,sfx_disabled / text_overflow,test_export_text_has_dark_ink_under_studio_theme
 project selector / style fields,select_project / save_style,ComicStore.update_project,Uložený styl před přepnutím,revision_conflict,test_switching_project_preserves_unsaved_style
 panel selector / prompt / format fields,select_panel / save_panel,ComicStore.save_panel,Verzovaný dokument a vlastní rozměry,invalid_format / invalid_document,test_studio_comic_crud_and_panel_save

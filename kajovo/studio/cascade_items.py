@@ -84,6 +84,7 @@ class CascadeItemDialog(QDialog):
         outputs.setCurrentIndex(max(0, outputs.findData(selected)))
 
     def submit(self):
+        from kajovo.core.orchestration.contracts import parse_json_value_strict
         value = self.record.to_dict()
         try:
             for name, widget in self.form.fields.items():
@@ -94,9 +95,9 @@ class CascadeItemDialog(QDialog):
                 else:
                     text = widget.toPlainText()
                     if name == "decision_options":
-                        value[name] = json.loads(text)
+                        value[name] = parse_json_value_strict(text)
                     elif name == "json_schema":
-                        value[name] = json.loads(text) if text.strip() else None
+                        value[name] = parse_json_value_strict(text) if text.strip() else None
                     else:
                         value[name] = text
             if value.get("kind") != "json":

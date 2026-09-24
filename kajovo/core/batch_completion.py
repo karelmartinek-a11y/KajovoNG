@@ -13,7 +13,8 @@ from .contracts import (
     validate_chunk_metadata,
     ContractError,
 )
-from .generate_batch import encode_requests, process_saved_batch
+from .generate_batch import encode_requests, process_saved_batch_already_locked
+from .runs.locking import ExecutionLock, locked_run_operation
 from .progress import ProgressEvent
 from .batch_submit import exact_batch_matches
 from .run_bundle import RunBundle
@@ -112,6 +113,16 @@ def pending_batch_ids(state):
 
 def remember_remote_batch_state(run_dir, batch):
     """Uloží naposledy doložený remote stav bez změny místního import statusu."""
+    lock = ExecutionLock(Path(run_dir) / "execution.lock")
+    if not lock.acquire():
+        return False
+    try:
+        return _remember_remote_batch_state_already_locked(run_dir, batch)
+    finally:
+        lock.release()
+
+
+def _remember_remote_batch_state_already_locked(run_dir, batch):
     if not isinstance(batch, dict) or not isinstance(batch.get("id"), str):
         return False
     state = read_state(run_dir)
@@ -182,6 +193,11 @@ def save_batch_statuses(log_dir, records):
 
 def recover_unknown_submission(run_dir, records):
     """Dohledá neurčitý pracovní submit pouze přes přesný input_file_id + endpoint."""
+    with ExecutionLock(Path(run_dir) / "execution.lock"):
+        return _recover_unknown_submission_already_locked(run_dir, records)
+
+
+def _recover_unknown_submission_already_locked(run_dir, records):
     state = read_state(run_dir)
     if not state.get("submission_unknown"):
         return None
@@ -203,8 +219,29 @@ def recover_unknown_submission(run_dir, records):
     if not bid:
         raise ContractError("Nalezená dávka nemá ID.")
     pending = state.get("pending_batch_submission")
+    if pending is None and isinstance(state.get("generate_batch"), dict):
+        pending = {"manifest": state["generate_batch"],
+                   "manifest_v4_id": state.get("batch_manifest_v4_id")}
     if isinstance(pending, dict) and isinstance(pending.get("manifest"), dict):
-        encode_requests(pending["manifest"])
+        encode_requests(pending["manifest"], archived=True)
+        from .orchestration.repository import OrchestrationRepository
+        from .orchestration.work_order import work_order_from_mapping
+        from .orchestration.batch_manifest import transition
+        manifest_id = pending.get("manifest_v4_id")
+        if manifest_id:
+            v4 = state.get("batch_manifests_v4", {}).get(manifest_id)
+            if not isinstance(v4, dict) or v4.get("input_file_id") != input_file_id or v4.get("endpoint") != endpoint:
+                raise ContractError("Dohledaná dávka neodpovídá uloženému V4 manifestu.")
+            if v4.get("provider_batch_id") not in {None, bid}:
+                raise ContractError("V4 manifest již patří jiné vzdálené dávce.")
+            if v4["state"] in {"submitting", "submission_unknown"}:
+                state["batch_manifests_v4"][manifest_id] = transition(v4, "submitted", provider_batch_id=bid)
+            if (state.get("batch_manifest_v4") or {}).get("manifest_id") == manifest_id:
+                state["batch_manifest_v4"] = state["batch_manifests_v4"][manifest_id]
+        if pending["manifest"].get("work_orders"):
+            repo = OrchestrationRepository(Path(run_dir).resolve().parent / "orchestration.sqlite3")
+            orders = [work_order_from_mapping(raw) for raw in pending["manifest"]["work_orders"].values()]
+            repo.recover_batch_identity(orders, batch_id=bid, input_file_id=input_file_id)
         state.setdefault("generate_batch", pending["manifest"])
         state.setdefault("generate_batches", {})[bid] = pending["manifest"]
     if not state.get("batch_id"):
@@ -306,10 +343,11 @@ def import_bundle(
         try:
             if isinstance(entry.get("custom_id"), str):
                 seen.add(entry["custom_id"])
-            response = entry.get("response") or {}
-            if entry.get("error") or response.get("status_code", 200) >= 400:
+            from .batch_result import response_body
+
+            body, error = response_body(entry)
+            if error:
                 raise ContractError(f"Položka {entry.get('custom_id', '')} selhala.")
-            body = response.get("body") or entry.get("body")
             if not isinstance(body, dict):
                 raise ContractError("Chybí objekt odpovědi.")
             if body.get("status") != "completed":
@@ -321,6 +359,8 @@ def import_bundle(
                     "Výstup neodpovídá kontraktu odeslaného požadavku."
                 )
             if contract == "C_FILES_ALL":
+                from .structured_output import builtin_format, validate_output
+                validate_output(body, {"text": builtin_format("C_FILES_ALL")})
                 files = payload.get("files")
                 validate_paths(files)
                 root = payload.get("root", "")
@@ -337,6 +377,9 @@ def import_bundle(
                     for record in files
                 )
             elif contract == "A3_FILE":
+                from .contracts import historical_file_response_format
+                from .structured_output import validate_output
+                validate_output(body, {"text": historical_file_response_format()})
                 name = payload.get("path", "")
                 safe_join_under_root(target, name)
                 info = chunks.setdefault(
@@ -462,6 +505,7 @@ def import_bundle(
     }
 
 
+@locked_run_operation
 def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
     """Převezme existující dávku bez nových generujících požadavků."""
     state = read_state(run_dir)
@@ -479,6 +523,7 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
         return service.run(operation["id"], allow_submit=False)
     bundle = _bundle_if_present(run_dir)
     if bundle:
+        client.evidence_bundle = bundle
         bundle.update_run({"status": "importing"})
         bundle.append_event(
             "batch.import.started",
@@ -512,7 +557,7 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
             "detail": "Dávka se ještě zpracovává. Dokončit ji můžete později.",
         }
     if state.get("generate_batch"):
-        result = process_saved_batch(
+        result = process_saved_batch_already_locked(
             client,
             run_dir,
             batch_id,

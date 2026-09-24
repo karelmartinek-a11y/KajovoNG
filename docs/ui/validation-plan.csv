@@ -27,4 +27,4 @@ UI-25,Rychlost historie,Metadata bez velkých odpovědí; neměnný index bez z�
 UI-26,Kontextové akce,Komiks pouze pro COMIC; dávky pouze při vazbě; neověřený bod blokován,kajovo/studio/history_policy.py,tests/test_history_forensic.py,docs/UI_DESIGN.md
 UI-27,Výběr fáze,Kliknutí i klávesnice; asynchronní odpověď zachová vybraný segment,kajovo/studio/history_timeline.py;kajovo/studio/history.py,tests/test_history_forensic.py,docs/UI_DESIGN.md
 UI-28,Obnova vstupů,Úplný archiv a rekonstrukce izolovaného IN; původní zdroj beze změn,kajovo/core/runlog.py;kajovo/studio/history_launcher.py,tests/test_history_forensic.py,docs/RUN_BUNDLE_SPEC.md
-UI-24,Sedm vizuálních stavů,Offline deterministické fixture Run Bundles bez klíče a s kontrolou clippingu,scripts/render_studio.py,scripts/render_studio.py,docs/UI_DESIGN.md
+UI-29,Sedm vizuálních stavů,Offline deterministické fixture Run Bundles bez klíče a s kontrolou clippingu,scripts/render_studio.py,scripts/render_studio.py,docs/UI_DESIGN.md

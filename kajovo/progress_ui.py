@@ -6,19 +6,22 @@ from datetime import datetime
 from typing import Iterable
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPlainTextEdit,
     QProgressBar,
+    QScrollArea,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from .core.progress_display import source_title, stage_title, state_title
+from .core.progress_display import default_plan, source_title, stage_title, state_title
 
 
 COLORS = {
@@ -60,6 +63,9 @@ STATE_META = {
     "importing": ("⇩", "Přebírá se", "focus"),
     "ready_to_import": ("⇩", "K převzetí", "warning"),
     "completed": ("✓", "Dokončeno", "success"),
+    "completed_unverified": ("?", "Převzato bez ověření funkčnosti", "warning"),
+    "needs_clarification": ("?", "Čeká na upřesnění zadání", "warning"),
+    "waiting_manual_resource": ("▣", "Čeká na ruční podklad", "warning"),
     "closed": ("✓", "Dokončeno / uzavřeno", "success"),
     "dry_run": ("◇", "Dry-run / návrh bez zápisu", "focus"),
     "plan_ready": ("◆", "Ověřený plán připraven", "success"),
@@ -90,12 +96,10 @@ STATE_META = {
 
 PROCESS_PRESETS = {
     "GENERATE": (
-        "Lokální validace", "Přílohy / vstupní data", "A0", "A0R", "A1", "A2",
-        "A3", "Validace kontraktů", "Ukládání",
+        "Lokální validace", "Přílohy / vstupní data", *default_plan("GENERATE"),
     ),
     "MODIFY": (
-        "Lokální validace", "kontrola IN", "B0R", "B1", "B2", "B3",
-        "Validace kontraktů", "Ukládání",
+        "Lokální validace", "kontrola IN", *default_plan("MODIFY"),
     ),
     "QA": (
         "Validace zadání", "Příprava příloh", "Sestavení API požadavku", "Odeslání",
@@ -142,11 +146,9 @@ PROVIDER_STATES = {
     "queued", "validating", "in_progress", "finalizing", "completed", "failed",
     "cancelling", "cancelled", "expired",
 }
-TERMINAL_STATES = {
-    "completed", "closed", "dry_run", "plan_ready", "partial", "files_complete_unverified",
-    "unfinished_record", "cancelled", "stopped", "failed", "error", "submission_unknown",
-    "corrupt_state", "unknown", "expired", "response_pending", "batch_pending",
-}
+from .core.progress import TERMINAL_RUN_STATES
+
+TERMINAL_STATES = TERMINAL_RUN_STATES
 FAILURE_STATES = {"failed", "error", "corrupt_state", "expired"}
 BLOCKED_STATES = {"submission_unknown"}
 DOMAIN_STAGES = {"A0", "A0R", "A1", "A2", "A2Q", "A3", "B0R", "B1", "B2", "B2Q", "B3"}
@@ -224,30 +226,35 @@ def _event_code(event) -> str:
 class FlowStrip(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._layout = QHBoxLayout(self)
+        self._layout = QGridLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(5)
+        self._steps = None
 
     def set_steps(self, steps):
+        steps = list(steps)
+        if steps == self._steps:
+            return
+        self._steps = steps
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
-        symbols = {"done": "✓", "current": "▶", "pending": "○", "error": "!", "blocked": "▣", "skipped": "»"}
+        symbols = {"done": "✓", "current": "▶", "pending": "○", "error": "!", "blocked": "▣", "skipped": "»", "unconfirmed": "—"}
         tones = {"done": "success", "current": "focus", "error": "danger", "blocked": "warning"}
         for index, (title, state) in enumerate(steps):
-            chip = QLabel(f"{symbols.get(state, '○')} {title}")
-            chip.setWordWrap(False)
+            chip = QLabel(f"{index + 1}. {symbols.get(state, '○')} {title}")
+            chip.setWordWrap(True)
+            chip.setMinimumWidth(0)
+            chip.setToolTip(title)
             chip.setStyleSheet(
                 f"color: {_tone_color(tones.get(state, 'muted'))}; background: {COLORS['raised']}; "
                 f"border: 1px solid {COLORS['border']}; border-radius: 7px; padding: 5px 7px; font-weight: 600;"
             )
-            self._layout.addWidget(chip)
-            if index < len(steps) - 1:
-                arrow = QLabel("→")
-                arrow.setStyleSheet(f"color: {COLORS['border']}; font-weight: 700;")
-                self._layout.addWidget(arrow)
-        self._layout.addStretch(1)
+            self._layout.addWidget(chip, index // 3, index % 3)
+        for column in range(3):
+            self._layout.setColumnStretch(column, 1)
 
 
 class ProcessInspector(QWidget):
@@ -261,7 +268,17 @@ class ProcessInspector(QWidget):
         self.refresh()
 
     def _build(self, title):
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        content.setObjectName("ProcessContent")
+        root = QVBoxLayout(content)
+        root.setSizeConstraint(QLayout.SetMinimumSize)
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll)
         root.setContentsMargins(18, 18, 18, 14)
         root.setSpacing(10)
 
@@ -280,6 +297,9 @@ class ProcessInspector(QWidget):
         header.addWidget(self.badge, 0, Qt.AlignTop)
         root.addLayout(header)
 
+        process_caption = QLabel("KROKY CELÉHO POŽADAVKU")
+        process_caption.setObjectName("SectionCaption")
+        root.addWidget(process_caption)
         self.flow = FlowStrip()
         root.addWidget(self.flow)
 
@@ -291,6 +311,7 @@ class ProcessInspector(QWidget):
         section = QLabel("AKTUÁLNÍ FÁZE")
         section.setObjectName("SectionCaption")
         self.phase_label = QLabel("Příprava")
+        self.phase_label.setWordWrap(True)
         self.phase_label.setObjectName("PhaseTitle")
         self.activity_label = QLabel("Připravuji operaci…")
         self.activity_label.setObjectName("ActivityTitle")
@@ -309,7 +330,7 @@ class ProcessInspector(QWidget):
         for row, (caption, widget) in enumerate((
             ("Zdroj", self.source_label),
             ("Stav fáze", self.stage_state_label),
-            ("Mikrooperace", self.micro_label),
+            ("Aktuální činnost", self.micro_label),
             ("Vzdálená služba", self.provider_label),
         )):
             key = QLabel(caption + ":")
@@ -320,6 +341,7 @@ class ProcessInspector(QWidget):
         current_layout.addLayout(grid)
 
         self.micro_flow = FlowStrip()
+        self.micro_flow.hide()
         current_layout.addWidget(self.micro_flow)
         self.run_progress = QProgressBar()
         self.run_progress.setRange(0, 0)
@@ -355,10 +377,14 @@ class ProcessInspector(QWidget):
         next_caption = QLabel("DALŠÍ KROK")
         next_caption.setObjectName("SectionCaption")
         self.next_label = QLabel("Bude určen po zahájení běhu")
+        self.next_label.setWordWrap(True)
         self.next_label.setObjectName("StrongValue")
         next_layout.addWidget(next_caption)
         next_layout.addWidget(self.next_label, 1)
         root.addWidget(next_card)
+        self.last_label = QLabel("Poslední dokončený krok zatím není doložen.")
+        self.last_label.setWordWrap(True)
+        root.addWidget(self.last_label)
 
         self.tech_toggle = QToolButton()
         self.tech_toggle.setText("▾ Technický průběh")
@@ -378,6 +404,7 @@ class ProcessInspector(QWidget):
         self.setObjectName("ProcessInspector")
         self.setStyleSheet(f"""
         QWidget#ProcessInspector {{ background: {COLORS['canvas']}; color: {COLORS['text']}; font-family: Montserrat; font-size: 13px; }}
+        QWidget#ProcessContent, QScrollArea {{ background: {COLORS['canvas']}; }}
         QLabel {{ color: {COLORS['text']}; background: transparent; }}
         QLabel#ProcessTitle {{ font-size: 24px; font-weight: 700; }}
         QLabel#PhaseTitle {{ font-size: 17px; font-weight: 700; }}
@@ -412,7 +439,12 @@ class ProcessInspector(QWidget):
     def append_log(self, text):
         if text:
             now = datetime.now().strftime("%H:%M:%S.%f")[:12]
-            self.log.appendPlainText(f"{now}  LOCAL       —   {text}")
+            self._prepend_log(f"{now}  LOCAL       —   {text}")
+
+    def _prepend_log(self, text):
+        lines = (str(text) + "\n" + self.log.toPlainText()).splitlines()[:2000]
+        self.log.setPlainText("\n".join(lines))
+        self.log.moveCursor(QTextCursor.Start)
 
     def append_event(self, event):
         now = datetime.now().strftime("%H:%M:%S.%f")[:12]
@@ -425,7 +457,7 @@ class ProcessInspector(QWidget):
             if value:
                 suffix = f" · {key} {value}"
                 break
-        self.log.appendPlainText(f"{now}  {code:<11} {stage:<8} {detail}{suffix}")
+        self._prepend_log(f"{now}  {code:<11} {stage:<8} {detail}{suffix}")
 
     def on_event(self, event, clock=None):
         self.events.append(event)
@@ -435,6 +467,10 @@ class ProcessInspector(QWidget):
         self.refresh(clock)
 
     def _stage_key(self, stage):
+        if stage in default_plan("GENERATE", True) + default_plan("MODIFY", True):
+            return stage
+        if str(stage).startswith(("A3_", "B3_")):
+            return str(stage).split("_", 1)[0]
         if stage in STAGE_ALIASES:
             return STAGE_ALIASES[stage]
         upper = str(stage).upper()
@@ -452,7 +488,9 @@ class ProcessInspector(QWidget):
 
     def _process_steps(self):
         preset = list(PROCESS_PRESETS.get(self.kind, ()))
-        quality_seen = any(getattr(event, "stage", "") in {"A2Q", "B2Q"} for event in self.events)
+        quality_seen = self.context.get("maximum_quality", False) or any(
+            getattr(event, "stage", "") in {"A2Q", "B2Q"} for event in self.events
+        )
         if quality_seen:
             marker, before = ("A2Q", "A3") if self.kind == "GENERATE" else ("B2Q", "B3")
             if marker not in preset and before in preset:
@@ -477,69 +515,57 @@ class ProcessInspector(QWidget):
         run_state = getattr(run_event, "state", "") if run_event else ""
         failed_current = run_state in FAILURE_STATES
         blocked_current = run_state in BLOCKED_STATES
-        completed = {
-            self._stage_key(getattr(event, "stage", ""))
-            for event in self.events
-            if getattr(event, "stage", "") != "RUN" and getattr(event, "state", "") == "completed"
+        latest = {
+            self._stage_key(event.stage): event.state
+            for event in self.events if event.stage != "RUN"
         }
-        current_index = preset.index(current) if current in preset else -1
+        completed = {key for key, state in latest.items() if state == "completed"}
         steps = []
-        for index, key in enumerate(preset):
+        for key in preset:
             if key == current:
                 event_state = getattr(current_event, "state", "")
                 if failed_current or event_state in FAILURE_STATES:
                     state = "error"
                 elif blocked_current or event_state == "blocked":
                     state = "blocked"
+                elif event_state == "completed":
+                    state = "done"
+                elif run_state in TERMINAL_STATES:
+                    state = "unconfirmed"
                 else:
                     state = "current"
-            elif key in completed or (current_index >= 0 and index < current_index):
+            elif key in completed:
                 state = "done"
             else:
-                state = "pending"
-            title = stage_title(key) if key in DOMAIN_STAGES else key
+                state = "unconfirmed" if run_state in TERMINAL_STATES else "pending"
+            title = stage_title(key)
             steps.append((title, state))
         return steps
 
     def _micro_steps(self, event):
-        source = getattr(event, "source", "local") if event else "local"
-        state = getattr(event, "state", "preparing") if event else "preparing"
-        if source in {"api", "files_api", "batch_api", "image_api", "vector_store"}:
-            names = ["Sestavení requestu", "Odeslání API", "Čekání", "Převzetí", "Parsování", "Validace"]
-            if state in {"waiting", "response_pending", "batch_pending", "queued", "in_progress", "finalizing"}:
-                active = 2
-            elif state in {"validating", "validating_result", "completed"}:
-                active = 5
-            else:
-                active = 1
-        elif source == "upload":
-            names, active = ["Příprava", "Upload", "Potvrzení"], 1
-        elif source == "download":
-            names, active = ["Příprava", "Download", "Ověření"], 1
-        elif source == "disk":
-            names, active = ["Příprava", "Zápis na disk", "Ověření"], 1
-        elif source == "validation":
-            names, active = ["Příprava", "Validace", "Výsledek"], 1
-        else:
-            names, active = ["Příprava", "Lokální zpracování", "Validace"], 1
-        return [
-            (name, "done" if index < active else "current" if index == active else "pending")
-            for index, name in enumerate(names)
-        ]
+        if event and getattr(event, "stage", "") == "RUN" and event.state in TERMINAL_STATES:
+            return [(state_title(event.state), "error" if event.state in FAILURE_STATES else "unconfirmed")]
+        if event is None:
+            return []
+        state = getattr(event, "state", "preparing")
+        return [(state_title(state), "done" if state == "completed" else "current")]
 
     def _provider_state(self, event):
         if event:
             explicit = getattr(event, "provider_state", "")
             if explicit:
                 return explicit
+            if getattr(event, "source", "local") not in {"api", "batch_api", "image_api", "files_api", "vector_store"}:
+                return ""
             state = getattr(event, "state", "")
             if getattr(event, "source", "") == "batch_api" and state in PROVIDER_STATES:
                 return state
         previous = next(
             (
                 item for item in reversed(self.events)
-                if getattr(item, "provider_state", "")
-                or getattr(item, "source", "") == "batch_api"
+                if getattr(item, "stage", "") == getattr(event, "stage", "")
+                and (getattr(item, "provider_state", "")
+                     or getattr(item, "source", "") == "batch_api")
             ),
             None,
         )
@@ -567,7 +593,7 @@ class ProcessInspector(QWidget):
             self.unit_progress.setFormat(f"%v / %m {unit}" if unit else "%v / %m")
             self.progress_note.setText(f"{completed} z {total} {unit} · {round(completed / total * 100)} %".strip())
             return
-        if state in TERMINAL_STATES:
+        if event and event.stage == "RUN" and state in TERMINAL_STATES:
             self.run_progress.show()
             self.run_progress.setRange(0, 100)
             self.run_progress.setValue(100 if state in {"completed", "closed"} else 0)
@@ -624,7 +650,7 @@ class ProcessInspector(QWidget):
             source_title(getattr(event, "source", "local")) if event else "Lokální zpracování"
         )
         self.stage_state_label.setText(state_title(state))
-        self.micro_label.setText(_event_code(event) if event else "LOCAL")
+        self.micro_label.setText(state_title(state))
         provider = self._provider_state(event)
         self.provider_label.setText(state_title(provider) if provider else "—")
 
@@ -635,11 +661,26 @@ class ProcessInspector(QWidget):
             (index for index, (_, step_state) in enumerate(steps) if step_state in {"current", "error", "blocked"}),
             -1,
         )
+        if current_index < 0 and event and stage != "RUN":
+            current_title = stage_title(self._stage_key(stage))
+            current_index = next((index for index, (title, _) in enumerate(steps)
+                                  if title == current_title), -1)
         next_step = next(
             (title for title, step_state in steps[current_index + 1:] if step_state == "pending"),
             "Hotový výsledek",
         ) if steps else "Bude určen po zahájení běhu"
         self.next_label.setText(next_step)
+        if event and event.next_step:
+            self.next_label.setText(event.next_step)
+        last = next((item for item in reversed(self.events)
+                     if item.stage != "RUN" and item.state == "completed"), None)
+        self.last_label.setText(
+            "Poslední dokončený krok: " + stage_title(last.stage)
+            + (f" · {last.path}" if last.path else "")
+            if last else "Poslední dokončený krok zatím není doložen."
+        )
+        if event and stage == "RUN" and state in TERMINAL_STATES:
+            self.next_label.setText("Místní operace skončila · " + state_title(state))
         self._set_progress(event, state)
 
         if clock is not None:

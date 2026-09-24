@@ -107,7 +107,8 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
     raw = {}
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+            from .orchestration.contracts import parse_json_strict
+            raw = parse_json_strict(f.read())
     if not isinstance(raw, dict):
         raise ValueError("Nastavení musí být JSON objekt.")
 
@@ -155,10 +156,20 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
 
 def save_settings(s: AppSettings, path: str = DEFAULT_SETTINGS_FILE) -> None:
     ensure_dir(os.path.dirname(os.path.abspath(path)) or ".")
-    set_secret("smtp_password", s.smtp.password or "")
-    set_secret("ssh_password", s.ssh.password or "")
     payload = asdict(s)
     # Hesla se do JSON neukládají.
     payload.setdefault("smtp", {})["password"] = ""
     payload.setdefault("ssh", {})["password"] = ""
-    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+    secrets = {"smtp_password": s.smtp.password or "", "ssh_password": s.ssh.password or ""}
+    previous = {key: get_secret(key) or "" for key in secrets}
+    attempted = []
+    try:
+        for key, value in secrets.items():
+            attempted.append(key)
+            if not set_secret(key, value):
+                raise ValueError("Hesla se nepodařilo trvale uložit; nastavení nebylo uloženo.")
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+    except Exception:
+        for key in reversed(attempted):
+            set_secret(key, previous[key])
+        raise

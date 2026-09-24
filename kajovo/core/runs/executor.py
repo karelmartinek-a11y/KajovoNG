@@ -17,7 +17,11 @@ from ..openai_client import OpenAIClient
 from ..openai_transport import SubmissionOutcomeUnknown
 from ..orchestration.authorization import create_execution_authorization
 from ..orchestration.contracts import canonical_sha256
-from ..orchestration.publish import recover_publish_journal
+from ..orchestration.publish import (
+    publish_staged_run_already_locked as publish_staged_run,
+    recover_publish_journal_already_locked as recover_publish_journal,
+)
+from ..orchestration.preparation import PreparationBlocked
 from ..orchestration.repository import repository_for_logger
 from ..orchestration.run_config import build_run_config_v2, run_scope_hash
 from ..orchestration.source_pack import freeze_run_sources, source_context
@@ -69,6 +73,7 @@ class RunExecutor(RunContext):
         if not lock.acquire():
             self.finished_err.emit("Tento běh již používá jiná instance aplikace.")
             return
+        client = None
         try:
             state_path = Path(self.log.state_path)
             saved_state = (
@@ -76,9 +81,27 @@ class RunExecutor(RunContext):
                 if state_path.is_file()
                 else {}
             )
+            continuation = None
+            from .live_continuation import pending_live
+            if pending_live(saved_state) and not self.log.find_json("manifests", "response_journal"):
+                raise ContractError("Continue LIVE: chybí journal rozpracované odpovědi; nový POST je zakázán.")
+            if saved_state.get("live_continuation"):
+                self._response_journal = ResponseJournal(self.log, self.settings.response_poll_timeout_s)
+                continuation = self._response_journal.continuation
+                if continuation is None:
+                    raise ContractError("Continue LIVE: chybí zmrazené podklady; nový POST je zakázán.")
+                if not self.api_key:
+                    raise ValueError("Continue LIVE vyžaduje přístupový klíč.")
+                from .live_continuation import restore_sources
+                restore_sources(self, continuation)
+                from .response_execution import retrieve_inherited_response
+                client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
+                client.stopped = lambda: self._stop
+                retrieve_inherited_response(self, client)
             recovery = recover_publish_journal(self.log.paths.run_dir)
             if recovery and recovery.get("status") in {"committed", "rolled_back"}:
                 if recovery["status"] == "committed":
+                    recovery = publish_staged_run(self.log.paths.run_dir)
                     patch = {
                         "published_files": recovery.get("published", []),
                         "publish_report": recovery,
@@ -137,14 +160,20 @@ class RunExecutor(RunContext):
             # Read-only Files/vector-store retrieval is allowed before the
             # first paid generative request so SOURCE_PACK_V1 can freeze exact
             # remote bytes as part of the authorized run scope.
-            client = OpenAIClient(
-                self.api_key, timeout_s=self.settings.response_timeout_s
-            )
+            if client is None:
+                client = OpenAIClient(
+                    self.api_key, timeout_s=self.settings.response_timeout_s
+                )
             client.configure_validation(self.settings)
+            client.evidence_bundle = self.log.bundle
             client.stopped = lambda: self._stop
-            source_pack = freeze_run_sources(
-                self.cfg, self.settings, self.log, client=client
-            )
+            if continuation:
+                from .live_continuation import restore_sources
+                source_pack = restore_sources(self, continuation)
+            else:
+                source_pack = freeze_run_sources(
+                    self.cfg, self.settings, self.log, client=client
+                )
             self.source_pack = source_pack
             self.source_context = source_context(self.log, source_pack)
             scope_hash = canonical_sha256({
@@ -235,8 +264,13 @@ class RunExecutor(RunContext):
             if final_status not in (
                 "completed", "partial", "batch_pending", "dry_run",
                 "files_complete_unverified", "plan_ready", "qfile_plan_ready",
+                "waiting_manual_resource",
             ):
                 raise ContractError(f"Neplatný stav běhu: {final_status}")
+            if continuation:
+                self.log.save_json("manifests", "live_replay_complete", {"hash": continuation["pending_hash"]})
+                self.log.update_state({"live_replay_complete": True})
+                self.log.clear_state_keys("live_replay_pending")
             if final_status in ("completed", "partial", "dry_run", "files_complete_unverified"):
                 self.log.update_state({"status": final_status, "completed_at": time.time()})
             else:
@@ -245,6 +279,14 @@ class RunExecutor(RunContext):
             if final_status == "completed":
                 self.transition(RunStatus.COMPLETED)
             self.progress_event.emit(ProgressEvent("RUN", final_status))
+            self.finished_ok.emit(result)
+        except PreparationBlocked as e:
+            self.transition(RunStatus.INTERRUPTED)
+            result = {"mode": self.cfg.mode, "status": "needs_clarification",
+                      "stage": e.stage, "questions": e.questions}
+            self.log.update_state(result)
+            self.log.bundle.seal()
+            self.progress_event.emit(ProgressEvent("RUN", "needs_clarification", detail=str(e)))
             self.finished_ok.emit(result)
         except Exception as e:
             measurement = getattr(e, "context_report", None)
@@ -262,6 +304,23 @@ class RunExecutor(RunContext):
             if self._last_prev_id_error:
                 msg = self._last_prev_id_error
             if isinstance(e, (ResponsePending, SubmissionUnknown, SubmissionOutcomeUnknown)):
+                self.transition(
+                    RunStatus.UNKNOWN_REMOTE_SUBMISSION
+                    if not isinstance(e, ResponsePending) and self.lifecycle_status in {
+                        RunStatus.REMOTE_WORK, RunStatus.PROCESSING_RESPONSE,
+                        RunStatus.UNKNOWN_REMOTE_SUBMISSION,
+                    }
+                    else RunStatus.INTERRUPTED
+                )
+                try:
+                    self.log.exception("response", e)
+                except Exception as evidence_error:
+                    logging.getLogger(__name__).warning("Zápis příčiny selhal: %s", type(evidence_error).__name__)
+                from ..user_errors import describe_error
+                from dataclasses import asdict
+                failure = describe_error(e)
+                self.log.update_state({"failure_detail": asdict(failure)})
+                self.failure_detail.emit(failure)
                 state = "response_pending" if isinstance(e, ResponsePending) else "submission_unknown"
                 self.log.update_state({"status": state, "error": str(e)})
                 if isinstance(e, SubmissionOutcomeUnknown):
@@ -277,14 +336,17 @@ class RunExecutor(RunContext):
                 self.progress_event.emit(ProgressEvent("RUN", state, detail=str(e)))
                 self.finished_err.emit(str(e))
             elif isinstance(e, ResponseCancelled):
+                self.transition(RunStatus.CANCELLED)
                 self.log.update_state({"status": "cancelled", "error": str(e)})
                 self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
                 self.finished_err.emit(str(e))
             elif str(e) == "STOP_REQUESTED":
+                self.transition(RunStatus.CANCELLED)
                 self.log.update_state({"status": "stopped", "stopped_at": time.time()})
                 self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
                 self.finished_err.emit("STOPPED")
             else:
+                self.transition(RunStatus.FAILED)
                 try:
                     self.log.exception("run", e)
                 except Exception as evidence_error:

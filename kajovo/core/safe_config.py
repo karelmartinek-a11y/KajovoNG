@@ -74,6 +74,8 @@ _CANONICAL_FIELDS = frozenset({
     "preparation_snapshot", "graph", "plan", "requirements", "response",
     "prompt", "instructions", "input", "output", "output_text", "content",
     "text", "recovery_instruction", "repair_instruction",
+    "target_id", "target_path", "path", "snapshot", "values", "legacy_context",
+    "generate_batch", "generate_batches", "cascade_runtime",
 })
 _DIAGNOSTIC_FIELDS = frozenset({
     "error", "failure_detail", "last_error", "trace", "exception", "headers", "http_headers",
@@ -86,7 +88,7 @@ def _looks_like_json_schema(value: Any) -> bool:
     if "$schema" in value or "$ref" in value or "$defs" in value:
         return True
     kind = value.get("type")
-    return kind in {
+    return isinstance(kind, str) and kind in {
         "object", "array", "string", "number", "integer", "boolean", "null"
     } and any(
         key in value
@@ -107,6 +109,12 @@ def persist_evidence(value: Any) -> Any:
     if isinstance(value, dict):
         if _looks_like_json_schema(value):
             return copy.deepcopy(value)
+        if {"order_hash", "attempt_id", "input_projection_hash", "provider_endpoint"} <= value.keys():
+            from .orchestration.work_order import WORK_ORDER_V2_SCHEMA, WORK_ORDER_V3_SCHEMA
+            schema = WORK_ORDER_V3_SCHEMA if value.get("version") == 3 else WORK_ORDER_V2_SCHEMA
+            if (set(schema["required"]) <= value.keys()
+                    and value.keys() <= set(schema["properties"]) | {"order_hash"}):
+                return copy.deepcopy(value)
         result = {}
         for key, item in value.items():
             name = str(key).strip().casefold().replace("-", "_")

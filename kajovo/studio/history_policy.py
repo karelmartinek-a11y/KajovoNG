@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from kajovo.core.batch_completion import batch_ids, pending_batch_ids
+from kajovo.core.runs.live_continuation import pending_live
 
 from .history_state import is_error_state
 
@@ -48,6 +49,9 @@ class ActionAvailabilityPolicy:
             and batch_records[identifier].get("status") == "completed"
         ]
         status = str(run.get("status") or state.get("status") or "unknown")
+        if status == "waiting_manual_resource" and submitted:
+            remote_completed = [identifier for identifier in submitted
+                                if (batch_records.get(identifier) or {}).get("status") in {"completed", "failed", "expired", "cancelled"}]
         mode = str(run.get("mode") or state.get("mode") or (ui or {}).get("mode") or "")
         step_status = str((selected_step or {}).get("status") or "")
         has_error = is_error_state(status) or is_error_state(step_status)
@@ -57,7 +61,7 @@ class ActionAvailabilityPolicy:
             and any(row.get("checkpoint_type") == "plan_ready" for row in safe)
         )
         nonterminal = status in {
-            "created", "preparing", "running", "response_pending", "stopped", "cancelled"
+            "created", "preparing", "running", "response_pending", "stopped", "cancelled", "waiting_manual_resource"
         } or plan_ready
         staged = state.get("staged_files") if isinstance(state.get("staged_files"), list) else []
         publishable_staged = bool(
@@ -74,28 +78,41 @@ class ActionAvailabilityPolicy:
             direct_reason = "Legacy běh nemá doložený bezpečný checkpoint."
         elif status == "submission_unknown":
             direct_reason = "Výsledek odeslání není potvrzen. Nový požadavek by mohl zdvojit placené zpracování."
-        elif pending:
+        elif pending or (submitted and status == "waiting_manual_resource"):
             direct_reason = "Běh má nedokončený místní import BATCH; použijte původní dávku a nevytvářejte druhý submit."
         elif not safe:
             direct_reason = "Běh nemá neporušený explicitní bezpečný checkpoint."
         else:
             direct_reason = ""
         direct_ok = not direct_reason
+        live = pending_live(state)
+        nonterminal = nonterminal or live
+        pending_identity = state.get("response_pending") or state.get("live_replay_pending")
+        live_missing = live and not (
+            isinstance(pending_identity, dict)
+            and pending_identity.get("id")
+            and pending_identity.get("hash")
+        )
         return {
+            "manual_resource": ActionDecision(
+                status == "waiting_manual_resource", "Archivuje explicitně vybraný chybějící podklad bez placeného volání.",
+                status == "waiting_manual_resource",
+            ),
             "rerun": ActionDecision(direct_ok, direct_reason or "Vytvoří nový běh od bezpečného bodu.", mode in DIRECT_MODES),
             "repair": ActionDecision(
-                direct_ok and has_error,
+                direct_ok and has_error and (state.get("response_pending") or {}).get("status") not in {"queued", "in_progress", "submitting"},
                 direct_reason or ("Oprava je dostupná pouze pro doloženou chybu nebo částečný výsledek." if not has_error else "Vytvoří opravnou větev."), mode in DIRECT_MODES and has_error,
             ),
             "continue": ActionDecision(
-                direct_ok and nonterminal,
-                direct_reason or (
+                direct_ok and nonterminal and not live_missing,
+                direct_reason or ("Chybí identita rozpracované LIVE odpovědi; nový submit je zakázán." if live_missing else
+                    "Převezme původní LIVE odpověď přes GET v nové větvi; neopakuje POST." if live else (
                     "Dokončený běh nemá smysluplné pokračování."
                     if not nonterminal
                     else "Pokračuje z ověřeného plánu bez opakování přípravy."
                     if plan_ready
                     else "Pokračuje v nové větvi."
-                ),
+                )),
                 mode in DIRECT_MODES and nonterminal,
             ),
             "edit_branch": ActionDecision(

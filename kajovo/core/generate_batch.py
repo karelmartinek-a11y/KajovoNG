@@ -10,6 +10,7 @@ import os
 import shutil
 import time
 import uuid
+from functools import wraps
 from pathlib import Path
 
 from .contracts import (
@@ -28,6 +29,7 @@ from .progress import ProgressEvent
 from .run_bundle import RunBundle
 from .context_compiler import ContextCompiler, canonical
 from .context_limits import configure_file_request, measure_request, ensure_technical_limits
+from .runs.locking import locked_run_operation
 
 
 def object_schema(properties):
@@ -178,6 +180,9 @@ def _build_manifest_v3(
     verified_artifacts=None,
     approved_paths=None,
     completed_targets=None,
+    source_segments=None,
+    requirements_wrapper=None,
+    explicit_retry=False,
 ):
     """Build exactly one ready production wave from IMPLEMENTATION_GRAPH_V3."""
     import jsonschema
@@ -207,6 +212,8 @@ def _build_manifest_v3(
         "plan": plan,
         "structure": structure,
         "requirements": requirements,
+        "source_segments": source_segments or [],
+        "requirements_wrapper": requirements_wrapper or requirements,
         "maximum_quality": maximum_quality,
         "original_hashes": {
             path: hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -258,9 +265,11 @@ def _build_manifest_v3(
         for index, wave in enumerate(dag.waves)
         for path in wave
     }
-    # Normal continuation excludes already verified targets. An explicit repair
-    # selects only already verified targets and is therefore allowed to rebuild
-    # exactly those targets without reopening providers or siblings.
+    # Pokračování vynechá hotové cíle; ruční opakování zachová celý výběr
+    # a u vybraných závislostí počká na nový výsledek jejich producenta.
+    if explicit_retry:
+        completed_targets -= requested
+        verified_targets -= requested
     pending_requested = requested - verified_targets
     candidates = pending_requested if pending_requested else requested
     eligible = {
@@ -383,6 +392,7 @@ def _build_manifest_v3(
                 "contract_name": "FILE_CONTENT_V1",
                 "schema": fmt["format"]["schema"],
                 "prompt": body["instructions"] + "\n" + body["input"],
+                "request_payload": body,
                 "model": model,
                 "model_capability": {},
                 "source_snapshot": {
@@ -401,10 +411,11 @@ def _build_manifest_v3(
         work_orders.append({**order.to_dict(), "order_hash": order.order_hash})
 
     selected_set = set(selected_paths)
-    deferred = sorted(approved_scope - selected_set - verified_targets)
+    deferred = sorted((requested if explicit_retry else approved_scope) - selected_set - verified_targets)
     manifest = {
         "version": 3,
         "graph_version": 3,
+        "compiler_revision": 2,
         "wave_no": first_wave,
         "mode": mode,
         "snapshot": snapshot,
@@ -451,7 +462,8 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
                    requirements=None, maximum_quality=False, mode="GENERATE", originals=None,
                    recovery_instruction="", run_config=None, expected_target_hashes=None,
                    verified_artifacts=None, approved_paths=None,
-                   completed_targets=None):
+                   completed_targets=None, source_segments=None, requirements_wrapper=None,
+                   explicit_retry=False):
     if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
         return _build_manifest_v3(
             run_id,
@@ -471,6 +483,9 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
             verified_artifacts=verified_artifacts,
             approved_paths=approved_paths,
             completed_targets=completed_targets,
+            source_segments=source_segments,
+            requirements_wrapper=requirements_wrapper,
+            explicit_retry=explicit_retry,
         )
 
     from .requirements import apply_quality, stage_instructions, validate_traceability
@@ -586,6 +601,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
                 "contract_name": "FILE_CONTENT_V1",
                 "schema": fmt["format"]["schema"],
                 "prompt": body["instructions"] + "\n" + body["input"],
+                "request_payload": body,
                 "model": model,
                 "model_capability": {},
                 "source_snapshot": snapshot,
@@ -606,7 +622,7 @@ def build_manifest(run_id, prompt, plan, structure, model, temperature, paths=No
     return manifest
 
 
-def encode_requests(manifest):
+def encode_requests(manifest, *, archived=False):
     if manifest.get("version", 1) not in {1, 2, 3} or manifest.get("mode", "GENERATE") not in {"GENERATE", "MODIFY"}:
         raise ContractError("Nepodporovaná verze nebo režim manifestu.")
     if digest(manifest["snapshot"]) != manifest["snapshot_hash"]:
@@ -644,9 +660,17 @@ def encode_requests(manifest):
     if set(manifest["expected"]) != {r["custom_id"] for r in rows}:
         raise ContractError("Mapování úloh neodpovídá požadavkům.")
     validate_paths([{"path": p} for p in manifest["expected"].values()])
-    compiler = ContextCompiler(manifest["snapshot"]) if manifest.get("version") == 3 else None
+    compiler = ContextCompiler(manifest["snapshot"]) if manifest.get("version") == 3 and not archived else None
     for row in rows:
-        validate_response_payload(row["body"], batch=True)
+        if not archived or manifest.get("version") != 3:
+            validate_response_payload(row["body"], batch=True)
+        else:
+            # Import dokládá již odeslanou práci; aktuální katalog nemění její limity.
+            from .structured_output import validate_schema
+            wire = row["body"]["text"]["format"]
+            if wire.get("type") != "json_schema" or wire.get("strict") is not True:
+                raise ContractError("Archivovaný požadavek nemá strict JSON masku.")
+            validate_schema(wire["schema"])
         if row["method"] != "POST" or row["url"] != "/v1/responses" or row["body"].get("previous_response_id"):
             raise ContractError("Souborová úloha musí být samostatný požadavek Responses.")
         context = parse_json_strict(row["body"]["input"])
@@ -659,13 +683,15 @@ def encode_requests(manifest):
                    for path, value in original_sources.items()):
                 raise ContractError("Původní obsah neodpovídá auditnímu snapshotu.")
             expected_context = compiler.compile(
-                context["file"]["path"],
-                originals=original_sources,
+                context["file"]["path"], originals=original_sources,
                 verified_artifacts=manifest.get("verified_dependency_artifacts") or {},
-            )
+            ) if compiler is not None else compiled
+            if digest(compiled.get("working_context")) != compiled.get("file_context_hash") or compiled.get("source_snapshot_hash") != manifest["snapshot_hash"]:
+                raise ContractError("Archivovaný FileContext má neplatné otisky.")
             if compiled != expected_context or "specification" in context or row["body"].get("tools"):
                 raise ContractError("FileContext neodpovídá kanonické přípravě.")
-            ensure_technical_limits(measure_request(row["body"], compiled=compiled, batch=True))
+            if not archived:
+                ensure_technical_limits(measure_request(row["body"], compiled=compiled, batch=True))
         elif digest(context["specification"]) != manifest["snapshot_hash"]:
             raise ContractError("Úloha neodpovídá společné specifikaci.")
         if context["file"]["path"] != manifest["expected"][row["custom_id"]]:
@@ -693,6 +719,14 @@ def encode_requests(manifest):
                 if not isinstance(order, dict):
                     raise ContractError("V3 souborová úloha nemá WORK_ORDER_V2.")
                 validate_work_order_v2({k: v for k, v in order.items() if k != "order_hash"})
+                from .orchestration.work_order import work_order_from_mapping, response_payload_hash
+                work_order_from_mapping(order)
+                if order["input_projection_hash"] != digest(compiled) or order["schema_hash"] != digest(row["body"]["text"]["format"]["schema"]):
+                    raise ContractError("Archivovaný požadavek neodpovídá otiskům WorkOrderu.")
+                if order["model"] != row["body"]["model"] or order["prompt_hash"] != digest(row["body"]["instructions"] + "\n" + row["body"]["input"]):
+                    raise ContractError("Archivovaný model nebo prompt neodpovídá WorkOrderu.")
+                if order.get("request_payload_hash") and order["request_payload_hash"] != response_payload_hash(row["body"]):
+                    raise ContractError("Archivovaný payload byl změněn.")
                 if order.get("target_path") != context["file"]["path"] or order.get("contract_name") != "FILE_CONTENT_V1":
                     raise ContractError("WORK_ORDER_V2 neodpovídá cíli dávkové úlohy.")
             else:
@@ -725,9 +759,29 @@ def _snapshot_before_import(target):
     return str(destination)
 
 
+def _validated_usage(body):
+    """Validuje spotřebu samostatně; její chyba nezneplatňuje obsah odpovědi."""
+    usage = body.get("usage", {})
+    if usage is None:
+        usage = {}
+    if not isinstance(usage, dict):
+        raise ContractError("Neplatná usage metadata odpovědi.")
+    details = usage.get("output_tokens_details")
+    if details is None:
+        details = {}
+    if not isinstance(details, dict):
+        raise ContractError("Neplatná usage.output_tokens_details.")
+    counts = {"input_tokens": usage.get("input_tokens"),
+              "output_tokens": usage.get("output_tokens"),
+              "reasoning_tokens": details.get("reasoning_tokens")}
+    if any(value is not None and (type(value) is not int or value < 0) for value in counts.values()):
+        raise ContractError("Neplatný počet tokenů v usage metadata.")
+    return counts
+
+
 def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_hashes=None, progress=None):
     """Nejdříve ověří celou dávku, potom bezpečně zapíše samostatné výsledky."""
-    encode_requests(manifest)
+    encode_requests(manifest, archived=True)
     expected = manifest["expected"]
     completed_hashes = manifest.get("completed_hashes", {})
     validate_paths([{"path": path} for path in completed_hashes])
@@ -753,7 +807,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             if cid in entries:
                 raise ContractError(f"Duplicitní ID výsledku: {cid}")
             entries[cid] = item
-    contents, error_details = {}, {}
+    contents, error_details, usage_diagnostics = {}, {}, {}
     for cid, path in expected.items():
         if cid in errors:
             continue
@@ -767,6 +821,12 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
         body = body if isinstance(body, dict) else {}
         if isinstance(body, dict) and body.get("id"):
             responses.append(body)
+        try:
+            counts = _validated_usage(body)
+            if any(value is None for value in counts.values()):
+                usage_diagnostics[cid] = "Neúplná usage metadata; chybějící počty tokenů nejsou známé."
+        except ContractError as exc:
+            usage_diagnostics[cid] = str(exc)
         try:
             if item.get("error") or response.get("status_code") != 200 or body.get("status") != "completed":
                 raise RemoteResponseError(
@@ -850,6 +910,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
             "dry_run": dry_run, "planned_files": planned, "snapshot_dir": snapshot_dir,
             "file_errors": {**completed_errors, **{expected[cid]: message for cid, message in errors.items()}},
             "omitted": manifest.get("omitted", []),
+            "usage_diagnostics": usage_diagnostics,
             "status": "partial" if errors or completed_errors or manifest.get("omitted") else
                       "dry_run" if dry_run else "files_complete_unverified"}
 
@@ -859,13 +920,31 @@ def _v3_verified_artifacts(run_dir, manifest, staged_files):
     """Reconstruct dependency artifacts only from immutable staged bytes."""
     compiler = ContextCompiler(manifest["snapshot"])
     root = Path(run_dir).resolve()
-    artifacts = {}
+    artifacts = copy.deepcopy(manifest.get("verified_dependency_artifacts") or {})
+    from .orchestration.repository import OrchestrationRepository
+    repo = OrchestrationRepository(root.parent / "orchestration.sqlite3")
+    latest = repo.latest_target_attempts(root.name)
+    # Kopie manifestu není důkazem úspěchu aktuálního pokusu.
+    artifacts = {path: value for path, value in artifacts.items()
+                 if path not in latest}
+    from .recoverable_artifacts import load_run_state
+    state = load_run_state(root) if (root / "run_state.json").is_file() else {}
+    manifests = {state.get("batch_id"): state.get("generate_batch") or {}, **(state.get("generate_batches") or {})}
     for row in staged_files:
         if not isinstance(row, dict):
             continue
         path = str(row.get("path") or "")
         staged_path = str(row.get("staged_path") or "")
         if path not in compiler.files or not staged_path:
+            continue
+        if "attempt_no" not in row and row.get("batch_id"):
+            order = next((value for value in manifests.get(row["batch_id"], {}).get("work_orders", {}).values()
+                          if value.get("target_path") == path), None)
+            if order is None:
+                raise ContractError(f"{path}: chybí původní WorkOrder stagingu.")
+            row = {**row, "attempt_no": order["attempt_no"]}
+        if int(row.get("attempt_no") or 0) < latest.get(path, 0):
+            artifacts.pop(path, None)
             continue
         source = (root / staged_path).resolve()
         try:
@@ -883,6 +962,7 @@ def _v3_verified_artifacts(run_dir, manifest, staged_files):
         except UnicodeDecodeError:
             continue
         artifacts[path] = {
+            "attempt_no": int(row.get("attempt_no") or 0),
             "validation_status": "verified",
             "verification_level": "wire_and_artifact",
             "contract_hash": compiler.provider_hash(path),
@@ -983,16 +1063,13 @@ def _prepare_v3_followup(run_dir, state, manifest, *, retry_source=None):
             attempt = max(
                 [int(previous["attempt_no"]), *(int(number) for number, _ in attempts)]
             ) + 1
-            if attempt > 3:
-                raise ContractError(
-                    "Úloha vyčerpala limit tří pokusů; automatické opravy jsou vyčerpány. "
-                    "Další postup vyžaduje explicitní rozhodnutí uživatele."
-                )
             custom_id = f"{previous['task_id']}_retry_{attempt}"
             raw_order = manifest["work_orders"][old_id]
             order = work_order_from_mapping(raw_order)
             order = replace(
                 order,
+                version=3,
+                attempt_kind="manual",
                 task_id=previous["task_id"],
                 step_id="batch:" + custom_id,
                 attempt_no=attempt,
@@ -1066,6 +1143,29 @@ def _prepare_v3_followup(run_dir, state, manifest, *, retry_source=None):
     return repo, orders
 
 
+def _cleanup_unstarted_attempts(function):
+    """Výjimka před dispatch uvolní jen nově připravené pokusy této operace."""
+    @wraps(function)
+    def wrapped(client, run_dir, *args, **kwargs):
+        from .orchestration.repository import OrchestrationRepository
+
+        repo = OrchestrationRepository(Path(run_dir).resolve().parent / "orchestration.sqlite3")
+        query = ("SELECT p.attempt_id FROM provider_operations p JOIN work_orders w "
+                 "ON w.work_order_hash=p.work_order_hash WHERE w.run_id=? AND p.state='prepared'")
+        with repo.connect() as db:
+            previous = {row[0] for row in db.execute(query, (Path(run_dir).name,))}
+        try:
+            return function(client, run_dir, *args, **kwargs)
+        except Exception:
+            with repo.connect() as db:
+                current = {row[0] for row in db.execute(query, (Path(run_dir).name,))}
+            for attempt_id in current - previous:
+                repo.mark_not_submitted(attempt_id)
+            raise
+    return wrapped
+
+
+@_cleanup_unstarted_attempts
 def _submit_v3_followup_wave(
     client,
     run_dir,
@@ -1078,14 +1178,20 @@ def _submit_v3_followup_wave(
     deferred = list(source_manifest.get("deferred_paths") or [])
     if not deferred:
         return None
+    from .orchestration.batch_recovery import reconcile_unsubmitted
+    state = reconcile_unsubmitted(run_dir, state)
     if state.get("submission_unknown") or state.get("pending_batch_submission"):
         raise ContractError("Neznámý submit musí být dohledán před novým odesláním.")
 
     ui = dict(state.get("ui_state") or {})
     cfg = _v3_cfg_namespace(state)
+    manual = source_manifest.get("manual_retry")
+    if manual:
+        cfg.execution_approval_id = manual["approval_id"]
     originals = {}
     bundle = RunBundle(Path(run_dir))
     root = Path(run_dir).resolve()
+    frozen_original_hashes = dict(source_manifest["snapshot"].get("original_hashes") or {})
     for artifact in bundle.artifacts():
         if artifact.get("role") != "in_project_file":
             continue
@@ -1093,6 +1199,8 @@ def _submit_v3_followup_wave(
         rel = str(metadata.get("relative_path") or artifact.get("reconstruction_role") or "")
         path_in_bundle = artifact.get("path_in_bundle")
         if not rel or not isinstance(path_in_bundle, str):
+            continue
+        if rel not in frozen_original_hashes:
             continue
         source = (root / path_in_bundle).resolve()
         try:
@@ -1102,9 +1210,16 @@ def _submit_v3_followup_wave(
         if not source.is_file():
             continue
         try:
-            originals[rel] = source.read_text(encoding="utf-8")
+            data = source.read_bytes()
+            actual_hash = hashlib.sha256(data).hexdigest()
+            if actual_hash != artifact.get("sha256") or actual_hash != frozen_original_hashes[rel]:
+                raise ContractError(f"{rel}: původní obsah neodpovídá zmrazenému snapshotu.")
+            originals[rel] = data.decode("utf-8")
         except UnicodeDecodeError:
             continue
+
+    if set(originals) != set(frozen_original_hashes):
+        raise ContractError("Další vlna nemá úplný původní SourcePack.")
 
     model = str(source_manifest["requests"][0]["body"]["model"])
     temperature = source_manifest["requests"][0]["body"].get("temperature")
@@ -1121,6 +1236,8 @@ def _submit_v3_followup_wave(
         temperature,
         deferred,
         requirements=source_manifest["snapshot"]["requirements"],
+        source_segments=source_manifest["snapshot"].get("source_segments"),
+        requirements_wrapper=source_manifest["snapshot"].get("requirements_wrapper"),
         maximum_quality=bool(source_manifest["snapshot"].get("maximum_quality")),
         mode=source_manifest["mode"],
         originals=originals,
@@ -1129,6 +1246,7 @@ def _submit_v3_followup_wave(
         expected_target_hashes=expected_target_hashes,
         verified_artifacts=verified_artifacts,
         approved_paths=source_manifest.get("approved_paths") or deferred,
+        explicit_retry=bool(manual),
         completed_targets=(
             set(source_manifest.get("completed_dependency_targets") or [])
             | set(verified_artifacts)
@@ -1153,7 +1271,12 @@ def _submit_v3_followup_wave(
         source_manifest.get("excluded_scope") or []
     )
     next_manifest["source_manifest_hash"] = digest(source_manifest)
-    repo, orders = _prepare_v3_followup(run_dir, state, next_manifest)
+    if manual:
+        next_manifest["manual_retry"] = copy.deepcopy(manual)
+    repo, orders = _prepare_v3_followup(
+        run_dir, state, next_manifest,
+        retry_source={"work_orders": manual["source_orders"]} if manual else None,
+    )
     data = encode_requests(next_manifest)
     requests_dir = Path(run_dir) / "requests"
     requests_dir.mkdir(parents=True, exist_ok=True)
@@ -1182,7 +1305,7 @@ def _submit_v3_followup_wave(
     v4 = from_file_manifest(
         Path(run_dir).name,
         next_manifest,
-        wave_no=int(source_manifest.get("wave_no") or 0) + 1,
+        wave_no=next_manifest["wave_no"],
     )
     v4 = transition_batch_manifest(
         v4, "input_uploaded", input_file_id=input_file_id
@@ -1210,7 +1333,7 @@ def _submit_v3_followup_wave(
             physical_request_hash=canonical_sha256(physical_submit),
             remote_input_file_id=input_file_id,
         )
-        repo.mark_submission_started(order.attempt_id)
+    repo.mark_batch_dispatch(order.attempt_id for order in orders.values())
     try:
         batch = submit_verified_batch(
             client, input_file_id, next_manifest["requests"]
@@ -1222,10 +1345,13 @@ def _submit_v3_followup_wave(
             in {400, 401, 403, 404, 422, 429}
         )
         if definite_reject:
-            for order in orders.values():
-                repo.mark_not_submitted(order.attempt_id)
+            repo.mark_batch_dispatch((order.attempt_id for order in orders.values()), rejected=True)
             v4 = transition_batch_manifest(v4, "failed")
             state["submission_unknown"] = False
+            rejected = state.pop("pending_batch_submission", None)
+            if rejected:
+                state.setdefault("rejected_batch_submissions", {})[v4["manifest_id"]] = rejected
+            state["status"] = "partial"
         else:
             for order in orders.values():
                 repo.mark_submitted(
@@ -1302,12 +1428,20 @@ def _process_saved_batch_v3(
     from .orchestration.repository import OrchestrationRepository
     from .orchestration.verification import (
         candidate_verification_report,
-        technical_staging_report,
+        unverified_delivery_report,
     )
     from .orchestration.work_order import work_order_from_mapping
 
     run_root = Path(run_dir).resolve()
     repo = OrchestrationRepository(run_root.parent / "orchestration.sqlite3")
+    # Neplatný stavový přechod se odmítá před zápisem výsledných bajtů.
+    v4_candidates = [state.get("batch_manifest_v4"), *(state.get("batch_manifests_v4") or {}).values()]
+    for candidate in v4_candidates:
+        if candidate and candidate.get("provider_batch_id") == batch_id:
+            probe = candidate
+            if probe["state"] in {"submitted", "submission_unknown"}:
+                probe = transition_batch_manifest(probe, "remote_terminal")
+            transition_batch_manifest(probe, "imported")
 
     # Provider usage se archivuje beze změny; opakovaný import je idempotentní.
     orders = {}
@@ -1328,6 +1462,10 @@ def _process_saved_batch_v3(
             provider_id = str(body.get("id") or "")
             usage = body.get("usage")
             if order is None or not provider_id or not isinstance(usage, dict):
+                continue
+            try:
+                _validated_usage(body)
+            except ContractError:
                 continue
             repo.record_usage(
                 order.attempt_id,
@@ -1354,6 +1492,9 @@ def _process_saved_batch_v3(
         previous_import.get("hashes"),
         progress=progress,
     )
+    if batch.get("status") in {"completed", "failed", "expired", "cancelled"}:
+        for order in orders.values():
+            repo.mark_terminal(order.attempt_id, str(batch_id))
 
     files_by_path = {
         row["path"]: row
@@ -1383,10 +1524,14 @@ def _process_saved_batch_v3(
             "action": files_by_path.get(path, {}).get("action"),
             "purpose": files_by_path.get(path, {}).get("purpose", ""),
             "batch_id": batch_id,
+            "task_id": order_by_path[path].task_id,
+            "attempt_no": order_by_path[path].attempt_no,
+            "attempt_id": order_by_path[path].attempt_id,
         })
 
-    verification = technical_staging_report(
+    verification = unverified_delivery_report(
         generated_root,
+        staged,
         target_id=f"{Path(run_dir).name}:batch:{batch_id}",
     )
     manifest_record = {
@@ -1416,7 +1561,36 @@ def _process_saved_batch_v3(
         for row in state.get("staged_files", [])
         if isinstance(row, dict) and row.get("path")
     }
-    merged.update({str(row["path"]): row for row in staged})
+    latest = repo.latest_target_attempts(run_root.name)
+    manifests = {state.get("batch_id"): state.get("generate_batch") or {}, **(state.get("generate_batches") or {})}
+    for path, previous in list(merged.items()):
+        if "attempt_no" not in previous and previous.get("batch_id"):
+            previous_order = next((row for row in manifests.get(previous["batch_id"], {}).get("work_orders", {}).values()
+                                   if row.get("target_path") == path), None)
+            if previous_order is None:
+                raise ContractError(f"{path}: chybí původní WorkOrder stagingu.")
+            previous = {**previous, **{key: previous_order[key] for key in ("attempt_no", "attempt_id", "task_id")}}
+            merged[path] = previous
+        if int(previous.get("attempt_no") or 0) < latest.get(path, 0):
+            merged.pop(path)
+    for row in staged:
+        if row["attempt_no"] < latest.get(row["path"], 0):
+            continue
+        previous = merged.get(row["path"])
+        if previous:
+            old_attempt = previous.get("attempt_no")
+            if old_attempt is None:
+                previous_manifest = manifests.get(previous.get("batch_id"), {})
+                previous_order = next((order for order in (previous_manifest.get("work_orders") or {}).values()
+                                       if order.get("target_path") == row["path"]), None)
+                if previous_order is None:
+                    raise ContractError(f"{row['path']}: chybí identita předchozího pokusu.")
+                old_attempt = previous_order["attempt_no"]
+            if int(old_attempt) > row["attempt_no"]:
+                continue
+            if int(old_attempt) == row["attempt_no"] and previous["sha256"] != row["sha256"]:
+                raise ContractError(f"{row['path']}: tentýž pokus má rozdílný obsah.")
+        merged[row["path"]] = row
     state["staged_files"] = [merged[path] for path in sorted(merged)]
     state["generated_hashes"] = {
         path: row["sha256"] for path, row in merged.items()
@@ -1554,6 +1728,10 @@ def _process_saved_batch_v3(
         | set(verified_artifacts)
         | set(state.get("resource_completed_paths") or [])
     )
+    completed_for_ready -= {
+        row["path"] for row in graph_for_ready["spine"]["files"]
+        if row["kind"] == "text" and row["action"] != "preserve" and row["path"] not in verified_artifacts
+    }
     ready_deferred = {
         path
         for path in (manifest.get("deferred_paths") or [])
@@ -1591,7 +1769,7 @@ def _process_saved_batch_v3(
             if row["kind"] == "text" and row["action"] in production_actions
         }
     )
-    staged_paths = set(merged)
+    staged_paths = set(verified_artifacts) | set(state.get("resource_completed_paths") or [])
     missing = sorted(expected_paths - staged_paths)
     result["missing"] = missing
 
@@ -1640,15 +1818,31 @@ def _process_saved_batch_v3(
     return result
 
 
+@locked_run_operation
 def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, progress=None):
+    return process_saved_batch_already_locked(
+        client, run_dir, batch_id, settings, batch=batch, progress=progress,
+    )
+
+
+def process_saved_batch_already_locked(client, run_dir, batch_id, settings, *, batch=None, progress=None):
     """Stáhne a vyhodnotí vlastní dávku; neprovádí žádný vygenerovaný kód."""
     state_path = Path(run_dir) / "run_state.json"
     from .recoverable_artifacts import load_run_state
     state = load_run_state(run_dir)
     if batch_id != state.get("batch_id") and batch_id not in state.get("generate_batches", {}):
         raise ContractError("Dávka nepatří k tomuto běhu.")
-    manifest = (state.get("generate_batches") or {}).get(batch_id, state["generate_batch"])
+    manifest = (state.get("generate_batches") or {}).get(batch_id) or state["generate_batch"]
     batch = batch if batch is not None else client.retrieve_batch(batch_id)
+    from .batch_submit import validate_batch_identity
+
+    binding = next((row for row in (state.get("batch_manifests_v4") or {}).values()
+                    if row.get("provider_batch_id") == batch_id), {})
+    previous_record = (state.get("batch_records") or {}).get(batch_id) or {}
+    validate_batch_identity(
+        batch, batch_id=batch_id,
+        input_file_id=binding.get("input_file_id") or previous_record.get("input_file_id"),
+    )
     if batch.get("status") not in ("completed", "failed", "expired", "cancelled"):
         raise ContractError("Dávka ještě není v konečném stavu.")
     raw_files = []
@@ -1662,7 +1856,9 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
             raw_files.append(raw)
             raw_path = safe_join_under_root(str(response_dir), f"{batch_id}_{key}.jsonl")
             Path(raw_path).write_bytes(raw)
-    batch_usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+    batch_usage = {"input_tokens": None, "output_tokens": None, "reasoning_tokens": None}
+    complete_usage_ids = set()
+    invalid_usage_ids = set()
     requests_by_id = {r["custom_id"]: r["body"] for r in manifest["requests"]}
     for raw in raw_files:
         for line in raw.decode("utf-8").splitlines():
@@ -1671,16 +1867,32 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
             result_row = parse_json_strict(line)
             cid = result_row.get("custom_id")
             if cid in requests_by_id:
-                body = (result_row.get("response") or {}).get("body") or {"status": "failed"}
-                if result_row.get("error"):
-                    body = {**body, "error": result_row["error"]}
-                usage = body.get("usage") or {}
-                batch_usage["input_tokens"] += usage.get("input_tokens", 0)
-                batch_usage["output_tokens"] += usage.get("output_tokens", 0)
-                batch_usage["reasoning_tokens"] += (usage.get("output_tokens_details") or {}).get("reasoning_tokens", 0)
+                response = result_row.get("response")
+                body = response.get("body") if isinstance(response, dict) else None
+                if not isinstance(body, dict):
+                    continue
+                try:
+                    counts = _validated_usage(body)
+                except ContractError:
+                    invalid_usage_ids.add(cid)
+                    continue
+                if all(value is not None for value in counts.values()):
+                    complete_usage_ids.add(cid)
+                for key, value in counts.items():
+                    if value is not None:
+                        previous = batch_usage[key]
+                        batch_usage[key] = value if previous is None else previous + value
+    # Součty zahrnují pouze doložené hodnoty. missing_count počítá všechny
+    # očekávané položky bez úplné spotřeby, včetně vadných a chybějících řádků.
+    batch_usage["missing_count"] = len(set(requests_by_id) - complete_usage_ids)
+    batch_usage["invalid_count"] = len(invalid_usage_ids)
+    batch_usage["complete"] = batch_usage["missing_count"] == 0
     if progress:
-        progress(ProgressEvent("Spotřeba BATCH", detail=f"Vstup {batch_usage['input_tokens']:,} · "
-            f"výstup {batch_usage['output_tokens']:,} · reasoning {batch_usage['reasoning_tokens']:,} tokenů"))
+        values = [f"{label} {batch_usage[key]:,}" if batch_usage[key] is not None else f"{label} neznámé"
+                  for key, label in (("input_tokens", "Vstup"), ("output_tokens", "výstup"),
+                                     ("reasoning_tokens", "reasoning"))]
+        suffix = "" if batch_usage["complete"] else f" · neúplná evidence ({batch_usage['missing_count']} položek)"
+        progress(ProgressEvent("Spotřeba BATCH", detail=" · ".join(values) + " tokenů" + suffix))
     if (
         (manifest.get("snapshot") or {}).get("structure", {}).get("contract")
         == "IMPLEMENTATION_GRAPH_V3"
@@ -1793,6 +2005,7 @@ def process_saved_batch(client, run_dir, batch_id, settings, *, batch=None, prog
 
 
 
+@_cleanup_unstarted_attempts
 def _repeat_v3_batch(
     client,
     run_dir,
@@ -1801,6 +2014,8 @@ def _repeat_v3_batch(
     selected,
     feedback,
 ):
+    from .orchestration.batch_recovery import reconcile_unsubmitted
+    state = reconcile_unsubmitted(run_dir, state)
     if state.get("submission_unknown") or state.get("pending_batch_submission"):
         raise ContractError(
             "Neznámý submit musí být dohledán před novým odesláním."
@@ -1816,7 +2031,7 @@ def _repeat_v3_batch(
             run_id=Path(run_dir).name,
             run_config=state.get("run_config_v2") or {},
             scope_hash=str(state.get("run_scope_hash") or ""),
-            require_repair=True,
+            allow_expired=True,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ContractError(
@@ -1830,6 +2045,18 @@ def _repeat_v3_batch(
         raise ContractError(
             "Ruční retry se pokouší rozšířit původní schválený scope."
         )
+    source_orders = {}
+    for candidate in [state.get("generate_batch") or {}, *(state.get("generate_batches") or {}).values()]:
+        if candidate.get("snapshot_hash") != source["snapshot_hash"]:
+            continue
+        encode_requests(candidate, archived=True)
+        for identifier, value in (candidate.get("work_orders") or {}).items():
+            if value.get("target_path") in selected:
+                source_orders[identifier] = value
+    known_paths = {value["target_path"] for value in source_orders.values()}
+    if not selected <= known_paths:
+        raise ContractError("Opakovat lze pouze cíle s doloženým předchozím WorkOrderem.")
+    retry_source = {"work_orders": source_orders}
     manual_authorization = create_targeted_retry_authorization(
         root_authorization.run_id,
         root_authorization.scope_hash,
@@ -1867,7 +2094,7 @@ def _repeat_v3_batch(
         if not source_path.is_file():
             continue
         try:
-            originals[rel] = source_path.read_text(encoding="utf-8")
+            originals[rel] = source_path.read_bytes().decode("utf-8")
         except UnicodeDecodeError:
             continue
 
@@ -1912,6 +2139,8 @@ def _repeat_v3_batch(
         temperature,
         sorted(selected),
         requirements=source["snapshot"]["requirements"],
+        source_segments=source["snapshot"].get("source_segments"),
+        requirements_wrapper=source["snapshot"].get("requirements_wrapper"),
         maximum_quality=bool(source["snapshot"].get("maximum_quality")),
         mode=source["mode"],
         originals=originals,
@@ -1920,6 +2149,7 @@ def _repeat_v3_batch(
         expected_target_hashes=expected_target_hashes,
         verified_artifacts=verified_artifacts,
         approved_paths=approved,
+        explicit_retry=True,
         completed_targets=(
             set(source.get("completed_dependency_targets") or [])
             | set(verified_artifacts)
@@ -1934,10 +2164,15 @@ def _repeat_v3_batch(
 
     # A repair is terminal for exactly the explicitly selected targets; it must
     # not accidentally continue unrelated deferred tasks from the source batch.
-    manifest["deferred_paths"] = []
-    manifest["blocked_requested_paths"] = []
+    manifest["deferred_paths"] = sorted(set(manifest["deferred_paths"]) & selected)
+    manifest["blocked_requested_paths"] = sorted(set(manifest["blocked_requested_paths"]) & selected)
+    manifest["manual_retry"] = {
+        "approval_id": manual_authorization.approval_id,
+        "target_paths": sorted(selected),
+        "source_orders": copy.deepcopy(source_orders),
+    }
 
-    repo, orders = _prepare_v3_followup(run_dir, state, manifest, retry_source=source)
+    repo, orders = _prepare_v3_followup(run_dir, state, manifest, retry_source=retry_source)
     data = encode_requests(manifest)
     request_path = (
         Path(run_dir)
@@ -1986,7 +2221,7 @@ def _repeat_v3_batch(
             physical_request_hash=canonical_sha256(physical_submit),
             remote_input_file_id=input_file_id,
         )
-        repo.mark_submission_started(order.attempt_id)
+    repo.mark_batch_dispatch(order.attempt_id for order in orders.values())
     try:
         batch = submit_verified_batch(
             client, input_file_id, manifest["requests"]
@@ -1998,10 +2233,13 @@ def _repeat_v3_batch(
             in {400, 401, 403, 404, 422, 429}
         )
         if definite_reject:
-            for order in orders.values():
-                repo.mark_not_submitted(order.attempt_id)
+            repo.mark_batch_dispatch((order.attempt_id for order in orders.values()), rejected=True)
             v4 = transition_batch_manifest(v4, "failed")
             state["submission_unknown"] = False
+            rejected = state.pop("pending_batch_submission", None)
+            if rejected:
+                state.setdefault("rejected_batch_submissions", {})[v4["manifest_id"]] = rejected
+            state["status"] = "partial"
         else:
             for order in orders.values():
                 repo.mark_submitted(
@@ -2054,21 +2292,22 @@ def _repeat_v3_batch(
     return {"batch_id": batch_id, "files": len(manifest["requests"])}
 
 
+@locked_run_operation
 def repeat_saved_batch(client, run_dir, source_batch_id, paths, feedback=""):
     from .recoverable_artifacts import load_run_state
     state = load_run_state(run_dir)
     if source_batch_id != state.get("batch_id") and source_batch_id not in state.get("generate_batches", {}):
         raise ContractError("Dávka nepatří k tomuto běhu.")
-    source = (state.get("generate_batches") or {}).get(source_batch_id, state["generate_batch"])
+    source = (state.get("generate_batches") or {}).get(source_batch_id) or state["generate_batch"]
     selected = set(paths)
     if (
         source.get("version") == 3
         and (source.get("snapshot") or {}).get("structure", {}).get("contract")
         == "IMPLEMENTATION_GRAPH_V3"
     ):
-        encode_requests(source)
-        if not selected or not selected <= set(source["expected"].values()):
-            raise ContractError("Vyberte pouze soubory z manifestu dávky.")
+        encode_requests(source, archived=True)
+        if not selected or not selected <= set(source.get("approved_paths") or source["expected"].values()):
+            raise ContractError("Vyberte pouze soubory z původního schváleného rozsahu dávky.")
         return _repeat_v3_batch(
             client, run_dir, state, source, selected, feedback
         )

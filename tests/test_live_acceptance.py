@@ -10,6 +10,19 @@ import pytest
 from scripts import live_acceptance
 
 
+def test_provider_ids_are_limited_to_the_selected_scenario(tmp_path):
+    for scenario, identity in (("qa", "resp_qa"), ("generate", "resp_generate")):
+        path = tmp_path / scenario
+        path.mkdir()
+        (path / "result.json").write_text(json.dumps({"response_id": identity, "work_order_hash": scenario}), encoding="utf-8")
+    report = {}
+    live_acceptance.enrich_ids(tmp_path / "qa", report)
+    assert report["provider_response_ids"] == ["resp_qa"]
+    assert report["work_order_hashes"] == ["qa"]
+    source = Path(live_acceptance.__file__).read_text(encoding="utf-8")
+    assert "enrich_ids(usage_root, report)" in source
+
+
 def test_gate_without_confirmation_blocks_before_key_access(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "secret-must-not-be-read")
     with pytest.raises(live_acceptance.Blocked, match="BLOCKED_AUTHORIZATION"):

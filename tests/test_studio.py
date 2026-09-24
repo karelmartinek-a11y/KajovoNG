@@ -40,6 +40,38 @@ def test_factory_installs_all_production_pages_without_remote_reads(studio):
         assert type(page).__module__.startswith(("kajovo.studio", "PySide6"))
 
 
+def test_store_add_callback_cannot_overwrite_new_selection_or_new_generation(studio, monkeypatch):
+    from kajovo.studio.resources import fill_records
+    page = studio.pages["resources"]
+    fill_records(page.lists["stores"], [{"id": "store-a"}, {"id": "store-b"}])
+    page.lists["stores"].setCurrentRow(0)
+    calls = []
+    monkeypatch.setattr(page, "execute", lambda title, work, receive: calls.append((work, receive)))
+    page.add_files(["file-a"])
+    work, receive = calls[0]
+    page.lists["stores"].setCurrentRow(1)
+    client = Mock()
+    work(client, None)
+    client.add_file_to_vector_store.assert_called_once_with("store-a", "file-a")
+    receive([{"id": "file-a"}])
+    assert page.store_files.count() == 0
+    page.lists["stores"].setCurrentRow(0)
+    receive([{"id": "file-a"}])
+    assert page.store_files.count() == 0
+    page.store_receiver("store-a")([{"id": "file-a"}])
+    assert page.store_files.count() == 1
+
+
+def test_empty_comic_cannot_become_dirty_without_a_panel(studio):
+    page = studio.pages["comics"]
+    page.project_id = page.service.store.project("Prázdný komiks")
+    page.refresh_projects()
+    assert page.panel_id is None
+    assert not page.panel_editor.isEnabled() and not page.overlays.isEnabled()
+    page.panel_name.setText("Nepřiřazená hodnota")
+    assert not page.dirty and page.save_pending()
+
+
 def test_saved_state_preserves_parameters_without_password(studio, tmp_path):
     workbench = studio.workbench
     values = workbench.state()
@@ -64,13 +96,14 @@ def test_batch_clears_incompatible_output_diagnostics(studio):
     assert not workbench.widgets["diag_windows_out"].isEnabled()
 
 
-def test_catalog_reload_selects_recommended_compatible_model(studio):
+def test_catalog_reload_preserves_unavailable_explicit_model(studio):
     state = studio.workbench.state()
     state["model"] = "missing-model"
     studio.workbench.apply_state(state)
     assert studio.workbench.state()["model"] == "missing-model"
     studio.workbench.refresh_models()
-    assert studio.workbench.state()["model"] == "gpt-4.1"
+    assert studio.workbench.state()["model"] == "missing-model"
+    assert studio.workbench.widgets["model"].property("model_unavailable")
 
 
 def test_failed_key_persistence_does_not_change_account(studio, monkeypatch):
@@ -234,19 +267,23 @@ def test_duplicate_cascade_remaps_internal_input_reference(studio):
     assert duplicate.outputs[0].modify_input_id == duplicate.inputs[0].id
 
 
-def test_history_clone_does_not_reuse_remote_response(studio, monkeypatch, tmp_path):
+def test_history_clone_does_not_reuse_remote_response(studio, monkeypatch, tmp_path, qtbot):
+    import json
     from types import SimpleNamespace
     studio.history.adapter = SimpleNamespace(root=tmp_path, run_id="RUN_source")
     state = studio.workbench.state()
     state["response_id"] = "resp_source"
     studio.history._state = {"ui_state": state}
+    (tmp_path / "run_state.json").write_text(json.dumps({"ui_state": state}), encoding="utf-8")
     studio.history.clone()
+    qtbot.waitUntil(lambda: studio.workbench.pending_lineage is not None)
     assert studio.workbench.config().response_id == ""
     assert studio.workbench.pending_lineage["source_run_id"] == "RUN_source"
 
 
-def test_history_clone_with_artifact_has_isolated_input(studio, tmp_path):
+def test_history_clone_with_artifact_has_isolated_input(studio, tmp_path, qtbot):
     import hashlib
+    import json
     from types import SimpleNamespace
     source = tmp_path / "archive"
     source.mkdir()
@@ -256,7 +293,9 @@ def test_history_clone_with_artifact_has_isolated_input(studio, tmp_path):
     studio.history.payload = {"artifacts": [{"artifact_id": "artifact_test", "reusable": True,
                                             "path_in_bundle": "approved.txt", "sha256": hashlib.sha256(b"approved").hexdigest()}]}
     studio.history._state = {"ui_state": studio.workbench.state()}
+    (source / "run_state.json").write_text(json.dumps(studio.history._state), encoding="utf-8")
     studio.history.clone_with_artifact(studio.history.payload["artifacts"][0])
+    qtbot.waitUntil(lambda: studio.workbench.pending_lineage is not None)
     directory = Path(studio.workbench.widgets["in_dir"].text())
     assert directory != source
     assert [path.name for path in directory.iterdir()] == ["approved.txt"]

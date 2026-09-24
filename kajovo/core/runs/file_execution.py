@@ -111,7 +111,9 @@ def _gen_file_chunks(
             break
     self._log_request_attachments(contract, [], [], [], vs_ids, tools)
 
-    max_attempts = 3
+    from ..orchestration.authorization import automatic_attempt_limit
+
+    max_attempts = automatic_attempt_limit(self.cfg)
     last_err: Exception | None = None
     rejected: list[str] = []
     repair: dict[str, Any] | None = None
@@ -170,7 +172,14 @@ def _gen_file_chunks(
             if expected_map is not None
             else (getattr(self.cfg, "completed_hashes", None) or {}).get(path)
         )
-        work_order = freeze_order(
+        from .response_execution import inherited_response_order
+        inherited_order = inherited_response_order(self, working, attempt)
+        if inherited_order is not None and (
+            inherited_order.target_path != path
+            or inherited_order.expected_target_hash != expected_target_hash
+        ):
+            raise ContractError("Continue LIVE: cíl souboru neodpovídá původnímu WorkOrderu.")
+        work_order = inherited_order or freeze_order(
             self.cfg,
             {
                 "run_id": self.log.run_id,
@@ -184,6 +193,7 @@ def _gen_file_chunks(
                 "contract_name": "FILE_CONTENT_V1",
                 "schema": working["text"]["format"]["schema"],
                 "prompt": prompt,
+                "request_payload": working,
                 "model": step_model,
                 "model_capability": self._model_caps(step_model),
                 "source_snapshot": self._delivery_snapshot,
@@ -369,7 +379,7 @@ def _gen_file_chunks(
     )
     self.progress_event.emit(ProgressEvent(
         getattr(self, "_progress_stage", contract),
-        detail=f"{path} · celý soubor ověřen",
+        detail=f"{path} · převzat úplný obsah, ověřen JSON kontrakt a hash",
     ))
     if self._response_journal:
         self._response_file_ids[path] = latest_response_id

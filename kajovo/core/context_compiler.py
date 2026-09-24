@@ -20,6 +20,24 @@ def content_hash(value):
     return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
+def owned_obligations(requirements, spine, path):
+    """Přesné definice povinností výslovně vlastněných cílovým souborem."""
+    definitions = {
+        row["id"]: row
+        for kind in ("invariants", "flows", "lifecycles")
+        for row in requirements.get(kind, [])
+    }
+    result = []
+    for owner in spine.get("obligation_owners", []):
+        if path not in owner.get("paths", []):
+            continue
+        identifier = owner["obligation_id"]
+        if identifier not in definitions:
+            raise ContractError(f"{path}: neznámá povinnost {identifier}.")
+        result.append({**deepcopy(owner), "definition": deepcopy(definitions[identifier])})
+    return sorted(result, key=lambda row: row["obligation_id"])
+
+
 def file_index(snapshot):
     structure = snapshot["structure"]
     if structure.get("contract") == "IMPLEMENTATION_GRAPH_V3":
@@ -270,10 +288,31 @@ class ContextCompiler:
         )
         dependencies = sorted(set(file.get("dependencies", [])))
         content_dependencies = sorted(set(file.get("content_dependencies", [])))
-        obligations = []
-        for owner in self.snapshot["structure"]["spine"].get("obligation_owners", []):
-            if path in owner.get("paths", []):
-                obligations.append(deepcopy(owner))
+        obligations = owned_obligations(requirements, self.snapshot["structure"]["spine"], path)
+
+        acceptance_ids = set(spec.get("acceptance_ids", []))
+        acceptance = [
+            deepcopy(row) for row in requirements.get("acceptance", [])
+            if row["id"] in acceptance_ids
+        ]
+        if {row["id"] for row in acceptance} != acceptance_ids:
+            raise ContractError(f"{path}: neznámá akceptační podmínka.")
+
+        source_refs = [*spec.get("source_refs", []),
+                       *(ref for row in selected_requirements for ref in row.get("source_refs", []))]
+        selected_segments = {(ref["source_id"], ref["segment_id"]) for ref in source_refs}
+        source_segments = [
+            deepcopy(row) for row in self.snapshot.get("source_segments", [])
+            if (row["source_id"], row["segment_id"]) in selected_segments
+        ]
+        if "source_segments" in self.snapshot:
+            by_segment = {(row["source_id"], row["segment_id"]): row for row in source_segments}
+            if len(by_segment) != len(source_segments) or set(by_segment) != selected_segments:
+                raise ContractError(f"{path}: chybějící nebo duplicitní zdrojový segment.")
+            for ref in source_refs:
+                segment = by_segment[(ref["source_id"], ref["segment_id"])]
+                if any(ref[key] != segment[key] for key in ("start_byte", "end_byte", "sha256")) or hashlib.sha256(segment["text"].encode("utf-8")).hexdigest() != ref["sha256"]:
+                    raise ContractError(f"{path}: obsah zdrojového segmentu neodpovídá odkazu.")
 
         relevant_sources = []
         for source_path, content in sorted((originals or {}).items()):
@@ -296,6 +335,15 @@ class ContextCompiler:
         verified = []
         for dependency in content_dependencies:
             artifact = (verified_artifacts or {}).get(dependency)
+            if artifact is None and self.files[dependency].get("action") == "preserve" and dependency in (originals or {}):
+                content = originals[dependency]
+                actual_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                expected_hash = (self.snapshot.get("original_hashes") or {}).get(dependency, actual_hash)
+                if expected_hash != actual_hash:
+                    raise ContractError(f"{dependency}: změněný zachovaný originál.")
+                artifact = {"content": content, "output_hash": actual_hash,
+                            "contract_hash": self.provider_hash(dependency),
+                            "validation_status": "verified", "origin": "preserved_original"}
             if artifact is None:
                 raise ContractError(
                     f"{path}: content dependency {dependency} nemá ověřený provider artefakt."
@@ -325,6 +373,20 @@ class ContextCompiler:
                 selected_requirements, key=lambda row: row["id"]
             ),
             "architecture_contracts": components,
+            "project_contract": deepcopy(plan.get("project", {})),
+            "architecture_decisions": [
+                deepcopy(row) for row in plan.get("decisions", [])
+                if not row.get("requirement_ids")
+                or set(row["requirement_ids"]) & set(file.get("requirement_ids", []))
+            ],
+            "applicable_assumptions": [
+                deepcopy(row) for row in requirements.get("assumptions", [])
+                if not row.get("requirement_ids")
+                or set(row["requirement_ids"]) & set(file.get("requirement_ids", []))
+            ],
+            "integration_rules": deepcopy(plan.get("integration_rules", [])),
+            "packages": deepcopy(plan.get("packages", [])),
+            "acceptance_contracts": sorted(acceptance, key=lambda row: row["id"]),
             "applicable_invariants": sorted(
                 obligations, key=lambda row: row["obligation_id"]
             ),
@@ -341,9 +403,14 @@ class ContextCompiler:
                 for dependency in dependencies
             ],
             "relevant_source_excerpts": relevant_sources,
+            "source_segments": source_segments,
             "verified_dependency_artifacts": verified,
             "cycle_contracts": [],
         }
+        wrapper = self.snapshot.get("requirements_wrapper") or {}
+        if "change_requirements" in wrapper:
+            from .orchestration.preparation import modify_obligations
+            context["modify_obligations"] = modify_obligations(wrapper, file.get("requirement_ids", []))
         context["context_provenance"] = [
             {
                 "component": key,
@@ -457,11 +524,12 @@ class ContextCompiler:
             ),
         })
 
-    def invalidated(self, previous, *, originals=None, previous_originals=None):
+    def invalidated(self, previous, *, originals=None, previous_originals=None,
+                    verified_artifacts=None, previous_verified_artifacts=None):
         """Přímé změny kontraktů a tranzitivní konzumenti; bez nesouvisejících souborů."""
         changed = {p for p in self.files if p not in previous.files or
-                   self.compile(p, originals=originals)["file_context_hash"] !=
-                   previous.compile(p, originals=previous_originals)["file_context_hash"]}
+                   self.compile(p, originals=originals, verified_artifacts=verified_artifacts)["file_context_hash"] !=
+                   previous.compile(p, originals=previous_originals, verified_artifacts=previous_verified_artifacts)["file_context_hash"]}
         removed = set(previous.files) - self.files.keys()
         pending = changed | removed
         while pending:

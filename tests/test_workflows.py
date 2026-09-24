@@ -86,7 +86,7 @@ def test_complete_offline_workflow(tmp_path, mode, maximum_quality):
         assert names[-1] == "FILE_CONTENT_V1"
         prefix = "A" if mode == "GENERATE" else "B"
         assert (
-            f"{prefix}2Q_QUALITY_GATE_V2" in names
+            f"{prefix}2Q_QUALITY_GATE_V3" in names
         ) is maximum_quality
         state = json.loads(
             (tmp_path / "LOG" / worker.log.run_id / "run_state.json").read_text(
@@ -328,4 +328,3 @@ def test_batch_uses_only_supported_jsonl_fields(tmp_path):
     assert set(
         request["body"]["text"]["format"]["schema"]["properties"]
     ) == {"content"}
-

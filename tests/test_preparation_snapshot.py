@@ -71,7 +71,7 @@ def test_resume_after_a2_runs_only_gate_and_persists_canonical_output(tmp_path):
     fixed["file_specs"][0]["spec"]["behavior"] = "Úplné chování po kontrole."
 
     def correct_gate(name, value, data):
-        assert name == "A2Q_QUALITY_GATE_V2"
+        assert name == "A2Q_QUALITY_GATE_V3"
         assert data["implementation_graph"] == checkpoint["graph"]
         value["result"]["data"]["corrected_file_specs"] = deepcopy(fixed["file_specs"])
         return value
@@ -85,7 +85,7 @@ def test_resume_after_a2_runs_only_gate_and_persists_canonical_output(tmp_path):
     assert client.create_response.call_count == 1
     assert structure == fixed
     assert worker.cfg.preparation_snapshot["canonical_stage"] == "A2Q"
-    assert format_names(responder) == ["A2Q_QUALITY_GATE_V2"]
+    assert format_names(responder) == ["A2Q_QUALITY_GATE_V3"]
     assert checkpoint["graph"] != fixed
     validate_graph(worker, worker.cfg.preparation_snapshot["graph"])
     stored = worker.cfg.preparation_snapshot

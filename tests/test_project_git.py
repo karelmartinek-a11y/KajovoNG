@@ -13,6 +13,40 @@ def test_sensitive_and_generated_files_are_excluded(path):
     assert not allowed_file(path)
 
 
+@pytest.mark.parametrize("extension", [".db", ".sqlite", ".sqlite3", ".SQLITE3"])
+@pytest.mark.parametrize("sidecar", ["", "-wal", "-shm", "-journal"])
+def test_database_and_sidecars_are_excluded(extension, sidecar):
+    assert not allowed_file("data/orchestration" + extension + sidecar)
+    assert allowed_file("data/schema.sql")
+
+
+def test_milestone_checks_selected_repository_index(tmp_path, monkeypatch):
+    root = tmp_path / "selected"
+    root.mkdir()
+    other = tmp_path / "cwd"
+    other.mkdir()
+    service = ProjectGit(root)
+    service.init()
+    service.command("config", "user.name", "Offline test")
+    service.command("config", "user.email", "test@example.invalid")
+    service.command("add", ".gitignore")
+    service.command("commit", "-m", "base")
+    monkeypatch.chdir(other)
+    original = service.text_with_env
+
+    def corrupt_selected_index(env, *arguments):
+        result = original(env, *arguments)
+        if arguments[0] == "commit-tree":
+            with (root / ".git" / "index").open("ab") as handle:
+                handle.write(b"changed")
+        return result
+
+    monkeypatch.setattr(service, "text_with_env", corrupt_selected_index)
+    with pytest.raises(RuntimeError, match="index"):
+        service.milestone("must-not-create")
+    assert not service.text("tag").strip()
+
+
 def test_repository_lifecycle_and_conflict_guard(tmp_path):
     root = tmp_path / "project"
     root.mkdir()

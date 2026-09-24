@@ -75,11 +75,13 @@ class VersionsPage(QWidget):
             self.path.setText(path)
             self.refresh()
 
-    def execute(self, title, call, receive=None):
+    def execute(self, title, call, receive=None, *, reserve=True):
         if self.busy:
             return
         try:
             service = ProjectGit(self.path.text())
+            if reserve:
+                self.context.operations.assert_output_available(service.root)
         except ValueError as error:
             self.notice.setText(str(error))
             return
@@ -88,7 +90,10 @@ class VersionsPage(QWidget):
         def deliver(value):
             if self.path.text() == root:
                 (receive or self.render)(value)
-        record = self.context.operations.start(title, lambda task: call(service), deliver)
+        record = self.context.operations.start(
+            title, lambda task: call(service), deliver,
+            output_dir=service.root if reserve else None,
+        )
         record.worker.finished.connect(lambda: setattr(self, "busy", False))
         return record
 
@@ -112,7 +117,7 @@ class VersionsPage(QWidget):
         )
 
     def refresh(self):
-        self.execute("Načtení projektu", lambda service: service.snapshot())
+        self.execute("Načtení projektu", lambda service: service.snapshot(), reserve=False)
 
     def set_remote(self):
         remote = self.remote.text().strip()
@@ -164,7 +169,7 @@ class VersionsPage(QWidget):
             self.editor.setReadOnly(compare)
             self.loaded = (relative, digest, root) if not compare else None
 
-        self.execute("Otevření souboru", lambda service: service.read_file(relative, tag), receive)
+        self.execute("Otevření souboru", lambda service: service.read_file(relative, tag), receive, reserve=False)
 
     def save_file(self):
         if not self.loaded or self.editor.isReadOnly():

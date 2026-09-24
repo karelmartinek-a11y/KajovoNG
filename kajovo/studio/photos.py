@@ -51,6 +51,7 @@ class PhotosPage(QWidget):
         self.template_store = PhotoTemplateStore(Path(context.settings.cache_dir) / "photo_templates.json")
         self.professional = None
         self.pending_professional = None
+        self._revision = 0
         self.busy = False
         self.jobs = []
         root = vertical(self, 0)
@@ -92,6 +93,14 @@ class PhotosPage(QWidget):
         body.addWidget(actions(action("photos.template.use", "Použít šablonu", self.use_template),
                                action("photos.prompt.improve", "Vylepšit zadání", self.improve),
                                action("photos.prompt.restore", "Vrátit původní zadání", self.restore_prompt)))
+        self.pending_preview = QPlainTextEdit()
+        self.pending_preview.setReadOnly(True)
+        self.pending_preview.setAccessibleName("Odložený návrh zadání")
+        body.addWidget(self.pending_preview)
+        self.pending_use = action("photos.prompt.pending.use", "Použít odložený návrh", self.use_pending)
+        self.pending_discard = action("photos.prompt.pending.discard", "Zahodit odložený návrh", self.discard_pending)
+        body.addWidget(actions(self.pending_use, self.pending_discard))
+        self._show_pending()
         body.addWidget(actions(action("photos.template.save", "Uložit novou šablonu", self.save_template),
                                action("photos.template.update", "Upravit šablonu", self.update_template),
                                action("photos.template.copy", "Duplikovat šablonu", self.duplicate_template),
@@ -128,6 +137,9 @@ class PhotosPage(QWidget):
         self.start_button = action("photos.start", "Odeslat úpravy fotografií", self.start, "primary")
         root.addWidget(actions(self.start_button))
         context.models_changed.connect(self.refresh_models)
+        self.prompt.textChanged.connect(self._edited)
+        self.form.changed.connect(self._edited)
+        self.options.changed.connect(self._edited)
         self.refresh_templates()
         self.refresh_models()
 
@@ -181,12 +193,9 @@ class PhotosPage(QWidget):
         ):
             values = self.context.models_for_usage(usage)
             recommended = self.context.recommended_model(usage)
-            widget.blockSignals(True)
-            widget.clear()
-            for value in values:
-                widget.addItem(value, value)
-            widget.setCurrentIndex(widget.findData(recommended) if recommended else -1)
-            widget.blockSignals(False)
+            from .model_selection import refill_models
+
+            refill_models(widget, values, recommended)
         self.refresh_image_options()
         if self.context.models and not self.image_model.currentData():
             self.notice.setText("Účet nemá model povolený pro Image Edit BATCH podle pevné matice.")
@@ -223,7 +232,6 @@ class PhotosPage(QWidget):
     def use_template(self):
         if self.template.currentData():
             self.professional = None
-            self.pending_professional = None
             self.prompt.setPlainText(
                 self.template_store.get(self.template.currentData()).prompt
             )
@@ -289,6 +297,9 @@ class PhotosPage(QWidget):
         return record
 
     def improve(self):
+        if self.pending_professional is not None:
+            self.notice.setText("Nejprve použijte nebo zahoďte odložený návrh.")
+            return
         if not self.context.models:
             self.context.ensure_models()
             self.notice.setText("Načítám katalog modelů účtu.")
@@ -300,12 +311,14 @@ class PhotosPage(QWidget):
             return
 
         request_prompt = prompt
+        revision = self._revision
 
         def receive(value):
             # Asynchronní výsledek smí změnit editor pouze tehdy, pokud
             # uživatel mezitím nezměnil vstup. Jinak zůstává jen návrhem.
-            if self.prompt.toPlainText() != request_prompt:
+            if self._revision != revision or self.prompt.toPlainText() != request_prompt:
                 self.pending_professional = value
+                self._show_pending()
                 self.notice.setText(
                     "Vylepšený návrh je připraven, ale nebyl aplikován, "
                     "protože zadání bylo mezitím změněno."
@@ -313,6 +326,7 @@ class PhotosPage(QWidget):
                 return
             self.professional = value
             self.pending_professional = None
+            self._show_pending()
             self.prompt.setPlainText(value.professional_prompt)
 
         self.execute(
@@ -327,11 +341,29 @@ class PhotosPage(QWidget):
             receive,
         )
 
+    def _edited(self, *_):
+        self._revision += 1
+
+    def _show_pending(self):
+        value = self.pending_professional
+        self.pending_preview.setPlainText(value.professional_prompt if value else "")
+        for widget in (self.pending_preview, self.pending_use, self.pending_discard):
+            widget.setVisible(value is not None)
+
+    def use_pending(self):
+        if self.pending_professional is not None:
+            self.professional = self.pending_professional
+            self.prompt.setPlainText(self.professional.professional_prompt)
+            self.discard_pending()
+
+    def discard_pending(self):
+        self.pending_professional = None
+        self._show_pending()
+
     def restore_prompt(self):
         if self.professional:
             original = self.professional.original_prompt
             self.professional = None
-            self.pending_professional = None
             self.prompt.setPlainText(original)
 
     def start(self):
@@ -404,7 +436,13 @@ class PhotosPage(QWidget):
     def cancel_job(self):
         job = self.selected_job()
         if job and job.batch_id and confirm(self, "Zrušit dávku fotografií", "Požádat službu o zrušení dávky? Již zpracované položky mohou být účtované."):
-            self.execute("Zrušení dávky fotografií", lambda client, task: client.cancel_batch(job.batch_id), lambda value: self.load_jobs())
+            def cancel(client, task):
+                result = client.cancel_batch(job.batch_id)
+                photo_batch.apply_batch_status(job, result)
+                photo_batch.save_job(job, self.context.settings.log_dir)
+                return job
+
+            self.execute("Zrušení dávky fotografií", cancel, lambda value: self.load_jobs())
 
     def job_details(self):
         job = self.selected_job()

@@ -25,7 +25,7 @@ sips -z 256 256 Build/assets/app_icon.png --out "$ICONSET_DIR/icon_128x128@2x.pn
 sips -z 256 256 Build/assets/app_icon.png --out "$ICONSET_DIR/icon_256x256.png" >/dev/null
 sips -z 512 512 Build/assets/app_icon.png --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null
 sips -z 512 512 Build/assets/app_icon.png --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
-cp Build/assets/app_icon.png "$ICONSET_DIR/icon_512x512@2x.png"
+cp Build/assets/app_icon_1024.png "$ICONSET_DIR/icon_512x512@2x.png"
 iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS"
 
 "$PYTHON_BIN" -m PyInstaller \
@@ -35,11 +35,13 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS"
   --name "$APP_NAME" \
   --icon "$ICON_ICNS" \
   --collect-data kajovo.core \
+  --copy-metadata kajovong \
   --add-data "resources/app_icon.png:resources" \
   --add-data "resources/Kajovo_new.png:resources" \
   --add-data "resources/studio-symbol.png:resources" \
   --add-data "resources/montserrat_regular.ttf:resources" \
   --add-data "resources/montserrat_bold.ttf:resources" \
+  --add-data "resources/orchestration:resources/orchestration" \
   kajovo/app/main.py
 
 "$PYTHON_BIN" tools/write_build_metadata.py

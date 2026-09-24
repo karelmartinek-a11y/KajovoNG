@@ -90,6 +90,46 @@ def test_valid_wire_contract_is_not_modified():
     assert payload == before
 
 
+@pytest.mark.parametrize("field", ["input", "instructions", "tools", "reasoning"])
+def test_frozen_request_rejects_changed_work(field):
+    cfg, task, payload, _ = file_order()
+    task["request_payload"] = payload
+    order = freeze_order(cfg, task, {"path": "src/main.py"})
+    payload[field] = {"input": "changed", "instructions": "changed",
+                      "tools": [{"type": "file_search", "vector_store_ids": ["vs_other"]}],
+                      "reasoning": {"effort": "low"}}[field]
+    with pytest.raises(ContractError, match="PAYLOAD_MISMATCH"):
+        validate_response_work_order(order, payload)
+
+
+def test_transport_tracking_does_not_change_frozen_work():
+    cfg, task, payload, _ = file_order()
+    task["request_payload"] = payload
+    order = freeze_order(cfg, task, {})
+    validate_response_work_order(order, {**payload, "background": True, "store": True})
+
+
+def test_stale_measurement_is_rejected_before_effects():
+    cfg, _, payload, order = file_order()
+    client, logger = Mock(), Mock()
+    with pytest.raises(ContractError, match="MEASUREMENT_MISMATCH"):
+        prepare_provider_request(logger, cfg, client, payload, work_order=order,
+                                 measurement={"blockers": [], "request_hash": "0" * 64})
+    assert not client.mock_calls and not logger.mock_calls
+
+
+def test_fake_token_measurement_is_rejected_even_with_matching_request_hash():
+    from kajovo.core.context_limits import measure_request
+    from kajovo.core.context_compiler import content_hash
+    cfg, _, payload, order = file_order()
+    report = measure_request(payload)
+    report.update(input_tokens=0, input_token_upper_bound=0, request_hash=content_hash(payload), blockers=[])
+    client, logger = Mock(), Mock()
+    with pytest.raises(ContractError, match="MEASUREMENT_MISMATCH"):
+        prepare_provider_request(logger, cfg, client, payload, work_order=order, measurement=report)
+    assert not client.mock_calls and not logger.mock_calls
+
+
 def test_batch_identifier_bijection_is_checked_before_effects():
     cfg, _, payload, order = file_order()
     logger = Mock()
@@ -213,10 +253,11 @@ def test_corrupt_backup_never_replaces_our_written_target(tmp_path):
 
 
 def test_physical_contract_schemas_match_runtime_definitions():
+    from kajovo.core.orchestration.manual_resources import MANUAL_RESOURCE_BINDINGS_V1_SCHEMA
     from kajovo.core.orchestration.batch_manifest import BATCH_MANIFEST_V4_SCHEMA
     from kajovo.core.orchestration.run_config import RUN_CONFIG_V2_SCHEMA
     from kajovo.core.orchestration.verification import VERIFICATION_REPORT_V3_SCHEMA
-    from kajovo.core.orchestration.work_order import WORK_ORDER_V2_SCHEMA
+    from kajovo.core.orchestration.work_order import WORK_ORDER_V2_SCHEMA, WORK_ORDER_V3_SCHEMA
     from kajovo.core.structured_output import file_content_format
 
     root = Path(__file__).resolve().parents[1]
@@ -226,6 +267,8 @@ def test_physical_contract_schemas_match_runtime_definitions():
         contract_root / "local" / "RUN_CONFIG_V2.schema.json": RUN_CONFIG_V2_SCHEMA,
         contract_root / "local" / "VERIFICATION_REPORT_V3.schema.json": VERIFICATION_REPORT_V3_SCHEMA,
         contract_root / "local" / "WORK_ORDER_V2.schema.json": WORK_ORDER_V2_SCHEMA,
+        contract_root / "local" / "WORK_ORDER_V3.schema.json": WORK_ORDER_V3_SCHEMA,
+        contract_root / "local" / "MANUAL_RESOURCE_BINDINGS_V1.schema.json": MANUAL_RESOURCE_BINDINGS_V1_SCHEMA,
         contract_root / "wire" / "FILE_CONTENT_V1.schema.json": file_content_format()["format"]["schema"],
     }
 

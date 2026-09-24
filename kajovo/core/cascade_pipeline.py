@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import re
+import sqlite3
 import tempfile
 import time
 from dataclasses import dataclass
@@ -50,6 +52,7 @@ from .orchestration.work_order import freeze_order
 from .progress import ProgressEvent
 from .request_rules import validate_response_payload
 from .runs.ports import EventPort
+from .runs.locking import ExecutionLock
 from .structured_output import (
     OutputContractError,
     resolve_schema,
@@ -145,6 +148,8 @@ class CascadeRunConfig:
     recovery_instruction: str = ""
     lineage: dict[str, Any] | None = None
     execution_approval_id: str = ""
+    resume_source_dir: str = ""
+    input_bindings: list[dict[str, Any]] | None = None
 
 
 class CascadeRunExecutor:
@@ -181,18 +186,19 @@ class CascadeRunExecutor:
         idx: int,
         payload: dict[str, Any],
         attempt_no: int,
+        task_suffix: str = "schema",
     ) -> dict[str, Any]:
         if self.logger is None:
             raise RuntimeError("Cascade logger není inicializovaný.")
         run_id = str(self.cfg.run_id or self.logger.run_id)
         operation_cfg = self._operation_cfg(step.model, self.cfg.execution_approval_id)
-        task_id = f"{step.id}:schema"
+        task_id = f"{step.id}:{task_suffix}"
         projection = {
             "cascade_name": self.cfg.cascade.name,
             "step_id": step.id,
             "step_signature": step_signature(step),
             "attempt_no": attempt_no,
-            "purpose": "schema_preparation",
+            "purpose": task_suffix,
             "input": payload.get("input"),
         }
         wire_format = (payload.get("text") or {}).get("format") or {}
@@ -202,7 +208,7 @@ class CascadeRunExecutor:
                 "run_id": run_id,
                 "step_id": str(getattr(self, "_current_step_record_id", step.id)),
                 "task_id": task_id,
-                "stage": "CASCADE_SCHEMA",
+                "stage": "CASCADE_SCHEMA" if task_suffix == "schema" else "CASCADE_PRODUCTION",
                 "route": "responses_live",
                 "provider_endpoint": "/v1/responses",
                 "target_id": step.id,
@@ -213,12 +219,13 @@ class CascadeRunExecutor:
                 ),
                 "schema": wire_format.get("schema") or {},
                 "prompt": str(payload.get("instructions") or ""),
+                "request_payload": payload,
                 "model": step.model,
                 "model_capability": model_spec(step.model),
                 "source_snapshot": {
                     "step_signature": step_signature(step),
                     "cascade_name": self.cfg.cascade.name,
-                    "purpose": "schema_preparation",
+                    "purpose": task_suffix,
                 },
                 "attempt_no": attempt_no,
                 "approval_id": self.cfg.execution_approval_id,
@@ -263,7 +270,7 @@ class CascadeRunExecutor:
         record_usage(self.logger, order, response)
         self.logger.save_json(
             "responses",
-            f"cascade_schema_{idx:02d}_attempt_{attempt_no}",
+            f"cascade_{canonical_sha256(task_suffix)[:16]}_{idx:02d}_attempt_{attempt_no}",
             response,
             step_id=str(getattr(self, "_current_step_record_id", step.id)),
         )
@@ -388,7 +395,18 @@ class CascadeRunExecutor:
             candidates.extend(("files_local_paths", str(index), value)
                               for index, value in enumerate(step.files_local_paths or []))
             for field, input_id, value in candidates:
+                if field == "files_local_paths" and PLACEHOLDER_RE.search(str(value or "")):
+                    continue
                 resolved = self._resolve_text(str(value or ""), {})
+                binding = next((row for row in (self.cfg.input_bindings or [])
+                                if (row.get("step_id"), row.get("field"), row.get("input_id"))
+                                == (step.id, field, input_id)), None)
+                if binding:
+                    parent = Path(self.cfg.resume_source_dir).resolve()
+                    frozen = Path(safe_join_under_root(parent, binding["path_in_bundle"]))
+                    if sha256_file(str(frozen)) != binding["sha256"]:
+                        raise ContractError("Zdrojový archiv kaskády má změněný hash.")
+                    resolved = str(frozen)
                 if not resolved or not Path(resolved).is_file():
                     missing.append(f"{step.id}:{input_id}")
                     continue
@@ -405,8 +423,48 @@ class CascadeRunExecutor:
                     "input_id": input_id,
                     "artifact_id": artifact["artifact_id"],
                     "path_in_bundle": artifact["path_in_bundle"],
+                    "sha256": artifact["sha256"],
                 })
+        self._frozen_cascade_inputs = mappings
         return mappings, missing
+
+    def _archive_dynamic_inputs(self, step, context):
+        """Zmrazí závislé legacy přílohy až nad výsledky jejich producentů."""
+        for index, expression in enumerate(step.files_local_paths or []):
+            if not PLACEHOLDER_RE.search(expression):
+                continue
+            resolved = self._resolve_text(expression, context)
+            artifact = self.logger.bundle.archive_artifact(
+                resolved, role="user_input", kind="cascade_input",
+                reconstruction_role=f"cascade:{step.id}:files_local_paths:{index}",
+                metadata={"step_id": step.id, "field": "files_local_paths", "input_id": str(index)},
+            )
+            for staged in getattr(self, "_cascade_staged_files", {}).values():
+                staged_path = Path(self.logger.paths.run_dir) / staged["staged_path"]
+                if staged_path.resolve() == Path(resolved).resolve() and artifact["sha256"] != staged["sha256"]:
+                    raise ContractError("Dynamický vstup kaskády neodpovídá archivovanému výstupu producenta.")
+            self._frozen_cascade_inputs = [
+                row for row in self._frozen_cascade_inputs
+                if (row["step_id"], row["field"], row["input_id"])
+                != (step.id, "files_local_paths", str(index))
+            ]
+            self._frozen_cascade_inputs.append({
+                "step_id": step.id, "field": "files_local_paths", "input_id": str(index),
+                **{key: artifact[key] for key in ("artifact_id", "path_in_bundle", "sha256")},
+            })
+            self._cascade_input_artifact_ids.append(artifact["artifact_id"])
+        self.logger.update_state({"cascade_input_artifacts": self._frozen_cascade_inputs})
+
+    def _frozen_input_path(self, step_id, field, input_id):
+        for row in getattr(self, "_frozen_cascade_inputs", []):
+            if (row["step_id"], row["field"], row["input_id"]) != (step_id, field, input_id):
+                continue
+            root = Path(self.logger.paths.run_dir).resolve()
+            path = (root / row["path_in_bundle"]).resolve()
+            if not path.is_relative_to(root) or hashlib.sha256(path.read_bytes()).hexdigest() != row["sha256"]:
+                raise ContractError("Archivovaný vstup kaskády má neplatnou integritu.")
+            return str(path)
+        raise ContractError(f"Kaskáda nemá zmrazený vstup {step_id}:{input_id}.")
 
     def _emit_status(self, p: int, sp: int, text: str) -> None:
         self.progress.emit(p)
@@ -422,22 +480,116 @@ class CascadeRunExecutor:
     def _runtime_path(self) -> str:
         base = Path(self.settings.log_dir or "LOG").resolve().parent / "cascades" / ".runtime"
         base.mkdir(parents=True, exist_ok=True)
-        return str(base / self._cascade_filename(self.cfg.cascade.name))
+        return str(base / (canonical_sha256(self._runtime_identity()) + ".runtime.json"))
+
+    def _runtime_identity(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "project": self.cfg.project,
+            "in_dir": os.path.normcase(str(Path(self.cfg.in_dir).resolve())) if self.cfg.in_dir else "",
+            "out_dir": os.path.normcase(str(Path(self.cfg.out_dir).resolve())) if self.cfg.out_dir else "",
+            "name": self.cfg.cascade.name,
+            "created_at": self.cfg.cascade.created_at,
+        }
 
     def _read_runtime_state(self) -> dict[str, Any]:
         path = Path(self._runtime_path())
         if not path.is_file():
+            legacy = path.parent / self._cascade_filename(self.cfg.cascade.name)
+            if legacy.is_file():
+                return self._read_legacy_runtime(legacy)
             return {}
         try:
-            return parse_json_strict(path.read_text(encoding="utf-8"))
-        except (OSError, ContractError) as exc:
+            state = parse_json_strict(path.read_text(encoding="utf-8"))
+            if state.get("runtime_identity") != self._runtime_identity():
+                raise ContractError("Runtime kaskády patří jiné identitě.")
+            return state
+        except (OSError, ValueError, ContractError) as exc:
             raise ContractError("Kaskádový runtime stav obsahuje nekanonický JSON.") from exc
+
+    @staticmethod
+    def _evidence_identity(evidence):
+        """Vlastníka staré evidence lze odvodit jen z úplných kanonických údajů."""
+        definition = evidence.get("cascade_definition")
+        if not isinstance(definition, dict):
+            raise ContractError("Chybí kanonická definice vlastníka kaskády.")
+        if any(not isinstance(evidence.get(key), str) for key in ("project", "in_dir", "out_dir")):
+            raise ContractError("Chybí projekt nebo kořeny vlastníka kaskády.")
+        if not isinstance(definition.get("name"), str) or type(definition.get("created_at")) not in (int, float):
+            raise ContractError("Chybí stabilní identita definice kaskády.")
+        roots = {}
+        for key in ("in_dir", "out_dir"):
+            value = evidence[key]
+            if value and not Path(value).is_absolute():
+                raise ContractError("Relativní historický kořen nedokládá vlastníka kaskády.")
+            roots[key] = os.path.normcase(str(Path(value).resolve())) if value else ""
+        return {
+            "version": 1, "project": evidence["project"], **roots,
+            "name": definition["name"], "created_at": definition["created_at"],
+        }
+
+    def _read_legacy_runtime(self, path):
+        try:
+            legacy = parse_json_strict(path.read_text(encoding="utf-8"))
+            run_id = legacy.get("run_id")
+            if not isinstance(run_id, str) or not run_id.strip():
+                raise ContractError("Starý runtime neodkazuje na kanonický běh.")
+            root = Path(safe_join_under_root(Path(self.settings.log_dir).resolve(), run_id))
+            evidence = parse_json_strict((root / "run_state.json").read_text(encoding="utf-8"))
+            identity = self._evidence_identity(evidence)
+            recorded = evidence.get("runtime_identity")
+            if recorded is not None and recorded != identity:
+                raise ContractError("Kanonické údaje vlastníka kaskády si odporují.")
+            if identity != self._runtime_identity():
+                return {}
+            return self._runtime_evidence({**legacy, "runtime_identity": identity})
+        except (OSError, ValueError, ContractError) as exc:
+            raise ContractError(
+                "Starý runtime kaskády nemá jednoznačnou identitu nebo platnou evidenci; "
+                "vyžaduje ověření původního běhu."
+            ) from exc
+
+    def _runtime_evidence(self, state):
+        """Sdílený runtime je pouze ukazatel; rozhoduje kanonický stav běhu."""
+        if not state.get("run_id"):
+            return state
+        root = Path(safe_join_under_root(Path(self.settings.log_dir).resolve(), state["run_id"]))
+        evidence = parse_json_strict((root / "run_state.json").read_text(encoding="utf-8"))
+        identity = evidence.get("runtime_identity")
+        if identity is None:
+            identity = self._evidence_identity(evidence)
+        if identity != self._runtime_identity():
+            raise ContractError("Zdrojový běh neodpovídá identitě kaskády.")
+        if not isinstance(evidence.get("cascade_runtime"), dict):
+            raise ContractError("Kanonický běh nemá platný mezistav kaskády; odvozenou cache nelze použít.")
+        result = dict(state)
+        result["cache"] = evidence.get("cascade_runtime")
+        result["status"] = evidence.get("status")
+        if state.get("status") == "submission_unknown":
+            result["status"] = "submission_unknown"
+        database = root.parent / "orchestration.sqlite3"
+        if database.is_file():
+            with contextlib.closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
+                uncertain = db.execute(
+                    "SELECT 1 FROM provider_operations p JOIN work_orders w "
+                    "ON w.work_order_hash=p.work_order_hash WHERE w.run_id=? "
+                    "AND p.state='submission_unknown' LIMIT 1", (state["run_id"],),
+                ).fetchone()
+            if uncertain:
+                result["status"] = "submission_unknown"
+        return result
 
     def _write_runtime_state(self, patch: dict[str, Any]) -> None:
         state = self._read_runtime_state()
         state.update(patch)
         state["cascade_name"] = self.cfg.cascade.name
+        state["runtime_identity"] = self._runtime_identity()
         state["updated_at"] = time.time()
+        if self.logger and "cache" in patch:
+            self.logger.update_state({
+                "runtime_identity": self._runtime_identity(),
+                "cascade_runtime": patch["cache"],
+            })
         atomic_write_text(
             self._runtime_path(),
             canonical_bytes(state).decode("utf-8"),
@@ -482,6 +634,9 @@ class CascadeRunExecutor:
 
     def _schema_for_step(self, step: CascadeStep) -> dict[str, Any] | None:
         if step.deterministic:
+            if any(output.kind == "file" and output.file_type in {"xlsx", "docx", "pdf", "pptx", "zip"} for output in step.outputs):
+                if "code_interpreter" not in model_spec(step.model).get("features", []):
+                    raise ContractError(f"{step.model}: výroba dokumentů vyžaduje Code Interpreter.")
             return runtime_schema_for_step(step)
         if step.output_type != "json":
             return None
@@ -596,8 +751,15 @@ class CascadeRunExecutor:
         if expected is None:
             expected = {}
             self._cascade_expected_hashes = expected
+        baseline = getattr(self, "_cascade_original_expected_hashes", None)
+        if baseline is None:
+            baseline = dict(expected)
+            self._cascade_original_expected_hashes = baseline
         for rel in sorted(paths):
             if rel in expected:
+                continue
+            if rel in baseline:
+                expected[rel] = baseline[rel]
                 continue
             destination = safe_join_under_root(
                 out_abs, rel.replace("/", os.sep)
@@ -607,6 +769,7 @@ class CascadeRunExecutor:
                 if os.path.isfile(destination)
                 else None
             )
+            baseline[rel] = expected[rel]
         if self.logger:
             self.logger.save_json(
                 "manifests",
@@ -746,9 +909,10 @@ class CascadeRunExecutor:
         expected = getattr(self, "_cascade_expected_hashes", {}) or {}
         if set(expected) != {row["path"] for row in staged}:
             missing = sorted({row["path"] for row in staged} - set(expected))
+            unstaged = sorted(set(expected) - {row["path"] for row in staged})
             raise ContractError(
-                "Kaskádová publikace nemá úplná původní očekávání: "
-                + ", ".join(missing)
+                "Kaskádová publikace: chybí původní očekávání pro "
+                + repr(missing) + "; chybí staging pro " + repr(unstaged)
             )
         plan = prepare_publish(
             staged,
@@ -874,23 +1038,25 @@ class CascadeRunExecutor:
         self,
         start_index: int,
     ) -> tuple[dict[str, Any], dict[str, str], dict[str, Any], set[str]]:
-        if start_index <= 0:
+        if start_index <= 0 and self.cfg.resume_snapshot is None and not self.cfg.cascade.run_from_step_id:
             return {}, {}, {}, set()
-        state = self._read_runtime_state()
+        state = getattr(self, "_resume_runtime_state", None)
+        if state is None:
+            state = self._runtime_evidence(self._read_runtime_state())
         cache = self.cfg.resume_snapshot if self.cfg.resume_snapshot is not None else state.get("cache")
         if not isinstance(cache, dict):
             raise CascadeValidationError(
                 "Pro spuštění od vybraného kroku chybí předchozí dokončený stav; spusťte kaskádu od začátku."
             )
+        if cache.get("version", 1) not in {1, 2}:
+            raise CascadeValidationError("Nepodporovaná verze cache kaskády.")
+        self._primary_responses = copy.deepcopy(cache.get("primary_responses") or {})
+        if not self.cfg.resume_source_dir and state.get("run_id"):
+            self.cfg.resume_source_dir = str(Path(self.settings.log_dir) / state["run_id"])
+        self.logger._cascade_resume_root = self.cfg.resume_source_dir
         signatures = cache.get("step_signatures", {})
         if not isinstance(signatures, dict):
             signatures = {}
-        for index in range(start_index):
-            step = self.cfg.cascade.steps[index]
-            if signatures.get(step.id) != step_signature(step):
-                raise CascadeValidationError(
-                    f"Předchozí krok {index + 1} se od posledního běhu změnil; spusťte kaskádu nejpozději od tohoto kroku."
-                )
         context = cache.get("legacy_context", {})
         context_ids = cache.get("context_response_ids", {})
         values = cache.get("values", {})
@@ -905,6 +1071,46 @@ class CascadeRunExecutor:
         self._cascade_expected_hashes = copy.deepcopy(
             cache.get("cascade_expected_target_hashes") or {}
         )
+        self._cascade_original_expected_hashes = copy.deepcopy(
+            cache.get("cascade_original_expected_hashes") or self._cascade_expected_hashes
+        )
+        if self.cfg.resume_source_dir:
+            parent = Path(self.cfg.resume_source_dir).resolve()
+            child = Path(self.logger.paths.run_dir).resolve()
+            replacements = {}
+            for row in self._cascade_staged_files.values():
+                source = Path(safe_join_under_root(parent, row["staged_path"]))
+                if not source.is_file() or sha256_file(str(source)) != row["sha256"]:
+                    raise ContractError(f"Neplatný zdroj stagingu kaskády: {row['path']}")
+                artifact = self.logger.bundle.archive_artifact(
+                    source, role="staged_output", kind="output_file", reusable=True,
+                    reconstruction_role=row["path"], metadata={"source_run_id": parent.name},
+                )
+                row["staged_path"] = artifact["path_in_bundle"]
+                replacements[str(source)] = str(child / row["staged_path"])
+            def relocated(value):
+                if isinstance(value, dict):
+                    return {key: relocated(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [relocated(item) for item in value]
+                return replacements.get(value, value) if isinstance(value, str) else value
+            context, values = relocated(context), relocated(values)
+        for index in range(start_index):
+            step = self.cfg.cascade.steps[index]
+            if step.id in executed:
+                self._archive_dynamic_inputs(step, context)
+            if cache.get("version") == 2:
+                expected_signature = self._semantic_step_signature(step)
+            else:
+                legacy = step.to_dict()
+                if legacy.get("previous_response_id_expr"):
+                    raise CascadeValidationError("Cache V1 nedokládá explicitní kontext; spusťte tento krok znovu.")
+                legacy.pop("previous_response_id_expr", None)
+                expected_signature = canonical_sha256(legacy)
+            if signatures.get(step.id) != expected_signature:
+                raise CascadeValidationError(
+                    f"Předchozí krok {index + 1} se od posledního běhu změnil; spusťte kaskádu nejpozději od tohoto kroku."
+                )
         return (
             copy.deepcopy(context),
             {str(k): str(v) for k, v in context_ids.items() if v},
@@ -923,27 +1129,39 @@ class CascadeRunExecutor:
         idx: int,
         values: dict[str, Any],
         client: OpenAIClient,
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[str, list[str], list[dict[str, Any]]]:
         extra_text: list[str] = []
         file_ids: list[str] = []
+        bindings: list[dict[str, Any]] = []
+
+        def bind(item, file_id, filename):
+            from .compat import SUPPORTED_INPUT_IMAGE_EXTS
+            representation = "input_image" if Path(filename).suffix.lower() in SUPPORTED_INPUT_IMAGE_EXTS else "input_file"
+            file_ids.append(file_id)
+            bindings.append({"input_id": item.id, "name": item.name, "file_id": file_id,
+                             "filename": filename, "type": representation})
 
         for item in step.inputs:
             if item.source == "text":
-                extra_text.append(f"[Vstup: {item.name}]\n{item.value}")
+                extra_text.append(f"[Vstup {item.id}: {item.name}]\n{item.value}")
                 continue
             if item.source == "local_file":
-                path = self._resolve_text(item.value, {})
+                path = self._frozen_input_path(step.id, "input", item.id)
                 if not os.path.isfile(path):
                     raise RuntimeError(f"Vstupní soubor neexistuje: {path}")
                 uploaded = client.upload_file(path, purpose='user_data')
                 file_id = str(uploaded.get("id") or "").strip()
                 if not file_id:
                     raise RuntimeError(f"Upload souboru nevrátil file_id: {path}")
-                file_ids.append(file_id)
+                bind(item, file_id, Path(path).name)
                 continue
             if item.source == "file_id":
                 if item.value.strip():
-                    file_ids.append(item.value.strip())
+                    file_id = item.value.strip()
+                    metadata = client.retrieve_file(file_id)
+                    if not isinstance(metadata, dict) or not isinstance(metadata.get("filename"), str):
+                        raise ContractError(f"Vstup {item.id} nemá doložený typ souboru.")
+                    bind(item, file_id, metadata["filename"])
                 continue
             if item.source == "output":
                 key = self._value_key(item.source_step_id, item.source_output_id)
@@ -955,24 +1173,26 @@ class CascadeRunExecutor:
                 if isinstance(value, dict) and value.get("kind") == "file":
                     file_id = str(value.get("file_id") or "").strip()
                     if file_id:
-                        file_ids.append(file_id)
+                        bind(item, file_id, str(value.get("path") or "output." + str(value.get("file_type") or "")))
                     elif value.get("path") and os.path.isfile(str(value["path"])):
                         uploaded = client.upload_file(str(value['path']), purpose='user_data')
                         file_id = str(uploaded.get("id") or "").strip()
                         if not file_id:
                             raise RuntimeError("Upload návazného souboru nevrátil file_id.")
-                        file_ids.append(file_id)
+                        bind(item, file_id, str(value["path"]))
                     else:
                         raise RuntimeError("Návazný soubor už není dostupný.")
                 else:
                     visible = value.get("value") if isinstance(value, dict) and "value" in value else value
                     if not isinstance(visible, str):
                         visible = json.dumps(visible, ensure_ascii=False)
-                    extra_text.append(f"[Vstup: {item.name}]\n{visible}")
+                    extra_text.append(f"[Vstup {item.id}: {item.name}]\n{visible}")
         text = step.input_text
         if extra_text:
             text = text.rstrip() + "\n\n" + "\n\n".join(extra_text)
-        return text, file_ids
+        if bindings:
+            text += "\n\nMapování příloh na vstupy: " + json.dumps(bindings, ensure_ascii=False)
+        return text, file_ids, bindings
 
     def _deterministic_instructions(self, step: CascadeStep) -> str:
         lines = [
@@ -987,7 +1207,7 @@ class CascadeRunExecutor:
                 )
             if output.kind == "file" and output.file_mode == "modify":
                 lines.append(
-                    f"  Soubor „{output.name}“ musí být upravenou verzí vybraného vstupního souboru, nikoli novým nesouvisejícím souborem."
+                    f"  Soubor „{output.name}“ uprav výhradně z input_id={output.modify_input_id}; zachovej chování mimo zadanou změnu."
                 )
         prefix = step.instructions.strip()
         return (prefix + "\n\n" if prefix else "") + "\n".join(lines)
@@ -1003,7 +1223,7 @@ class CascadeRunExecutor:
         client: OpenAIClient,
     ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
         if step.deterministic:
-            resolved_input_text, file_ids = self._resolve_deterministic_inputs(
+            resolved_input_text, file_ids, bindings = self._resolve_deterministic_inputs(
                 step=step,
                 idx=idx,
                 values=values,
@@ -1015,10 +1235,12 @@ class CascadeRunExecutor:
                 {"type": "input_text", "text": resolved_input_text}
             ]
             existing_file_ids = set()
-            for file_id in file_ids:
+            for binding in bindings:
+                file_id = binding["file_id"]
                 if file_id and file_id not in existing_file_ids:
-                    content_parts.append({"type": "input_file", "file_id": file_id})
+                    content_parts.append({"type": binding["type"], "file_id": file_id})
                     existing_file_ids.add(file_id)
+            self._step_input_bindings = bindings
             schema = self._schema_for_step(step)
             spec = model_spec(step.model)
             output_limit = spec.get("max_output_tokens")
@@ -1104,8 +1326,8 @@ class CascadeRunExecutor:
         validate_response_payload(preflight_payload)
         client.validate_prepared_payload(preflight_payload)
 
-        for local_path in step.files_local_paths or []:
-            resolved_path = self._resolve_text(local_path, context)
+        for index, _local_path in enumerate(step.files_local_paths or []):
+            resolved_path = self._frozen_input_path(step.id, "files_local_paths", str(index))
             if not os.path.isfile(resolved_path):
                 raise RuntimeError(f"Lokální soubor neexistuje: {resolved_path}")
             uploaded = client.upload_file(resolved_path, purpose='user_data')
@@ -1286,6 +1508,8 @@ class CascadeRunExecutor:
         executed_step_ids: set[str],
     ) -> dict[str, Any]:
         return {
+            "version": 2,
+            "primary_responses": copy.deepcopy(getattr(self, "_primary_responses", {})),
             "legacy_context": copy.deepcopy(context),
             "cascade_staged_files": copy.deepcopy(
                 getattr(self, "_cascade_staged_files", {}) or {}
@@ -1293,13 +1517,25 @@ class CascadeRunExecutor:
             "cascade_expected_target_hashes": copy.deepcopy(
                 getattr(self, "_cascade_expected_hashes", {}) or {}
             ),
+            "cascade_original_expected_hashes": copy.deepcopy(
+                getattr(self, "_cascade_original_expected_hashes", {})
+                or getattr(self, "_cascade_expected_hashes", {}) or {}
+            ),
             "context_response_ids": copy.deepcopy(context_response_ids),
             "values": copy.deepcopy(values),
             "executed_step_ids": sorted(executed_step_ids),
             "step_signatures": {
-                step.id: step_signature(step) for step in self.cfg.cascade.steps
+                step.id: self._semantic_step_signature(step) for step in self.cfg.cascade.steps
             },
         }
+
+    def _semantic_step_signature(self, step):
+        return canonical_sha256({
+            "version": 2, "definition": step_signature(step),
+            "inputs": sorted([row["field"], row["input_id"], row["sha256"]]
+                             for row in getattr(self, "_frozen_cascade_inputs", [])
+                             if row["step_id"] == step.id),
+        })
 
     def _selected_final_outputs(self, values: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -1310,9 +1546,28 @@ class CascadeRunExecutor:
         return result
 
     def execute(self) -> None:
-        previous = self._read_runtime_state()
+        try:
+            with ExecutionLock(self._runtime_path() + ".lock"):
+                self._execute()
+        except Exception as exc:
+            self._emit_boundary_error(exc)
+
+    def _emit_boundary_error(self, exc: Exception) -> None:
+        from .user_errors import describe_error
+        self.failure_detail.emit(describe_error(exc))
+        self.progress_event.emit(ProgressEvent("RUN", "failed", detail=str(exc)))
+        self.finished_err.emit(humanize_cascade_error(exc))
+
+    def _execute(self) -> None:
+        previous = self._runtime_evidence(self._read_runtime_state())
+        if previous and not Path(self._runtime_path()).is_file():
+            # Převezme pouze ověřený ukazatel; historický soubor zůstává beze změny.
+            atomic_write_text(self._runtime_path(), canonical_bytes(previous).decode("utf-8"))
+        self._resume_runtime_state = previous
         if previous.get("status") == "submission_unknown":
             message = "Předchozí odeslání nemá potvrzený výsledek; automatické opakování je zakázáno."
+            from .user_errors import describe_error
+            self.failure_detail.emit(describe_error(ContractError(message)))
             self.progress_event.emit(ProgressEvent("RUN", "submission_unknown", detail=message))
             self.finished_err.emit(message)
             return
@@ -1388,6 +1643,14 @@ class CascadeRunExecutor:
             invalid_step_ids = {
                 step.id for step in self.cfg.cascade.steps[start_index:]
             }
+            self._cascade_staged_files = {
+                path: row for path, row in self._cascade_staged_files.items()
+                if int(row.get("cascade_step") or 0) <= start_index
+            }
+            self._cascade_expected_hashes = {
+                path: value for path, value in self._cascade_expected_hashes.items()
+                if path in self._cascade_staged_files
+            }
             values = {
                 key: value
                 for key, value in values.items()
@@ -1396,23 +1659,23 @@ class CascadeRunExecutor:
             executed_step_ids = {
                 step_id for step_id in executed_step_ids if step_id not in invalid_step_ids
             }
+            context = {
+                key: value
+                for key, value in context.items()
+                if not (
+                    key.startswith("step.")
+                    and key.split(".", 2)[1].isdigit()
+                    and int(key.split(".", 2)[1]) >= start_index + 1
+                )
+            }
             if start_index > 0:
-                context = {
-                    key: value
-                    for key, value in context.items()
-                    if not (
-                        key.startswith("step.")
-                        and key.split(".", 2)[1].isdigit()
-                        and int(key.split(".", 2)[1]) >= start_index + 1
-                    )
-                }
                 context_response_ids = {}
                 for prior_index in range(start_index):
                     prior_step = self.cfg.cascade.steps[prior_index]
                     response_id = str(
                         context.get(f"step.{prior_index + 1}.response_id") or ""
                     ).strip()
-                    if response_id:
+                    if response_id and prior_step.deterministic:
                         context_response_ids[prior_step.context_id] = response_id
             else:
                 context_response_ids = {}
@@ -1428,6 +1691,7 @@ class CascadeRunExecutor:
                     "in_dir": self.cfg.in_dir,
                     "cascade_name": self.cfg.cascade.name,
                     "steps": len(self.cfg.cascade.steps),
+                    "runtime_identity": self._runtime_identity(),
                     "start_step": start_index + 1,
                     "cascade_definition": self.cfg.cascade.to_dict(),
                     "cascade_runtime": self._cache_snapshot(
@@ -1474,6 +1738,7 @@ class CascadeRunExecutor:
             )
 
             client = OpenAIClient(self.api_key, timeout_s=self.settings.response_timeout_s)
+            client.evidence_bundle = self.logger.bundle
             client.configure_validation(self.settings)
             client.stopped = lambda: self._stop
 
@@ -1512,23 +1777,48 @@ class CascadeRunExecutor:
 
                 self._check_stop()
                 self._freeze_cascade_targets(step, idx)
+                self._archive_dynamic_inputs(step, context)
                 step_summary: dict[str, Any] = {}
                 decision_value: str | None = None
-                payload, schema, file_ids = self._prepare_step(
-                    step=step,
-                    idx=idx,
-                    context=context,
-                    context_response_ids=context_response_ids,
-                    values=values,
-                    client=client,
-                )
+                def semantic_value(value):
+                    if isinstance(value, dict):
+                        if value.get("kind") == "file":
+                            path = value.get("path")
+                            return {"kind": "file", "sha256": sha256_file(path), "file_type": value.get("file_type")}
+                        return {key: semantic_value(item) for key, item in value.items()}
+                    if isinstance(value, list):
+                        return [semantic_value(item) for item in value]
+                    return value
+                primary_key = canonical_sha256({
+                    "step": self._semantic_step_signature(step), "values": semantic_value(values),
+                    "context_ids": context_response_ids if step.deterministic else {},
+                    "instruction": self.cfg.recovery_instruction,
+                    "legacy_context": {
+                        key: {"sha256": sha256_file(value)} if ".out_file_path:" in key else value
+                        for key, value in context.items()
+                    } if not step.deterministic else {},
+                })
+                cached_primary = getattr(self, "_primary_responses", {}).get(primary_key)
+                self.logger._cascade_resume_root = self.cfg.resume_source_dir if cached_primary else ""
+                if cached_primary:
+                    payload, schema = cached_primary["payload"], cached_primary["schema"]
+                    response = cached_primary["response"]
+                    decoded = validate_output(response, payload)
+                    self._step_input_bindings = cached_primary["bindings"]
+                    file_ids = cached_primary["file_ids"]
+                    self.logger.save_json("responses", f"cascade_step_{idx:02d}_reused", response, step_id=current_step_record_id)
+                else:
+                    payload, schema, file_ids = self._prepare_step(
+                        step=step, idx=idx, context=context, context_response_ids=context_response_ids,
+                        values=values, client=client,
+                    )
                 self._emit_status(
                     base_p,
                     50,
                     f"Krok {idx}: požadavek na OpenAI",
                 )
                 original_instructions = str(payload.get("instructions") or "")
-                for repair_attempt in range(3):
+                for repair_attempt in range(0 if cached_primary else 3):
                     self._check_stop()
                     self.logger.save_json(
                         "requests", f"cascade_step_{idx:02d}_attempt_{repair_attempt + 1}",
@@ -1568,6 +1858,7 @@ class CascadeRunExecutor:
                                 or "CASCADE_TEXT"
                             ),
                             "schema": wire_format.get("schema") or {},
+                            "request_payload": payload,
                             "prompt": str(
                                 payload.get("instructions") or ""
                             ),
@@ -1708,8 +1999,18 @@ class CascadeRunExecutor:
                         payload.setdefault("metadata", {})["kajovo_repair_attempt"] = str(repair_attempt + 1)
                         payload["instructions"] = original_instructions + "\nOprav předchozí neplatný výstup: " + str(exc)
 
+                self._primary_responses = {**getattr(self, "_primary_responses", {}), primary_key: {
+                    "payload": copy.deepcopy(payload), "schema": schema, "response": response,
+                    "bindings": copy.deepcopy(getattr(self, "_step_input_bindings", [])), "file_ids": file_ids,
+                }}
+                self.logger.update_state({"cascade_runtime": self._cache_snapshot(
+                    context=context, context_response_ids=context_response_ids, values=values,
+                    executed_step_ids=executed_step_ids,
+                )})
                 if step.deterministic:
                     self._validate_json_output(decoded, schema)
+                    from .cascade_production import produce_binary_outputs
+                    decoded = produce_binary_outputs(self, client, step, idx, payload, decoded)
                     step_summary, decision_value = self._process_deterministic_output(
                         step=step,
                         idx=idx,
@@ -1761,6 +2062,11 @@ class CascadeRunExecutor:
                             per_step_out_files.setdefault(str(idx), {})[output.id] = value
 
                 executed_step_ids.add(step.id)
+                self._primary_responses.pop(primary_key, None)
+                self.logger.update_state({"cascade_runtime": self._cache_snapshot(
+                    context=context, context_response_ids=context_response_ids, values=values,
+                    executed_step_ids=executed_step_ids,
+                )})
                 completed_record = self.logger.bundle.update_step(
                     current_step_record_id,
                     status="completed",
@@ -1971,6 +2277,17 @@ class CascadeRunExecutor:
 
             human = humanize_cascade_error(ex)
             technical = str(ex)
+            terminal_status = "submission_unknown" if isinstance(ex, SubmissionOutcomeUnknown) else "failed"
+            if self.logger:
+                repo = repository_for_logger(self.logger)
+                with repo.connect() as db:
+                    uncertain = db.execute(
+                        "SELECT 1 FROM provider_operations p JOIN work_orders w "
+                        "ON w.work_order_hash=p.work_order_hash WHERE w.run_id=? "
+                        "AND p.state='submission_unknown' LIMIT 1", (self.logger.run_id,),
+                    ).fetchone()
+                if uncertain:
+                    terminal_status = "submission_unknown"
             failed_step_id = ""
             failed_step_number = 0
             if 0 <= self._failed_step_index < len(self.cfg.cascade.steps):
@@ -1981,7 +2298,7 @@ class CascadeRunExecutor:
                 if current_step_record_id:
                     self.logger.bundle.update_step(
                         current_step_record_id,
-                        status="failed",
+                        status=terminal_status,
                         finished_at=datetime.now(UTC).isoformat(),
                         technical_summary=technical,
                         human_summary=human,
@@ -1997,7 +2314,7 @@ class CascadeRunExecutor:
                 )
                 self.logger.update_state(
                     {
-                        "status": "failed",
+                        "status": terminal_status,
                         "finished_at": time.time(),
                         "error": technical,
                         "human_error": human,
@@ -2007,7 +2324,7 @@ class CascadeRunExecutor:
                 )
             self._write_runtime_state(
                 {
-                    "status": "failed",
+                    "status": terminal_status,
                     "run_id": run_id,
                     "failed_step_id": failed_step_id,
                     "failed_step_number": failed_step_number,
@@ -2023,5 +2340,5 @@ class CascadeRunExecutor:
             )
             from .user_errors import describe_error
             self.failure_detail.emit(describe_error(ex))
-            self.progress_event.emit(ProgressEvent("RUN", "failed"))
+            self.progress_event.emit(ProgressEvent("RUN", terminal_status))
             self.finished_err.emit(human)

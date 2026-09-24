@@ -185,7 +185,20 @@ class ArtifactGuard:
         if target == self.root or self.root in target.parents:
             raise ValueError("Export nesmí přepsat zdrojový Run Bundle.")
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
+        descriptor, temporary = tempfile.mkstemp(prefix=".artifact-export-", dir=target.parent)
+        os.close(descriptor)
+        try:
+            shutil.copyfile(source, temporary)
+            with open(temporary, "r+b") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                os.fsync(stream.fileno())
+            if digest != record["sha256"]:
+                raise ValueError("Obsah exportu neodpovídá evidovanému SHA-256.")
+            if target.exists():
+                shutil.copymode(target, temporary)
+            os.replace(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
         return target
 
 

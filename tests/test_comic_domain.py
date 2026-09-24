@@ -111,9 +111,10 @@ class WorkingClient:
 
 @pytest.fixture
 def comic(tmp_path):
+    from kajovo.comic_layout import prepare_storyboard_layout
     settings = AppSettings(comic_library_dir=str(tmp_path / "comics"), log_dir=str(tmp_path / "log"))
     client = WorkingClient()
-    service = ComicService(settings, client)
+    service = ComicService(settings, client, storyboard_layout=prepare_storyboard_layout)
     project = service.store.project("Příběh")
     service.run(service.start_bible(project))
     return service, client, project
@@ -443,7 +444,7 @@ def test_change_normalized_reference_keeps_original_metadata_bytes(comic):
 
 
 
-def test_story_script_storyboard_continuity_materializes_once(comic, monkeypatch):
+def test_story_script_storyboard_continuity_materializes_once(comic, monkeypatch, qapp):
     service, _client, project = comic
 
     values = {
