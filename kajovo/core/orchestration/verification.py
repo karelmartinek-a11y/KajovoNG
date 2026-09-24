@@ -420,6 +420,109 @@ def _stack_profile(root: Path) -> tuple[dict[str, Any], str | None]:
     }, None
 
 
+def _static_format_checks(root: Path) -> tuple[list[dict[str, Any]], str]:
+    checks: list[dict[str, Any]] = []
+    failed = False
+    unsupported = False
+    for index, path in enumerate(
+        sorted(item for item in root.rglob("*") if item.is_file()), 1
+    ):
+        raw = path.read_bytes()
+        rel = path.relative_to(root).as_posix()
+        suffix = path.suffix.lower()
+        status = "passed"
+        detail = "Formát byl deterministicky ověřen."
+        try:
+            if suffix == ".py":
+                ast.parse(raw.decode("utf-8", errors="strict"), filename=rel)
+            elif suffix == ".json":
+                json.loads(raw.decode("utf-8", errors="strict"))
+            elif suffix == ".toml":
+                tomllib.loads(raw.decode("utf-8", errors="strict"))
+            elif suffix in {".xml", ".svg"}:
+                ET.fromstring(raw)
+            elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                from PIL import Image
+                from io import BytesIO
+                with Image.open(BytesIO(raw)) as image:
+                    image.verify()
+            elif suffix in {
+                ".txt", ".md", ".csv", ".html", ".css", ".js", ".mjs", ".cjs",
+                ".ts", ".tsx", ".go", ".c", ".h", ".cpp", ".hpp", ".java",
+                ".yaml", ".yml", ".ini", ".cfg", ".rst",
+            }:
+                raw.decode("utf-8", errors="strict")
+                if suffix in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".c", ".cpp", ".java"}:
+                    status = "unsupported"
+                    detail = "UTF-8 je validní, ale syntax vyžaduje stackový verifier."
+                    unsupported = True
+            else:
+                status = "unsupported"
+                detail = "Typ souboru nemá bezpečný vestavěný parser."
+                unsupported = True
+        except Exception as exc:
+            status = "failed"
+            failed = True
+            detail = f"Parser odmítl {rel}: {type(exc).__name__}: {exc}"
+        checks.append({
+            "id": f"format-{index:04d}",
+            "criterion_id": "format_parser",
+            "kind": "deterministic",
+            "status": status,
+            "evidence_hashes": [hashlib.sha256(raw).hexdigest()],
+            "path": rel,
+            "detail": detail,
+        })
+    if not checks:
+        return [{
+            "id": "format-empty",
+            "criterion_id": "artifact_presence",
+            "kind": "deterministic",
+            "status": "failed",
+            "evidence_hashes": [],
+            "detail": "Staging neobsahuje žádný artefakt.",
+        }], "failed"
+    if failed:
+        return checks, "failed"
+    return checks, "partial" if unsupported else "passed"
+
+
+def _stack_profile(root: Path) -> tuple[dict[str, Any], str | None]:
+    paths = [item.relative_to(root).as_posix() for item in root.rglob("*") if item.is_file()]
+    suffixes = {Path(path).suffix.lower() for path in paths}
+    if ".py" in suffixes:
+        script = (
+            "import ast,pathlib,sys;"
+            "bad=[];"
+            "[(ast.parse(p.read_text(encoding='utf-8'),filename=str(p))) "
+            "for p in pathlib.Path('.').rglob('*.py')];"
+            "print('python syntax ok')"
+        )
+        return {
+            "id": "python-container-v1",
+            "commands": [["python", "-c", script]],
+            "required_checks": ["python_project_syntax"],
+        }, os.environ.get("KAJOVO_VERIFIER_PYTHON_IMAGE", "python:3.12-slim")
+    if suffixes & {".js", ".mjs", ".cjs"} and not suffixes & {".ts", ".tsx"}:
+        commands = [["node", "--check", path] for path in paths if Path(path).suffix.lower() in {".js", ".mjs", ".cjs"}]
+        return {
+            "id": "node-container-v1",
+            "commands": commands,
+            "required_checks": ["javascript_syntax"] * len(commands),
+        }, os.environ.get("KAJOVO_VERIFIER_NODE_IMAGE", "node:22-alpine")
+    if suffixes & {".ts", ".tsx"}:
+        return {
+            "id": "typescript-needs-toolchain-v1",
+            "commands": [],
+            "required_checks": ["typescript_build"],
+        }, None
+    return {
+        "id": "format-only-v1",
+        "commands": [],
+        "required_checks": ["format_parser"],
+    }, None
+
+
 def run_checks(plan: VerificationPlan, sandbox=None) -> dict[str, Any]:
     from datetime import datetime, timezone
 
