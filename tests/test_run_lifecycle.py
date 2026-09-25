@@ -59,9 +59,9 @@ def test_executor_preserves_waiting_manual_resource_without_marking_completed(tm
     import json
     from pathlib import Path
     from types import SimpleNamespace
-    from change_v2_fixtures import scenario, run
+\n    from change_v2_fixtures import run, scenario
+\n    from kajovo.core.progress import TERMINAL_RUN_STATES
     from kajovo.core.runs.executor import WORKFLOWS
-    from kajovo.core.progress import TERMINAL_RUN_STATES
     worker, client, _ = scenario(tmp_path, "GENERATE")
     monkeypatch.setitem(WORKFLOWS, "GENERATE", SimpleNamespace(execute=lambda context: {
         "mode": "GENERATE", "status": "waiting_manual_resource", "missing_deliverables": ["data.bin"]}))
