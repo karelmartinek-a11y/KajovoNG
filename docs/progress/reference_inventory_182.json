@@ -2,7 +2,7 @@
   "schema_version": 1,
   "source_pdf": "KajovoNG_Kruhova_mapa_srozumitelny_navrh_182_procesu(1).pdf",
   "source_commit": "7c0567e05e7a50890a61eac961ed0cde1722a543",
-  "notice": "Referenční návrh. Údaje nejsou potvrzením současného běhu; backend_evidence se musí ověřit ve zdrojovém kódu a testech.",
+  "notice": "Referenční návrh. backend_evidence dokládá pouze uvedenou hranici události, nikoli celý obsah navrženého kroku. Ostatní kroky nejsou potvrzením současného běhu.",
   "variant_count": 182,
   "step_count": 1284,
   "variants": [
@@ -9463,8 +9463,11 @@
             "states_and_errors": "active Chyby: unsupported/missing attachment"
           },
           "pdf_page": 774,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_INPUT: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 7,
@@ -9477,8 +9480,11 @@
             "states_and_errors": "waiting/validating Chyby: response_pending/submission_unkno wn/remote error"
           },
           "pdf_page": 775,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_RESPONSE: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 8,
@@ -9491,8 +9497,11 @@
             "states_and_errors": "completed/needs_clarification Chyby: unknown evidence; supported claim without evidence; schema error"
           },
           "pdf_page": 776,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_VALIDATION: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 9,
@@ -9597,8 +9606,11 @@
             "states_and_errors": "active Chyby: unsupported/missing attachment"
           },
           "pdf_page": 786,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_INPUT: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 7,
@@ -9625,8 +9637,11 @@
             "states_and_errors": "waiting/validating Chyby: response_pending/submission_unkno wn/remote error"
           },
           "pdf_page": 788,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_RESPONSE: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 9,
@@ -9639,8 +9654,11 @@
             "states_and_errors": "completed/needs_clarification Chyby: unknown evidence; supported claim without evidence; schema error"
           },
           "pdf_page": 789,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_VALIDATION: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 10,
@@ -9745,8 +9763,11 @@
             "states_and_errors": "active Chyby: unsupported/missing attachment"
           },
           "pdf_page": 799,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_INPUT: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 7,
@@ -9759,8 +9780,11 @@
             "states_and_errors": "waiting/validating Chyby: response_pending/submission_unkno wn/remote error"
           },
           "pdf_page": 800,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_RESPONSE: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 8,
@@ -9773,8 +9797,11 @@
             "states_and_errors": "completed/needs_clarification Chyby: unknown evidence; supported claim without evidence; schema error"
           },
           "pdf_page": 801,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_VALIDATION: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 9,
@@ -9907,8 +9934,11 @@
             "states_and_errors": "active Chyby: unsupported/missing attachment"
           },
           "pdf_page": 813,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_INPUT: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 8,
@@ -9921,8 +9951,11 @@
             "states_and_errors": "waiting/validating Chyby: response_pending/submission_unkno wn/remote error"
           },
           "pdf_page": 814,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_RESPONSE: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 9,
@@ -9935,8 +9968,11 @@
             "states_and_errors": ""
           },
           "pdf_page": 815,
-          "backend_evidence": [],
-          "verification": "unverified"
+          "backend_evidence": [
+            "kajovo/core/runs/qa.py::_run_qa — QA_VALIDATION: potvrzení po skutečné hranici zpracování",
+            "tests/test_qa_evidence_links.py::test_qa_evidence_resolves_to_supplied_sources — hranice čekání/dokončení a odmítnutí neplatných podkladů"
+          ],
+          "verification": "partial_backend_event_verified"
         },
         {
           "index": 10,
