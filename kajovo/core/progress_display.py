@@ -7,6 +7,9 @@ from dataclasses import dataclass
 
 STAGE_TITLES = {
     "RUN": "Celý běh",
+    "QA_INPUT": "Příprava podkladů k otázce",
+    "QA_RESPONSE": "Získání odpovědi",
+    "QA_VALIDATION": "Kontrola odpovědi",
     "Lokální validace": "Lokální kontrola před spuštěním",
     "Přílohy": "Kontrola vstupních příloh",
     "Diagnostika": "Sběr diagnostických podkladů",
