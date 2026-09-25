@@ -1,7 +1,6 @@
 """Recoverable conflict-safe publication from immutable staging into OUT."""
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import os
 import shutil
