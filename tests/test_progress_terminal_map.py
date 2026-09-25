@@ -1,24 +1,23 @@
+"""Koncový stav operace nesmí zpětně potvrdit neověřený krok."""
+
+import pytest
+
 from kajovo.core.progress import ProgressEvent
-from kajovo.progress_ui import ProcessInspector
+from kajovo.multiprogress import step_states
 
 
-def _state_for(inspector, title):
-    return dict(inspector._process_steps())[title]
+@pytest.mark.parametrize("terminal,visual", [
+    ("completed", "unconfirmed"), ("partial", "unconfirmed"),
+    ("failed", "error"), ("submission_unknown", "blocked"),
+    ("batch_pending", "blocked"),
+])
+def test_terminal_preserves_step_evidence(terminal, visual):
+    events = [ProgressEvent("A1", "completed"), ProgressEvent("A2", "waiting"),
+              ProgressEvent("RUN", terminal)]
+    assert step_states(events) == [("A1", "done"), ("A2", visual)]
 
 
-def test_terminal_failure_marks_last_active_macro_step_as_error(qtbot):
-    inspector = ProcessInspector("Práce na projektu", kind="GENERATE")
-    qtbot.addWidget(inspector)
-    inspector.on_event(ProgressEvent("A1", "active", source="api"))
-    inspector.on_event(ProgressEvent("RUN", "failed"))
-
-    assert _state_for(inspector, "Architektonický plán") == "error"
-
-
-def test_unknown_submission_blocks_last_active_macro_step(qtbot):
-    inspector = ProcessInspector("Práce na projektu", kind="GENERATE")
-    qtbot.addWidget(inspector)
-    inspector.on_event(ProgressEvent("A1", "waiting", source="api"))
-    inspector.on_event(ProgressEvent("RUN", "submission_unknown"))
-
-    assert _state_for(inspector, "Architektonický plán") == "blocked"
+def test_return_to_earlier_stage_uses_latest_event_as_current():
+    events = [ProgressEvent("A1", "completed"), ProgressEvent("A2", "active"),
+              ProgressEvent("A1", "repairing")]
+    assert step_states(events) == [("A1", "current"), ("A2", "unconfirmed")]

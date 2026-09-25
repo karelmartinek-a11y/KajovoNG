@@ -1,82 +1,47 @@
+"""Nová mapa smí zobrazit jen zprávy, které pracovní proces skutečně vydal."""
+
 from kajovo.core.progress import ProgressEvent
-from kajovo.progress_ui import PROCESS_PRESETS, STATE_META, ProcessInspector, infer_kind
+from kajovo.multiprogress import MultiProgressView, step_states
 
 
-def test_all_specified_progress_dialog_kinds_have_process_presets():
-    assert set(PROCESS_PRESETS) == {
-        "GENERATE",
-        "MODIFY",
-        "QA",
-        "QFILE",
-        "KASKÁDA",
-        "BATCH",
-        "FOTOGRAFIE",
-        "COMIC",
-        "ZDROJE",
-        "OBNOVA",
-        "LOKÁLNÍ",
-        "SERVIS",
-    }
-    assert all(PROCESS_PRESETS.values())
+def test_no_steps_are_invented_from_operation_title(qtbot):
+    view = MultiProgressView("Tvorba projektu")
+    qtbot.addWidget(view)
+    assert view.steps.count() == 0
+    assert view.ring.total == 0
+    view.on_event(ProgressEvent("A1", "active"))
+    assert view.steps.count() == 1
+    assert view.ring.done == 0
 
 
-def test_master_state_inventory_contains_uncertain_and_cancel_states():
-    for state in (
-        "created",
-        "preparing",
-        "running",
-        "active",
-        "waiting",
-        "repairing",
-        "response_pending",
-        "batch_pending",
-        "ready_to_import",
-        "completed",
-        "partial",
-        "files_complete_unverified",
-        "cancelling",
-        "cancelled",
-        "failed",
-        "submission_unknown",
-        "corrupt_state",
-        "unknown",
-        "expired",
-        "blocked",
-        "skipped",
-    ):
-        assert state in STATE_META
+def test_completion_requires_event_for_same_stage(qtbot):
+    view = MultiProgressView()
+    qtbot.addWidget(view)
+    view.on_event(ProgressEvent("A1", "completed"))
+    view.on_event(ProgressEvent("A2", "waiting", source="api", provider_state="in_progress"))
+    assert view.ring.done == 1
+    assert view.ring.total == 2
+    assert "odpověď služby" in view.activity_label.text()
+    assert "vzdálené služby" in view.provider_label.text()
+    view.on_event(ProgressEvent("RUN", "failed"))
+    assert step_states(view.events) == [("A1", "done"), ("A2", "error")]
+    assert view.ring.done == 1
 
 
-def test_kind_is_derived_from_real_domain_stages():
-    assert infer_kind(events=[ProgressEvent("A1")]) == "GENERATE"
-    assert infer_kind(events=[ProgressEvent("B2")]) == "MODIFY"
-    assert infer_kind("Komiks · panelová dávka") == "COMIC"
-    assert infer_kind("Nahrávání zdrojů") == "ZDROJE"
+def test_unknown_submission_stays_unconfirmed(qtbot):
+    view = MultiProgressView()
+    qtbot.addWidget(view)
+    view.on_event(ProgressEvent("A1", "waiting", source="api"))
+    view.on_event(ProgressEvent("RUN", "submission_unknown"))
+    assert step_states(view.events) == [("A1", "blocked")]
+    assert view.ring.done == 0
+    assert "znovu neposíláme" in view.activity_label.text()
+    assert "Odeslání" in view.phase_label.text()
 
 
-def test_measured_units_are_preserved_after_terminal_event(qtbot):
-    inspector = ProcessInspector("Převod")
-    qtbot.addWidget(inspector)
-    inspector.on_event(ProgressEvent("Soubory", completed=3, total=8, unit="souborů"))
-    inspector.on_event(ProgressEvent("RUN", "partial"))
-    assert inspector.unit_progress.maximum() == 8
-    assert inspector.unit_progress.value() == 3
-    assert "3 z 8" in inspector.progress_note.text()
-
-
-def test_batch_keeps_provider_and_local_state_separate(qtbot):
-    inspector = ProcessInspector("BATCH", kind="BATCH")
-    qtbot.addWidget(inspector)
-    inspector.on_event(
-        ProgressEvent(
-            "BATCH",
-            "waiting",
-            source="batch_api",
-            provider_state="in_progress",
-            detail="Čekám na vzdálenou dávku",
-        )
-    )
-    inspector.show()
-    assert inspector.parallel.isVisible()
-    assert "Vzdálené zpracování" in inspector.provider_label.text()
-    assert inspector.stage_state_label.text() == "Čeká na odpověď služby"
+def test_provider_state_does_not_bleed_into_next_step(qtbot):
+    view = MultiProgressView()
+    qtbot.addWidget(view)
+    view.on_event(ProgressEvent("A1", "waiting", provider_state="in_progress"))
+    view.on_event(ProgressEvent("A2", "preparing"))
+    assert view.provider_label.text() == ""

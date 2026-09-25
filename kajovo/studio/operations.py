@@ -6,13 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QDialog, QListWidget, QListWidgetItem
+from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtWidgets import QDialog, QListWidget, QListWidgetItem
 
 from kajovo.core.progress import ProgressClock, ProgressEvent
 from kajovo.core.user_errors import UserError, describe_error
-from kajovo.progress_ui import DIALOG_STYLE, ProcessInspector
-from .components import BranchMark, DetailDialog, action, actions, caption, vertical
+from kajovo.multiprogress_dialog import MultiProgressDialog
+from .components import action, actions, caption, vertical
 
 
 class Cancelled(Exception):
@@ -101,151 +101,11 @@ class Operation:
     identifier: str
     title: str
     worker: QThread
-    dialog: "OperationDialog | None"
+    dialog: "MultiProgressDialog | None"
     result: object = None
     error: UserError | None = None
     terminal: str = ""
     events: list = field(default_factory=list)
-
-
-class OperationDialog(QDialog):
-    """Studio progress dialog používající stejný procesní inspektor jako desktop."""
-
-    def __init__(self, title, parent=None, reduced_motion=False):
-        super().__init__(parent)
-        self.setObjectName("operation.progress")
-        self.setWindowTitle(title)
-        self.resize(1080, 740)
-        self.setMinimumSize(760, 560)
-        self.setStyleSheet(DIALOG_STYLE)
-        self.clock = ProgressClock()
-        self.events = []
-        self.active = True
-        self.reduced_motion = reduced_motion
-        self.stop_callback = None
-        self.error = None
-        self.result = None
-        root = vertical(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        self.mark = BranchMark()
-        self.mark.hide()
-        self.inspector = ProcessInspector(title)
-        root.addWidget(self.inspector, 1)
-        self.summary = self.inspector.activity_label
-        self.stage = self.inspector.phase_label
-        self.source = self.inspector.source_label
-        self.plan = self.inspector.meta_label
-        self.next_step = self.inspector.next_label
-        self.progress = self.inspector.unit_progress
-        self.counts = self.inspector.progress_note
-        self.times = self.inspector.time_label
-        self.log = self.inspector.log
-        self.notification = QCheckBox("Oznámit výsledek elektronickou poštou")
-        self.notification.setObjectName("operation.notification")
-        self.notification.hide()
-        self.stop = action("operation.stop", "Zastavit", self.request_stop, "danger")
-        self.stop.setEnabled(False)
-        self.details = action("operation.details", "Podrobnosti chyby", self.show_details)
-        self.details.hide()
-        self.result_button = action("operation.result", "Výsledek", self.show_result)
-        self.result_button.hide()
-        self.close_button = action("operation.hide", "Skrýt průběh", self.hide)
-        self.close_button.setAutoDefault(False)
-        controls = actions(
-            self.notification,
-            self.close_button,
-            self.stop,
-            self.details,
-            self.result_button,
-        )
-        controls.setStyleSheet(DIALOG_STYLE)
-        root.addWidget(controls)
-        self.timer = QTimer(self)
-        self.timer.setInterval(1000)
-        self.timer.timeout.connect(self.tick)
-        self.timer.start()
-
-    def showEvent(self, event):
-        bounds = self.screen().availableGeometry()
-        self.resize(min(self.width(), bounds.width()), min(self.height(), bounds.height()))
-        super().showEvent(event)
-        self.mark.set_running(self.active, self.reduced_motion)
-
-    def on_event(self, event):
-        self.events.append(event)
-        self.events[:] = self.events[-2000:]
-        self.clock.update(event)
-        self.inspector.on_event(event, self.clock)
-        if event.stage == "RUN" and event.state in STATES and event.state not in {"active", "waiting"}:
-            self.summary.setText(STATES[event.state])
-        self.tick()
-
-    def _refresh_plan(self):
-        self.inspector.refresh(self.clock)
-
-    def tick(self):
-        self.inspector.refresh(self.clock)
-
-    def request_stop(self):
-        if self.active and self.stop_callback:
-            self.stop.setEnabled(False)
-            event = ProgressEvent("RUN", "cancelling", detail="Čekám na bezpečné ukončení operace")
-            self.events.append(event)
-            self.clock.update(event)
-            self.inspector.on_event(event, self.clock)
-            self.stop_callback()
-
-    def finish(self, state, error=None):
-        self.active = False
-        self.error = error
-        self.timer.stop()
-        self.mark.set_running(False)
-        self.stop.setEnabled(False)
-        self.stop.hide()
-        self.close_button.setText("OK")
-        self.close_button.setAccessibleName("OK")
-        self.close_button.setDefault(True)
-        self.close_button.setFocus()
-        self.notification.setEnabled(False)
-        event = ProgressEvent("RUN", state, detail=error.message if error else STATES.get(state, state))
-        self.events.append(event)
-        self.clock.update(event)
-        self.inspector.on_event(event, self.clock)
-        if self.progress.maximum() == 0:
-            self.progress.hide()
-        elif self.counts.text() and self.progress.isVisible():
-            self.counts.setText("Poslední doložený postup: " + self.counts.text())
-        self.details.setVisible(error is not None)
-        self.result_button.setVisible(self.result is not None)
-        self.tick()
-
-    def show_details(self):
-        if self.error:
-            DetailDialog(
-                "Podrobnosti chyby",
-                self.error.message,
-                self,
-                self.error.detail + "\n\n" + self.error.next_step,
-            ).exec()
-
-    def show_result(self):
-        from dataclasses import asdict, is_dataclass
-
-        value = asdict(self.result) if is_dataclass(self.result) else self.result
-        DetailDialog(
-            "Výsledek operace",
-            "Úplné vrácené podklady jsou dostupné v technických podrobnostech.",
-            self,
-            value,
-        ).exec()
-
-    def closeEvent(self, event):
-        if self.active:
-            event.ignore()
-            self.hide()
-        else:
-            super().closeEvent(event)
 
 
 class Operations(QObject):
@@ -326,7 +186,7 @@ class Operations(QObject):
             record.result = None
             worker.deleteLater()
             if record.error:
-                dialog = record.dialog or OperationDialog(title, self.parent(), self.reduced_motion)
+                dialog = record.dialog or MultiProgressDialog(title, self.parent(), self.reduced_motion)
                 dialog.finish("failed", record.error)
                 dialog.setAttribute(Qt.WA_DeleteOnClose)
                 dialog.show()
@@ -366,6 +226,9 @@ class Operations(QObject):
             dialog.clock = ProgressClock()
             dialog.events = []
             dialog.inspector.events = []
+            dialog.inspector.steps.clear()
+            dialog.inspector.ring.set_progress(0, 0, "Čekáme na zprávu")
+            dialog.inspector.log.clear()
             dialog.active = True
             dialog.error = None
             dialog.result = None
@@ -381,13 +244,11 @@ class Operations(QObject):
             dialog.summary.setText("Ověřuji aktuální stav")
             dialog.counts.clear()
             dialog.stage.setText("Čekám na zprávu služby")
-            dialog.progress.setRange(0, 0)
-            dialog.progress.show()
             dialog.timer.start()
             dialog.mark.set_running(dialog.isVisible(), self.reduced_motion)
             dialog.inspector.refresh(dialog.clock)
         else:
-            dialog = OperationDialog(title, self.parent(), self.reduced_motion)
+            dialog = MultiProgressDialog(title, self.parent(), self.reduced_motion)
         cfg = getattr(worker, "cfg", None)
         if cfg is not None:
             dialog.inspector.set_context(
@@ -407,7 +268,7 @@ class Operations(QObject):
         if hasattr(worker, "progress_event"):
             worker.progress_event.connect(lambda event: self._event(record, event))
         if hasattr(worker, "status"):
-            worker.status.connect(dialog.summary.setText)
+            worker.status.connect(dialog.inspector.append_log)
         if hasattr(worker, "logline"):
             worker.logline.connect(dialog.inspector.append_log)
         success = worker.value if isinstance(worker, Task) else worker.finished_ok
@@ -535,7 +396,11 @@ class Operations(QObject):
             if record is None:
                 return
             if record.dialog is None:
-                record.dialog = OperationDialog(record.title, self.parent(), self.reduced_motion)
+                record.dialog = MultiProgressDialog(record.title, self.parent(), self.reduced_motion)
             dialog = record.dialog
             dialog.show()
             dialog.raise_()
+
+
+# Kompatibilita pro externí volání; původní implementace dialogu byla odstraněna.
+OperationDialog = MultiProgressDialog
