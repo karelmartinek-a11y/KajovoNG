@@ -54,7 +54,7 @@ def validate_live_continuation(value, *, target_run_id=None):
         except ValueError as exc:
             raise ContractError(f"Continue LIVE: neplatné {field}.") from exc
     if (value["source_run_id"] == value["target_run_id"]
-            or target_run_id is not None and value["target_run_id"] != target_run_id):
+            or (target_run_id is not None and value["target_run_id"] != target_run_id)):
         raise ContractError("Continue LIVE: manifest neodpovídá lineage potomka.")
     for field in fields - {"version", "source_run_id", "target_run_id", "pending_hash", "response_id"}:
         if not isinstance(value[field], dict):
