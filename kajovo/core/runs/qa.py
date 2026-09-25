@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from ..contracts import ContractError, extract_text_from_response
 from ..orchestration.preparation import PreparationBlocked
 from ..openai_client import OpenAIClient
+from ..progress import ProgressEvent
 from ..safe_config import safe_ui_state
 from ..structured_output import OutputContractError, qa_answer_format, validate_output
 from ..orchestration.contracts import parse_json_strict
@@ -21,7 +22,7 @@ def _run_qa(
     diag_file_ids: list[str],
     base_prev_id: str | None,
 ) -> dict[str, Any]:
-    self._set(10, 0, "QA: připravuji ověřitelný dotaz…", stage="QA")
+    self._set(10, 0, "Připravuji podklady k otázce…", stage="QA_INPUT")
     note = self._in_dir_fallback_note()
     input_text = self.cfg.prompt or ""
     if self.cfg.recovery_instruction:
@@ -72,6 +73,10 @@ def _run_qa(
             "conversation_continuity": bool(self.cfg.qa_continue_conversation),
         },
     )
+    self.progress_event.emit(ProgressEvent(
+        "QA_INPUT", "completed", detail="Podklady a požadavek jsou připravené.",
+        source="validation",
+    ))
     self._log_api_action(
         "QA",
         "send",
@@ -84,6 +89,9 @@ def _run_qa(
             "contract": "QA_ANSWER_V2",
         },
     )
+    self.progress_event.emit(ProgressEvent(
+        "QA_RESPONSE", "waiting", detail="Čekáme na odpověď služby.", source="api",
+    ))
     try:
         resp = self._create_response(client, payload)
         parsed = validate_output(resp, payload)
@@ -110,6 +118,14 @@ def _run_qa(
                 "QA_ANSWER_V2: podložené tvrzení nemá žádné podklady."
             ) from exc
         raise
+    self.progress_event.emit(ProgressEvent(
+        "QA_RESPONSE", "completed", detail="Odpověď dorazila a má požadovanou podobu.",
+        source="api", response_id=str(resp.get("id") or ""),
+    ))
+    self.progress_event.emit(ProgressEvent(
+        "QA_VALIDATION", "active", detail="Ověřuji tvrzení a jejich podklady.",
+        source="validation",
+    ))
     result = parsed.get("result")
     if not isinstance(result, dict):
         raise ContractError("QA_ANSWER_V2: chybí result.")
@@ -164,6 +180,10 @@ def _run_qa(
             "response_id": str(resp.get("id") or ""),
         },
     )
+    self.progress_event.emit(ProgressEvent(
+        "QA_VALIDATION", "completed", detail="Tvrzení i jejich podklady jsou ověřené.",
+        source="validation",
+    ))
     self._log_api_action(
         "QA",
         "receive",
