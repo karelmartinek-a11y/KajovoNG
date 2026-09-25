@@ -4,12 +4,12 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from ..contracts import ContractError, extract_text_from_response
-from ..orchestration.preparation import PreparationBlocked
 from ..openai_client import OpenAIClient
+from ..orchestration.contracts import parse_json_strict
+from ..orchestration.preparation import PreparationBlocked
 from ..progress import ProgressEvent
 from ..safe_config import safe_ui_state
 from ..structured_output import OutputContractError, qa_answer_format, validate_output
-from ..orchestration.contracts import parse_json_strict
 from ..utils import ts_code
 
 if TYPE_CHECKING:
