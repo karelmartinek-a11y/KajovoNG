@@ -42,23 +42,6 @@ def response_batch_submit_payload(
     }
 
 
-def response_batch_submit_payload(
-    input_file_id: str,
-    *,
-    endpoint: str = "/v1/responses",
-    completion_window: str = "24h",
-) -> dict[str, Any]:
-    if not isinstance(input_file_id, str) or not input_file_id:
-        raise ValueError("Pracovní BATCH vyžaduje neprázdné input_file_id.")
-    if endpoint != "/v1/responses" or completion_window != "24h":
-        raise ValueError("Program podporuje pouze Batch Responses s oknem 24h.")
-    return {
-        "input_file_id": input_file_id,
-        "endpoint": endpoint,
-        "completion_window": completion_window,
-    }
-
-
 def submit_verified_batch(
     client,
     input_file_id: str,
