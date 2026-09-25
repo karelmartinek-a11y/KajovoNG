@@ -430,6 +430,7 @@ class CascadeRunExecutor:
 
     def _archive_dynamic_inputs(self, step, context):
         """Zmrazí závislé legacy přílohy až nad výsledky jejich producentů."""
+        assert self.logger is not None
         for index, expression in enumerate(step.files_local_paths or []):
             if not PLACEHOLDER_RE.search(expression):
                 continue
@@ -456,6 +457,7 @@ class CascadeRunExecutor:
         self.logger.update_state({"cascade_input_artifacts": self._frozen_cascade_inputs})
 
     def _frozen_input_path(self, step_id, field, input_id):
+        assert self.logger is not None
         for row in getattr(self, "_frozen_cascade_inputs", []):
             if (row["step_id"], row["field"], row["input_id"]) != (step_id, field, input_id):
                 continue
@@ -1053,6 +1055,7 @@ class CascadeRunExecutor:
         self._primary_responses = copy.deepcopy(cache.get("primary_responses") or {})
         if not self.cfg.resume_source_dir and state.get("run_id"):
             self.cfg.resume_source_dir = str(Path(self.settings.log_dir) / state["run_id"])
+        assert self.logger is not None
         self.logger._cascade_resume_root = self.cfg.resume_source_dir
         signatures = cache.get("step_signatures", {})
         if not isinstance(signatures, dict):
