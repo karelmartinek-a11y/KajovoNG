@@ -51,8 +51,8 @@ from .orchestration.run_config import validate_run_config_v2
 from .orchestration.work_order import freeze_order
 from .progress import ProgressEvent
 from .request_rules import validate_response_payload
-from .runs.ports import EventPort
 from .runs.locking import ExecutionLock
+from .runs.ports import EventPort
 from .structured_output import (
     OutputContractError,
     resolve_schema,
@@ -634,9 +634,9 @@ class CascadeRunExecutor:
 
     def _schema_for_step(self, step: CascadeStep) -> dict[str, Any] | None:
         if step.deterministic:
-            if any(output.kind == "file" and output.file_type in {"xlsx", "docx", "pdf", "pptx", "zip"} for output in step.outputs):
-                if "code_interpreter" not in model_spec(step.model).get("features", []):
-                    raise ContractError(f"{step.model}: výroba dokumentů vyžaduje Code Interpreter.")
+            if (any(output.kind == "file" and output.file_type in {"xlsx", "docx", "pdf", "pptx", "zip"} for output in step.outputs)
+                    and "code_interpreter" not in model_spec(step.model).get("features", [])):
+                raise ContractError(f"{step.model}: výroba dokumentů vyžaduje Code Interpreter.")
             return runtime_schema_for_step(step)
         if step.output_type != "json":
             return None
