@@ -1,6 +1,6 @@
 # Pokrytí kruhové mapy a zdrojové důkazy
 
-Referenční seznam [182 variant](reference_inventory_182.json) je odvozen z přiloženého grafického návrhu. Obsahuje 1 284 kroků. Každý krok je označen jako neověřený, dokud jej nepotvrdí zdrojová funkce, návratový stav a test. Referenční seznam není důkazem, že backend vydává událost.
+Referenční seznam [182 variant](reference_inventory_182.json) je odvozen z přiloženého grafického návrhu. Obsahuje 1 284 kroků. U dvanácti kroků variant 040–043 je doložena dílčí hranice backendové události; ostatní kroky zůstávají neověřené. Záznam o události nepotvrzuje všechny části navrženého kroku. Referenční seznam není důkazem, že backend vydává událost.
 
 ## Společný začátek projektových běhů a odpovědi na otázku
 
@@ -25,4 +25,4 @@ Tyto kroky jsou popsány u variant 001, 002 a 040–043; úplná platnost stejn�
 | Odpověď vyžaduje upřesnění (042) | `PreparationBlocked`, poté `RunExecutor.run` uloží `needs_clarification` | Samostatná událost kroku dosud chybí. |
 | Příprava přiložených souborů (043) | `prepare_runtime` a přílohové funkce | Samostatná událost kroku dosud chybí. |
 
-Terminální `RUN` znamená výsledek místního běhu; nesmí zpětně potvrdit nedokončené kroky. Současné okno stále zobrazuje jen ohlášené etapy, takže plný jmenovatel 9/10 kroků ještě není zaveden. Všech 182 variant zůstává otevřených do plného sémantického auditu, testů a vizuální kontroly.
+Terminální `RUN` znamená výsledek místního běhu; nesmí zpětně potvrdit nedokončené kroky. Současné okno stále zobrazuje jen ohlášené etapy, takže plný jmenovatel 9/10 kroků ještě není zaveden. Všech 182 variant zůstává otevřených do plného sémantického auditu, testů a vizuální kontroly; dílčí důkaz hranice pro dvanáct kroků uzavření varianty neznamená.
