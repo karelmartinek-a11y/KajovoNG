@@ -223,7 +223,7 @@ def read_evidence(root):
     source_pack = _artifact(root, "manifests/source_pack_v1")
     if digest(source_pack) != state.get("source_pack_hash"):
         raise ContractError("Continue LIVE: SourcePack má neplatný otisk.")
-    source_upload_ids = {}
+    source_upload_ids: dict[str, str] = {}
     index = parse_json_strict((root / "artifacts" / "index.json").read_text("utf-8"))
     for name in index["entries"]:
         if name.startswith("manifests/source_delivery_"):
