@@ -35,11 +35,11 @@ def _run_v3_modify_production(
     supports_fs: bool,
     vs_id: str | None,
 ) -> dict[str, Any]:
+    from ..orchestration.preparation import _inventory
     from ..orchestration.resource_delivery import (
         dispatch_resource_target,
         prepare_production_scope,
     )
-    from ..orchestration.preparation import _inventory
     selected, completed, excluded = prepare_production_scope(self, struct)
     files_by_path = {
         str(row["path"]): row for row in struct["spine"]["files"]
@@ -324,7 +324,7 @@ def _run_v3_modify_production(
 
 def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[str], base_prev_id: str | None) -> dict[str, Any]:
     (root, items, up_items, tools, supports_fs, vs_id,
-     b_text, b_input_files, b_input_images) = prepare_modify_inputs(self, client, diag_file_ids)
+     _b_text, b_input_files, b_input_images) = prepare_modify_inputs(self, client, diag_file_ids)
     plan, struct, resp2_id = prepare_delivery(
         self, client, "MODIFY", base_prev_id,
         {"recovery_instruction": self.cfg.recovery_instruction,
