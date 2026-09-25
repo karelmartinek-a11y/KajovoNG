@@ -6,7 +6,6 @@ import pytest
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QWidget
 
-from kajovo.core.progress import ProgressEvent
 from kajovo.core.user_errors import describe_error
 from kajovo.studio.operations import Operations
 
