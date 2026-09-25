@@ -16,7 +16,6 @@ from kajovo.core.model_capabilities import ModelCapabilitiesCache
 from kajovo.core.runs.config import UiRunConfig
 from kajovo.studio.workers.run_worker import RunWorker
 from kajovo.core.request_rules import validate_run_options
-from kajovo.core.orchestration.contracts import parse_json_strict
 from kajovo.core.runlog import RunLogger
 from kajovo.core.utils import atomic_write_text, new_run_id, validate_relative_path
 from .components import Form, PathInput, action, actions, caption, panel, scroll, vertical
