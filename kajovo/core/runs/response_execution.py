@@ -354,6 +354,8 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
 def retrieve_inherited_response(self: RunContext, client):
     """První síťová operace Continue používá přesný původní payload a Response ID."""
     journal = self._response_journal
+    if journal is None:
+        raise ContractError("Continue LIVE: chybí žurnál odpovědi.")
     evidence = journal.continuation
     entry = journal.entries[evidence["pending_hash"]]
     order = journal.inherited_order(entry["payload"])

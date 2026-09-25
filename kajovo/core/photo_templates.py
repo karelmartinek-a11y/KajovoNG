@@ -8,7 +8,6 @@ from pathlib import Path
 import uuid
 
 from .utils import atomic_write_text
-from .orchestration.contracts import parse_json_strict
 
 SCHEMA_VERSION = 1
 

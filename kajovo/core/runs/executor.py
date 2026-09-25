@@ -17,11 +17,13 @@ from ..openai_client import OpenAIClient
 from ..openai_transport import SubmissionOutcomeUnknown
 from ..orchestration.authorization import create_execution_authorization
 from ..orchestration.contracts import canonical_sha256
+from ..orchestration.preparation import PreparationBlocked
 from ..orchestration.publish import (
     publish_staged_run_already_locked as publish_staged_run,
+)
+from ..orchestration.publish import (
     recover_publish_journal_already_locked as recover_publish_journal,
 )
-from ..orchestration.preparation import PreparationBlocked
 from ..orchestration.repository import repository_for_logger
 from ..orchestration.run_config import build_run_config_v2, run_scope_hash
 from ..orchestration.source_pack import freeze_run_sources, source_context
@@ -316,8 +318,9 @@ class RunExecutor(RunContext):
                     self.log.exception("response", e)
                 except Exception as evidence_error:
                     logging.getLogger(__name__).warning("Zápis příčiny selhal: %s", type(evidence_error).__name__)
-                from ..user_errors import describe_error
                 from dataclasses import asdict
+
+                from ..user_errors import describe_error
                 failure = describe_error(e)
                 self.log.update_state({"failure_detail": asdict(failure)})
                 self.failure_detail.emit(failure)

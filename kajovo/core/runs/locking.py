@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
+from functools import wraps
 from pathlib import Path
 from typing import Any, BinaryIO
-from functools import wraps
 
 
 def locked_run_operation(function):

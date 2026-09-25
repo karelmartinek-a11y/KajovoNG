@@ -2,7 +2,6 @@
 import pytest
 
 from change_v2_fixtures import run, scenario
-from kajovo.core.progress import ProgressEvent
 
 
 @pytest.mark.parametrize("mode,prefix", [("GENERATE", "A"), ("MODIFY", "B")])

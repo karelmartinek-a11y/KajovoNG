@@ -51,8 +51,8 @@ from .orchestration.run_config import validate_run_config_v2
 from .orchestration.work_order import freeze_order
 from .progress import ProgressEvent
 from .request_rules import validate_response_payload
-from .runs.ports import EventPort
 from .runs.locking import ExecutionLock
+from .runs.ports import EventPort
 from .structured_output import (
     OutputContractError,
     resolve_schema,
@@ -430,6 +430,7 @@ class CascadeRunExecutor:
 
     def _archive_dynamic_inputs(self, step, context):
         """Zmrazí závislé legacy přílohy až nad výsledky jejich producentů."""
+        assert self.logger is not None
         for index, expression in enumerate(step.files_local_paths or []):
             if not PLACEHOLDER_RE.search(expression):
                 continue
@@ -456,6 +457,7 @@ class CascadeRunExecutor:
         self.logger.update_state({"cascade_input_artifacts": self._frozen_cascade_inputs})
 
     def _frozen_input_path(self, step_id, field, input_id):
+        assert self.logger is not None
         for row in getattr(self, "_frozen_cascade_inputs", []):
             if (row["step_id"], row["field"], row["input_id"]) != (step_id, field, input_id):
                 continue
@@ -634,9 +636,9 @@ class CascadeRunExecutor:
 
     def _schema_for_step(self, step: CascadeStep) -> dict[str, Any] | None:
         if step.deterministic:
-            if any(output.kind == "file" and output.file_type in {"xlsx", "docx", "pdf", "pptx", "zip"} for output in step.outputs):
-                if "code_interpreter" not in model_spec(step.model).get("features", []):
-                    raise ContractError(f"{step.model}: výroba dokumentů vyžaduje Code Interpreter.")
+            if (any(output.kind == "file" and output.file_type in {"xlsx", "docx", "pdf", "pptx", "zip"} for output in step.outputs)
+                    and "code_interpreter" not in model_spec(step.model).get("features", [])):
+                raise ContractError(f"{step.model}: výroba dokumentů vyžaduje Code Interpreter.")
             return runtime_schema_for_step(step)
         if step.output_type != "json":
             return None
@@ -1053,6 +1055,7 @@ class CascadeRunExecutor:
         self._primary_responses = copy.deepcopy(cache.get("primary_responses") or {})
         if not self.cfg.resume_source_dir and state.get("run_id"):
             self.cfg.resume_source_dir = str(Path(self.settings.log_dir) / state["run_id"])
+        assert self.logger is not None
         self.logger._cascade_resume_root = self.cfg.resume_source_dir
         signatures = cache.get("step_signatures", {})
         if not isinstance(signatures, dict):
