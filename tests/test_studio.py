@@ -221,7 +221,7 @@ def test_photo_batch_is_not_done_before_local_download(studio, qtbot):
     result = SimpleNamespace(batch_id="batch_test", status="completed")
     record = studio.operations.start("Fotografie", lambda task: result, popup=False)
     qtbot.waitUntil(lambda: bool(record.terminal))
-    assert record.terminal == "batch_pending"
+    assert record.terminal == "ready_to_import"
     assert record.dialog.result is result
 
 

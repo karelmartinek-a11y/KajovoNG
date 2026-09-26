@@ -292,7 +292,8 @@ class MultiProgressView(QWidget):
                 self.unit_progress.setValue(completed)
                 self.unit_progress.setFormat(f"{completed} z {total} {measurement.unit}")
                 self.unit_progress.show()
-                note += f" Poslední doložený počet: {step_name(measurement.stage)}."
+                note += (f" Poslední doložený počet: {completed} z {total} "
+                         f"{measurement.unit}; krok {step_name(measurement.stage)}.")
             else:
                 self.unit_progress.hide()
                 note += f" Potvrzený údaj procesu: {completed} z {total} {measurement.unit}."
