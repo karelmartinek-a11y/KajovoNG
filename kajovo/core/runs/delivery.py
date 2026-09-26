@@ -284,6 +284,7 @@ def save_out_files(
         staged=combined_staged,
         dry_run=dry_run,
     )
+    context.progress_emit(ProgressEvent("Ukládání", "completed", source="disk"))
     return {
         "saved": [],
         "staged": combined_staged,

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..contracts import ContractError
 from ..openai_client import OpenAIClient
+from ..progress import ProgressEvent
 from ..orchestration.work_order import freeze_order
 from ..request_rules import uses_reasoning_defaults
 from ..safe_config import safe_ui_state
@@ -163,6 +164,7 @@ def _run_qfile(
                 "status": "qfile_plan_ready",
             }
         )
+        self.progress_event.emit(ProgressEvent("QFILE_PLAN", "completed", source="validation"))
         return {
             "mode": "QFILE",
             "status": "qfile_plan_ready",
@@ -335,6 +337,7 @@ def _run_qfile(
             "qfile_work_order_hash": order.order_hash,
         }
     )
+    self.progress_event.emit(ProgressEvent("QFILE", "completed", source="validation"))
     return {
         "mode": "QFILE",
         "status": "files_complete_unverified",

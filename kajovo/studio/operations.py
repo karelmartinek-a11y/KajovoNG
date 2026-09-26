@@ -9,9 +9,9 @@ from uuid import uuid4
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import QDialog, QListWidget, QListWidgetItem
 
-from kajovo.core.progress import ProgressClock, ProgressEvent
+from kajovo.core.progress import TERMINAL_RUN_STATES, ProgressEvent
 from kajovo.core.user_errors import UserError, describe_error
-from kajovo.multiprogress_dialog import MultiProgressDialog
+from .progress_dialog import MultiProgressDialog
 from .components import action, actions, caption, vertical
 
 
@@ -39,10 +39,27 @@ class Task(QThread):
 
     def run(self):
         try:
-            self.value.emit(self.function(self))
+            self.progress_event.emit(ProgressEvent("PLAN", planned_steps=("OPERATION",)))
+            self.progress_event.emit(ProgressEvent("OPERATION"))
+            result = self.function(self)
+            status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+            step_status = status if status in {
+                "failed", "error", "corrupt_state", "expired", "cancelled", "stopped",
+                "submission_unknown", "response_pending", "partial", "unknown",
+            } else "completed"
+            self.progress_event.emit(ProgressEvent("OPERATION", step_status))
+            self.value.emit(result)
         except Cancelled:
             self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
         except Exception as error:
+            from kajovo.core.response_journal import ResponseCancelled, ResponsePending, SubmissionUnknown
+            from kajovo.core.openai_transport import SubmissionOutcomeUnknown
+            if isinstance(error, ResponsePending):
+                self.progress_event.emit(ProgressEvent("RUN", "response_pending"))
+            elif isinstance(error, (SubmissionUnknown, SubmissionOutcomeUnknown)):
+                self.progress_event.emit(ProgressEvent("RUN", "submission_unknown"))
+            elif isinstance(error, ResponseCancelled) or getattr(error, "code", "") == "stopped":
+                self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
             self.failure.emit(describe_error(error))
 
 
@@ -106,6 +123,7 @@ class Operation:
     error: UserError | None = None
     terminal: str = ""
     events: list = field(default_factory=list)
+    result_received: bool = False
 
 
 class Operations(QObject):
@@ -223,30 +241,7 @@ class Operations(QObject):
             raise ValueError("Operace s tímto identifikátorem již existuje.")
         if previous:
             dialog = previous.dialog
-            dialog.clock = ProgressClock()
-            dialog.events = []
-            dialog.inspector.events = []
-            dialog.inspector.steps.clear()
-            dialog.inspector.ring.set_progress(0, 0, "Čekáme na zprávu")
-            dialog.inspector.log.clear()
-            dialog.active = True
-            dialog.error = None
-            dialog.result = None
-            dialog.result_button.hide()
-            dialog.stop_callback = None
-            dialog.stop.setEnabled(False)
-            dialog.stop.show()
-            dialog.close_button.setText("Skrýt průběh")
-            dialog.close_button.setAccessibleName("Skrýt průběh")
-            dialog.close_button.setDefault(False)
-            dialog.notification.setEnabled(True)
-            dialog.details.hide()
-            dialog.summary.setText("Ověřuji aktuální stav")
-            dialog.counts.clear()
-            dialog.stage.setText("Čekám na zprávu služby")
-            dialog.timer.start()
-            dialog.mark.set_running(dialog.isVisible(), self.reduced_motion)
-            dialog.inspector.refresh(dialog.clock)
+            dialog.restart(title)
         else:
             dialog = MultiProgressDialog(title, self.parent(), self.reduced_motion)
         cfg = getattr(worker, "cfg", None)
@@ -277,7 +272,11 @@ class Operations(QObject):
             if isinstance(worker, Task)
             else getattr(worker, "failure_detail", worker.finished_err)
         )
-        success.connect(lambda value: setattr(record, "result", value))
+        def accept_result(value):
+            record.result = value
+            record.result_received = True
+
+        success.connect(accept_result)
         failure.connect(
             lambda error: setattr(
                 record,
@@ -315,26 +314,46 @@ class Operations(QObject):
         terminal_events = [
             e.state
             for e in record.events
-            if e.stage == "RUN" and e.state in STATES and e.state not in {"active", "waiting"}
+            if e.stage == "RUN" and e.state in TERMINAL_RUN_STATES
         ]
         result_status = record.result.get("status") if isinstance(record.result, dict) else None
         if isinstance(record.result, dict) and record.result.get("batch_id") and not result_status:
             result_status = "batch_pending"
-        elif getattr(record.result, "batch_id", ""):
+        elif hasattr(record.result, "batch_id"):
             status = getattr(record.result, "status", "")
             result_status = {
                 "downloaded": "completed",
                 "partial": "partial",
                 "failed": "failed",
                 "cancelled": "cancelled",
-            }.get(status, "batch_pending")
+                "expired": "expired",
+                "submission_unknown": "submission_unknown",
+                "completed": "ready_to_import",
+                "cancelling": "cancelling",
+            }.get(status, "batch_pending" if getattr(record.result, "batch_id", "") else "unknown")
+        if result_status and result_status not in STATES and result_status not in TERMINAL_RUN_STATES:
+            result_status = "unknown"
         record.terminal = (
-            "failed"
+            terminal_events[-1]
+            if terminal_events and terminal_events[-1] in {
+                "submission_unknown", "response_pending", "cancelled", "stopped"
+            }
+            else "failed"
             if record.error
-            else (terminal_events[-1] if terminal_events else result_status or "completed")
+            else result_status
+            if result_status in {"failed", "error", "corrupt_state", "expired", "partial",
+                                 "submission_unknown", "response_pending", "batch_pending"}
+            else (terminal_events[-1] if terminal_events else result_status or
+                  ("completed" if record.result_received else "unknown"))
         )
+        if not record.result_received and record.terminal in {
+            "completed", "closed", "dry_run", "plan_ready", "qfile_plan_ready",
+            "files_complete_unverified", "completed_unverified",
+        }:
+            record.terminal = "unknown"
         if (
             not record.error
+            and record.result_received
             and receive
             and record.terminal not in {"cancelled", "response_pending", "submission_unknown"}
         ):
@@ -402,5 +421,5 @@ class Operations(QObject):
             dialog.raise_()
 
 
-# Kompatibilita pro externí volání; původní implementace dialogu byla odstraněna.
+# Veřejné jméno používané integracemi studia.
 OperationDialog = MultiProgressDialog

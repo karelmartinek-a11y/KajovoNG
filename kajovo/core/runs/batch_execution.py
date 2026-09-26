@@ -60,6 +60,7 @@ def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
 
 def _submit_generate_batch(self: RunContext, client, manifest):
     from ..orchestration.repository import repository_for_logger
+    self.progress_event.emit(ProgressEvent("BATCH_SUBMIT", source="batch_api"))
     current_state = load_run_state(self.log.paths.run_dir)
     if (
         current_state.get("submission_unknown")
@@ -111,6 +112,7 @@ def _submit_generate_batch(self: RunContext, client, manifest):
     self.progress_event.emit(
         ProgressEvent(
             "Kontext BATCH",
+            "completed",
             detail=(
                 f"{len(manifest['requests'])} úloh · odhad vstupu "
                 f"{total_input:,} tokenů · {manifest['requests'][0]['body']['model']}"
@@ -246,12 +248,14 @@ def _submit_generate_batch(self: RunContext, client, manifest):
         }
     )
     self.log.save_json("manifests", "generate_batch_created", batch)
+    self.progress_event.emit(ProgressEvent("BATCH_SUBMIT", "completed", source="batch_api", batch_id=batch_id))
     self._set(
         100,
         0,
         "Příprava dokončena; souborové úlohy čekají na zpracování dávky.",
         stage="Čekání na dávku",
     )
+    self.progress_event.emit(ProgressEvent("Čekání na dávku", "batch_pending", source="batch_api", batch_id=batch_id))
     return {
         "mode": manifest.get("mode", "GENERATE"),
         "batch_id": batch_id,

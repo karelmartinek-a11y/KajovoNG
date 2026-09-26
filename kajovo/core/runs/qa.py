@@ -181,7 +181,7 @@ def _run_qa(
         },
     )
     self.progress_event.emit(ProgressEvent(
-        "QA_VALIDATION", "completed", detail="Tvrzení i jejich podklady jsou ověřené.",
+        "QA_VALIDATION", "completed", detail="Struktura odpovědi a odkazy na dostupné podklady jsou ověřené; pravdivost tvrzení tím není potvrzena.",
         source="validation",
     ))
     self._log_api_action(

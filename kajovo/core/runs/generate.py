@@ -220,7 +220,8 @@ def _run_v3_generate_production(
                     completed.add(path)
                 else:
                     resource_pending.append(result)
-            completed_count += 1
+            if path in completed:
+                completed_count += 1
             self.progress_event.emit(
                 ProgressEvent(
                     "A3",
@@ -244,6 +245,8 @@ def _run_v3_generate_production(
             for path in blocked
         )
     self._verify_completed_files()
+    if not resource_pending:
+        self.progress_event.emit(ProgressEvent("A3", "completed", source="validation"))
     saved_map = self._save_out_files(out_files)
     missing_report = self._write_missing_files_report(
         [
@@ -453,6 +456,7 @@ def _run_a_generate(
         self.progress_event.emit(
             ProgressEvent(
                 "A2Q" if self.cfg.maximum_quality else "A2",
+                "completed",
                 detail="Ověřená příprava je hotová; A3 nebylo spuštěno.",
             )
         )

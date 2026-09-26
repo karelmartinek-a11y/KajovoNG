@@ -156,6 +156,8 @@ def _prepare_response_runtime(self: RunContext, client):
         for model in (self.cfg.caps_by_model or {}):
             client.validate_access({"model": model, "text": text_format(),
                 "input": self._input_parts("kontrola příloh", input_files, input_images)})
+    if self._input_file_ids():
+        self.progress_event.emit(ProgressEvent("Přílohy", "completed", source="validation"))
     diag_file_ids, diag_text = self._maybe_collect_diagnostics(client)
     self._diag_text = diag_text or ""
     self._in_dir_info = self._prepare_in_dir_upload(client)
@@ -371,11 +373,13 @@ def _prepare_in_dir_upload(self: RunContext, client: OpenAIClient) -> dict[str, 
     self._set(4, 0, "Kontroluji a nahrávám vstupní data…", stage="Vstupní data")
     zip_path = self._zip_in_dir(in_dir)
     if os.path.getsize(zip_path) == 0:
+        self.progress_event.emit(ProgressEvent("Vstupní data", "skipped"))
         return None
     up = client.upload_file(zip_path, purpose='user_data')
     file_id = up["id"]
     self._remember_file_name(file_id, os.path.basename(zip_path))
     info: dict[str, Any] = {"zip_path": zip_path, "file_id": file_id, "vector_store_id": None}
+    self.progress_event.emit(ProgressEvent("Vstupní data", "completed", source="upload", file_id=file_id))
     try:
         self.log.event("upload.in_dir", {"zip": zip_path, "file_id": file_id, "bytes": os.path.getsize(zip_path)})
     except Exception as evidence_error:
@@ -411,7 +415,7 @@ def _prepare_in_dir_upload(self: RunContext, client: OpenAIClient) -> dict[str, 
             except Exception as evidence_error:
                 logging.getLogger(__name__).warning("Zápis evidence indexace selhal: %s", type(evidence_error).__name__)
             self.progress_event.emit(ProgressEvent(
-                "Indexace", detail="Indexace vstupu selhala; pokračuji přes kanonickou přímou textovou přílohu."
+                "Indexace", "failed", detail="Indexace vstupu selhala; pokračuji přes kanonickou přímou textovou přílohu."
             ))
     return info
 
@@ -592,6 +596,7 @@ def prepare_modify_inputs(self: RunContext, client: OpenAIClient, diag_file_ids:
             "input_images": b_input_images,
         },
     )
+    self.progress_event.emit(ProgressEvent("Vstupní data", "completed", source="validation"))
     return (
         root,
         items,

@@ -79,6 +79,8 @@ def test_manual_input_completes_real_workflow_without_repeating_text(tmp_path, b
     worker, client, _ = scenario(tmp_path, "GENERATE", batch=batch, mutate=manual,
                                   files=[{"path": "hello.txt", "action": "generate"},
                                          {"path": "asset.bin", "action": "generate", "kind": "binary_required"}])
+    events = []
+    worker.progress_event.connect(events.append)
     results, errors = run(worker, client)
     assert not errors
     state = load_run_state(worker.log.paths.run_dir)
@@ -95,6 +97,10 @@ def test_manual_input_completes_real_workflow_without_repeating_text(tmp_path, b
         assert result["status"] == "waiting_manual_resource"
     else:
         assert results[0]["status"] == "waiting_manual_resource"
+        measured = [event for event in events if event.stage == "A3" and event.completed is not None]
+        assert measured[-1].completed == 1
+        assert measured[-1].total == 2
+        assert not any(event.stage == "A3" and event.state == "completed" for event in events)
     source = tmp_path / "user.bin"
     source.write_bytes(b"dodany podklad")
     bind_manual_resource(worker.log.paths.run_dir, "asset.bin", source)

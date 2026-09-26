@@ -1583,6 +1583,12 @@ class CascadeRunExecutor:
         executed_step_ids: set[str] = set()
         try:
             validate_cascade_definition(self.cfg.cascade, strict=True)
+            progress_keys = [f"Krok {i}: {step.title or 'Bez názvu'}"
+                             for i, step in enumerate(self.cfg.cascade.steps, 1)]
+            self.progress_event.emit(ProgressEvent("PLAN", planned_steps=tuple([
+                "Příprava posloupnosti", *progress_keys, "Uložení výsledků posloupnosti",
+            ])))
+            self.progress_event.emit(ProgressEvent("Příprava posloupnosti"))
             self.logger = CascadeLogger(
                 self.settings.log_dir,
                 run_id,
@@ -1752,6 +1758,8 @@ class CascadeRunExecutor:
             per_step_out_files: dict[str, dict[str, Any]] = {}
             last_response_id = ""
 
+            self.progress_event.emit(ProgressEvent("Příprava posloupnosti", "completed"))
+
             while current_index < len(self.cfg.cascade.steps):
                 self._check_stop()
                 self._failed_step_index = current_index
@@ -1770,7 +1778,7 @@ class CascadeRunExecutor:
                 self._emit_status(base_p, 0, f"Krok {idx}/{total}: {step_label}")
                 self.progress_event.emit(
                     ProgressEvent(
-                        "KASKÁDA",
+                        progress_keys[current_index],
                         completed=len(executed_step_ids),
                         total=total,
                         unit="kroků",
@@ -2150,7 +2158,8 @@ class CascadeRunExecutor:
                 )
                 self.progress_event.emit(
                     ProgressEvent(
-                        "KASKÁDA",
+                        progress_keys[current_index],
+                        "completed",
                         completed=len(executed_step_ids),
                         total=total,
                         unit="kroků",
@@ -2160,6 +2169,7 @@ class CascadeRunExecutor:
                 current_index = next_index
                 current_step_record_id = ""
 
+            self.progress_event.emit(ProgressEvent("Uložení výsledků posloupnosti", source="disk"))
             publish_report = self._publish_cascade_outputs()
             final_outputs = self._selected_final_outputs(values)
             text_value = per_step_text.get(str(max(per_step_text, key=int)), "") if per_step_text else ""
@@ -2209,6 +2219,7 @@ class CascadeRunExecutor:
                     "result": result,
                 }
             )
+            self.progress_event.emit(ProgressEvent("Uložení výsledků posloupnosti", "completed", source="disk"))
             self.progress_event.emit(ProgressEvent("RUN", "completed"))
             self.finished_ok.emit(result)
         except SubmissionOutcomeUnknown as ex:

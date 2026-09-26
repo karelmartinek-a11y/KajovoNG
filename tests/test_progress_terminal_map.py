@@ -3,7 +3,7 @@
 import pytest
 
 from kajovo.core.progress import ProgressEvent
-from kajovo.multiprogress import step_states
+from kajovo.core.progress_model import step_states
 
 
 @pytest.mark.parametrize("terminal,visual", [

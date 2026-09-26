@@ -57,6 +57,7 @@ class ProgressEvent:
     batch_id: str = ""
     file_id: str = ""
     path: str = ""
+    planned_steps: tuple[str, ...] = ()
 
 
 class ProgressClock:
@@ -75,11 +76,19 @@ class ProgressClock:
         self.stage_started = self.started
 
     def update(self, event):
+        if event.stage == "PLAN":
+            return
         self.last_event = event
-        if event.stage != self.stage:
+        reset = (
+            event.stage != self.stage
+            or (event.total is not None and self.total is not None and
+                (event.total != self.total or event.unit != self.unit))
+            or (event.completed is not None and event.completed < self.completed)
+        )
+        if reset:
             self.stage = event.stage
             self.samples.clear()
-            self.completed, self.total = 0, None
+            self.completed, self.total = event.completed or 0, None
             self.unit_started = event.timestamp
             self.stage_started = event.timestamp
         self.last_activity = event.timestamp
@@ -88,7 +97,7 @@ class ProgressClock:
             self.total = event.total
             self.unit = event.unit
         if event.completed is not None:
-            if event.completed == self.completed + 1:
+            if not reset and event.completed == self.completed + 1:
                 self.samples.append(max(0, event.timestamp - self.unit_started))
             if event.completed != self.completed:
                 self.unit_started = event.timestamp

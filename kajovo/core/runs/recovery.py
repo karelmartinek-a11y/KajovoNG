@@ -171,6 +171,6 @@ def _ingest_prompt_if_needed(self: RunContext, client: OpenAIClient, prev_id: st
     prompt = self.cfg.prompt or ""
     if len(prompt) > 150_000:
         save_artifact(self.log.paths.run_dir, "source_prompt", {"text": prompt})
-        self.progress_event.emit(ProgressEvent("A0", completed=1, total=1,
+        self.progress_event.emit(ProgressEvent("A0", "completed", completed=1, total=1,
             unit="zadání", detail=f"Uloženo přesné zadání: {len(prompt):,} znaků; bez placených potvrzení částí."))
     return prev_id

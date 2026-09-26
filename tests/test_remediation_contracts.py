@@ -92,13 +92,14 @@ def test_request_evidence_does_not_claim_prepared_payload_was_sent(tmp_path):
 
 def test_diagnostic_stage_never_marks_unvisited_production_complete():
     from kajovo.core.progress import ProgressEvent
-    from kajovo.core.progress_display import build_steps
-    events = [ProgressEvent("Diagnostika", "active")]
-    steps = {row.key: row.state for row in build_steps(events, mode="GENERATE")}
+    from kajovo.core.progress_model import step_states
+    events = [ProgressEvent("PLAN", planned_steps=("A3", "Ukládání")),
+              ProgressEvent("Diagnostika", "active")]
+    steps = dict(step_states(events))
     assert steps["Diagnostika"] == "current"
     assert steps["A3"] == steps["Ukládání"] == "pending"
     events.append(ProgressEvent("Diagnostika", "completed"))
-    assert next(row.state for row in build_steps(events) if row.key == "Diagnostika") == "done"
+    assert dict(step_states(events))["Diagnostika"] == "done"
 
 
 def test_history_requires_same_batch_to_be_completed_and_unimported():

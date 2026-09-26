@@ -1,7 +1,8 @@
 """Nová mapa smí zobrazit jen zprávy, které pracovní proces skutečně vydal."""
 
 from kajovo.core.progress import ProgressEvent
-from kajovo.multiprogress import MultiProgressView, step_states
+from kajovo.studio.progress_view import MultiProgressView
+from kajovo.core.progress_model import step_states
 
 
 def test_no_steps_are_invented_from_operation_title(qtbot):

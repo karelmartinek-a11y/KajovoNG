@@ -23,8 +23,9 @@ def test_qa_evidence_resolves_to_supplied_sources(tmp_path, identifier, valid):
     stages = [(event.stage, event.state) for event in events]
     assert ("QA_INPUT", "completed") in stages
     assert ("QA_RESPONSE", "waiting") in stages
-    assert ("QA_RESPONSE", "completed") in stages
-    assert ("QA_VALIDATION", "active") in stages
+    # Prázdný seznam podkladů odmítne už kontrola formátu odpovědi.
+    assert (("QA_RESPONSE", "completed") in stages) is (identifier is not None)
+    assert (("QA_VALIDATION", "active") in stages) is (identifier is not None)
     assert (("QA_VALIDATION", "completed") in stages) is valid
     if not valid:
         assert ("neznámé podklady" if identifier else "nemá žádné podklady") in errors[0]

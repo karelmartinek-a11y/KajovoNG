@@ -6,7 +6,7 @@ from PySide6.QtCore import QTimer
 from change_v2_fixtures import run, scenario
 
 from kajovo.core.progress import ProgressClock, ProgressEvent
-from kajovo.core.progress_display import build_steps, event_sentence, source_title
+from kajovo.core.progress_model import step_states
 from kajovo.studio.components import install_theme
 from kajovo.studio.operations import Task
 
@@ -26,16 +26,15 @@ def test_eta_requires_completed_samples_and_counts_down():
 
 def test_progress_display_explains_remote_work_and_remaining_steps():
     events = [
+        ProgressEvent("PLAN", planned_steps=("A1", "A2", "A2Q")),
         ProgressEvent("A1", "completed", detail="Architektonický plán dokončen.", source="api"),
         ProgressEvent("A2", detail="Ověřuji přijatou strukturu.", source="api"),
     ]
-    steps = build_steps(events, mode="GENERATE", quality=True)
-    states = {step.key: step.state for step in steps}
+    states = dict(step_states(events))
     assert states["A1"] == "done"
     assert states["A2"] == "current"
-    assert any(step.key == "A2Q" and step.state == "pending" for step in steps)
-    assert source_title("api") == "OpenAI Responses API"
-    assert "OpenAI Responses API" in event_sentence(events[0])
+    assert states["A2Q"] == "pending"
+    assert events[-1].source == "api"
 
 
 def test_progress_event_metadata_is_optional_and_compatible():

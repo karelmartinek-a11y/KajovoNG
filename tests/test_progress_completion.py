@@ -62,7 +62,7 @@ def test_studio_completion_waits_and_reuse_restores_controls(qtbot):
 
         record = operations.start("Zápis", execute, cancellable=True, identifier="opakování")
         try:
-            qtbot.waitUntil(lambda record=record: len(record.events) == 2)
+            qtbot.waitUntil(lambda record=record: any(e.stage == "RUN" for e in record.events))
             dialog = record.dialog
             assert dialog.active
             assert dialog.close_button.text() == "Skrýt průběh"

@@ -71,6 +71,9 @@ class RunExecutor(RunContext):
         return _submit_generate_batch(self, client, manifest)
 
     def run(self):
+        from .progress_plan import run_progress_plan
+        self.progress_event.emit(ProgressEvent("PLAN", planned_steps=run_progress_plan(self.cfg)))
+        self.progress_event.emit(ProgressEvent("RUN_CHECK"))
         lock = ExecutionLock(Path(self.log.paths.run_dir) / "execution.lock")
         if not lock.acquire():
             self.finished_err.emit("Tento běh již používá jiná instance aplikace.")
@@ -133,6 +136,8 @@ class RunExecutor(RunContext):
                     return
             if saved_state.get("status") == "submission_unknown" or saved_state.get("submission_unknown"):
                 raise SubmissionUnknown("Nejasné předchozí odeslání blokuje nové operace.")
+            self.progress_event.emit(ProgressEvent("RUN_CHECK", "completed"))
+            self.progress_event.emit(ProgressEvent("RUN_INPUT", source="disk"))
             self.transition(RunStatus.PREPARING)
             # Schválený run config je sestaven lokálně; input_ready checkpoint se
             # vytvoří až po zmrazení SourcePacku a autorizace.
@@ -217,6 +222,7 @@ class RunExecutor(RunContext):
                 approval_id=authorization.approval_id,
                 status="running",
             )
+            self.progress_event.emit(ProgressEvent("RUN_INPUT", "completed", source="disk"))
             if self.cfg.mode in ("GENERATE", "MODIFY"):
                 self._response_journal = ResponseJournal(
                     self.log, self.settings.response_poll_timeout_s
@@ -248,7 +254,10 @@ class RunExecutor(RunContext):
                 )
 
             self.transition(RunStatus.REMOTE_WORK)
+            self.progress_event.emit(ProgressEvent("Lokální validace", "completed", source="validation"))
+            self.progress_event.emit(ProgressEvent("RUN_RUNTIME"))
             diag_file_ids, base_prev_id = prepare_runtime(self, client)
+            self.progress_event.emit(ProgressEvent("RUN_RUNTIME", "completed"))
 
             self.client = client
             self.diag_file_ids = diag_file_ids
@@ -257,6 +266,7 @@ class RunExecutor(RunContext):
             if self.lifecycle_status is RunStatus.REMOTE_WORK:
                 self.transition(RunStatus.PROCESSING_RESPONSE)
             self.transition(RunStatus.FINALIZING)
+            self.progress_event.emit(ProgressEvent("RUN_FINALIZE", source="disk"))
             if self._final_response_id:
                 result["last_response_id"] = self._final_response_id
                 if not result.get("response_id"):
@@ -280,6 +290,7 @@ class RunExecutor(RunContext):
                 self.log.update_state({"status": final_status})
             if final_status == "completed":
                 self.transition(RunStatus.COMPLETED)
+            self.progress_event.emit(ProgressEvent("RUN_FINALIZE", "completed", source="disk"))
             self.progress_event.emit(ProgressEvent("RUN", final_status))
             self.finished_ok.emit(result)
         except PreparationBlocked as e:

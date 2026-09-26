@@ -264,7 +264,8 @@ def _run_v3_modify_production(
                     completed.add(path)
                 else:
                     resource_pending.append(result)
-            completed_count += 1
+            if path in completed:
+                completed_count += 1
             self.progress_event.emit(
                 ProgressEvent(
                     "B3",
@@ -288,6 +289,8 @@ def _run_v3_modify_production(
             for path in blocked
         )
     self._verify_completed_files()
+    if not resource_pending:
+        self.progress_event.emit(ProgressEvent("B3", "completed", source="validation"))
     saved_map = self._save_out_files(out_files)
     status = (
         "waiting_manual_resource"
@@ -336,7 +339,7 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
 
     if self.cfg.stop_after_plan:
         self.progress_event.emit(
-            ProgressEvent("B2Q" if self.cfg.maximum_quality else "B2", detail="Ověřená příprava je hotová; B3 nebylo spuštěno.")
+            ProgressEvent("B2Q" if self.cfg.maximum_quality else "B2", "completed", detail="Ověřená příprava je hotová; B3 nebylo spuštěno.")
         )
         return {
             "mode": "MODIFY", "plan": plan, "structure": struct,
@@ -360,7 +363,10 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
     if not touched_raw:
         self._verify_completed_files()
         self.log.update_state({"no_changes": True, "written_files": []})
-        self.progress_event.emit(ProgressEvent("B2", detail="Nebyla navržena žádná změna; do OUT se nebude zapisovat."))
+        self.progress_event.emit(ProgressEvent("B2", "completed", detail="Nebyla navržena žádná změna; do OUT se nebude zapisovat."))
+        self.progress_event.emit(ProgressEvent("BATCH_SUBMIT" if self.cfg.send_as_c else "B3", "skipped"))
+        if not self.cfg.send_as_c:
+            self.progress_event.emit(ProgressEvent("Ukládání", "skipped"))
         return {
             "mode": "MODIFY", "plan": plan, "structure": struct,
             "saved": {"saved": []}, "written_files": [], "no_changes": True,

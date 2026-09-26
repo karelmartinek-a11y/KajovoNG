@@ -137,3 +137,4 @@ def wait_vector_store_files(
         )
         if pending:
             time.sleep(context.poll_interval_s)
+    context.progress_emit(ProgressEvent("Indexace", "completed", source="files_api"))
