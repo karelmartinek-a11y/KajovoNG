@@ -1,0 +1,52 @@
+name: semantic-audit-branch
+
+on:
+  push:
+    branches:
+      - audit/semantic-closure-20260928
+
+permissions:
+  contents: read
+
+jobs:
+  forensic-validation:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      KAJOVO_LIVE_ACCEPTANCE: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Create project environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install -c requirements/constraints.txt -e .[dev,build]
+      - name: Generate canonical UI matrix artifact without mutating tracked file
+        shell: pwsh
+        run: |
+          .venv\Scripts\python.exe -c "from pathlib import Path; from scripts.export_ui_validation import render, ROOT; Path('UI_VALIDATION_MATRIX.generated.csv').write_text(render(ROOT), encoding='utf-8', newline='')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-validation-generated
+          path: UI_VALIDATION_MATRIX.generated.csv
+          if-no-files-found: error
+      - name: Targeted forensic regressions
+        shell: pwsh
+        run: |
+          .venv\Scripts\python.exe -m pytest -q tests/test_audit_supporting_contracts.py tests/test_preparation_boundaries.py
+      - name: Full pytest
+        shell: pwsh
+        run: .venv\Scripts\python.exe -m pytest -q
+      - name: Ruff
+        shell: pwsh
+        run: .venv\Scripts\python.exe -m ruff check --select F,B,E9 kajovo kajovong utf8nobom tests Build
+      - name: Pip check
+        shell: pwsh
+        run: .venv\Scripts\python.exe -m pip check
