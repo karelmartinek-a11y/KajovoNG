@@ -211,6 +211,7 @@ RUNTIME_VARIANTS = (
         (
             "kajovo/core/photo_prompt.py",
             "kajovo/core/photo_batch.py",
+            "kajovo/studio/photos.py",
         ),
         (
             StepEvidence(
@@ -222,6 +223,18 @@ RUNTIME_VARIANTS = (
                 "submitted",
                 "tests/test_photo_studio.py::test_photo_batch_uncertain_submit_is_not_reposted",
                 "submission_unknown",
+            StepEvidence(
+                "PHOTO UI cancellation",
+                "kajovo/studio/photos.py::cancel_job",
+                "selected batch -> cancel_batch -> apply_batch_status -> persisted job",
+                "kajovo/core/photo_batch.py::apply_batch_status",
+                "tests/test_studio.py::test_photo_batch_is_not_done_before_local_download",
+                "batch_pending",
+                unverified_reason=(
+                    "Lokální/remote completion boundary je pokrytá, ale chybí cílený test "
+                    "cancel_job, který by ověřil přesně jeden cancel_batch a trvalý cancelled stav."
+                ),
+            ),
             ),
         ),
     ),
@@ -277,6 +290,65 @@ RUNTIME_VARIANTS = (
         ),
     ),
     RuntimeVariant(
+        "source-and-input-runtime",
+        ("GENERATE", "MODIFY", "QA", "QFILE"),
+        (
+            "kajovo/core/orchestration/source_pack.py",
+            "kajovo/core/runs/attachments.py",
+            "kajovo/core/runs/diagnostics.py",
+        ),
+        (
+            StepEvidence(
+                "freeze remote/local approved inputs",
+                "kajovo/core/orchestration/source_pack.py::freeze_run_sources",
+                "approved source -> immutable SourcePack",
+                "SOURCE_PACK_V1 hashes and source policy",
+                "tests/test_attachments.py::test_source_pack_freezes_remote_files_and_vector_store_members",
+                "file_vector",
+                "tests/test_attachments.py::test_source_pack_blocks_when_remote_bytes_cannot_be_frozen",
+                "file_missing",
+            ),
+        ),
+    ),
+    RuntimeVariant(
+        "resource-management-ui",
+        (),
+        ("kajovo/studio/resources.py",),
+        (
+            StepEvidence(
+                "Studio Files/vector-store provider actions",
+                "kajovo/studio/resources.py",
+                "UI action -> provider operation -> refreshed resource state",
+                "Studio operation manager and provider response",
+                "tests/test_studio.py::test_resources_attach_and_detach_change_run_config",
+                "attached_file_ids",
+                unverified_reason=(
+                    "Existuje UI state test, ale chybí cílený regresní test skutečného "
+                    "upload_file/create_vector_store/add_file_to_vector_store provider callu."
+                ),
+            ),
+        ),
+    ),
+    RuntimeVariant(
+        "batch-management-ui",
+        (),
+        ("kajovo/studio/batches.py",),
+        (
+            StepEvidence(
+                "Studio batch refresh/cancel/download",
+                "kajovo/studio/batches.py",
+                "explicit refresh/cancel -> provider state -> local import",
+                "batch identity and local completion boundaries",
+                "tests/test_process_audit_regressions.py::test_batch_monitoring_starts_only_after_explicit_refresh",
+                "automatic=True",
+                unverified_reason=(
+                    "Monitoring je regresně pokryté, ale přímý UI cancel_batch provider call "
+                    "nemá samostatný negativní runtime test."
+                ),
+            ),
+        ),
+    ),
+    RuntimeVariant(
         "cancellation",
         ("GENERATE", "MODIFY", "QA", "QFILE"),
         (
@@ -327,6 +399,11 @@ _PROVIDER_CALL_NAMES = {
     "create_image",
     "retrieve_response",
     "retrieve_batch",
+    "upload_file",
+    "file_content",
+    "cancel_batch",
+    "create_vector_store",
+    "add_file_to_vector_store",
 }
 _PROVIDER_INFRASTRUCTURE = {
     "kajovo/core/openai_client.py",
@@ -380,7 +457,7 @@ def discover_history_modes() -> set[str]:
 
 def discover_provider_sites() -> list[dict]:
     sites: list[dict] = []
-    for path in sorted((ROOT / "kajovo/core").rglob("*.py")):
+    for path in sorted((ROOT / "kajovo").rglob("*.py")):
         rel = path.relative_to(ROOT).as_posix()
         if rel in _PROVIDER_INFRASTRUCTURE:
             continue
