@@ -276,7 +276,7 @@ RUNTIME_VARIANTS = (
             ),
             StepEvidence(
                 "PHOTO UI cancellation",
-                "kajovo/studio/photos.py::cancel_job",
+                "kajovo/studio/photos.py::PhotosPage.cancel_job",
                 "selected batch -> cancel_batch -> apply_batch_status -> persisted job",
                 "kajovo/core/photo_batch.py::apply_batch_status",
                 "tests/test_provider_ui_semantics.py::test_photo_cancel_calls_provider_and_persists_returned_status",
@@ -494,7 +494,7 @@ RUNTIME_VARIANTS = (
                 "cooperative cancellation",
                 "kajovo/core/runs/cancellation.py::CancellationToken",
                 "running -> cancelled|stopped",
-                "kajovo/core/runs/cancellation.py::raise_if_cancelled",
+                "kajovo/core/runs/cancellation.py::CancellationToken.raise_if_cancelled",
                 "tests/test_run_cancellation.py::test_cancellation_token_starts_active_and_cancels_idempotently",
                 "cancel",
                 "tests/test_run_cancellation.py::test_executor_stop_before_provider_never_submits",
