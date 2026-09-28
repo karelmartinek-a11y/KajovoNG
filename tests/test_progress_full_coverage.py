@@ -98,6 +98,7 @@ def test_generate_progress_plan_contains_internal_runtime_boundaries():
     cfg = _Cfg()
     live = run_progress_plan(cfg)
     for stage in (
+        "UI_VALIDATE",
         "RUN_START",
         "RUN_CHECK",
         "RUN_CONFIG",
