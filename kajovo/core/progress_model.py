@@ -10,6 +10,7 @@ ERRORS = {"failed", "error", "expired", "corrupt_state"}
 BLOCKED = {"submission_unknown", "response_pending", "batch_pending", "unknown",
            "needs_clarification", "waiting_manual_resource"}
 LABELS = {
+    "UI_VALIDATE": "Kontrola zadání",
     "RUN_START": "Zahájení práce",
     "RUN_CHECK": "Kontrola rozpracované práce",
     "RUN_CONFIG": "Kontrola zadání a režimu",
