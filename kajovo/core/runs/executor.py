@@ -72,12 +72,26 @@ class RunExecutor(RunContext):
 
     def run(self):
         from .progress_plan import run_progress_plan
-        self.progress_event.emit(ProgressEvent("PLAN", planned_steps=run_progress_plan(self.cfg)))
-        self.progress_event.emit(ProgressEvent("RUN_CHECK"))
+        self.progress_event.emit(
+            ProgressEvent("PLAN", planned_steps=run_progress_plan(self.cfg))
+        )
+        self.progress_event.emit(
+            ProgressEvent("RUN_START", "active", source="local")
+        )
         lock = ExecutionLock(Path(self.log.paths.run_dir) / "execution.lock")
         if not lock.acquire():
-            self.finished_err.emit("Tento běh již používá jiná instance aplikace.")
+            message = "Tento běh již používá jiná instance aplikace."
+            self.progress_event.emit(
+                ProgressEvent("RUN_START", "failed", source="local", detail=message)
+            )
+            self.finished_err.emit(message)
             return
+        self.progress_event.emit(
+            ProgressEvent("RUN_START", "completed", source="local")
+        )
+        self.progress_event.emit(
+            ProgressEvent("RUN_CHECK", "active", source="disk")
+        )
         client = None
         try:
             state_path = Path(self.log.state_path)
@@ -136,8 +150,12 @@ class RunExecutor(RunContext):
                     return
             if saved_state.get("status") == "submission_unknown" or saved_state.get("submission_unknown"):
                 raise SubmissionUnknown("Nejasné předchozí odeslání blokuje nové operace.")
-            self.progress_event.emit(ProgressEvent("RUN_CHECK", "completed"))
-            self.progress_event.emit(ProgressEvent("RUN_INPUT", source="disk"))
+            self.progress_event.emit(
+                ProgressEvent("RUN_CHECK", "completed", source="validation")
+            )
+            self.progress_event.emit(
+                ProgressEvent("RUN_CONFIG", "active", source="validation")
+            )
             self.transition(RunStatus.PREPARING)
             # Schválený run config je sestaven lokálně; input_ready checkpoint se
             # vytvoří až po zmrazení SourcePacku a autorizace.
@@ -164,6 +182,12 @@ class RunExecutor(RunContext):
                         )
                     elif self.cfg.preparation_snapshot.get("version") != 2:
                         raise ContractError("Neznámá verze preparation checkpointu.")
+            self.progress_event.emit(
+                ProgressEvent("RUN_CONFIG", "completed", source="validation")
+            )
+            self.progress_event.emit(
+                ProgressEvent("RUN_INPUT", "active", source="disk")
+            )
             # Read-only Files/vector-store retrieval is allowed before the
             # first paid generative request so SOURCE_PACK_V1 can freeze exact
             # remote bytes as part of the authorized run scope.
@@ -222,7 +246,9 @@ class RunExecutor(RunContext):
                 approval_id=authorization.approval_id,
                 status="running",
             )
-            self.progress_event.emit(ProgressEvent("RUN_INPUT", "completed", source="disk"))
+            self.progress_event.emit(
+                ProgressEvent("RUN_INPUT", "completed", source="disk")
+            )
             if self.cfg.mode in ("GENERATE", "MODIFY"):
                 self._response_journal = ResponseJournal(
                     self.log, self.settings.response_poll_timeout_s
