@@ -1130,22 +1130,63 @@ def apply_batch_status(job: PhotoBatchJob, payload: dict) -> PhotoBatchJob:
     return job
 
 
-def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJob:
+def refresh_job(
+    client,
+    job: PhotoBatchJob,
+    log_dir: str | Path,
+    progress=None,
+) -> PhotoBatchJob:
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PLAN",
+            planned_steps=("PHOTO_RECOVERY", "PHOTO_STATUS", "PHOTO_STATE"),
+        ),
+    )
     _photo_operation_present(job, log_dir)
     if not job.batch_id:
         if job.status != "submission_unknown" or not job.input_file_id:
             raise ValueError("Photo Job nemá batch_id.")
+        _photo_progress(
+            progress,
+            ProgressEvent(
+                "PHOTO_RECOVERY",
+                "active",
+                source="batch_api",
+                file_id=job.input_file_id,
+                detail="Hledám jedinou přesnou shodu nepotvrzeného odeslání.",
+            ),
+        )
         matches = exact_batch_matches(
             client.list_batches(),
             job.input_file_id,
             IMAGE_EDIT_ENDPOINT,
         )
         if not matches:
+            _photo_progress(
+                progress,
+                ProgressEvent(
+                    "PHOTO_RECOVERY",
+                    "submission_unknown",
+                    source="batch_api",
+                    file_id=job.input_file_id,
+                ),
+            )
             raise ValueError(
                 "Neurčitý Image Edit submit zatím nelze přesně dohledat; "
                 "novou dávku neposílejte, aby nevznikl duplicitní provider běh."
             )
         if len(matches) != 1:
+            _photo_progress(
+                progress,
+                ProgressEvent(
+                    "PHOTO_RECOVERY",
+                    "submission_unknown",
+                    source="batch_api",
+                    file_id=job.input_file_id,
+                    detail="Nalezeno více odpovídajících dávek.",
+                ),
+            )
             raise ValueError(
                 "Neurčitý Image Edit submit odpovídá více dávkám; "
                 "automatické přiřazení není bezpečné."
@@ -1169,7 +1210,47 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
                 job, rows, log_dir, job.batch_id, unknown=False
             )
             _verify_photo_operation_binding(job, rows, log_dir)
+        _photo_progress(
+            progress,
+            ProgressEvent(
+                "PHOTO_RECOVERY",
+                "completed",
+                source="batch_api",
+                batch_id=job.batch_id,
+                file_id=job.input_file_id,
+            ),
+        )
+    else:
+        _photo_progress(
+            progress,
+            ProgressEvent("PHOTO_RECOVERY", "skipped", source="local"),
+        )
+
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_STATUS",
+            "active",
+            source="batch_api",
+            batch_id=job.batch_id,
+            detail="Ověřuji stav známé dávky fotografií.",
+        ),
+    )
     apply_batch_status(job, client.retrieve_batch(job.batch_id))
+    remote_terminal = job.status in {"completed", "failed", "expired", "cancelled"}
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_STATUS",
+            "completed" if remote_terminal else "batch_pending",
+            completed=job.request_completed + job.request_failed,
+            total=job.request_total,
+            unit="fotografií",
+            source="batch_api",
+            batch_id=job.batch_id,
+            provider_state=job.status,
+        ),
+    )
     if job.schema_version >= 2 and _photo_operation_present(job, log_dir):
         rows = [
             image_edit_row(
@@ -1183,9 +1264,26 @@ def refresh_job(client, job: PhotoBatchJob, log_dir: str | Path) -> PhotoBatchJo
             for item in job.items
         ]
         _verify_photo_operation_binding(job, rows, log_dir)
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_STATE",
+            "active",
+            source="disk",
+            batch_id=job.batch_id,
+        ),
+    )
     save_job(job, log_dir)
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_STATE",
+            "completed",
+            source="disk",
+            batch_id=job.batch_id,
+        ),
+    )
     return job
-
 
 def _atomic_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
