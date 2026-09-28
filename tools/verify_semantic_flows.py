@@ -3,8 +3,8 @@
 Kontrola skládá čtyři nezávislé důkazy:
 1. fyzické/runtime JSON Schema vazby z verify_contract_links.py,
 2. inventář všech explicitních a dynamických provider contract sites,
-3. úplný manifest podporovaných procesních rodin,
-4. skutečný průchod regresních scénářů přes producenty, validátory,
+3. nezávislý AST inventář runtime dispatcherů, history launcherů a provider call-sites,
+4. explicitní vlastnictví objevených runtime bodů a skutečný průchod regresních scénářů přes producenty, validátory,
    orchestration/recovery vrstvy a spotřebitele.
 
 Automat nesmí navazovat placené ani jiné živé provider operace. Testovací
@@ -537,7 +537,9 @@ def main() -> int:
         },
         "limitations": [
             "Audit používá lokální/mocked provider scénáře a neprovádí placené živé OpenAI volání.",
-            "Provider call-sites a dispatchované režimy se objevují nezávisle z AST; nový runtime bod bez vlastníka audit zablokuje.",
+            "PROCESS_FAMILIES je čitelné členění důkazových testů, nikoli samo o sobě důkaz úplnosti.",
+            "Provider call-sites a dispatchované režimy se objevují nezávisle z AST; nový objevený runtime bod bez vlastníka audit zablokuje.",
+            "AST discovery neumí dokázat existenci každé čistě lokální podmínkové větve bez vlastního dispatcheru/provider call-site; takové větve musí být explicitně popsány v runtime inventáři nebo zůstat v runtime_inventory.unverified.",
             "Položky runtime_inventory.unverified jsou explicitně neuzavřené varianty a nesmějí být interpretovány jako kompletně ověřené.",
         ],
         "errors": errors,
