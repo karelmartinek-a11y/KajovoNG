@@ -18,4 +18,4 @@ def run_progress_plan(cfg):
         steps.append("QFILE" if cfg.qfile_output_path else "QFILE_PLAN")
         if cfg.qfile_output_path:
             steps.append("Ukládání")
-    return tuple([*steps, "RUN_FINALIZE"])
+    return (*steps, "RUN_FINALIZE")

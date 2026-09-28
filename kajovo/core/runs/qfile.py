@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..contracts import ContractError
 from ..openai_client import OpenAIClient
-from ..progress import ProgressEvent
 from ..orchestration.work_order import freeze_order
+from ..progress import ProgressEvent
 from ..request_rules import uses_reasoning_defaults
 from ..safe_config import safe_ui_state
 from ..structured_output import (
