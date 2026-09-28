@@ -223,6 +223,7 @@ RUNTIME_VARIANTS = (
                 "submitted",
                 "tests/test_photo_studio.py::test_photo_batch_uncertain_submit_is_not_reposted",
                 "submission_unknown",
+            ),
             StepEvidence(
                 "PHOTO UI cancellation",
                 "kajovo/studio/photos.py::cancel_job",
@@ -234,7 +235,6 @@ RUNTIME_VARIANTS = (
                     "Lokální/remote completion boundary je pokrytá, ale chybí cílený test "
                     "cancel_job, který by ověřil přesně jeden cancel_batch a trvalý cancelled stav."
                 ),
-            ),
             ),
         ),
     ),
