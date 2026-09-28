@@ -69,11 +69,35 @@ class ComicService:
         self.stopped = stopped or (lambda: False)
         self.storyboard_layout = storyboard_layout
 
-    def progress(self, stage, completed=None, total=None, detail=""):
-        stage = {"COMIC_RESPONSES": "Sestavuji textová pravidla", "COMIC_REFERENCE": "Vytvářím obrazovou referenci",
-                 "COMIC_PREPARING": "Připravuji panely", "COMIC_SUBMITTING": "Odesílám dávku",
-                 "COMIC_RETRIEVING": "Přebírám výsledky"}.get(stage, stage)
-        self.emit(ProgressEvent(stage, "active", completed, total, "položek", detail))
+    def progress(
+        self,
+        stage,
+        completed=None,
+        total=None,
+        detail="",
+        *,
+        state=None,
+        source="local",
+    ):
+        resolved = state or (
+            "completed"
+            if isinstance(total, int)
+            and total > 0
+            and isinstance(completed, int)
+            and completed >= total
+            else "active"
+        )
+        self.emit(
+            ProgressEvent(
+                stage,
+                resolved,
+                completed,
+                total,
+                "položek",
+                detail,
+                source=source,
+            )
+        )
 
     def check_stop(self):
         if self.stopped():
@@ -710,8 +734,41 @@ class ComicService:
     def run(self, identifier, *, allow_submit=True):
         with self.store.execution_lock(identifier):
             operation = self.store.get("operations", identifier)
+            text_operation = operation["kind"] in {
+                "bible", "entity", "story", "script", "storyboard", "continuity"
+            }
+            planned = (
+                ("COMIC_CHECK", "COMIC_RESPONSES", "COMIC_SAVE")
+                if text_operation
+                else (
+                    "COMIC_CHECK",
+                    "COMIC_PREPARING",
+                    "COMIC_SUBMITTING",
+                    "BATCH",
+                    "COMIC_RETRIEVING",
+                    "COMIC_SAVE",
+                )
+            )
+            self.emit(ProgressEvent("PLAN", planned_steps=planned))
+            self.progress(
+                "COMIC_CHECK",
+                detail="Kontroluji stav komiksové operace a její uložené podklady.",
+                source="validation",
+            )
             if operation["status"] == "completed":
+                self.progress(
+                    "COMIC_CHECK",
+                    state="completed",
+                    detail="Operace je již doloženě dokončená.",
+                    source="validation",
+                )
                 return {"status": "completed", "operation_id": identifier}
+            self.progress(
+                "COMIC_CHECK",
+                state="completed",
+                detail="Operace je připravená k pokračování.",
+                source="validation",
+            )
             log = self.logger(operation)
             try:
                 if operation["kind"] == "bible":
@@ -745,8 +802,19 @@ class ComicService:
                 log.update_state({"status": status})
                 raise
             result = self.store.get("operations", identifier)
+            self.progress(
+                "COMIC_SAVE",
+                detail="Ukládám konečný stav komiksové operace.",
+                source="disk",
+            )
             self.update_operation(identifier, error={})
             log.update_state({"status": result["status"]})
+            self.progress(
+                "COMIC_SAVE",
+                state="completed",
+                detail="Konečný stav komiksové operace je uložen.",
+                source="disk",
+            )
             if result["status"] in ("completed", "partial", "failed", "cancelled"):
                 log.bundle.seal()
             return {"status": result["status"], "operation_id": identifier}
@@ -1485,6 +1553,12 @@ class ComicService:
                         unknown=False,
                     )
                     self.save_batch(batch["id"], payload)
+                    self.progress(
+                        "COMIC_SUBMITTING",
+                        state="completed",
+                        detail=f"Dávka {payload['id']} byla potvrzeně odeslána.",
+                        source="batch_api",
+                    )
             batch = self.store.get("batches", batch["id"])
             if batch["provider_id"]:
                 self._verify_batch_operation_binding(
@@ -1495,7 +1569,18 @@ class ComicService:
                 raise ComicError("invalid_batch_response", "OpenAI vrátilo jiné ID dávky nebo neznámý stav.")
             self.save_batch(batch["id"], payload)
             counts = payload.get("request_counts") or {}
-            self.progress("BATCH", (counts.get("completed", 0) + counts.get("failed", 0)), counts.get("total", len(items)), payload["status"])
+            self.progress(
+                "BATCH",
+                (counts.get("completed", 0) + counts.get("failed", 0)),
+                counts.get("total", len(items)),
+                payload["status"],
+                state=(
+                    "completed"
+                    if payload["status"] in TERMINAL
+                    else "batch_pending"
+                ),
+                source="batch_api",
+            )
             if payload["status"] in TERMINAL:
                 self.ingest(operation, batch, payload, log)
         statuses = [r["status"] for r in self.store.rows("batch_items", "batch_id IN (SELECT id FROM batches WHERE operation_id=?)", (operation["id"],))]
@@ -1639,6 +1724,18 @@ class ComicService:
                 self.store_panel_result(operation, current, log)
             elif item["custom_id"] not in seen and current["status"] != "completed":
                 self.item_error(item["id"], {"code": "batch_" + payload["status"], "message": "Dávka neobsahuje výsledek této položky."})
+        completed_items = sum(
+            self.store.get("batch_items", item["id"])["status"] == "completed"
+            for item in items
+        )
+        self.progress(
+            "COMIC_RETRIEVING",
+            completed_items,
+            len(items),
+            detail=f"Převzato {completed_items} z {len(items)} panelů.",
+            state=("completed" if completed_items == len(items) else "partial"),
+            source="download",
+        )
 
     def item_error(self, item_id, error):
         error = dict(error)
