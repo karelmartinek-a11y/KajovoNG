@@ -76,7 +76,10 @@ def test_qfile_confirmed_plan_produces_only_approved_file_contract(tmp_path):
     payload = client.create_response.call_args.args[0]
     assert payload["text"]["format"]["name"] == "FILE_CONTENT_V1"
     assert not (Path(worker.cfg.out_dir) / "navrh.md").exists()
-    assert results[0]["saved"]["navrh.md"]["sha256"]
+    staged = results[0]["saved"]["staged"]
+    assert len(staged) == 1
+    assert staged[0]["path"] == "navrh.md"
+    assert staged[0]["sha256"]
     client.create_batch.assert_not_called()
 
 
