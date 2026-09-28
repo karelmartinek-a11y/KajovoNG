@@ -1585,9 +1585,9 @@ class CascadeRunExecutor:
             validate_cascade_definition(self.cfg.cascade, strict=True)
             progress_keys = [f"Krok {i}: {step.title or 'Bez názvu'}"
                              for i, step in enumerate(self.cfg.cascade.steps, 1)]
-            self.progress_event.emit(ProgressEvent("PLAN", planned_steps=tuple([
+            self.progress_event.emit(ProgressEvent("PLAN", planned_steps=(
                 "Příprava posloupnosti", *progress_keys, "Uložení výsledků posloupnosti",
-            ])))
+            )))
             self.progress_event.emit(ProgressEvent("Příprava posloupnosti"))
             self.logger = CascadeLogger(
                 self.settings.log_dir,
