@@ -1,6 +1,10 @@
 # Pokrytí kruhové mapy a zdrojové důkazy
 
-Referenční seznam [182 variant](reference_inventory_182.json) obsahuje 1 284 navržených podkroků. Je to návrhová inventura, nikoli protokol o úspěšném provedení. Runtime plán používá etapy odpovídající současným potvrzovacím hranicím backendu; některé referenční podkroky jsou sloučené. Záznamy `unverified` v inventuře se nesmějí vydávat za dokončený audit všech variant.
+Referenční seznam [182 variant](reference_inventory_182.json) obsahuje 1 284 navržených podkroků. Původní položky `verification` v tomto historickém návrhovém inventáři se nepřepisují, protože popisují stav původního návrhu. Aktuální produkční pokrytí je samostatně a strojově závazně definováno v `core/progress_catalog.py` a ověřováno `tools/verify_progress_coverage.py`.
+
+Katalog pokrývá bez mezery varianty 1–182. Každý z 1 284 referenčních kroků je v auditním výstupu přiřazen právě jednomu runtime vlastníku a strategii instrumentace. GENERATE/MODIFY, QA/QFILE, BATCH, PHOTO, COMIC a KASKÁDA mají specializované backendové události. Ostatní asynchronní operace používají společný lifecycle `Příprava → skutečná operace → Převzetí výsledku` ve `studio/operations.py`; krátká čtení nevyskakují automaticky, ale jejich události jsou po dobu běhu součástí stejného modelu a lze je otevřít z přehledu operací.
+
+Kruh nadále nezobrazuje odhadovaný čas jako procenta. Referenční návrhový podkrok, který nemá samostatný pozorovatelný backendový přechod, je důkazně vlastněn nejbližší skutečnou runtime hranicí; UI si kvůli shodě s PDF nevymýšlí falešné dokončení. Nové skutečné hranice byly rozděleny tam, kde je lze potvrdit: zahájení a konfigurace běhu, výběr cíle, resource producer, kontrola výsledků, jednotlivé fáze BATCH submit/importu, PHOTO upload/submit/recovery/download, COMIC příprava/submit/retrieval a u KASKÁDY příprava/provedení/validace/checkpoint každého kroku.
 
 ## Hranice vydávané backendem
 
@@ -32,4 +36,4 @@ Fotografický `completed` znamená připraveno k převzetí; `downloaded` znamen
 
 Regrese jsou v `tests/test_circular_progress_semantics.py`, `test_progress_completion.py`, `test_progress_stage_identity.py`, `test_progress_terminal_map.py`, `test_qa_evidence_links.py`, `test_remediation_resources.py` a testech kaskád. `scripts/render_progress.py` vykresluje produkční komponenty nad skutečnými událostmi izolovaných executorů; koncové chybové stavy doplňuje samostatnými řízenými scénáři.
 
-Společný dialog pokrývá operace spravované `Operations`. To není důkaz samostatné instrumentace každého z 1 284 podkroků PDF. Synchronní akce, například pouhé připojení vybraného prostředku k formuláři, nevytvářejí umělý dlouhý běh. U obslužných funkcí bez jemnějších událostí ukazuje mapa pouze doloženou hranici celé funkce. Nepozorované podkroky se neoznačují jako hotové.
+Úplnost mapování hlídá Windows CI job `circular-progress-complete-windows`. Kontrola vyžaduje přesně 182 variant a 1 284 kroků, existenci všech deklarovaných runtime vlastníků, povinné progress markery, jediný produkční `MultiProgressDialog` a zákaz návratu `QProgressDialog`. Synchronní okamžité změny formuláře nevytvářejí umělý pracovní běh; jakmile je práce asynchronní nebo může čekat na I/O/službu, je vlastněna `Operations` nebo specializovaným executorem a používá kruhový progress.
