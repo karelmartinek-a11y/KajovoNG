@@ -219,4 +219,5 @@ def test_returned_failure_is_not_a_completed_step(qtbot, state):
     record = manager.start("Kontrola", lambda task: {"status": state}, popup=False)
     qtbot.waitUntil(lambda: bool(record.terminal))
     assert record.terminal == state
-    assert dict(record.dialog.inspector.model.rows())["OPERATION"] != "done"
+    rows = dict(record.dialog.inspector.model.rows())
+    assert rows["Kontrola"] != "done"
