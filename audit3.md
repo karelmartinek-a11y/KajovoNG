@@ -74,12 +74,6 @@ Po úspěšném keyring čtení se ještě povinně čte legacy registr mimo try
 
 _prepare_in_dir_upload při podporovaném vector store (LIVE nebo GENERATE) vždy provede create_vector_store, add_file a čekání. Neověřuje cfg.use_file_search. Teprve sestavení _fs_tools kontroluje use_file_search nebo diagnostiku. Pro běžný běh bez diagnostiky s use_file_search=False tak proběhne vzdálená indexace, která se do žádného pracovního toolu nezapojí; přibývají vzdálené operace, čekání a zůstává serverový prostředek bez expires_after.
 
-### A3-010 | OTEVRENO | Příprava přenáší obsah IN současně inline i jako úplnou přímou přílohu
-
-**Zdroj:** [kajovo/core/runs/attachments.py](kajovo/core/runs/attachments.py) · řádky 340-375,429-461; [kajovo/core/runs/generate.py](kajovo/core/runs/generate.py) · řádky 435-450; [kajovo/core/runs/modify.py](kajovo/core/runs/modify.py) · řádky 325-335; [kajovo/core/delivery_preparation.py](kajovo/core/delivery_preparation.py) · řádky 177-184; [kajovo/core/orchestration/preparation.py](kajovo/core/orchestration/preparation.py) · řádky 752-758,817-819,903-910,1315-1320,1338-1341,1373-1378,1386-1390.
-
-Textový projekt je vždy nahrán jako in_dir_*.txt a _input_files_with_in_dir jej přidá k přímým input_file. GENERATE A0R/A1 současně zahrne celé source.segments; MODIFY B0R/B1 zahrne celé selected_originals. _compile_source_attachments pro všechny čtyři stage připojí runtime file_ids. Obsah projektu je tedy na těchto krocích předán dvakrát různými reprezentacemi, bez deduplikace podle původu. Zvětšuje se vstupní kontext a zmenšuje prostor pro skutečnou práci; konkrétní cenu ani přesný počet provider tokenů audit netvrdí.
-
 ### A3-011 | UZAVRENO | Chybové ukončení běhu ponechá lifecycle_status v běžící fázi
 
 **Zdroj:** [kajovo/core/runs/context.py](kajovo/core/runs/context.py) · řádky 94-99; [kajovo/core/runs/executor.py](kajovo/core/runs/executor.py) · řádky 291-340; [kajovo/core/runs/contracts.py](kajovo/core/runs/contracts.py) · řádky 28-41,65-116.
@@ -130,11 +124,6 @@ Z kódu plyne chybné rozlišení položky iconsetu. Bez provedení macOS sestav
 ### A3-006 a A3-007 — dvě různé chyby BATCH obnovy
 
 A3-006 vyžaduje neurčitý výsledek prvního POST a následné jednoznačné dohledání dávky podle vstupního souboru a endpointu. A3-007 vyžaduje jednoznačně odmítnuté odeslání automatické následující vlny a opakování dokončení předchozí vlny. Nejde o stejný případ ani o požadavek automaticky opakovat neurčitý placený POST. Ruční opakování s novým číslem pokusu se od druhé cesty liší.
-
-### A3-009 a A3-010 — bez cenových odhadů
-
-A3-009 dokládá zbytečné serverové vytvoření a indexaci při nepoužitém nástroji. A3-010 dokládá souběžné předání stejného obsahu v jednom pracovním požadavku. Netvrdí přesnou cenu, počet účtovaných tokenů ani chybné řetězení přes previous_response_id; takové údaje nebyly měřeny.
-
 
 ## Rozsah dokonceni
 
