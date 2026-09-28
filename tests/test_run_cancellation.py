@@ -23,8 +23,9 @@ def test_executor_stop_before_provider_never_submits(tmp_path, mode, monkeypatch
     from pathlib import Path
     from unittest.mock import Mock
 
-    from kajovo.core.context_compiler import content_hash
     from test_workflows import make_worker
+
+    from kajovo.core.context_compiler import content_hash
 
     worker = make_worker(tmp_path, mode)
     if mode == "MODIFY":
