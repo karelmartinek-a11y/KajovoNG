@@ -407,7 +407,13 @@ class PhotosPage(QWidget):
 
         def submit(client, task):
             job = photo_batch.new_job(**options)
-            return photo_batch.prepare_and_submit(client, job, self.context.settings.log_dir, reporter=task.logline.emit)
+            return photo_batch.prepare_and_submit(
+                client,
+                job,
+                self.context.settings.log_dir,
+                reporter=task.logline.emit,
+                progress=task.progress_event.emit,
+            )
 
         self.execute("Dávkové úpravy fotografií", submit, lambda job: self.load_jobs())
 
@@ -426,12 +432,32 @@ class PhotosPage(QWidget):
     def refresh_job(self):
         job = self.selected_job()
         if job:
-            self.execute("Ověření dávky fotografií", lambda client, task: photo_batch.refresh_job(client, job, self.context.settings.log_dir), lambda value: self.load_jobs())
+            self.execute(
+                "Ověření dávky fotografií",
+                lambda client, task: photo_batch.refresh_job(
+                    client,
+                    job,
+                    self.context.settings.log_dir,
+                    progress=task.progress_event.emit,
+                ),
+                lambda value: self.load_jobs(),
+            )
 
     def download(self):
         job = self.selected_job()
         if job:
-            self.execute("Převzetí upravených fotografií", lambda client, task: photo_batch.download_results(client, job, self.context.settings.log_dir, reporter=task.logline.emit), lambda value: self.load_jobs(), output_dir=job.output_dir)
+            self.execute(
+                "Převzetí upravených fotografií",
+                lambda client, task: photo_batch.download_results(
+                    client,
+                    job,
+                    self.context.settings.log_dir,
+                    reporter=task.logline.emit,
+                    progress=task.progress_event.emit,
+                ),
+                lambda value: self.load_jobs(),
+                output_dir=job.output_dir,
+            )
 
     def cancel_job(self):
         job = self.selected_job()
