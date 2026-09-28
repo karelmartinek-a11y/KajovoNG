@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from semantic_runtime_inventory import RUNTIME_VARIANTS, validate_runtime_inventory
+
 
 @dataclass(frozen=True)
 class ProcessFamily:
@@ -54,6 +56,7 @@ PROCESS_FAMILIES = (
         (
             "tests/test_attachments.py",
             "tests/test_audit2_preparation.py",
+            "tests/test_preparation_boundaries.py",
             "tests/test_requirements.py",
             "tests/test_context_compiler.py",
         ),
@@ -104,6 +107,7 @@ PROCESS_FAMILIES = (
         "QA_ANSWER_V2, QFILE_PLAN_V1, FILE_CONTENT_V1 a request pravidla.",
         (
             "tests/test_clarification_wire_contracts.py",
+            "tests/test_qa_evidence_links.py",
             "tests/test_process_audit_regressions.py",
             "tests/test_request_rules.py",
         ),
@@ -123,6 +127,7 @@ PROCESS_FAMILIES = (
             "tests/test_cascade.py",
             "tests/test_cascade_v2.py",
             "tests/test_cascade_production.py",
+            "tests/test_cascade_unknown_submission.py",
             "tests/test_cascade_audit2.py",
             "tests/test_cascade_worker_adapter.py",
         ),
@@ -132,6 +137,7 @@ PROCESS_FAMILIES = (
         "PHOTO_PLAN_V1, image batch, identity výsledků, recovery a zákaz opakovaného submitu.",
         (
             "tests/test_photo_studio.py",
+            "tests/test_batch_recovery_boundaries.py",
         ),
     ),
     ProcessFamily(
@@ -139,6 +145,7 @@ PROCESS_FAMILIES = (
         "Komiksové strict kontrakty, persistence, batch, retry, resume a obrazové reference.",
         (
             "tests/test_comic_domain.py",
+            "tests/test_comic_recovery.py",
             "tests/test_live_acceptance.py",
         ),
     ),
@@ -383,6 +390,8 @@ def main() -> int:
     args = parser.parse_args()
 
     errors = _validate_manifest()
+    runtime_errors, runtime_unverified, runtime_inventory = validate_runtime_inventory()
+    errors.extend(runtime_errors)
     sites = _response_format_sites()
     named_contracts = sorted(_runtime_named_contracts())
     tests = _all_tests()
@@ -410,7 +419,26 @@ def main() -> int:
 
     collect = {"returncode": 0, "output": "pytest skipped"}
     execute = {"returncode": 0, "output": "pytest skipped"}
+    runtime_collect = {"returncode": 0, "output": "pytest skipped"}
+    runtime_execute = {"returncode": 0, "output": "pytest skipped"}
     if not args.skip_pytest:
+        runtime_collect, runtime_execute = _pytest_pass(runtime_inventory["test_nodes"])
+        if runtime_collect["returncode"] != 0:
+            errors.append(
+                {
+                    "scope": "runtime_evidence_collection",
+                    "error": "Cílené runtime důkazy nelze kompletně vybrat.",
+                    "returncode": runtime_collect["returncode"],
+                }
+            )
+        if runtime_execute["returncode"] != 0:
+            errors.append(
+                {
+                    "scope": "runtime_evidence_execution",
+                    "error": "Jeden nebo více cílených runtime důkazů selhalo.",
+                    "returncode": runtime_execute["returncode"],
+                }
+            )
         collect, execute = _pytest_pass(tests)
         if collect["returncode"] != 0:
             errors.append(
@@ -437,6 +465,30 @@ def main() -> int:
         "named_provider_contracts": named_contracts,
         "required_named_provider_contracts": sorted(REQUIRED_NAMED_PROVIDER_CONTRACTS),
         "provider_contract_sites": sites,
+        "runtime_inventory": {
+            "variants": [
+                {
+                    "id": variant.id,
+                    "modes": list(variant.modes),
+                    "runtime_paths": list(variant.runtime_paths),
+                    "steps": [
+                        {
+                            "name": step.name,
+                            "implementation": step.implementation,
+                            "transition": step.transition,
+                            "validator": step.validator,
+                            "positive_test": step.positive_test,
+                            "negative_test": step.negative_test,
+                            "unverified_reason": step.unverified_reason,
+                        }
+                        for step in variant.steps
+                    ],
+                }
+                for variant in RUNTIME_VARIANTS
+            ],
+            "discovered": runtime_inventory,
+            "unverified": runtime_unverified,
+        },
         "process_families": [
             {
                 "id": family.id,
@@ -454,6 +506,14 @@ def main() -> int:
                 else [{"error": "Contract-link report nebyl vytvořen."}]
             ),
         },
+        "runtime_pytest_collect": {
+            "returncode": runtime_collect["returncode"],
+            "output": runtime_collect["output"],
+        },
+        "runtime_pytest_execute": {
+            "returncode": runtime_execute["returncode"],
+            "output": runtime_execute["output"],
+        },
         "pytest_collect": {
             "returncode": collect["returncode"],
             "output": collect["output"],
@@ -464,7 +524,8 @@ def main() -> int:
         },
         "limitations": [
             "Audit používá lokální/mocked provider scénáře a neprovádí placené živé OpenAI volání.",
-            "Sémantický PASS dokládá podporované cesty manifestované v tomto souboru; nový proces bez doplnění manifestu musí být zachycen code review/CI.",
+            "Provider call-sites a dispatchované režimy se objevují nezávisle z AST; nový runtime bod bez vlastníka audit zablokuje.",
+            "Položky runtime_inventory.unverified jsou explicitně neuzavřené varianty a nesmějí být interpretovány jako kompletně ověřené.",
         ],
         "errors": errors,
     }
@@ -482,6 +543,11 @@ def main() -> int:
         "test_modules": len(tests),
         "named_provider_contracts": len(named_contracts),
         "dynamic_provider_sites": len(sites["dynamic"]),
+        "runtime_variants": len(RUNTIME_VARIANTS),
+        "runtime_provider_sites": len(runtime_inventory["provider_sites"]),
+        "runtime_unverified": runtime_unverified,
+        "runtime_pytest_collect": runtime_collect["returncode"],
+        "runtime_pytest_execute": runtime_execute["returncode"],
         "contract_links": contract_links["run"]["returncode"],
         "pytest_collect": collect["returncode"],
         "pytest_execute": execute["returncode"],
