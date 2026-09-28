@@ -241,7 +241,7 @@ RUNTIME_VARIANTS = (
                 "kajovo/core/orchestration/verification.py",
                 "verification profile -> report",
                 "VERIFICATION_REPORT_V3",
-                "tests/test_canonical_contract_links.py::test_local_schema_files_match_runtime_contracts",
+                "tests/test_canonical_contract_links.py::test_physical_contract_schemas_match_runtime_definitions",
                 "VERIFICATION_REPORT_V3",
                 unverified_reason=(
                     "Schéma je svázané s runtime kontraktem, ale nebyl nalezen "
