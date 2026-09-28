@@ -22,6 +22,7 @@ def _run_qa(
     diag_file_ids: list[str],
     base_prev_id: str | None,
 ) -> dict[str, Any]:
+    self._check_stop()
     self._set(10, 0, "Připravuji podklady k otázce…", stage="QA_INPUT")
     note = self._in_dir_fallback_note()
     input_text = self.cfg.prompt or ""
