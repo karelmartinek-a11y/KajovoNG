@@ -148,12 +148,10 @@ RUNTIME_VARIANTS = (
                 "kajovo/core/runs/qfile.py::_run_qfile",
                 "qfile_plan_ready|files_complete_unverified",
                 "QFILE_PLAN_V1 + FILE_CONTENT_V1",
-                "tests/test_workflows.py::test_complete_offline_workflow",
-                "qfile_output_path",
-                unverified_reason=(
-                    "Chybí samostatný backendový negativní test hranice "
-                    "QFILE_PLAN_V1 -> nové uživatelské potvrzení -> výroba."
-                ),
+                "tests/test_qfile_semantics.py::test_qfile_plan_requires_separate_confirmation_before_file_content",
+                "requires_user_confirmation",
+                "tests/test_qfile_semantics.py::test_qfile_rejects_unsafe_suggested_path_before_any_file_delivery",
+                "../escape.md",
             ),
         ),
     ),
@@ -241,12 +239,10 @@ RUNTIME_VARIANTS = (
                 "kajovo/core/orchestration/verification.py",
                 "verification profile -> report",
                 "VERIFICATION_REPORT_V3",
-                "tests/test_canonical_contract_links.py::test_physical_contract_schemas_match_runtime_definitions",
-                "VERIFICATION_REPORT_V3",
-                unverified_reason=(
-                    "Schéma je svázané s runtime kontraktem, ale nebyl nalezen "
-                    "cílený pozitivní i negativní test skutečného execution profilu."
-                ),
+                "tests/test_verification_profiles.py::test_verification_profile_accepts_valid_static_candidate_without_network",
+                "format_result",
+                "tests/test_verification_profiles.py::test_verification_profile_rejects_invalid_candidate_without_runner",
+                "functional_result",
             ),
         ),
     ),
@@ -265,10 +261,8 @@ RUNTIME_VARIANTS = (
                 "kajovo/core/runs/cancellation.py::raise_if_cancelled",
                 "tests/test_run_cancellation.py::test_cancellation_token_starts_active_and_cancels_idempotently",
                 "cancel",
-                unverified_reason=(
-                    "Token má regresní test, ale úplný restart/cancel průchod každého "
-                    "workflow nemá vlastní pozitivní i negativní end-to-end důkaz."
-                ),
+                "tests/test_run_cancellation.py::test_executor_stop_before_provider_never_submits",
+                "create_response.assert_not_called",
             ),
         ),
     ),
