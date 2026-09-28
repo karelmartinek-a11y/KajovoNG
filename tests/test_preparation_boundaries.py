@@ -276,3 +276,78 @@ def test_missing_mandatory_component_owner_stops_before_detail_and_keeps_evidenc
     assert evidence["candidate_hash"]
     assert evidence["response_id"]
     assert "COMPONENT-X" in failed[0]["errors"][0]
+
+
+def test_component_depends_on_is_plan_level_not_implicit_file_dependency():
+    """A1 component dependency se nesmí potichu měnit na A2 file dependency."""
+    from change_v2_fixtures import default_files, plan_data, requirements_data, spine_data
+    from kajovo.core.orchestration.preparation import validate_plan_v2, validate_spine_v1
+
+    requirements = requirements_data({"segments": []})
+    plan = plan_data()
+    plan["components"].append(
+        {
+            "id": "COMPONENT-X",
+            "responsibility": "Druhá povinná část architektury.",
+            "requirement_ids": ["REQ-1"],
+            "flow_ids": [],
+            "depends_on": ["COMP-1"],
+        }
+    )
+    validate_plan_v2(requirements, plan)
+
+    files = default_files("GENERATE")
+    second = deepcopy(files[0])
+    second["path"] = "component-x.txt"
+    files.append(second)
+    spine = spine_data("GENERATE", files)
+    spine["files"][1]["component_id"] = "COMPONENT-X"
+
+    # File dependency zůstává explicitní kontrakt SPINE; A1 depends_on ji
+    # automaticky nevytváří ani nevyžaduje.
+    assert spine["files"][1]["dependencies"] == []
+    validate_spine_v1("GENERATE", requirements, plan, spine)
+
+
+def test_plan_rejects_unknown_or_self_component_dependency():
+    from change_v2_fixtures import plan_data, requirements_data
+    from kajovo.core.orchestration.preparation import validate_plan_v2
+
+    requirements = requirements_data({"segments": []})
+    for dependency in ("UNKNOWN", "COMP-1"):
+        plan = plan_data()
+        plan["components"][0]["depends_on"] = [dependency]
+        with pytest.raises(ContractError, match="component dependency"):
+            validate_plan_v2(requirements, plan)
+
+
+def test_optional_only_component_does_not_require_spine_owner():
+    """Optional-only komponenta není povinným implementačním vlastníkem SPINE."""
+    from change_v2_fixtures import default_files, plan_data, requirements_data, spine_data
+    from kajovo.core.orchestration.preparation import validate_plan_v2, validate_spine_v1
+
+    requirements = requirements_data({"segments": []})
+    optional = deepcopy(requirements["requirements"][0])
+    optional.update(
+        id="REQ-OPTIONAL",
+        statement="Volitelná část návrhu.",
+        priority="optional",
+        acceptance_ids=[],
+    )
+    requirements["requirements"].append(optional)
+
+    plan = plan_data()
+    plan["components"].append(
+        {
+            "id": "COMP-OPTIONAL",
+            "responsibility": "Volitelná architektonická část.",
+            "requirement_ids": ["REQ-OPTIONAL"],
+            "flow_ids": [],
+            "depends_on": [],
+        }
+    )
+    validate_plan_v2(requirements, plan)
+
+    spine = spine_data("GENERATE", default_files("GENERATE"))
+    assert "COMP-OPTIONAL" not in {row["component_id"] for row in spine["files"]}
+    validate_spine_v1("GENERATE", requirements, plan, spine)
