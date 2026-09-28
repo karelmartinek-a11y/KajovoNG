@@ -6,7 +6,7 @@ on:
       - audit/semantic-closure-20260928
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   forensic-validation:
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: true
-          persist-credentials: false
+          persist-credentials: true
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -28,10 +28,18 @@ jobs:
         run: |
           python -m venv .venv
           .venv\Scripts\python.exe -m pip install -c requirements/constraints.txt -e .[dev,build]
-      - name: Generate canonical UI matrix artifact without mutating tracked file
+      - name: Regenerate canonical UI matrix
         shell: pwsh
         run: |
+          .venv\Scripts\python.exe scripts/export_ui_validation.py
           .venv\Scripts\python.exe -c "from pathlib import Path; from scripts.export_ui_validation import render, ROOT; Path('UI_VALIDATION_MATRIX.generated.csv').write_text(render(ROOT), encoding='utf-8', newline='')"
+          if (-not (git diff --quiet -- docs/UI_VALIDATION_MATRIX.csv)) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/UI_VALIDATION_MATRIX.csv
+            git commit -m "docs: regenerate canonical UI validation matrix"
+            git push origin HEAD:audit/semantic-closure-20260928
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: ui-validation-generated
