@@ -33,7 +33,8 @@ jobs:
         run: |
           .venv\Scripts\python.exe scripts/export_ui_validation.py
           .venv\Scripts\python.exe -c "from pathlib import Path; from scripts.export_ui_validation import render, ROOT; Path('UI_VALIDATION_MATRIX.generated.csv').write_text(render(ROOT), encoding='utf-8', newline='')"
-          if (-not (git diff --quiet -- docs/UI_VALIDATION_MATRIX.csv)) {
+          git diff --quiet -- docs/UI_VALIDATION_MATRIX.csv
+          if ($LASTEXITCODE -ne 0) {
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/UI_VALIDATION_MATRIX.csv
