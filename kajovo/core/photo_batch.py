@@ -29,11 +29,17 @@ from .orchestration.work_order import freeze_order
 from .model_registry import model_spec, models_for_usage
 from .openai_client import image_batch_submit_payload
 from .photo_prompt import manual_photo_plan
+from .progress import ProgressEvent
 from .runs.locking import ExecutionLock
 from .utils import atomic_write_text
 
 IMAGE_EDIT_ENDPOINT = "/v1/images/edits"
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _photo_progress(progress, event: ProgressEvent) -> None:
+    if progress:
+        progress(event)
 
 
 @dataclass
@@ -804,35 +810,116 @@ def _record_photo_usage(job, custom_id, usage, log_dir):
 
 
 def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PLAN",
+            planned_steps=(
+                "PHOTO_VALIDATE",
+                "PHOTO_UPLOAD_SOURCES",
+                "PHOTO_PREPARE_ROWS",
+                "PHOTO_VALIDATE_ROWS",
+                "PHOTO_UPLOAD_BATCH",
+                "PHOTO_SUBMIT",
+                "PHOTO_STATE",
+            ),
+        ),
+    )
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_VALIDATE",
+            "active",
+            source="validation",
+            detail="Kontroluji zadání, model, parametry a vstupní fotografie.",
+        ),
+    )
     validate_photo_job(job)
-    validate_image_edit_parameters(job.image_model, job.quality, job.size, job.output_format)
+    validate_image_edit_parameters(
+        job.image_model, job.quality, job.size, job.output_format
+    )
     root = save_job(job, log_dir)
     frozen_sources = {}
     for item in job.items:
-        target = root / "sources" / (item.source_sha256 + Path(item.source_name).suffix)
-        raw = target.read_bytes() if target.is_file() else Path(item.source_path).read_bytes()
+        target = root / "sources" / (
+            item.source_sha256 + Path(item.source_name).suffix
+        )
+        raw = (
+            target.read_bytes()
+            if target.is_file()
+            else Path(item.source_path).read_bytes()
+        )
         if hashlib.sha256(raw).hexdigest() != item.source_sha256:
             raise ValueError(f"{item.source_name}: vstup se od výběru změnil.")
         if not target.is_file():
             _atomic_bytes(target, raw)
         frozen_sources[item.custom_id] = str(target)
-    def report(text: str, pct: int) -> None:
-        if reporter:
-            reporter(text)
-        if progress:
-            progress(pct)
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_VALIDATE",
+            "completed",
+            completed=len(job.items),
+            total=len(job.items),
+            unit="fotografií",
+            source="validation",
+        ),
+    )
 
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_UPLOAD_SOURCES",
+            "active",
+            completed=0,
+            total=len(job.items),
+            unit="fotografií",
+            source="upload",
+        ),
+    )
     for index, item in enumerate(job.items, 1):
-        report(
-            f"Nahrávám {index}/{len(job.items)}: {item.source_name}",
-            int(index / len(job.items) * 70),
+        if reporter:
+            reporter(f"Nahrávám {index}/{len(job.items)}: {item.source_name}")
+        uploaded = client.upload_file(
+            frozen_sources[item.custom_id], purpose="user_data"
         )
-        uploaded = client.upload_file(frozen_sources[item.custom_id], purpose="user_data")
         item.uploaded_file_id = str(uploaded.get("id") or "")
         item.status = "uploaded"
         client._validate_resource_id(item.uploaded_file_id)
         save_job(job, log_dir)
+        _photo_progress(
+            progress,
+            ProgressEvent(
+                "PHOTO_UPLOAD_SOURCES",
+                completed=index,
+                total=len(job.items),
+                unit="fotografií",
+                source="upload",
+                file_id=item.uploaded_file_id,
+                path=item.source_name,
+            ),
+        )
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_UPLOAD_SOURCES",
+            "completed",
+            completed=len(job.items),
+            total=len(job.items),
+            unit="fotografií",
+            source="upload",
+        ),
+    )
 
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_PREPARE_ROWS",
+            "active",
+            source="local",
+            detail="Sestavuji jeden Image Edit požadavek pro každou fotografii.",
+        ),
+    )
     rows = [
         image_edit_row(
             item,
@@ -844,26 +931,86 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
         )
         for item in job.items
     ]
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_PREPARE_ROWS",
+            "completed",
+            completed=len(rows),
+            total=len(job.items),
+            unit="záznamů",
+            source="local",
+        ),
+    )
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_VALIDATE_ROWS",
+            "active",
+            completed=0,
+            total=len(rows),
+            unit="záznamů",
+            source="validation",
+        ),
+    )
     validate_image_edit_rows(rows)
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_VALIDATE_ROWS",
+            "completed",
+            completed=len(rows),
+            total=len(rows),
+            unit="záznamů",
+            source="validation",
+        ),
+    )
     root = save_job(job, log_dir)
     jsonl = root / "batch_input.jsonl"
-    text = "".join(
-        canonical_bytes(row).decode("utf-8") + "\n"
-        for row in rows
-    )
+    text = "".join(canonical_bytes(row).decode("utf-8") + "\n" for row in rows)
     if len(text.encode("utf-8")) > 200_000_000:
         raise ValueError("Pracovní JSONL překračuje 200 MB.")
     atomic_write_text(str(jsonl), text)
 
-    report("Nahrávám pracovní JSONL.", 82)
+    if reporter:
+        reporter("Nahrávám pracovní JSONL.")
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_UPLOAD_BATCH",
+            "active",
+            source="upload",
+            detail="Nahrávám ověřený dávkový JSONL.",
+        ),
+    )
     batch_file = client.upload_file(str(jsonl), purpose="batch")
     job.input_file_id = str(batch_file.get("id") or "")
     client._validate_resource_id(job.input_file_id)
     save_job(job, log_dir)
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_UPLOAD_BATCH",
+            "completed",
+            source="upload",
+            file_id=job.input_file_id,
+        ),
+    )
 
     _prepare_photo_submit(job, rows, log_dir)
     _mark_photo_submission_started(job, rows, log_dir)
-    report("Odesílám pracovní Image Edit BATCH.", 92)
+    if reporter:
+        reporter("Odesílám pracovní Image Edit BATCH.")
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_SUBMIT",
+            "active",
+            source="batch_api",
+            file_id=job.input_file_id,
+            detail="Odesílám jediný pracovní POST dávky fotografií.",
+        ),
+    )
     job.status = "submission_unknown"
     save_job(job, log_dir)
     try:
@@ -877,30 +1024,75 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
         if definite_reject:
             _mark_photo_not_submitted(job, rows, log_dir)
             job.status = "failed"
+            progress_state = "failed"
         else:
-            _mark_photo_submission(
-                job, rows, log_dir, None, unknown=True
-            )
+            _mark_photo_submission(job, rows, log_dir, None, unknown=True)
             job.status = "submission_unknown"
+            progress_state = "submission_unknown"
         save_job(job, log_dir)
+        _photo_progress(
+            progress,
+            ProgressEvent(
+                "PHOTO_SUBMIT",
+                progress_state,
+                source="batch_api",
+                detail=str(exc),
+            ),
+        )
         raise
     apply_batch_status(job, submitted)
     if not job.batch_id:
         _mark_photo_submission(job, rows, log_dir, None, unknown=True)
         job.status = "submission_unknown"
         save_job(job, log_dir)
+        _photo_progress(
+            progress,
+            ProgressEvent(
+                "PHOTO_SUBMIT",
+                "submission_unknown",
+                source="batch_api",
+                detail="Provider nepotvrdil batch_id.",
+            ),
+        )
         raise ValueError(
             "Image Edit BATCH nemá potvrzené provider ID; nový submit je zablokován."
         )
     client._validate_resource_id(job.batch_id)
-    _mark_photo_submission(
-        job, rows, log_dir, job.batch_id, unknown=False
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_SUBMIT",
+            "completed",
+            source="batch_api",
+            batch_id=job.batch_id,
+            file_id=job.input_file_id,
+        ),
     )
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_STATE",
+            "active",
+            source="disk",
+            batch_id=job.batch_id,
+            detail="Ukládám potvrzenou identitu dávky a pracovní evidenci.",
+        ),
+    )
+    _mark_photo_submission(job, rows, log_dir, job.batch_id, unknown=False)
     _verify_photo_operation_binding(job, rows, log_dir)
     save_job(job, log_dir)
-    report(f"BATCH vytvořen: {job.batch_id}", 100)
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_STATE",
+            "completed",
+            source="disk",
+            batch_id=job.batch_id,
+        ),
+    )
+    if reporter:
+        reporter(f"BATCH vytvořen: {job.batch_id}")
     return job
-
 
 def apply_batch_status(job: PhotoBatchJob, payload: dict) -> PhotoBatchJob:
     try:
