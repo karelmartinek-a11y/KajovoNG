@@ -186,3 +186,93 @@ def test_interruption_preserves_truthful_step_status(tmp_path, status):
     step = worker.log.bundle.steps()[0]
     assert step["status"] == status
     assert bool(step["finished_at"]) == (status in {"stopped", "cancelled"})
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_spine_requires_owner_for_every_mandatory_plan_component(mode):
+    """A2/B2 nesmí zahodit komponentu A1/B1 nesoucí mandatory requirement."""
+    from change_v2_fixtures import default_files, plan_data, requirements_data, spine_data
+    from kajovo.core.orchestration.preparation import validate_spine_v1
+
+    requirements = requirements_data({"segments": []})
+    plan = plan_data()
+    plan["components"].append(
+        {
+            "id": "COMPONENT-X",
+            "responsibility": "Samostatně vlastní povinnou část implementace.",
+            "requirement_ids": ["REQ-1"],
+            "flow_ids": [],
+            "depends_on": [],
+        }
+    )
+    spine = spine_data(mode, default_files(mode))
+
+    with pytest.raises(ContractError, match="COMPONENT-X"):
+        validate_spine_v1(mode, requirements, plan, spine)
+
+    owned = deepcopy(spine["files"][0])
+    owned["path"] = "component-x.txt"
+    owned["component_id"] = "COMPONENT-X"
+    owned["dependencies"] = []
+    owned["content_dependencies"] = []
+    owned["dependency_content_mode"] = "contract"
+    owned["dependency_content_reason"] = ""
+    spine["files"].append(owned)
+
+    validate_spine_v1(mode, requirements, plan, spine)
+
+
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_missing_mandatory_component_owner_stops_before_detail_and_keeps_evidence(
+    tmp_path, mode
+):
+    """Vadný A2/B2 SPINE je archivován a nesmí pustit DETAIL ani výrobu."""
+    from kajovo.core.run_bundle import LegacyRunAdapter
+
+    def mutate(name, value, context):
+        if name.endswith("1_PLAN_V2"):
+            plan = value["result"]["data"]
+            if mode == "MODIFY":
+                plan = plan["plan"]
+            plan["components"].append(
+                {
+                    "id": "COMPONENT-X",
+                    "responsibility": "Samostatně vlastní povinnou část implementace.",
+                    "requirement_ids": ["REQ-1"],
+                    "flow_ids": [],
+                    "depends_on": [],
+                }
+            )
+        return value
+
+    worker, client, responder = preparation_scenario(tmp_path, mode, mutate=mutate)
+    prefix = "A" if mode == "GENERATE" else "B"
+    stage = prefix + "2_SPINE"
+
+    with pytest.raises(ContractError, match="COMPONENT-X"):
+        prepare(worker, client)
+
+    names = [call["text"]["format"]["name"] for call in responder.calls]
+    assert f"{prefix}2_SPINE_V2" in names
+    assert f"{prefix}2_FILE_SPEC_V1" not in names
+    assert "FILE_CONTENT_V1" not in names
+    client.create_batch.assert_not_called()
+
+    candidate_path = worker.log.find_json(
+        "manifests", f"{stage}_prepared_candidate_0"
+    )
+    assert candidate_path is not None
+    candidate = json.loads(Path(candidate_path).read_text(encoding="utf-8"))
+    assert {row["component_id"] for row in candidate["spine"]["files"]} == {"COMP-1"}
+
+    adapter = LegacyRunAdapter(worker.log.paths.run_dir)
+    failed = [
+        row
+        for row in adapter.validations()
+        if row["target_id"] == stage and row["status"] == "failed"
+    ]
+    assert len(failed) == 1
+    evidence = failed[0]["evidence"]
+    assert evidence["candidate_hash"]
+    assert evidence["response_id"]
+    assert "COMPONENT-X" in failed[0]["errors"][0]
