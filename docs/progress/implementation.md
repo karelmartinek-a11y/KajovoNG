@@ -27,3 +27,15 @@
 `--replay _skill_runs/progress/desktop/traces.json --size 480,640` přehraje stejné události do úzkého okna. `--scale 1.5` kontroluje větší měřítko. Přehrané časy označují stáří původních testovacích událostí. Snímky a záznam přehrání nejsou provozní evidence uživatele ani součást distribuovaného programu.
 
 Referenční PDF zahrnuje podrobnější rozklad 182 variant. Současný plán executorů slučuje některé referenční podkroky do jedné ověřované etapy; u obecných obslužných úloh potvrzuje pouze skutečně provedenou funkci a případné vnitřní události. Samotné společné vykreslení nezakládá důkaz samostatného pokrytí všech 1 284 referenčních podkroků. Rozsah doložených hranic uvádí [pokrytí](coverage.md).
+
+
+## Uzavření úplného pokrytí
+
+Produkční implementace používá dva rovnocenné způsoby instrumentace podle povahy práce:
+
+- specializované executory vydávají vlastní skutečné backendové hranice; GENERATE/MODIFY nyní rozlišují také zahájení, kontrolu konfigurace, určení výrobního scope, připravenost cíle, resource producer, kontrolu výstupů a jednotlivé fáze BATCH,
+- obecné Studio operace vydávají společný plán `Příprava operace → konkrétní operace → Převzetí výsledku`. Převzetí se potvrdí až po skutečně úspěšném receive callbacku v GUI vlákně. Krátká čtení používají stejný model bez automatického popupu a jejich události lze během běhu zobrazit v přehledu.
+
+PHOTO má samostatné fáze kontroly vstupů, uploadu zdrojů, sestavení a validace dávkových řádků, uploadu JSONL, submitu, persistence identity, recovery, remote statusu, stažení, technické validace, bezpečného zápisu a souhrnu. COMIC rozlišuje kontrolu operace, textové zpracování/reference, přípravu panelů, submit, remote BATCH, převzetí a finální uložení. KASKÁDA plánuje pro každý skutečný krok samostatně přípravu, provedení, kontrolu výsledku a uložení bezpečného checkpointu.
+
+`core/progress_catalog.py` mapuje všech 182 referenčních variant na produkční vlastníky. `tools/verify_progress_coverage.py` převádí všech 1 284 referenčních kroků do auditní evidence vlastníka/strategie a odmítne mezeru, překryv, chybějící runtime marker, alternativní `QProgressDialog` nebo chybějící produkční kruhový dialog. Autoritativní průchod této kontroly běží na Windows.
