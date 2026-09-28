@@ -18,6 +18,7 @@ from ..contracts import ContractError
 from ..image_runtime import inspect_image, validate_image_request
 from ..model_registry import model_spec
 from ..openai_transport import SubmissionOutcomeUnknown
+from ..progress import ProgressEvent
 from ..utils import ensure_dir, safe_join_under_root, sha256_file
 from .contracts import canonical_sha256, parse_json_strict
 from .repository import repository_for_logger
@@ -593,6 +594,15 @@ def prepare_production_scope(
     graph: dict[str, Any],
 ) -> tuple[dict[str, dict[str, Any]], set[str], list[dict[str, Any]]]:
     """Freeze approved production targets and reject dependency gaps caused by skips."""
+    if hasattr(worker, "progress_event"):
+        worker.progress_event.emit(
+            ProgressEvent(
+                "TARGET_SCOPE",
+                "active",
+                source="validation",
+                detail="Kontroluji výrobní cíle, skip pravidla a původní hashe.",
+            )
+        )
     mode = str(graph.get("mode") or "")
     production_actions = {"generate"} if mode == "GENERATE" else {"add", "modify"}
     all_files = {
@@ -730,6 +740,21 @@ def prepare_production_scope(
                 "contract_hash": compiler.provider_hash(path), "validation_status": "verified",
             }
     worker.log.update_state({"production_expected_target_hashes": expected})
+    if hasattr(worker, "progress_event"):
+        worker.progress_event.emit(
+            ProgressEvent(
+                "TARGET_SCOPE",
+                "completed",
+                completed=len(selected),
+                total=len(production),
+                unit="cílů",
+                source="validation",
+                detail=(
+                    f"Vybráno {len(selected)} výrobních cílů; "
+                    f"{len(completed)} cílů je doloženě hotových nebo zachovaných."
+                ),
+            )
+        )
     return selected, completed, skipped
 
 
@@ -752,11 +777,31 @@ def dispatch_resource_target(
         raise ContractError(f"{path}: chybí resource target nebo producer.")
     producer = str(delivery["producer"])
     source_id = str(delivery["source_or_task_id"])
+    if hasattr(worker, "progress_event"):
+        worker.progress_event.emit(
+            ProgressEvent(
+                "RESOURCE_TARGET",
+                "active",
+                source="local",
+                path=path,
+                detail=f"{path} · producer {producer}",
+            )
+        )
     if producer == "manual_input":
         from .manual_resources import manual_resource_bytes
         data = manual_resource_bytes(worker, graph, path, source_id)
         if data is not None:
             row = _stage_resource(worker, path, data, producer)
+            if hasattr(worker, "progress_event"):
+                worker.progress_event.emit(
+                    ProgressEvent(
+                        "RESOURCE_TARGET",
+                        "completed",
+                        source="disk",
+                        path=path,
+                        detail=f"{path} byl převzat a uložen do stagingu.",
+                    )
+                )
             return {"path": path, "status": "completed_unverified", "producer": producer, "staged": row}
         states = dict(getattr(worker, "_resource_states", {}) or {})
         states[path] = {
@@ -771,6 +816,16 @@ def dispatch_resource_target(
                 "status": "waiting_manual_resource",
             }
         )
+        if hasattr(worker, "progress_event"):
+            worker.progress_event.emit(
+                ProgressEvent(
+                    "RESOURCE_TARGET",
+                    "waiting_manual_resource",
+                    source="local",
+                    path=path,
+                    detail=f"{path} čeká na ručně dodaný podklad.",
+                )
+            )
         return {
             "path": path,
             "status": "waiting_manual",
@@ -795,6 +850,16 @@ def dispatch_resource_target(
         "sha256": row["sha256"],
     }
     worker._resource_states = states
+    if hasattr(worker, "progress_event"):
+        worker.progress_event.emit(
+            ProgressEvent(
+                "RESOURCE_TARGET",
+                "completed",
+                source="disk",
+                path=path,
+                detail=f"{path} byl vytvořen a uložen do stagingu.",
+            )
+        )
     return {
         "path": path,
         "status": "completed_unverified",
