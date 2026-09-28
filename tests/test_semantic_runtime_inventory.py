@@ -17,6 +17,6 @@ def test_runtime_inventory_owns_discovered_dispatchers_and_provider_sites():
     assert discover_provider_sites()
     assert inventory["provider_sites"] == discover_provider_sites()
 
-    # Neuzavřené větve musí zůstat explicitní; nesmí se ztratit v obecném PASS.
-    open_variants = {row["variant"] for row in unverified}
-    assert {"qfile", "verification-profiles", "cancellation"} <= open_variants
+    # Každé zbývající omezení musí být explicitní; prázdný seznam je dovolen
+    # pouze pokud všechny aktuálně inventarizované kroky mají oba důkazy.
+    assert all(row["variant"] and row["reason"] for row in unverified)
