@@ -91,10 +91,36 @@ def _run_v3_modify_production(
             if row.get("kind") != "text"
         }
         while pending_resources:
+            self.progress_event.emit(
+                ProgressEvent(
+                    "TARGET_READY",
+                    "active",
+                    completed=len(completed),
+                    total=len(selected),
+                    unit="cílů",
+                    source="validation",
+                    detail="Hledám netextovou změnu s dostupnými závislostmi.",
+                )
+            )
             ready = sorted(
                 path
                 for path in pending_resources
                 if set(files_by_path[path].get("content_dependencies", [])) <= completed
+            )
+            self.progress_event.emit(
+                ProgressEvent(
+                    "TARGET_READY",
+                    "completed",
+                    completed=len(ready),
+                    total=len(pending_resources),
+                    unit="připravených změn",
+                    source="validation",
+                    detail=(
+                        f"Připraveno {len(ready)} netextových změn."
+                        if ready
+                        else "Žádná další netextová změna zatím nemá splněné závislosti."
+                    ),
+                )
             )
             if not ready:
                 break
@@ -139,11 +165,30 @@ def _run_v3_modify_production(
                 "excluded_paths": excluded,
             }
 
+        self.progress_event.emit(
+            ProgressEvent(
+                "TARGET_READY",
+                "active",
+                source="validation",
+                detail="Kontroluji připravenost textových změn pro první dávkovou vlnu.",
+            )
+        )
         ready_text = {
             path
             for path in text_scope
             if set(files_by_path[path].get("content_dependencies", [])) <= completed
         }
+        self.progress_event.emit(
+            ProgressEvent(
+                "TARGET_READY",
+                "completed",
+                completed=len(ready_text),
+                total=len(text_scope),
+                unit="textových změn",
+                source="validation",
+                detail=f"Do první dávkové vlny je připraveno {len(ready_text)} z {len(text_scope)} textových změn.",
+            )
+        )
         if not ready_text:
             saved_map = self._save_out_files([])
             blocked = sorted(set(text_scope) | pending_resources)
@@ -213,10 +258,36 @@ def _run_v3_modify_production(
     total = max(1, len(pending))
     completed_count = 0
     while pending:
+        self.progress_event.emit(
+            ProgressEvent(
+                "TARGET_READY",
+                "active",
+                completed=completed_count,
+                total=total,
+                unit="cílů",
+                source="validation",
+                detail="Hledám další změnu se splněnými obsahovými závislostmi.",
+            )
+        )
         ready = sorted(
             path
             for path in pending
             if set(files_by_path[path].get("content_dependencies", [])) <= completed
+        )
+        self.progress_event.emit(
+            ProgressEvent(
+                "TARGET_READY",
+                "completed",
+                completed=len(ready),
+                total=len(pending),
+                unit="připravených změn",
+                source="validation",
+                detail=(
+                    f"Připraveno {len(ready)} změn pro další výrobní průchod."
+                    if ready
+                    else "Žádná další změna nemá splněné obsahové závislosti."
+                ),
+            )
         )
         if not ready:
             break
@@ -288,7 +359,25 @@ def _run_v3_modify_production(
             }
             for path in blocked
         )
+    self.progress_event.emit(
+        ProgressEvent(
+            "OUTPUT_VALIDATE",
+            "active",
+            source="validation",
+            detail="Kontroluji dokončené změny proti původním hashům a kontraktům.",
+        )
+    )
     self._verify_completed_files()
+    self.progress_event.emit(
+        ProgressEvent(
+            "OUTPUT_VALIDATE",
+            "completed",
+            completed=len(completed),
+            total=len(selected),
+            unit="cílů",
+            source="validation",
+        )
+    )
     if not resource_pending:
         self.progress_event.emit(ProgressEvent("B3", "completed", source="validation"))
     saved_map = self._save_out_files(out_files)
@@ -361,7 +450,16 @@ def _run_b_modify(self: RunContext, client: OpenAIClient, diag_file_ids: list[st
     if any(item.get("action") not in ("add", "modify") for item in touched_raw):
         raise ContractError("B2: výrobní action musí být add nebo modify.")
     if not touched_raw:
+        self.progress_event.emit(
+            ProgressEvent("TARGET_SCOPE", "completed", completed=0, total=0, unit="změn", source="validation")
+        )
+        self.progress_event.emit(
+            ProgressEvent("OUTPUT_VALIDATE", "active", source="validation")
+        )
         self._verify_completed_files()
+        self.progress_event.emit(
+            ProgressEvent("OUTPUT_VALIDATE", "completed", completed=0, total=0, unit="změn", source="validation")
+        )
         self.log.update_state({"no_changes": True, "written_files": []})
         self.progress_event.emit(ProgressEvent("B2", "completed", detail="Nebyla navržena žádná změna; do OUT se nebude zapisovat."))
         self.progress_event.emit(ProgressEvent("BATCH_SUBMIT" if self.cfg.send_as_c else "B3", "skipped"))
