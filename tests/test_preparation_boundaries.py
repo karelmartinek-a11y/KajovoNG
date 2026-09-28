@@ -321,7 +321,8 @@ def test_plan_rejects_unknown_or_self_component_dependency():
             validate_plan_v2(requirements, plan)
 
 
-def test_optional_only_component_does_not_require_spine_owner():
+@pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
+def test_optional_only_component_does_not_require_spine_owner(mode):
     """Optional-only komponenta není povinným implementačním vlastníkem SPINE."""
     from change_v2_fixtures import default_files, plan_data, requirements_data, spine_data
     from kajovo.core.orchestration.preparation import validate_plan_v2, validate_spine_v1
@@ -348,6 +349,6 @@ def test_optional_only_component_does_not_require_spine_owner():
     )
     validate_plan_v2(requirements, plan)
 
-    spine = spine_data("GENERATE", default_files("GENERATE"))
+    spine = spine_data(mode, default_files(mode))
     assert "COMP-OPTIONAL" not in {row["component_id"] for row in spine["files"]}
-    validate_spine_v1("GENERATE", requirements, plan, spine)
+    validate_spine_v1(mode, requirements, plan, spine)
