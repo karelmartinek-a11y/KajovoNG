@@ -110,6 +110,7 @@ PROCESS_FAMILIES = (
             "tests/test_clarification_wire_contracts.py",
             "tests/test_qa_evidence_links.py",
             "tests/test_qfile_semantics.py",
+            "tests/test_qa_qfile_runtime_semantics.py",
             "tests/test_process_audit_regressions.py",
             "tests/test_request_rules.py",
         ),
