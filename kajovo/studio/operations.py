@@ -334,6 +334,8 @@ class Operations(QObject):
             )
         record = Operation(identifier, title, worker, dialog)
         self.records[identifier] = record
+        for event in tuple(getattr(worker, "pre_progress_events", ()) or ()):
+            self._event(record, event)
         if roots:
             self._output_reservations[(id(self), identifier)] = roots
         if cancellable and hasattr(worker, "request_stop"):
