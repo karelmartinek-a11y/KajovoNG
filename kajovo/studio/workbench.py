@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from kajovo.core.model_capabilities import ModelCapabilitiesCache
+from kajovo.core.progress import ProgressEvent
 from kajovo.core.runs.config import UiRunConfig
 from kajovo.studio.workers.run_worker import RunWorker
 from kajovo.core.request_rules import validate_run_options
@@ -378,6 +379,14 @@ class Workbench(QWidget):
             logger.record_lineage(**self.pending_lineage)
         settings = copy.deepcopy(self.context.settings)
         worker = RunWorker(cfg, settings, self.context.api_key, logger)
+        worker.pre_progress_events = (
+            ProgressEvent(
+                "UI_VALIDATE",
+                "completed",
+                source="validation",
+                detail="Zadání prošlo místní technickou a kontraktní kontrolou před spuštěním workeru.",
+            ),
+        )
         if target:
             self.busy_outputs[run_id] = target
         self._edited()

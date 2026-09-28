@@ -322,6 +322,17 @@ def import_bundle(
             "errors": [str(exc)],
             "status": "partial",
         }
+    if progress:
+        progress(
+            ProgressEvent(
+                "Parsování odpovědí",
+                "completed",
+                completed=len(entries),
+                total=len(entries),
+                unit="záznamů",
+                source="validation",
+            )
+        )
     if expected_ids is not None:
         ids = [entry.get("custom_id") for entry in entries]
         if (
@@ -428,6 +439,18 @@ def import_bundle(
                     unit="položek",
                 )
             )
+    if progress:
+        progress(
+            ProgressEvent(
+                "Validace kontraktů",
+                "completed" if not errors else "partial",
+                completed=len(entries),
+                total=len(entries),
+                unit="položek",
+                source="validation",
+                detail=(f"Nalezeno {len(errors)} chyb." if errors else "Všechny položky prošly validačním průchodem."),
+            )
+        )
     try:
         validate_paths([{"path": name} for name in chunks])
     except ContractError as exc:
@@ -497,6 +520,18 @@ def import_bundle(
                     detail=str(destination),
                 )
             )
+    if progress:
+        progress(
+            ProgressEvent(
+                "Ukládání souborů",
+                "completed" if not errors else "partial",
+                completed=len(written),
+                total=len(bundles),
+                unit="souborů",
+                source="disk",
+                detail=(f"Uloženo {len(written)} souborů; {len(errors)} chyb." if errors else f"Bezpečně uloženo {len(written)} souborů."),
+            )
+        )
     return {
         "written": written,
         "hashes": hashes,
@@ -508,6 +543,20 @@ def import_bundle(
 @locked_run_operation
 def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
     """Převezme existující dávku bez nových generujících požadavků."""
+    if progress:
+        progress(
+            ProgressEvent(
+                "PLAN",
+                planned_steps=(
+                    "Kontrola stavu dávky",
+                    "Stahování výsledků",
+                    "Parsování odpovědí",
+                    "Validace kontraktů",
+                    "Ukládání souborů",
+                    "Aktualizace evidence",
+                ),
+            )
+        )
     state = read_state(run_dir)
     if batch_id not in batch_ids(state):
         raise ContractError("Dávka nepatří k tomuto běhu nebo chybí jeho podklady.")
@@ -541,6 +590,17 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
         )
     batch = client.retrieve_batch(batch_id)
     if batch.get("status") not in TERMINAL:
+        if progress:
+            progress(
+                ProgressEvent(
+                    "Kontrola stavu dávky",
+                    "batch_pending",
+                    source="batch_api",
+                    batch_id=batch_id,
+                    provider_state=str(batch.get("status") or ""),
+                    detail="Vzdálená dávka ještě není v konečném stavu.",
+                )
+            )
         if bundle:
             bundle.update_run({"status": "batch_pending"})
             bundle.append_event(
@@ -556,6 +616,16 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
             "written": [],
             "detail": "Dávka se ještě zpracovává. Dokončit ji můžete později.",
         }
+    if progress:
+        progress(
+            ProgressEvent(
+                "Kontrola stavu dávky",
+                "completed",
+                source="batch_api",
+                batch_id=batch_id,
+                provider_state=str(batch.get("status") or ""),
+            )
+        )
     if state.get("generate_batch"):
         result = process_saved_batch_already_locked(
             client,
@@ -693,6 +763,18 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
                     reconstruction_role=key,
                     metadata={"batch_id": batch_id, "file_id": batch[key]},
                 )
+    if progress:
+        progress(
+            ProgressEvent(
+                "Stahování výsledků",
+                "completed",
+                completed=len(raw_files),
+                total=sum(bool(batch.get(key)) for key in ("output_file_id", "error_file_id")),
+                unit="souborů",
+                source="download",
+                batch_id=batch_id,
+            )
+        )
     previous = (state.get("batch_imports") or {}).get(batch_id, {})
     result = import_bundle(
         b"\n".join(raw_files),
@@ -717,6 +799,16 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
         str(Path(run_dir) / "run_state.json"),
         json.dumps(state, ensure_ascii=False, indent=2),
     )
+    if progress:
+        progress(
+            ProgressEvent(
+                "Aktualizace evidence",
+                "completed",
+                source="disk",
+                batch_id=batch_id,
+                detail="Stav importu byl bezpečně uložen.",
+            )
+        )
     if bundle:
         for destination in result.get("written") or []:
             path = Path(destination)

@@ -60,7 +60,14 @@ def _save_v4(log, manifest_v4: dict[str, Any]) -> None:
 
 def _submit_generate_batch(self: RunContext, client, manifest):
     from ..orchestration.repository import repository_for_logger
-    self.progress_event.emit(ProgressEvent("BATCH_SUBMIT", source="batch_api"))
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_PREPARE",
+            "active",
+            source="validation",
+            detail="Sestavuji neměnný manifest, WorkOrdery a dávkové řádky.",
+        )
+    )
     current_state = load_run_state(self.log.paths.run_dir)
     if (
         current_state.get("submission_unknown")
@@ -106,6 +113,16 @@ def _submit_generate_batch(self: RunContext, client, manifest):
         manifest["context_reports"],
         work_orders=work_orders,
     )
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_PREPARE",
+            "completed",
+            completed=len(manifest["requests"]),
+            total=len(manifest["requests"]),
+            unit="záznamů",
+            source="validation",
+        )
+    )
     total_input = sum(
         r["input_tokens"] for r in manifest["context_reports"]
     )
@@ -119,7 +136,18 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             ),
         )
     )
+    self.progress_event.emit(
+        ProgressEvent(
+            "OUTPUT_VALIDATE",
+            "active",
+            source="validation",
+            detail="Kontroluji dokončené a vynechané cíle před dávkovým odesláním.",
+        )
+    )
     self._verify_completed_files()
+    self.progress_event.emit(
+        ProgressEvent("OUTPUT_VALIDATE", "completed", source="validation")
+    )
     completed = {
         path: value
         for path, value in (getattr(self.cfg, "completed_hashes", None) or {}).items()
@@ -132,10 +160,40 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             path for path in manifest["omitted"] if path not in completed
         ]
 
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_VALIDATE",
+            "active",
+            completed=0,
+            total=len(manifest["requests"]),
+            unit="záznamů",
+            source="validation",
+        )
+    )
     encode_requests(manifest)
-    for row in manifest["requests"]:
+    for index, row in enumerate(manifest["requests"], 1):
         client.validate_access(row["body"], batch=True)
+        self.progress_event.emit(
+            ProgressEvent(
+                "BATCH_VALIDATE",
+                completed=index,
+                total=len(manifest["requests"]),
+                unit="záznamů",
+                source="validation",
+                detail=str(row.get("custom_id") or ""),
+            )
+        )
     data = encode_requests(manifest)
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_VALIDATE",
+            "completed",
+            completed=len(manifest["requests"]),
+            total=len(manifest["requests"]),
+            unit="záznamů",
+            source="validation",
+        )
+    )
     path = os.path.join(self.log.paths.requests_dir, "generate_batch.jsonl")
     with open(path, "wb") as stream:
         stream.write(data)
@@ -153,8 +211,24 @@ def _submit_generate_batch(self: RunContext, client, manifest):
         "Lokálně kontroluji a nahrávám pracovní BATCH…",
         stage="Příprava BATCH",
     )
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_UPLOAD",
+            "active",
+            source="upload",
+            detail="Nahrávám ověřený JSONL vstup dávky.",
+        )
+    )
     uploaded = client.upload_file(path, purpose="batch")
     input_file_id = str(uploaded["id"])
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_UPLOAD",
+            "completed",
+            source="upload",
+            file_id=input_file_id,
+        )
+    )
     manifest_v4 = transition(
         manifest_v4, "input_uploaded", input_file_id=input_file_id
     )
@@ -176,6 +250,15 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             remote_input_file_id=input_file_id,
         )
 
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_SUBMIT",
+            "active",
+            source="batch_api",
+            file_id=input_file_id,
+            detail="Odesílám jediný pracovní POST dávky.",
+        )
+    )
     self._set(55, 0, "Odesílám pracovní dávku…", stage="BATCH SUBMIT")
     manifest_v4 = transition(manifest_v4, "submitting")
     _save_v4(self.log, manifest_v4)
@@ -231,6 +314,24 @@ def _submit_generate_batch(self: RunContext, client, manifest):
             "BATCH submit nemá potvrzené provider ID; automatické opakování je zablokováno."
         )
 
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_SUBMIT",
+            "completed",
+            source="batch_api",
+            batch_id=batch_id,
+            file_id=input_file_id,
+        )
+    )
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_STATE",
+            "active",
+            source="disk",
+            batch_id=batch_id,
+            detail="Ukládám potvrzenou identitu dávky a stav běhu.",
+        )
+    )
     for order in work_orders.values():
         mark_submission(self.log, order, batch_id, unknown=False)
     manifest_v4 = transition(
@@ -248,7 +349,15 @@ def _submit_generate_batch(self: RunContext, client, manifest):
         }
     )
     self.log.save_json("manifests", "generate_batch_created", batch)
-    self.progress_event.emit(ProgressEvent("BATCH_SUBMIT", "completed", source="batch_api", batch_id=batch_id))
+    self.progress_event.emit(
+        ProgressEvent(
+            "BATCH_STATE",
+            "completed",
+            source="disk",
+            batch_id=batch_id,
+            file_id=input_file_id,
+        )
+    )
     self._set(
         100,
         0,

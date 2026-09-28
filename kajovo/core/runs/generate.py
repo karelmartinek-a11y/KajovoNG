@@ -45,10 +45,36 @@ def _run_v3_generate_production(
             if row.get("kind") != "text"
         }
         while pending_resources:
+            self.progress_event.emit(
+                ProgressEvent(
+                    "TARGET_READY",
+                    "active",
+                    completed=len(completed),
+                    total=len(selected),
+                    unit="cílů",
+                    source="validation",
+                    detail="Hledám netextový cíl s dostupnými závislostmi.",
+                )
+            )
             ready = sorted(
                 path
                 for path in pending_resources
                 if set(files_by_path[path].get("content_dependencies", [])) <= completed
+            )
+            self.progress_event.emit(
+                ProgressEvent(
+                    "TARGET_READY",
+                    "completed",
+                    completed=len(ready),
+                    total=len(pending_resources),
+                    unit="připravených cílů",
+                    source="validation",
+                    detail=(
+                        f"Připraveno {len(ready)} netextových cílů."
+                        if ready
+                        else "Žádný další netextový cíl zatím nemá splněné závislosti."
+                    ),
+                )
             )
             if not ready:
                 break
@@ -90,11 +116,30 @@ def _run_v3_generate_production(
                 "last_response_id": self._final_response_id or resp2_id,
             }
 
+        self.progress_event.emit(
+            ProgressEvent(
+                "TARGET_READY",
+                "active",
+                source="validation",
+                detail="Kontroluji připravenost textových cílů pro první dávkovou vlnu.",
+            )
+        )
         ready_text = {
             path
             for path in text_scope
             if set(files_by_path[path].get("content_dependencies", [])) <= completed
         }
+        self.progress_event.emit(
+            ProgressEvent(
+                "TARGET_READY",
+                "completed",
+                completed=len(ready_text),
+                total=len(text_scope),
+                unit="textových cílů",
+                source="validation",
+                detail=f"Do první dávkové vlny je připraveno {len(ready_text)} z {len(text_scope)} textových cílů.",
+            )
+        )
         if not ready_text:
             saved_map = self._save_out_files([])
             waiting = sorted(
@@ -167,10 +212,36 @@ def _run_v3_generate_production(
     total = max(1, len(pending))
     completed_count = 0
     while pending:
+        self.progress_event.emit(
+            ProgressEvent(
+                "TARGET_READY",
+                "active",
+                completed=completed_count,
+                total=total,
+                unit="cílů",
+                source="validation",
+                detail="Hledám další cíl se splněnými obsahovými závislostmi.",
+            )
+        )
         ready = sorted(
             path
             for path in pending
             if set(files_by_path[path].get("content_dependencies", [])) <= completed
+        )
+        self.progress_event.emit(
+            ProgressEvent(
+                "TARGET_READY",
+                "completed",
+                completed=len(ready),
+                total=len(pending),
+                unit="připravených cílů",
+                source="validation",
+                detail=(
+                    f"Připraveno {len(ready)} cílů pro další výrobní průchod."
+                    if ready
+                    else "Žádný další cíl nemá splněné obsahové závislosti."
+                ),
+            )
         )
         if not ready:
             break
@@ -244,7 +315,25 @@ def _run_v3_generate_production(
             }
             for path in blocked
         )
+    self.progress_event.emit(
+        ProgressEvent(
+            "OUTPUT_VALIDATE",
+            "active",
+            source="validation",
+            detail="Kontroluji dokončené cíle proti uloženým hashům a kontraktům.",
+        )
+    )
     self._verify_completed_files()
+    self.progress_event.emit(
+        ProgressEvent(
+            "OUTPUT_VALIDATE",
+            "completed",
+            completed=len(completed),
+            total=len(selected),
+            unit="cílů",
+            source="validation",
+        )
+    )
     if not resource_pending:
         self.progress_event.emit(ProgressEvent("A3", "completed", source="validation"))
     saved_map = self._save_out_files(out_files)
@@ -418,7 +507,20 @@ def _run_a_generate(
                 }
             )
 
+        self.progress_event.emit(
+            ProgressEvent("OUTPUT_VALIDATE", "active", source="validation")
+        )
         self._verify_completed_files()
+        self.progress_event.emit(
+            ProgressEvent(
+                "OUTPUT_VALIDATE",
+                "completed",
+                completed=len(out_files),
+                total=len(files),
+                unit="souborů",
+                source="validation",
+            )
+        )
         saved_map = self._save_out_files(out_files)
         missing_report = self._write_missing_files_report(skipped)
         missing = [row["path"] for row in skipped]
