@@ -3,7 +3,7 @@ name: semantic-audit-branch
 on:
   push:
     branches:
-      - audit/semantic-closure-20260928
+      - audit/semantic-closure-20260928-r2
 
 permissions:
   contents: write
@@ -43,7 +43,7 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/UI_VALIDATION_MATRIX.csv
             git commit -m "docs: regenerate canonical UI validation matrix"
-            git push origin HEAD:audit/semantic-closure-20260928
+            git push origin HEAD:audit/semantic-closure-20260928-r2
           }
       - uses: actions/upload-artifact@v4
         with:
