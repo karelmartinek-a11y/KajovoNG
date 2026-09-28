@@ -645,6 +645,31 @@ def _reference_parts(reference: str) -> tuple[Path, str]:
     return ROOT / raw_path, symbol
 
 
+def _symbol_exists(reference: str) -> bool:
+    path, symbol = _reference_parts(reference)
+    if not path.is_file():
+        return False
+    if not symbol:
+        return True
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    parts = symbol.split(".")
+    if len(parts) == 1:
+        return any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == parts[0]
+            for node in tree.body
+        )
+    if len(parts) == 2:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == parts[0]:
+                return any(
+                    isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and child.name == parts[1]
+                    for child in node.body
+                )
+    return False
+
+
 def _test_source(reference: str) -> str | None:
     path, symbol = _reference_parts(reference)
     if not path.is_file() or not symbol:
@@ -660,11 +685,10 @@ def _test_source(reference: str) -> str | None:
 def validate_runtime_inventory() -> tuple[list[dict], list[dict], dict]:
     errors: list[dict] = []
     unverified: list[dict] = []
-    owners = {
-        path: variant.id
-        for variant in RUNTIME_VARIANTS
-        for path in variant.runtime_paths
-    }
+    owners: dict[str, list[str]] = {}
+    for variant in RUNTIME_VARIANTS:
+        for path in variant.runtime_paths:
+            owners.setdefault(path, []).append(variant.id)
     discovered_sites = discover_provider_sites()
 
     discovered_modes = discover_workflow_modes()
@@ -700,10 +724,23 @@ def validate_runtime_inventory() -> tuple[list[dict], list[dict], dict]:
                     {"variant": variant.id, "path": path, "error": "Runtime vlastník odkazuje na chybějící soubor."}
                 )
         for step in variant.steps:
-            impl_path, _ = _reference_parts(step.implementation)
-            if not impl_path.is_file():
+            if not _symbol_exists(step.implementation):
                 errors.append(
-                    {"variant": variant.id, "step": step.name, "error": "Chybí implementace.", "reference": step.implementation}
+                    {
+                        "variant": variant.id,
+                        "step": step.name,
+                        "error": "Chybí deklarovaný implementační symbol.",
+                        "reference": step.implementation,
+                    }
+                )
+            if "::" in step.validator and not _symbol_exists(step.validator):
+                errors.append(
+                    {
+                        "variant": variant.id,
+                        "step": step.name,
+                        "error": "Chybí deklarovaný validační symbol.",
+                        "reference": step.validator,
+                    }
                 )
             for polarity, reference, marker in (
                 ("positive", step.positive_test, step.positive_marker),
