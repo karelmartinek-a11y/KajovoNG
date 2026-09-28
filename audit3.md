@@ -2,7 +2,7 @@
 
 ## Stav: dokonceny staticky audit
 
-Audit byl dokoncen nad pracovnim stromem ze dne 2026-09-24. Nejde o potvrzeni funkcnosti: nebyly spusteny testy, aplikace ani vzdalene API. Z puvodnich 11 bodu zustava v aktualni implementaci dolozeny nalez A3-010; ostatnich 10 bodu soucasny kod resi a jsou nize oznaceny jako uzavrene. V tomto statickem rozsahu nebyl potvrzen dalsi samostatny nalez.
+Všechny níže evidované nálezy jsou v aktuální implementaci uzavřené. Text jednotlivých položek zachovává popis kontrolované poruchy a jejího důvodu; stav položky určuje, zda jde o současnou chybu. Samotný tento dokument není důkazem funkčnosti a nenahrazuje zdrojový kód ani regresní testy.
 
 Puvodni inventar obsahoval 204 souboru. Zmenene soubory byly znovu porovnany a tabulka otiskuje aktualni pracovni strom. Pocty radku vyjadruji rozsah inventare, nikoli miru semanticke kontroly.
 
@@ -100,8 +100,6 @@ A3-001 az A3-009 a A3-011 jsou uzavrene podle dnesni implementace. Puvodni texty
 - A3-008: chyba uklidu legacy registru nezabrani vratit platny klic z keyringu.
 - A3-009: vector store se vytvari jen pri zapnutem file search.
 - A3-011: chybove vetve prechazeji do terminalniho lifecycle stavu.
-
-A3-010 zustava otevreny. `preparation._request` serializuje `input_value` do textu pozadavku; `_compile_source_attachments` zaroven pridava file/image ID pro zdroje v `_provider_inputs`. U pripravy A0R/B0R/A1/B1 tak muze byt stejny zdroj v inline JSON (`source.segments` nebo `selected_originals`) i jako prime prilozene soubory. Dopadem je duplicitni kontext a vetsi pozadavek; audit neurcuje cenu ani chovani vzdalenych modelu.
 
 ## Upřesnění dopadů a omezení nálezů
 
