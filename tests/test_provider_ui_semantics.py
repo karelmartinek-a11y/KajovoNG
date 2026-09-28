@@ -147,3 +147,89 @@ def test_photo_cancel_calls_provider_and_persists_returned_status(
     client.cancel_batch.assert_called_once_with("batch_photo")
     apply_status.assert_called_once_with(job, remote)
     save_job.assert_called_once_with(job, context.settings.log_dir)
+
+
+def test_resources_cancelled_upload_never_calls_provider(qtbot, tmp_path, monkeypatch):
+    client = Mock()
+    context = _context(qtbot, tmp_path, client)
+    page = ResourcesPage(context)
+    qtbot.addWidget(page)
+    _synchronous_execute(page, client)
+    monkeypatch.setattr(
+        "kajovo.studio.resources.QFileDialog.getOpenFileNames",
+        lambda *args, **kwargs: ([], ""),
+    )
+
+    page.upload()
+
+    client.upload_file.assert_not_called()
+    client.list_files.assert_not_called()
+
+
+def test_resources_cancelled_store_dialog_never_calls_provider(qtbot, tmp_path, monkeypatch):
+    client = Mock()
+    context = _context(qtbot, tmp_path, client)
+    page = ResourcesPage(context)
+    qtbot.addWidget(page)
+    _synchronous_execute(page, client)
+
+    class RejectedValue:
+        value = None
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.Rejected
+
+    monkeypatch.setattr("kajovo.studio.resources.ValueDialog", RejectedValue)
+
+    page.create_store()
+
+    client.create_vector_store.assert_not_called()
+    client.list_vector_stores.assert_not_called()
+
+
+def test_batch_cancel_ignores_non_cancellable_selection(qtbot, tmp_path, monkeypatch):
+    client = Mock()
+    context = _context(qtbot, tmp_path, client)
+    page = BatchesPage(context)
+    qtbot.addWidget(page)
+    _synchronous_execute(page, client)
+    page.records = [
+        {
+            "id": "batch_done",
+            "remote": {"id": "batch_done", "status": "completed"},
+            "state": {},
+            "run_dir": "",
+        }
+    ]
+    page.render()
+    page.table.selectRow(0)
+    confirm_call = Mock(return_value=True)
+    monkeypatch.setattr("kajovo.studio.batches.confirm", confirm_call)
+
+    page.cancel()
+
+    confirm_call.assert_not_called()
+    client.cancel_batch.assert_not_called()
+
+
+def test_photo_cancel_without_batch_id_never_calls_provider(qtbot, tmp_path, monkeypatch):
+    client = Mock()
+    context = _context(qtbot, tmp_path, client)
+    page = PhotosPage(context)
+    qtbot.addWidget(page)
+    _synchronous_execute(page, client)
+    monkeypatch.setattr(
+        page,
+        "selected_job",
+        lambda: SimpleNamespace(batch_id="", status="preparing"),
+    )
+    confirm_call = Mock(return_value=True)
+    monkeypatch.setattr("kajovo.studio.photos.confirm", confirm_call)
+
+    page.cancel_job()
+
+    confirm_call.assert_not_called()
+    client.cancel_batch.assert_not_called()
