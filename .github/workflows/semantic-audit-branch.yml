@@ -49,6 +49,9 @@ jobs:
         shell: pwsh
         run: |
           .venv\Scripts\python.exe -m pytest -q tests/test_audit_supporting_contracts.py tests/test_preparation_boundaries.py
+      - name: Semantic runtime audit
+        shell: pwsh
+        run: .venv\Scripts\python.exe tools/verify_semantic_flows.py --output semantic-flow-audit.json
       - name: Full pytest
         shell: pwsh
         run: .venv\Scripts\python.exe -m pytest -q
