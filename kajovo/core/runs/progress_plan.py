@@ -3,6 +3,7 @@
 
 def run_progress_plan(cfg):
     steps = [
+        "UI_VALIDATE",
         "RUN_START",
         "RUN_CHECK",
         "RUN_CONFIG",
