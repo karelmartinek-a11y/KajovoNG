@@ -79,7 +79,7 @@ def test_short_read_keeps_real_progress_evidence_without_popup(qtbot):
         "Převzetí výsledku",
     )
     release.set()
-    qtbot.waitUntil(lambda: not record.worker.isRunning())
+    qtbot.waitUntil(lambda: not manager.active)
     states = {(event.stage, event.state) for event in record.events}
     assert ("Příprava čtení", "completed") in states
     assert ("Porovnání verzí souboru", "completed") in states
