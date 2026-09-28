@@ -241,7 +241,7 @@ class Operations(QObject):
         stages = tuple(planned_steps) or (
             "Příprava čtení",
             str(title),
-            *("Převzetí výsledku",) if receive else (),
+            *(("Převzetí výsledku",) if receive else ()),
         )
         worker = Task(function, self, stages)
         record = Operation(identifier, title, worker, None)
