@@ -74,3 +74,34 @@ jobs:
           name: contract-links-${{ matrix.os }}-${{ github.sha }}
           path: contract-links-*.json
           if-no-files-found: error
+
+  semantic-flows:
+    name: semantic-flow-forensic-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Linux Qt runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Install semantic audit environment
+        run: python -m pip install -c requirements/constraints.txt -e '.[dev,build]'
+      - name: Complete semantic contract and process pass
+        run: python tools/verify_semantic_flows.py --output semantic-flow-audit.json
+      - name: Preserve semantic audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-flow-audit-${{ github.sha }}
+          path: semantic-flow-audit.json
+          if-no-files-found: error
