@@ -509,23 +509,24 @@ ovladač,PhaseInspector.self.error,caption,Statická konstrukce; nedokazuje funk
 ovladač,PhaseInspector.self.answer,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/history_overview.py:93
 signál,RunTrackView.self.doubleClicked,self._activate,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/history_timeline.py:170
 signál,RunTrackView.model.modelReset,self.update_scale,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/history_timeline.py:176
-ovladač,Operations.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:377
-ovladač,Operations.self.listing,QListWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:378
-ovladač,Operations.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:383
-ovladač,Operations.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:384
-ovladač,Operations.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:385
-signál,Operations.self.changed,self.refresh_overview,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:139
-signál,Operations.worker.value,"lambda value: setattr(record, 'result', value)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:190
-signál,Operations.worker.failure,"lambda error: setattr(record, 'error', error)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:191
-signál,Operations.worker.finished,finish,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:217
-signál,Operations.worker.progress_event,"lambda event: self._event(record, event)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:264
-signál,Operations.worker.status,dialog.inspector.append_log,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:266
-signál,Operations.worker.logline,dialog.inspector.append_log,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:268
-signál,Operations.success,accept_result,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:279
-signál,Operations.failure,"lambda error: setattr(record, 'error', error if isinstance(error, UserError) else describe_error(RuntimeError(str(error))))",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:280
-signál,Operations.worker.finished_err,"lambda error: setattr(record, 'error', record.error or describe_error(RuntimeError(str(error))))",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:288
-signál,Operations.worker.finished,"lambda: self._finished(record, receive)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:293
-signál,Operations.self.listing.itemDoubleClicked,self.open_selected,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:388
+ovladač,Operations.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:473
+ovladač,Operations.self.listing,QListWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:474
+ovladač,Operations.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:479
+ovladač,Operations.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:480
+ovladač,Operations.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:481
+signál,Operations.self.changed,self.refresh_overview,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:177
+signál,Operations.worker.value,accept_result,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:254
+signál,Operations.worker.failure,"lambda error: setattr(record, 'error', error)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:255
+signál,Operations.worker.progress_event,"lambda event: self._event(record, event)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:256
+signál,Operations.worker.finished,finish,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:296
+signál,Operations.worker.progress_event,"lambda event: self._event(record, event)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:345
+signál,Operations.worker.status,dialog.inspector.append_log,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:347
+signál,Operations.worker.logline,dialog.inspector.append_log,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:349
+signál,Operations.success,accept_result,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:360
+signál,Operations.failure,"lambda error: setattr(record, 'error', error if isinstance(error, UserError) else describe_error(RuntimeError(str(error))))",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:361
+signál,Operations.worker.finished_err,"lambda error: setattr(record, 'error', record.error or describe_error(RuntimeError(str(error))))",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:369
+signál,Operations.worker.finished,"lambda: self._finished(record, receive)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:374
+signál,Operations.self.listing.itemDoubleClicked,self.open_selected,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/operations.py:484
 ovladač,PhotosPage.self.tabs,QTabWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:58
 ovladač,PhotosPage.gallery,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:60
 ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:62
@@ -573,11 +574,11 @@ ovladač,PhotosPage.self.notice,caption,Statická konstrukce; nedokazuje funkčn
 ovladač,PhotosPage.self.start_button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:137
 ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:138
 ovladač,PhotosPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:377
-ovladač,PhotosPage.contents,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:468
-ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:472
-ovladač,PhotosPage.label,QLabel,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:473
-ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:478
-ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:479
+ovladač,PhotosPage.contents,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:494
+ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:498
+ovladač,PhotosPage.label,QLabel,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:499
+ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:504
+ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:505
 signál,PhotosPage.self.photos.paths_dropped,self.add_paths,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/photos.py:67
 signál,PhotosPage.self.photos.currentItemChanged,self.preview_source,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/photos.py:68
 signál,PhotosPage.self.photos.itemSelectionChanged,self.update_count,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/photos.py:69
@@ -587,7 +588,7 @@ signál,PhotosPage.self.prompt.textChanged,self._edited,Explicitní vazba signá
 signál,PhotosPage.self.form.changed,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/photos.py:141
 signál,PhotosPage.self.options.changed,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/photos.py:142
 signál,PhotosPage.record.worker.finished,release,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/photos.py:296
-signál,PhotosPage.selection.currentIndexChanged,render,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/photos.py:493
+signál,PhotosPage.selection.currentIndexChanged,render,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/photos.py:519
 ovladač,MultiProgressDialog.self.lifecycle_hint,label,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:31
 ovladač,MultiProgressDialog.self.notification,QCheckBox,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:33
 ovladač,MultiProgressDialog.button,QPushButton,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:46
@@ -707,41 +708,41 @@ ovladač,VersionsPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,k
 signál,VersionsPage.self.path.textChanged,self.invalidate,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/versions.py:23
 signál,VersionsPage.self.files.itemDoubleClicked,lambda item: self.open_file(),Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/versions.py:53
 signál,VersionsPage.record.worker.finished,"lambda: setattr(self, 'busy', False)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/versions.py:97
-ovladač,Workbench.self.tabs,QTabWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:66
-ovladač,Workbench.page,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:68
-ovladač,"Workbench.(box, layout)",panel,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:70
-ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:72
-ovladač,Workbench.self.prompt,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:76
-ovladač,Workbench.self.attachments,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:83
-ovladač,Workbench.self.validation,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:85
-ovladač,Workbench.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:88
-ovladač,Workbench.parameters,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:89
-ovladač,Workbench.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:94
-ovladač,Workbench.temperature,QDoubleSpinBox,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:102
-ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:106
+ovladač,Workbench.self.tabs,QTabWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:67
+ovladač,Workbench.page,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:69
+ovladač,"Workbench.(box, layout)",panel,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:71
+ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:73
+ovladač,Workbench.self.prompt,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:77
+ovladač,Workbench.self.attachments,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:84
+ovladač,Workbench.self.validation,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:86
+ovladač,Workbench.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:89
+ovladač,Workbench.parameters,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:90
+ovladač,Workbench.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:95
+ovladač,Workbench.temperature,QDoubleSpinBox,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:103
 ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:107
-ovladač,Workbench.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:120
-ovladač,Workbench.diagnostics,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:121
-ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:129
-ovladač,Workbench.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:133
-ovladač,Workbench.self.start_button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:136
-ovladač,Workbench.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:137
-ovladač,Workbench.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:138
+ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:108
+ovladač,Workbench.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:121
+ovladač,Workbench.diagnostics,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:122
+ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:130
+ovladač,Workbench.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:134
+ovladač,Workbench.self.start_button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:137
+ovladač,Workbench.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:138
 ovladač,Workbench.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:139
 ovladač,Workbench.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:140
-ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:158
-ovladač,Workbench.value,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:213
-ovladač,Workbench.target,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:304
-ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:305
-signál,Workbench.form.changed,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:143
-signál,Workbench.form.changed,self.validate,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:144
-signál,Workbench.self.prompt.textChanged,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:145
-signál,Workbench.self.prompt.textChanged,self.validate,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:146
-signál,Workbench.context.models_changed,self.refresh_models,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:147
-signál,Workbench.context.attachments_changed,self.update_attachments,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:148
-signál,Workbench.context.attachments_changed,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:149
-signál,Workbench.context.key_changed,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:150
-signál,Workbench.context.key_changed,self.validate,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:151
-signál,Workbench.self.widgets['mode'].currentIndexChanged,self.refresh_models,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:152
-signál,Workbench.self.widgets['send_as_c'].toggled,self.refresh_models,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:153
-signál,Workbench.worker.finished,"lambda: self.busy_outputs.pop(run_id, None)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:413
+ovladač,Workbench.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:141
+ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:159
+ovladač,Workbench.value,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:214
+ovladač,Workbench.target,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:305
+ovladač,Workbench.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:306
+signál,Workbench.form.changed,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:144
+signál,Workbench.form.changed,self.validate,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:145
+signál,Workbench.self.prompt.textChanged,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:146
+signál,Workbench.self.prompt.textChanged,self.validate,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:147
+signál,Workbench.context.models_changed,self.refresh_models,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:148
+signál,Workbench.context.attachments_changed,self.update_attachments,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:149
+signál,Workbench.context.attachments_changed,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:150
+signál,Workbench.context.key_changed,self._edited,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:151
+signál,Workbench.context.key_changed,self.validate,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:152
+signál,Workbench.self.widgets['mode'].currentIndexChanged,self.refresh_models,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:153
+signál,Workbench.self.widgets['send_as_c'].toggled,self.refresh_models,Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:154
+signál,Workbench.worker.finished,"lambda: self.busy_outputs.pop(run_id, None)",Explicitní vazba signálu; chování pokrývají testy oblasti,kajovo/studio/workbench.py:422
