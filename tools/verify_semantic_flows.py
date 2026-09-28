@@ -171,6 +171,7 @@ ALLOWED_DYNAMIC_PROVIDER_SITES = {
     "kajovo/core/contracts.py": "legacy-file-contract-factory",
     "kajovo/core/structured_output.py": "structured-output-factory",
     "kajovo/core/requirements.py": "requirements-schema-factory",
+    "kajovo/core/orchestration/preparation.py": "preparation-quality-gate-factory",
     "kajovo/core/cascade_pipeline.py": "cascade",
     "kajovo/core/cascade_production.py": "cascade",
     "kajovo/core/comic_service.py": "comic",
