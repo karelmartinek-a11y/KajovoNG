@@ -116,6 +116,16 @@ PROCESS_FAMILIES = (
         ),
     ),
     ProcessFamily(
+        "resource-delivery-and-verification",
+        "Netextové zdroje, ruční předání, verification profily a přímé Studio provider akce.",
+        (
+            "tests/test_remediation_resources.py",
+            "tests/test_verification_profiles.py",
+            "tests/test_provider_ui_semantics.py",
+            "tests/test_audit2_studio_resources.py",
+        ),
+    ),
+    ProcessFamily(
         "provider-transport",
         "Responses transport, retry klasifikace a zákaz dvojího submitu.",
         (
