@@ -26,9 +26,24 @@ class Task(QThread):
     status = Signal(str)
     logline = Signal(str)
 
-    def __init__(self, function, parent=None):
+    def __init__(self, function, parent=None, planned_steps=()):
         super().__init__(parent)
         self.function = function
+        self.planned_steps = tuple(planned_steps) or (
+            "Příprava operace",
+            "Provedení operace",
+        )
+        self.prepare_stage = self.planned_steps[0]
+        self.execute_stage = (
+            self.planned_steps[1]
+            if len(self.planned_steps) > 1
+            else self.planned_steps[0]
+        )
+        self.receive_stage = (
+            self.planned_steps[2]
+            if len(self.planned_steps) > 2
+            else ""
+        )
 
     def request_stop(self):
         self.requestInterruption()
@@ -39,27 +54,50 @@ class Task(QThread):
 
     def run(self):
         try:
-            self.progress_event.emit(ProgressEvent("PLAN", planned_steps=("OPERATION",)))
-            self.progress_event.emit(ProgressEvent("OPERATION"))
+            self.progress_event.emit(
+                ProgressEvent("PLAN", planned_steps=self.planned_steps)
+            )
+            self.progress_event.emit(
+                ProgressEvent(self.prepare_stage, "active", source="local")
+            )
+            self.check_stop()
+            self.progress_event.emit(
+                ProgressEvent(self.prepare_stage, "completed", source="validation")
+            )
+            self.progress_event.emit(
+                ProgressEvent(self.execute_stage, "active", source="local")
+            )
             result = self.function(self)
             status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
             step_status = status if status in {
                 "failed", "error", "corrupt_state", "expired", "cancelled", "stopped",
                 "submission_unknown", "response_pending", "partial", "unknown",
             } else "completed"
-            self.progress_event.emit(ProgressEvent("OPERATION", step_status))
+            self.progress_event.emit(
+                ProgressEvent(self.execute_stage, step_status, source="local")
+            )
             self.value.emit(result)
         except Cancelled:
+            self.progress_event.emit(
+                ProgressEvent(self.execute_stage, "cancelled", source="local")
+            )
             self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
         except Exception as error:
             from kajovo.core.response_journal import ResponseCancelled, ResponsePending, SubmissionUnknown
             from kajovo.core.openai_transport import SubmissionOutcomeUnknown
             if isinstance(error, ResponsePending):
-                self.progress_event.emit(ProgressEvent("RUN", "response_pending"))
+                state = "response_pending"
             elif isinstance(error, (SubmissionUnknown, SubmissionOutcomeUnknown)):
-                self.progress_event.emit(ProgressEvent("RUN", "submission_unknown"))
+                state = "submission_unknown"
             elif isinstance(error, ResponseCancelled) or getattr(error, "code", "") == "stopped":
-                self.progress_event.emit(ProgressEvent("RUN", "cancelled"))
+                state = "cancelled"
+            else:
+                state = "failed"
+            self.progress_event.emit(
+                ProgressEvent(self.execute_stage, state, source="local", detail=str(error))
+            )
+            if state != "failed":
+                self.progress_event.emit(ProgressEvent("RUN", state, detail=str(error)))
             self.failure.emit(describe_error(error))
 
 
@@ -162,8 +200,14 @@ class Operations(QObject):
         output_dir=None,
         write_roots=(),
         identifier=None,
+        planned_steps=(),
     ):
-        worker = Task(function, self)
+        stages = tuple(planned_steps) or (
+            "Příprava operace",
+            str(title),
+            *("Převzetí výsledku",) if receive else (),
+        )
+        worker = Task(function, self, stages)
         return self.adopt(
             title,
             worker,
@@ -175,29 +219,64 @@ class Operations(QObject):
             identifier=identifier,
         )
 
-    def start_read(self, title, function, receive=None, *, popup=False, identifier=None):
-        """Krátké lokální čtení bez konstrukce a uchovávání progresového dialogu.
+    def start_read(
+        self,
+        title,
+        function,
+        receive=None,
+        *,
+        popup=False,
+        identifier=None,
+        planned_steps=(),
+    ):
+        """Krátké lokální čtení bez automatického popupu.
 
-        Skutečné pracovní běhy používají nadále start/adopt, progres a zámky.
-        Čtení zůstává vlastněno managerem až do dokončení vlákna.
+        Čtení používá stejný doložený kruhový model jako ostatní operace.
+        Dialog se vytváří až na vyžádání v přehledu operací, takže rychlé
+        čtení nebliká na obrazovce, ale jeho probíhající kroky nejsou skryté.
         """
         identifier = identifier or uuid4().hex
         if identifier in self.records and not self.records[identifier].terminal:
             return self.records[identifier]
-        worker = Task(function, self)
+        stages = tuple(planned_steps) or (
+            "Příprava čtení",
+            str(title),
+            *("Převzetí výsledku",) if receive else (),
+        )
+        worker = Task(function, self, stages)
         record = Operation(identifier, title, worker, None)
         self.records[identifier] = record
-        worker.value.connect(lambda value: setattr(record, "result", value))
+
+        def accept_result(value):
+            record.result = value
+            record.result_received = True
+
+        worker.value.connect(accept_result)
         worker.failure.connect(lambda error: setattr(record, "error", error))
+        worker.progress_event.connect(lambda event: self._event(record, event))
 
         def finish():
             record.terminal = "failed" if record.error else "completed"
             if not record.error and receive:
+                stage = getattr(worker, "receive_stage", "")
+                if stage:
+                    self._event(record, ProgressEvent(stage, "active", source="local"))
                 try:
                     receive(record.result)
                 except Exception as error:
                     record.error = describe_error(error)
                     record.terminal = "failed"
+                    if stage:
+                        self._event(
+                            record,
+                            ProgressEvent(stage, "failed", source="local", detail=str(error)),
+                        )
+                else:
+                    if stage:
+                        self._event(
+                            record,
+                            ProgressEvent(stage, "completed", source="validation"),
+                        )
             if self.records.get(identifier) is record:
                 self.records.pop(identifier, None)
             self.completed.emit(identifier, record.result)
@@ -307,7 +386,8 @@ class Operations(QObject):
     def _event(self, record, event):
         record.events.append(event)
         record.events[:] = record.events[-2000:]
-        record.dialog.on_event(event)
+        if record.dialog is not None:
+            record.dialog.on_event(event)
 
     def _finished(self, record, receive):
         self._output_reservations.pop((id(self), record.identifier), None)
@@ -357,11 +437,25 @@ class Operations(QObject):
             and receive
             and record.terminal not in {"cancelled", "response_pending", "submission_unknown"}
         ):
+            stage = getattr(record.worker, "receive_stage", "")
+            if stage:
+                self._event(record, ProgressEvent(stage, "active", source="local"))
             try:
                 receive(record.result)
             except Exception as error:
                 record.error = describe_error(error)
                 record.terminal = "failed"
+                if stage:
+                    self._event(
+                        record,
+                        ProgressEvent(stage, "failed", source="local", detail=str(error)),
+                    )
+            else:
+                if stage:
+                    self._event(
+                        record,
+                        ProgressEvent(stage, "completed", source="validation"),
+                    )
         record.dialog.result = record.result
         record.dialog.finish(record.terminal, record.error)
         record.worker.deleteLater()
@@ -415,7 +509,11 @@ class Operations(QObject):
             if record is None:
                 return
             if record.dialog is None:
-                record.dialog = MultiProgressDialog(record.title, self.parent(), self.reduced_motion)
+                record.dialog = MultiProgressDialog(
+                    record.title, self.parent(), self.reduced_motion
+                )
+                for event in record.events:
+                    record.dialog.on_event(event)
             dialog = record.dialog
             dialog.show()
             dialog.raise_()
