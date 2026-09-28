@@ -233,3 +233,26 @@ def test_photo_cancel_without_batch_id_never_calls_provider(qtbot, tmp_path, mon
 
     confirm_call.assert_not_called()
     client.cancel_batch.assert_not_called()
+
+
+def test_resource_store_add_calls_provider_and_missing_store_blocks_it(
+    qtbot, tmp_path
+):
+    from kajovo.studio.resources import fill_records
+
+    client = Mock()
+    client.list_vector_store_files.return_value = [{"id": "file_one"}]
+    context = _context(qtbot, tmp_path, client)
+    page = ResourcesPage(context)
+    qtbot.addWidget(page)
+    _synchronous_execute(page, client)
+
+    page.add_files(["file_one"])
+    client.add_file_to_vector_store.assert_not_called()
+
+    fill_records(page.lists["stores"], [{"id": "store_one"}])
+    page.lists["stores"].setCurrentRow(0)
+    page.add_files(["file_one"])
+
+    client.add_file_to_vector_store.assert_called_once_with("store_one", "file_one")
+    client.list_vector_store_files.assert_called_once_with("store_one")
