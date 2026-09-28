@@ -97,6 +97,7 @@ PROCESS_FAMILIES = (
         "WorkOrder, provider operation identity, SQLite vazby, Run Bundle a filesystem hranice.",
         (
             "tests/test_orchestration_repository.py",
+            "tests/test_verification_profiles.py",
             "tests/test_filesystem_boundaries.py",
             "tests/test_run_bundle.py",
             "tests/test_run_contracts.py",
@@ -108,6 +109,7 @@ PROCESS_FAMILIES = (
         (
             "tests/test_clarification_wire_contracts.py",
             "tests/test_qa_evidence_links.py",
+            "tests/test_qfile_semantics.py",
             "tests/test_process_audit_regressions.py",
             "tests/test_request_rules.py",
         ),
