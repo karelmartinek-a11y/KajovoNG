@@ -1388,7 +1388,20 @@ def download_results(client, job, log_dir, reporter=None, progress=None):
 
 
 def _download_results_locked(client, job, log_dir, reporter=None, progress=None):
-    refresh_job(client, job, log_dir)
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PLAN",
+            planned_steps=(
+                "PHOTO_STATUS",
+                "PHOTO_DOWNLOAD",
+                "PHOTO_VALIDATE_RESULTS",
+                "PHOTO_WRITE",
+                "PHOTO_SUMMARY",
+            ),
+        ),
+    )
+    refresh_job(client, job, log_dir, progress=progress)
     terminal = {"completed", "failed", "expired", "cancelled"}
     if job.status not in terminal:
         raise ValueError(f"BATCH není v konečném stavu (stav: {job.status}).")
@@ -1405,6 +1418,27 @@ def _download_results_locked(client, job, log_dir, reporter=None, progress=None)
     seen: set[str] = set()
 
     result_sets = {}
+    remote_files = [
+        (file_id, name)
+        for file_id, name in (
+            (job.output_file_id, "batch_output.jsonl"),
+            (job.error_file_id, "batch_errors.jsonl"),
+        )
+        if file_id
+    ]
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_DOWNLOAD",
+            "active",
+            completed=0,
+            total=len(remote_files),
+            unit="souborů",
+            source="download",
+            batch_id=job.batch_id,
+        ),
+    )
+    downloaded_files = 0
     for file_id, name in ((job.output_file_id, "batch_output.jsonl"),
                           (job.error_file_id, "batch_errors.jsonl")):
         rows = []
@@ -1412,12 +1446,60 @@ def _download_results_locked(client, job, log_dir, reporter=None, progress=None)
             raw = client.file_content(file_id)
             _atomic_bytes(root / name, raw)
             rows = _jsonl(raw, name)
+            downloaded_files += 1
+            _photo_progress(
+                progress,
+                ProgressEvent(
+                    "PHOTO_DOWNLOAD",
+                    completed=downloaded_files,
+                    total=len(remote_files),
+                    unit="souborů",
+                    source="download",
+                    file_id=file_id,
+                    batch_id=job.batch_id,
+                    detail=name,
+                ),
+            )
         for row in rows:
             cid = str(row.get("custom_id") or "")
             if cid not in by_id or cid in seen:
                 raise ValueError(f"Neznámé nebo duplicitní custom_id: {cid}")
             seen.add(cid)
         result_sets[name] = rows
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_DOWNLOAD",
+            "completed",
+            completed=downloaded_files,
+            total=len(remote_files),
+            unit="souborů",
+            source="download",
+            batch_id=job.batch_id,
+        ),
+    )
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_VALIDATE_RESULTS",
+            "active",
+            completed=0,
+            total=len(job.items),
+            unit="fotografií",
+            source="validation",
+        ),
+    )
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_WRITE",
+            "active",
+            completed=0,
+            total=len(job.items),
+            unit="fotografií",
+            source="disk",
+        ),
+    )
 
     if job.output_file_id:
         rows = result_sets["batch_output.jsonl"]
@@ -1506,10 +1588,30 @@ def _download_results_locked(client, job, log_dir, reporter=None, progress=None)
             item.status = "downloaded"
             item.error_message = ""
             save_job(job, log_dir)
+            _photo_progress(
+                progress,
+                ProgressEvent(
+                    "PHOTO_VALIDATE_RESULTS",
+                    completed=index,
+                    total=len(job.items),
+                    unit="fotografií",
+                    source="validation",
+                    path=item.source_name,
+                ),
+            )
+            _photo_progress(
+                progress,
+                ProgressEvent(
+                    "PHOTO_WRITE",
+                    completed=index,
+                    total=len(job.items),
+                    unit="fotografií",
+                    source="disk",
+                    path=str(target),
+                ),
+            )
             if reporter:
                 reporter(f"Ukládám {index}/{len(rows)}: {target.name}")
-            if progress:
-                progress(10 + int(index / max(len(rows), 1) * 80))
 
     if job.error_file_id:
         for row in result_sets["batch_errors.jsonl"]:
@@ -1527,6 +1629,19 @@ def _download_results_locked(client, job, log_dir, reporter=None, progress=None)
         if cid not in seen and item.status != "downloaded":
             item.status = "failed"
             item.error_message = "missing_result: terminální dávka neobsahuje výsledek položky."
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_VALIDATE_RESULTS",
+            "completed",
+            completed=sum(
+                item.status in {"downloaded", "failed"} for item in job.items
+            ),
+            total=len(job.items),
+            unit="fotografií",
+            source="validation",
+        ),
+    )
     done = sum(item.status == "downloaded" for item in job.items)
     failed = sum(item.status == "failed" for item in job.items)
     job.request_completed = done
@@ -1538,9 +1653,39 @@ def _download_results_locked(client, job, log_dir, reporter=None, progress=None)
         if done
         else "failed"
     )
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_WRITE",
+            "completed" if not failed else "partial",
+            completed=done,
+            total=len(job.items),
+            unit="fotografií",
+            source="disk",
+        ),
+    )
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_SUMMARY",
+            "active",
+            source="local",
+            detail=f"Vyhodnocuji {done} úspěšných výsledků a {failed} chyb.",
+        ),
+    )
     save_job(job, log_dir)
     if reporter:
         reporter(f"Stažení dokončeno: {done} výsledků, {failed} chyb.")
-    if progress:
-        progress(100)
+    _photo_progress(
+        progress,
+        ProgressEvent(
+            "PHOTO_SUMMARY",
+            "completed" if not failed else "partial",
+            completed=done,
+            total=len(job.items),
+            unit="fotografií",
+            source="validation",
+            detail=f"Stažení dokončeno: {done} výsledků, {failed} chyb.",
+        ),
+    )
     return job
