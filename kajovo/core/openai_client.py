@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import copy
 import re
 import time
 import logging
@@ -349,6 +350,9 @@ class OpenAIClient:
         from .structured_output import validate_output
         from .contracts import ContractError
 
+        # Výchozí wire maska se doplňuje do vlastní kopie. Volající může stejný
+        # objekt držet jako zmrazený payload journalu pod již uloženým hashem.
+        payload = copy.deepcopy(payload)
         try:
             self.validate_access(payload)
             self._policy.ensure(payload)

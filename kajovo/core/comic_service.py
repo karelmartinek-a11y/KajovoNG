@@ -121,6 +121,9 @@ class ComicService:
         exists = (Path(self.settings.log_dir) / operation["run_id"] / "run_state.json").exists()
         log = RunLogger(self.settings.log_dir, operation["run_id"], project_name=project["name"], resume=exists, comic_operation_id=operation["id"])
         self.client.evidence_bundle = log.bundle
+        # Krok předchozí operace nesmí být přenesen do jiného Run Bundle.
+        # Konkrétní textový request si svůj nový krok naváže při provedení.
+        self.client.evidence_step_id = ""
         log.update_state({"mode": "COMIC", "comic_operation_id": operation["id"], "comic_library_dir": str(self.store.root),
                           "project": project["name"], "status": operation["status"]})
         return log
