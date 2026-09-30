@@ -10,6 +10,7 @@ from typing import Any
 import jsonschema
 
 from .contracts import canonical_sha256
+from .errors import OrchestrationError
 from .waves import build_execution_dag
 from ..context_limits import preparation_measurement
 from ..context_compiler import owned_obligations
@@ -660,6 +661,23 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
             raise ContractError(f"{resource['path']}: resource delivery není ve file indexu.")
         if not set(resource["criterion_ids"]) <= acceptance_ids:
             raise ContractError(f"{resource['path']}: neznámé criterion.")
+
+    # Výrobní pořadí je vlastností SPINE. Vadný předchůdce nesmí být přijat
+    # do checkpointu ani spustit placené DETAIL kroky před vlastní opravou.
+    try:
+        build_execution_dag({"spine": spine})
+    except OrchestrationError as exc:
+        raise ContractError(
+            str(exc),
+            issues=[ValidationIssue(
+                code=exc.code,
+                stage="A2_SPINE" if mode == "GENERATE" else "B2_SPINE",
+                pointer="/files",
+                message=str(exc),
+                expected="Proveditelné pořadí souborů bez cyklu obsahových závislostí.",
+                actual={row["path"]: row["content_dependencies"] for row in files},
+            )],
+        ) from exc
 
 
 def validate_file_spec_v1(worker, target: dict[str, Any], spine: dict[str, Any],
