@@ -407,11 +407,11 @@ def audit_studio(root: str | Path) -> dict[str, Any]:
     modules = [
         audit_module(path, root_path)
         for path in sorted(studio.glob("*.py"))
-        if path.name != "ui_audit.py"
+        if path.name != "ui_audit.py" and not path.name.startswith("._")
     ]
     # Vazba na zděděnou metodu je platná pouze po dohledání skutečného předka.
     trees = {path.stem: ast.parse(path.read_text(encoding="utf-8"))
-             for path in sorted(studio.glob("*.py"))}
+             for path in sorted(studio.glob("*.py")) if not path.name.startswith("._")}
     known = {}
     for module_name, tree in trees.items():
         imports = {}

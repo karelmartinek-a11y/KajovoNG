@@ -22,6 +22,8 @@ def _called_attribute_names(node: ast.AST) -> set[str]:
 def test_validation_named_functions_cannot_call_paid_generation_transport():
     violations = []
     for path in sorted(RUNTIME.rglob("*.py")):
+        if path.name.startswith("._"):
+            continue
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         for node in ast.walk(tree):

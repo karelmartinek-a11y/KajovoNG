@@ -45,7 +45,7 @@ ACTIVE_FILES = [
 
 
 def _runtime_files():
-    yield from sorted((ROOT / "kajovo").rglob("*.py"))
+    yield from (path for path in sorted((ROOT / "kajovo").rglob("*.py")) if not path.name.startswith("._"))
     yield from ACTIVE_FILES
 
 

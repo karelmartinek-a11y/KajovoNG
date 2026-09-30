@@ -11,7 +11,7 @@ def _python_files(*relative_roots: str):
         root = ROOT / relative_root
         if not root.exists():
             continue
-        yield from root.rglob("*.py")
+        yield from (path for path in root.rglob("*.py") if not path.name.startswith("._"))
 
 
 def _imports(path: Path) -> set[str]:

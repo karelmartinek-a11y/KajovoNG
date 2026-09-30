@@ -203,6 +203,8 @@ def test_git_editor_refuses_path_outside_project(tmp_path):
 def test_no_studio_module_imports_legacy_ui():
     root = Path(__file__).resolve().parents[1] / "kajovo" / "studio"
     for path in root.rglob("*.py"):
+        if path.name.startswith("._"):
+            continue
         assert "kajovo.desktop" not in path.read_text(encoding="utf-8")
 
 

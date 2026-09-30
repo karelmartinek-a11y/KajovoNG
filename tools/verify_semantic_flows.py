@@ -249,6 +249,8 @@ def _response_format_sites() -> dict:
     dynamic: list[dict] = []
     errors: list[dict] = []
     for path in sorted((ROOT / "kajovo").rglob("*.py")):
+        if path.name.startswith("._"):
+            continue
         rel = path.relative_to(ROOT).as_posix()
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)

@@ -64,3 +64,13 @@ def test_missing_or_malformed_json_fails(tmp_path):
     assert main([str(path)]) == 1
     path.write_text("{", encoding="utf-8")
     assert main([str(path)]) == 1
+
+
+def test_sidecar_is_not_python_source_and_real_missing_source_still_fails(source):
+    sidecar = source / "core/._run.py"
+    raw = b"\x00\x05\x16\x07\x00\x02Mac OS X\xff"
+    sidecar.write_bytes(raw)
+    assert check(report(), config(), source) == []
+    assert sidecar.read_bytes() == raw
+    (source / "core/uncovered.py").write_text("x = 2\n", encoding="utf-8")
+    assert check(report(), config(), source)

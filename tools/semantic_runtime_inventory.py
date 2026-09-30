@@ -621,6 +621,8 @@ def discover_history_modes() -> set[str]:
 def discover_provider_sites() -> list[dict]:
     sites: list[dict] = []
     for path in sorted((ROOT / "kajovo").rglob("*.py")):
+        if path.name.startswith("._"):
+            continue
         rel = path.relative_to(ROOT).as_posix()
         if rel in _PROVIDER_INFRASTRUCTURE:
             continue

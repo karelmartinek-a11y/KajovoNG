@@ -33,7 +33,7 @@ def render(root=ROOT):
                              module["source"] + ":" + str(control["line"])])
         for connection in module["connections"]:
             writer.writerow(["signál", connection["class"] + "." + connection["signal"],
-                             connection["target"], "Explicitní vazba signálu; chování pokrývají testy oblasti",
+                             connection["target"], "Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář",
                              module["source"] + ":" + str(connection["line"])])
     return stream.getvalue()
 

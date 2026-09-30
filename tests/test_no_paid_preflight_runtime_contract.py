@@ -16,6 +16,8 @@ LEGACY_READ_ONLY_FILES = {
 
 def _runtime_sources():
     for path in sorted(RUNTIME.rglob("*.py")):
+        if path.name.startswith("._"):
+            continue
         yield path, path.read_text(encoding="utf-8")
 
 

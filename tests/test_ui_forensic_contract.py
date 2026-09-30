@@ -31,7 +31,7 @@ def test_ui_audit_covers_every_studio_module():
     expected = {
         path.relative_to(ROOT).as_posix()
         for path in (ROOT / "kajovo" / "studio").glob("*.py")
-        if path.name != "ui_audit.py"
+        if path.name != "ui_audit.py" and not path.name.startswith("._")
     }
     actual = {module["source"] for module in result["modules"]}
     assert actual == expected
@@ -63,6 +63,7 @@ def test_active_ui_has_no_stale_redaction_claims():
     source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "kajovo" / "studio").glob("*.py"))
+        if not path.name.startswith("._")
     )
     assert "redakce známých tajných polí je vždy aktivní" not in source.lower()
 
@@ -81,3 +82,16 @@ def test_real_feature_installers_are_wired_into_application_entrypoint(qtbot, tm
     qtbot.addWidget(window)
     assert isinstance(window.pages["history"], HistoryPage)
     assert isinstance(window.pages["photos"], PhotosPage)
+
+
+def test_ui_inventory_preserves_and_excludes_appledouble_sidecar(tmp_path):
+    studio = tmp_path / "kajovo/studio"
+    studio.mkdir(parents=True)
+    source = studio / "page.py"
+    source.write_text('class Page:\n    def refresh(self):\n        pass\n', encoding="utf-8")
+    sidecar = studio / "._page.py"
+    raw = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X\xff"
+    sidecar.write_bytes(raw)
+    result = audit_studio(tmp_path)
+    assert [module["source"] for module in result["modules"]] == ["kajovo/studio/page.py"]
+    assert sidecar.read_bytes() == raw

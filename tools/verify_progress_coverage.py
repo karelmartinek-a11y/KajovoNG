@@ -129,6 +129,8 @@ def main() -> int:
 
     studio_root = ROOT / "kajovo" / "studio"
     for path in studio_root.rglob("*.py"):
+        if path.name.startswith("._"):
+            continue
         source = path.read_text(encoding="utf-8")
         if "QProgressDialog" in source:
             errors.append(

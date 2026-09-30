@@ -42,7 +42,8 @@ def check(report: dict, config: dict, root: Path) -> list[str]:
         for pattern in patterns:
             if not isinstance(pattern, str) or ".." in Path(pattern).parts or Path(pattern).is_absolute():
                 raise ValueError(f"{name}: neplatný vzor cesty.")
-            matched = {p.relative_to(root).as_posix() for p in root.glob(pattern) if p.is_file()}
+            matched = {p.relative_to(root).as_posix() for p in root.glob(pattern)
+                       if p.is_file() and not p.name.startswith("._")}
             if not matched:
                 failures.append(f"{name}: vzor {pattern} neodpovídá žádnému souboru")
             selected.update(matched)
