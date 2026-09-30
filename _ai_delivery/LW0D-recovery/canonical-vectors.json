@@ -1,0 +1,20 @@
+{
+  "format": "KCML-CANONICAL-JSON/1",
+  "accepted": [
+    {"name": "keys", "input": "{\"b\":2,\"a\":1}", "canonical": "{\"a\":1,\"b\":2}"},
+    {"name": "negative-zero", "input": "{\"x\":-0.0}", "canonical": "{\"x\":0}"},
+    {"name": "numbers", "input": "[1e-7,1e-6,1e20,1e21]", "canonical": "[1e-7,0.000001,100000000000000000000,1e+21]"},
+    {"name": "escaping", "input": "{\"x\":\"\\u000f\\n\\t\\\"\\\\/\"}", "canonical": "{\"x\":\"\\u000f\\n\\t\\\"\\\\/\"}"},
+    {"name": "utf16-order", "input": "{\"\":2,\"😀\":1}", "canonical": "{\"😀\":1,\"\":2}"},
+    {"name": "no-unicode-normalization", "input": "[\"é\",\"é\"]", "canonical": "[\"é\",\"é\"]"},
+    {"name": "bigint-string", "input": "{\"sequence\":\"9223372036854775807\"}", "canonical": "{\"sequence\":\"9223372036854775807\"}"}
+  ],
+  "rejected": [
+    {"name": "duplicate-key", "input": "{\"a\":1,\"a\":2}", "reason": "duplicate decoded member"},
+    {"name": "escaped-duplicate-key", "input": "{\"a\":1,\"\\u0061\":2}", "reason": "duplicate decoded member"},
+    {"name": "nonfinite", "input": "[NaN]", "reason": "invalid JSON number"},
+    {"name": "overflow", "input": "[1e400]", "reason": "non-finite binary64"},
+    {"name": "lone-surrogate", "input": "[\"\\ud800\"]", "reason": "invalid Unicode"}
+  ],
+  "rejected_exact_integer_fields": ["-0", "+1", "01", "1.0", "1e2", " 1"]
+}

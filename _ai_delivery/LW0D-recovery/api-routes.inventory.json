@@ -1,0 +1,2517 @@
+[
+  {
+    "method": "GET",
+    "path": "/operations/catalog",
+    "source_section": "26.1"
+  },
+  {
+    "method": "POST",
+    "path": "/operations/:operationKey/invoke",
+    "source_section": "26.1"
+  },
+  {
+    "method": "POST",
+    "path": "/auth/login",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/auth/login/mfa",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/auth/logout",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/auth/api-key-session",
+    "source_section": "26.2"
+  },
+  {
+    "method": "GET",
+    "path": "/session",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/session/reauthenticate",
+    "source_section": "26.2"
+  },
+  {
+    "method": "GET",
+    "path": "/owner/security",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/owner/mfa/enroll",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/owner/mfa/verify",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/owner/recovery-codes/rotate",
+    "source_section": "26.2"
+  },
+  {
+    "method": "GET",
+    "path": "/owner/sessions",
+    "source_section": "26.2"
+  },
+  {
+    "method": "DELETE",
+    "path": "/owner/sessions/:id",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/owner/sessions/revoke-others",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/owner/sessions/revoke-all",
+    "source_section": "26.2"
+  },
+  {
+    "method": "GET",
+    "path": "/owner/api-key",
+    "source_section": "26.2"
+  },
+  {
+    "method": "GET",
+    "path": "/owner/api-key/value",
+    "source_section": "26.2"
+  },
+  {
+    "method": "POST",
+    "path": "/owner/api-key/rotate",
+    "source_section": "26.2"
+  },
+  {
+    "method": "GET",
+    "path": "/owner/api-key/usage",
+    "source_section": "26.2"
+  },
+  {
+    "method": "GET",
+    "path": "/dashboard/topology",
+    "source_section": "26.3"
+  },
+  {
+    "method": "PUT",
+    "path": "/dashboard/layout",
+    "source_section": "26.3"
+  },
+  {
+    "method": "GET",
+    "path": "/dashboard/events",
+    "source_section": "26.3"
+  },
+  {
+    "method": "GET",
+    "path": "/dashboard/identity-cards",
+    "source_section": "26.3"
+  },
+  {
+    "method": "POST",
+    "path": "/dashboard/connections/preview",
+    "source_section": "26.3"
+  },
+  {
+    "method": "POST",
+    "path": "/dashboard/connections",
+    "source_section": "26.3"
+  },
+  {
+    "method": "PUT",
+    "path": "/dashboard/connections/:id/binding",
+    "source_section": "26.3"
+  },
+  {
+    "method": "DELETE",
+    "path": "/dashboard/connections/:id",
+    "source_section": "26.3"
+  },
+  {
+    "method": "PUT",
+    "path": "/dashboard/nodes/:id/suspension",
+    "source_section": "26.3"
+  },
+  {
+    "method": "GET",
+    "path": "/dashboard/nodes/:id/deregistration-preview",
+    "source_section": "26.3"
+  },
+  {
+    "method": "POST",
+    "path": "/dashboard/nodes/:id/deregister",
+    "source_section": "26.3"
+  },
+  {
+    "method": "POST",
+    "path": "/dashboard/secrets/:secretId/bindings",
+    "source_section": "26.3"
+  },
+  {
+    "method": "DELETE",
+    "path": "/dashboard/secrets/:secretId/bindings/:nodeId",
+    "source_section": "26.3"
+  },
+  {
+    "method": "GET",
+    "path": "/dashboard/secrets/:secretId/bindings/bulk-preview",
+    "source_section": "26.3"
+  },
+  {
+    "method": "POST",
+    "path": "/dashboard/secrets/:secretId/bindings/bulk",
+    "source_section": "26.3"
+  },
+  {
+    "method": "GET",
+    "path": "/components",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/components/:id",
+    "source_section": "26.4"
+  },
+  {
+    "method": "PATCH",
+    "path": "/components/:id",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/components/:id/revisions",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/revisions",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/components/:id/releases",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/validate",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/verify",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/activate",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/enable",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/disable",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/suspend",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/quarantine",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/restore",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/rollback",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/repair",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/recertify",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/e2e-runs",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/state-queries",
+    "source_section": "26.4"
+  },
+  {
+    "method": "POST",
+    "path": "/components/:id/heartbeat-challenges",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/components/:id/logs",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/components/:id/audit",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/components/:id/bindings",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/components/:id/secrets",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/components/:id/usage",
+    "source_section": "26.4"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-servers",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-servers/:id",
+    "source_section": "26.5"
+  },
+  {
+    "method": "PATCH",
+    "path": "/mcp-servers/:id",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-servers/:id/revisions",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/revisions",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-servers/:id/revisions/:revisionId",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/revisions/:revisionId/validate",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/revisions/:revisionId/verify",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/revisions/:revisionId/activate",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/revisions/:revisionId/compatibility",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-servers/:id/discovery-snapshots",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/discovery-snapshots",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-servers/:id/discovery-snapshots/:snapshotId",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-servers/:id/discovery-snapshots/:snapshotId/diff",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-servers/:id/registration-probes",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/era-probe",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/server-discover-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/request-metadata-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/streamable-http-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/cache-pagination-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/mrtr-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/tasks-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/wire-edge-matrix",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/tools/list-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/resources/list-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/resources/templates/list-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/prompts/list-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/tools/:toolName/call-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-servers/:id/subscriptions/list-test",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-request-events",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-request-events/:requestEventId",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-request-events/:requestEventId/raw",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-call-runs",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-call-runs/:callId",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-call-runs/:callId/events",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-call-runs/:callId/outcome",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-call-runs/:callId/cancel",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-call-runs/:callId/reconcile",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-call-runs/:callId/input-exchanges",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-input-exchanges/:exchangeId",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-input-exchanges/:exchangeId/respond",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-subscriptions",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-subscriptions/:subscriptionId",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-subscriptions/:subscriptionId/cancel",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-subscriptions/:subscriptionId/notifications",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-state-handles",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-state-handles/:handleId",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-state-handles/:handleId/close",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-tasks",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-tasks/:taskId",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-tasks/:taskId/update",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-tasks/:taskId/cancel",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-tasks/:taskId/events",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-tools",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-tools",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-tools/:id",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-tools/:id/revisions",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-tools/:id/callers",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-tools/:id/usage",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-resources",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-resources/:id",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-resource-templates",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-resource-templates/:id",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-prompts",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-prompts/:id",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/mcp-aliases",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-aliases/preview",
+    "source_section": "26.5"
+  },
+  {
+    "method": "POST",
+    "path": "/mcp-aliases",
+    "source_section": "26.5"
+  },
+  {
+    "method": "DELETE",
+    "path": "/mcp-aliases/:id",
+    "source_section": "26.5"
+  },
+  {
+    "method": "GET",
+    "path": "/agents",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id",
+    "source_section": "26.6"
+  },
+  {
+    "method": "PATCH",
+    "path": "/agents/:id",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/revisions",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/revisions",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/revisions/:revisionId",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/revisions/:revisionId/validate",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/revisions/:revisionId/verify",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/revisions/:revisionId/activate",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/revisions/:revisionId/compatibility",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/revisions/:revisionId/tool-bindings",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/revisions/:revisionId/tool-bindings/preview",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/revisions/:revisionId/handoffs",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/revisions/:revisionId/guardrails",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/revisions/:revisionId/promotion-gates",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/enable",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/disable",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/repair",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/runs",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/runs",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-runs/:runId",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-runs/:runId/events",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-runs/:runId/checkpoints",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-runs/:runId/messages",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-runs/:runId/pause",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-runs/:runId/resume",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-runs/:runId/cancel",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-runs/:runId/tool-calls",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-runs/:runId/handoffs",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-runs/:runId/approvals",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-runs/:runId/approvals/:approvalId/approve",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-runs/:runId/approvals/:approvalId/reject",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/sessions",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-sessions/:sessionId",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-sessions/:sessionId/items",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-sessions/:sessionId/compact",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-sessions/:sessionId/close",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/memory",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/memory/search",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/memory/items",
+    "source_section": "26.6"
+  },
+  {
+    "method": "DELETE",
+    "path": "/agents/:id/memory/items/:itemId",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/eval-suites",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/eval-suites",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-eval-suites/:suiteId",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agent-eval-suites/:suiteId/runs",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-eval-runs/:runId",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agent-eval-runs/:runId/cases",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/agents/:id/triggers",
+    "source_section": "26.6"
+  },
+  {
+    "method": "POST",
+    "path": "/agents/:id/triggers",
+    "source_section": "26.6"
+  },
+  {
+    "method": "PATCH",
+    "path": "/agents/:id/triggers/:triggerId",
+    "source_section": "26.6"
+  },
+  {
+    "method": "DELETE",
+    "path": "/agents/:id/triggers/:triggerId",
+    "source_section": "26.6"
+  },
+  {
+    "method": "GET",
+    "path": "/chat/conversations",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "POST",
+    "path": "/chat/conversations",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "GET",
+    "path": "/chat/conversations/:id",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "GET",
+    "path": "/chat/conversations/:id/messages",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "POST",
+    "path": "/chat/conversations/:id/messages",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "GET",
+    "path": "/chat/conversations/:id/events",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "POST",
+    "path": "/chat/conversations/:id/cancel",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "GET",
+    "path": "/chat/conversations/:id/browser-sessions",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "POST",
+    "path": "/chat/conversations/:id/browser-sessions",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "POST",
+    "path": "/chat/conversations/:id/browser-sessions/:sessionId/attach",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "POST",
+    "path": "/chat/ask",
+    "source_section": "26.6.1"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-calls",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-calls/:id",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-calls/:id/request-descriptor",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-calls/:id/events",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-calls/:id/output-items",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-calls/:id/tool-dispatches",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-calls/:id/continuations",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-calls/:id/checkpoints",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/model-calls/:id/retrieve",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/model-calls/:id/resume-stream",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/model-calls/:id/request-cancel",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/model-calls/:id/reconcile",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-capabilities",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "GET",
+    "path": "/ai/model-capabilities/:snapshotId",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "POST",
+    "path": "/ai/model-capabilities/refresh",
+    "source_section": "26.6.2"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/snapshot",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/messages",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/messages",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/turns",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/events",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/sources",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/sources",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/sources/:sourceId",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/facts",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/owner-decisions",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/capability-snapshots",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/capability-snapshots/refresh",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/spec",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/spec/revisions",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/spec/revisions/:revisionId",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/spec/revisions/:revisionId/precheck",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/approve-spec",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/authority",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/plans",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/plans/:planId",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/plans/:planId/validate",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/phases",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/phases/:phaseRunId",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/checkpoints",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/model-calls",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/tool-events",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/workspace/revisions",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/workspace/revisions/:revisionId",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/workspace/revisions/:revisionId/files",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/workspace/patches",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/contract-candidates",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/artifact-manifests",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/artifacts",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/validation-runs",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/validation-runs/:runId",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/validation-runs",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/blockers",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/blockers/:blockerId/resolve",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/activation-set",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/cancel",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/retry",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/follow-up",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/resume",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/releases",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/logs",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/audit",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/browser/session",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/session",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/browser/preview",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/attach",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/credentials",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/account/save",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/operation-scope",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/confirmations",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/generation/jobs/:id/browser/teaching",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/teaching",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/teaching/preflight",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/teaching/replay",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/takeover",
+    "source_section": "26.7"
+  },
+  {
+    "method": "POST",
+    "path": "/generation/jobs/:id/browser/return-to-ai",
+    "source_section": "26.7"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/snapshot",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/events",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/pages",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/pages",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/pages/:pageId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/pages/:pageId/activate",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/pages/:pageId/close",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/frames",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/documents",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/navigations",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/observe",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/actions",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/actions/:actionId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/actions/:actionId/attempts",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/actions/:actionId/cancel",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/actions/:actionId/reconcile",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/actions/:actionId/resolve-outcome",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/control",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/control/acquire",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/control/release",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/control/return-to-ai",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/control-transfers",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/operation-scopes",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/targets",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/targets/pick",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/targets/:targetId/revalidate",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/credentials",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/auth/verify",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/auth-attempts",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/accounts/save",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/state-bundles/capture",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/dialogs/:dialogId/respond",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/permissions/:requestId/respond",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/challenges/:challengeId/resolve",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/pause",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/resume",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/recover",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/close",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/artifacts",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/uploads",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/downloads",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-sessions/:sessionId/preview-tickets",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-sessions/:sessionId/preview/latest",
+    "source_section": "26.8"
+  },
+  {
+    "method": "WSS",
+    "path": "/browser-sessions/:sessionId/preview/ws",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-accounts",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-accounts",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-accounts/:accountId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "PATCH",
+    "path": "/browser-accounts/:accountId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-accounts/:accountId/verify",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-accounts/:accountId/reauthenticate",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-accounts/:accountId/logout",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-accounts/:accountId/invalidate-state",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-accounts/:accountId/state-bundles",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-accounts/:accountId/state-bundles/:bundleId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-accounts/:accountId/state-bundles/:bundleId/verify",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-accounts/:accountId/state-bundles/:bundleId/activate",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-accounts/:accountId/state-bundles/:bundleId/invalidate",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-bridges",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-bridges/enrollments",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-bridges/enrollments/:enrollmentId/complete",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-bridges/:bridgeId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-bridges/:bridgeId/connections",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-bridges/:bridgeId/profiles",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-bridges/:bridgeId/test",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-bridges/:bridgeId/rotate-certificate",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-bridges/:bridgeId/revoke",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-automations",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-automations/:id",
+    "source_section": "26.8"
+  },
+  {
+    "method": "PATCH",
+    "path": "/browser-automations/:id",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-automations/:id/revisions",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/revisions",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-automations/:id/revisions/:revisionId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/revisions/:revisionId/preflight",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/revisions/:revisionId/verify",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/revisions/:revisionId/activate",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/revisions/:revisionId/rollback",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-automations/:id/auth-bindings",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/auth-bindings",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-automations/:id/schedules",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/schedules",
+    "source_section": "26.8"
+  },
+  {
+    "method": "PATCH",
+    "path": "/browser-automations/:id/schedules/:scheduleId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/teaching-runs",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-teaching-runs/:teachingRunId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-teaching-runs/:teachingRunId/stop",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-teaching-runs/:teachingRunId/compile",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/runs",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-automations/:id/runs",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-runs/:runId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-runs/:runId/session",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-runs/:runId/steps",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-runs/:runId/control/acquire",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-runs/:runId/control/release",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-runs/:runId/control/return-to-runtime",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-runs/:runId/cancel",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-runs/:runId/reauthenticate",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-runs/:runId/reconcile",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-runs/:runId/resolve-outcome",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-runs/:runId/challenges/:challengeId/resolve",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-runs/:runId/artifacts",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/browser-runs/:runId/artifacts/:artifactId",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/enable",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/disable",
+    "source_section": "26.8"
+  },
+  {
+    "method": "POST",
+    "path": "/browser-automations/:id/repair",
+    "source_section": "26.8"
+  },
+  {
+    "method": "GET",
+    "path": "/secrets",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets",
+    "source_section": "26.9"
+  },
+  {
+    "method": "GET",
+    "path": "/secrets/:id",
+    "source_section": "26.9"
+  },
+  {
+    "method": "PATCH",
+    "path": "/secrets/:id",
+    "source_section": "26.9"
+  },
+  {
+    "method": "DELETE",
+    "path": "/secrets/:id",
+    "source_section": "26.9"
+  },
+  {
+    "method": "GET",
+    "path": "/secrets/:id/value",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets/:id/versions",
+    "source_section": "26.9"
+  },
+  {
+    "method": "GET",
+    "path": "/secrets/:id/versions",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets/:id/versions/:versionId/activate",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets/:id/rotate",
+    "source_section": "26.9"
+  },
+  {
+    "method": "GET",
+    "path": "/secrets/:id/bindings",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets/:id/bindings",
+    "source_section": "26.9"
+  },
+  {
+    "method": "DELETE",
+    "path": "/secrets/:id/bindings/:bindingId",
+    "source_section": "26.9"
+  },
+  {
+    "method": "GET",
+    "path": "/secrets/:id/usage",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets/:id/test-resolve",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets/generate-password",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets/import",
+    "source_section": "26.9"
+  },
+  {
+    "method": "POST",
+    "path": "/secrets/export",
+    "source_section": "26.9"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/executions",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/executions/:id",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/instances",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/instances/:id",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/instances/:id/processes",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/instances/:id/connections",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/instances/:id/calls",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/instances/:id/sandbox",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/instances/:id/cleanup",
+    "source_section": "26.10"
+  },
+  {
+    "method": "POST",
+    "path": "/runtime/instances/:id/drain",
+    "source_section": "26.10"
+  },
+  {
+    "method": "POST",
+    "path": "/runtime/instances/:id/restart",
+    "source_section": "26.10"
+  },
+  {
+    "method": "POST",
+    "path": "/runtime/instances/:id/reconcile",
+    "source_section": "26.10"
+  },
+  {
+    "method": "POST",
+    "path": "/runtime/instances/:id/verify-boundary",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/runtime/boundary/evidence",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/bindings",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/bindings/:id",
+    "source_section": "26.10"
+  },
+  {
+    "method": "POST",
+    "path": "/bindings/preview",
+    "source_section": "26.10"
+  },
+  {
+    "method": "POST",
+    "path": "/bindings/test",
+    "source_section": "26.10"
+  },
+  {
+    "method": "GET",
+    "path": "/external/targets",
+    "source_section": "26.11"
+  },
+  {
+    "method": "POST",
+    "path": "/external/targets",
+    "source_section": "26.11"
+  },
+  {
+    "method": "GET",
+    "path": "/external/targets/:id",
+    "source_section": "26.11"
+  },
+  {
+    "method": "PATCH",
+    "path": "/external/targets/:id",
+    "source_section": "26.11"
+  },
+  {
+    "method": "POST",
+    "path": "/external/targets/:id/test",
+    "source_section": "26.11"
+  },
+  {
+    "method": "POST",
+    "path": "/external/targets/:id/circuit/open",
+    "source_section": "26.11"
+  },
+  {
+    "method": "POST",
+    "path": "/external/targets/:id/circuit/close",
+    "source_section": "26.11"
+  },
+  {
+    "method": "GET",
+    "path": "/external/auth-bindings",
+    "source_section": "26.11"
+  },
+  {
+    "method": "POST",
+    "path": "/external/auth-bindings",
+    "source_section": "26.11"
+  },
+  {
+    "method": "PATCH",
+    "path": "/external/auth-bindings/:id",
+    "source_section": "26.11"
+  },
+  {
+    "method": "GET",
+    "path": "/external/target-bindings",
+    "source_section": "26.11"
+  },
+  {
+    "method": "POST",
+    "path": "/external/target-bindings",
+    "source_section": "26.11"
+  },
+  {
+    "method": "DELETE",
+    "path": "/external/target-bindings/:id",
+    "source_section": "26.11"
+  },
+  {
+    "method": "GET",
+    "path": "/external/requests",
+    "source_section": "26.11"
+  },
+  {
+    "method": "GET",
+    "path": "/webhooks",
+    "source_section": "26.11"
+  },
+  {
+    "method": "POST",
+    "path": "/webhooks/test",
+    "source_section": "26.11"
+  },
+  {
+    "method": "GET",
+    "path": "/monitoring/overview",
+    "source_section": "26.12"
+  },
+  {
+    "method": "GET",
+    "path": "/monitoring/probes",
+    "source_section": "26.12"
+  },
+  {
+    "method": "GET",
+    "path": "/monitoring/state-history",
+    "source_section": "26.12"
+  },
+  {
+    "method": "GET",
+    "path": "/monitoring/profiles",
+    "source_section": "26.12"
+  },
+  {
+    "method": "PUT",
+    "path": "/monitoring/profiles/:componentId",
+    "source_section": "26.12"
+  },
+  {
+    "method": "POST",
+    "path": "/monitoring/probe/run",
+    "source_section": "26.12"
+  },
+  {
+    "method": "GET",
+    "path": "/alerts",
+    "source_section": "26.12"
+  },
+  {
+    "method": "GET",
+    "path": "/alerts/:id",
+    "source_section": "26.12"
+  },
+  {
+    "method": "POST",
+    "path": "/alerts/:id/acknowledge",
+    "source_section": "26.12"
+  },
+  {
+    "method": "POST",
+    "path": "/alerts/:id/suppress",
+    "source_section": "26.12"
+  },
+  {
+    "method": "POST",
+    "path": "/alerts/:id/close",
+    "source_section": "26.12"
+  },
+  {
+    "method": "GET",
+    "path": "/alerts/:id/deliveries",
+    "source_section": "26.12"
+  },
+  {
+    "method": "POST",
+    "path": "/alerts/channels/test",
+    "source_section": "26.12"
+  },
+  {
+    "method": "GET",
+    "path": "/workers/heartbeats",
+    "source_section": "26.12"
+  },
+  {
+    "method": "GET",
+    "path": "/audit/events",
+    "source_section": "26.13"
+  },
+  {
+    "method": "GET",
+    "path": "/audit/events/:id",
+    "source_section": "26.13"
+  },
+  {
+    "method": "GET",
+    "path": "/audit/integrity",
+    "source_section": "26.13"
+  },
+  {
+    "method": "POST",
+    "path": "/audit/integrity/verify",
+    "source_section": "26.13"
+  },
+  {
+    "method": "GET",
+    "path": "/audit/archive",
+    "source_section": "26.13"
+  },
+  {
+    "method": "GET",
+    "path": "/logs",
+    "source_section": "26.13"
+  },
+  {
+    "method": "GET",
+    "path": "/logs/stream",
+    "source_section": "26.13"
+  },
+  {
+    "method": "GET",
+    "path": "/logs/correlations/:correlationId",
+    "source_section": "26.13"
+  },
+  {
+    "method": "POST",
+    "path": "/logs/export",
+    "source_section": "26.13"
+  },
+  {
+    "method": "GET",
+    "path": "/config/settings",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/config/settings/:key",
+    "source_section": "26.14"
+  },
+  {
+    "method": "PUT",
+    "path": "/config/settings/:key",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/config/settings/:key/reset",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/config/validate",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/config/apply",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/config/export",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/config/import",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/releases",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/releases/:id",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/releases/:id/rollback",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/deployments",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/backups",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/backups",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/backups/:id/verify",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/acceptance-runs",
+    "source_section": "26.14"
+  },
+  {
+    "method": "POST",
+    "path": "/maintenance/restart-service",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/system/health",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/system/readiness",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/system/version",
+    "source_section": "26.14"
+  },
+  {
+    "method": "GET",
+    "path": "/self-tests/catalog",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/self-tests/fault-catalog",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/self-tests/models",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "POST",
+    "path": "/self-tests/runs",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/self-tests/runs",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/self-tests/runs/:id",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/self-tests/runs/:id/events",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/self-tests/runs/:id/history",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/self-tests/runs/:id/evidence",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "POST",
+    "path": "/self-tests/runs/:id/replay",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "POST",
+    "path": "/self-tests/runs/:id/shrink",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "POST",
+    "path": "/self-tests/runs/:id/cancel",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "POST",
+    "path": "/self-tests/runs/:id/cleanup",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/system/capabilities",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/system/recovery",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/system/closure",
+    "source_section": "26.14.1"
+  },
+  {
+    "method": "GET",
+    "path": "/authority/lineages/:id",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/authority/lineages/:id/graph",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/operation-intents/:id",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/operation-contexts/:id",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/operation-contexts/:id/action-plans",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/operation-contexts/:id/value-derivations",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/operation-contexts/:id/secret-uses",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/provenance/content/:id",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/provenance/content/:id/graph",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/agentic-security/events",
+    "source_section": "26.16"
+  },
+  {
+    "method": "GET",
+    "path": "/agentic-security/events/:id",
+    "source_section": "26.16"
+  },
+  {
+    "method": "POST",
+    "path": "/agentic-security/self-tests",
+    "source_section": "26.16"
+  },
+  {
+    "method": "POST",
+    "path": "/agentic-security/evidence/export",
+    "source_section": "26.16"
+  }
+]

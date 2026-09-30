@@ -22,6 +22,19 @@ def test_all_physical_contracts_have_distribution_and_runtime_bindings():
     assert actual and actual <= included
     inventory = schema_inventory()
     assert not inventory["errors"], inventory["errors"]
+    schema_names = {item["name"] for item in inventory["schemas"]}
+    assert "PHOTO_PLAN_V1" in schema_names
+    assert "kajovo.core.photo_batch.PHOTO_BATCH_CREATE_SCHEMA" in schema_names
+    assert {f"Cascade:file_{suffix}" for suffix in (
+        "txt", "md", "json", "csv", "xlsx", "docx", "pdf", "pptx", "png", "jpg", "jpeg", "zip"
+    )} <= schema_names
+    assert "Cascade:mixed_refs_decision" in schema_names
+    contracts = {item.get("contract") for item in inventory["schemas"] if item["kind"] == "provider_mask"}
+    assert {
+        "A1_PLAN", "A2_STRUCTURE_V2", "A3_FILE", "B3_FILE", "SCHEMA_PREPARATION",
+        "COMIC_BIBLE", "COMIC_ENTITY", "COMIC_STORY", "COMIC_SCRIPT",
+        "COMIC_STORYBOARD", "COMIC_CONTINUITY", "CASCADE_DOCUMENT_ARTIFACT_V1",
+    } <= contracts
     for script, separator in (("Build/build_windows.ps1", ";"), ("Build/build_macos.sh", ":")):
         assert f"resources/orchestration{separator}resources/orchestration" in (ROOT / script).read_text(encoding="utf-8")
 

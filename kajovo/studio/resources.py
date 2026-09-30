@@ -6,12 +6,13 @@ import json
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QFileDialog, QListWidget, QListWidgetItem,
+    QAbstractItemView, QDialog, QListWidget, QListWidgetItem,
     QPlainTextEdit, QTabWidget, QWidget,
 )
 
 
-from .components import DetailDialog, action, actions, caption, confirm, vertical
+from .components import DetailDialog, action, actions, caption, confirm, friendly_error, vertical
+from .file_dialogs import get_open_file_names
 
 
 def selected_ids(widget):
@@ -56,7 +57,7 @@ class ValueDialog(QDialog):
                 raise ValueError("Vyplňte hodnotu.")
             self.value = value
         except ValueError as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         self.accept()
 
@@ -143,7 +144,7 @@ class ResourcesPage(QWidget):
         try:
             client = self.context.client()
         except ValueError as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         key = self.context.api_key
         self.busy = True
@@ -179,7 +180,7 @@ class ResourcesPage(QWidget):
         self.context.attachments_changed.emit()
 
     def upload(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Nahrát soubory")
+        paths, _ = get_open_file_names(self, "Nahrát soubory")
         if not paths:
             return
 

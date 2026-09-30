@@ -14,11 +14,14 @@ from kajovo.core.photo_batch import (
     ImageEditBatchAdapter,
     PhotoBatchItem,
     download_results,
+    delete_job,
+    deleted_job_markers,
     image_edit_model_ids,
     image_edit_row,
     new_job,
     prepare_and_submit,
     refresh_job,
+    save_job,
     validate_image_edit_rows,
 )
 from kajovo.core.photo_prompt import professionalize_payload, professionalize_prompt
@@ -51,6 +54,52 @@ def test_custom_template_round_trip(tmp_path):
     store.delete(item.template_id)
     with pytest.raises(KeyError):
         store.get(item.template_id)
+
+
+def test_duplicate_template_uses_required_user_name(tmp_path):
+    store = PhotoTemplateStore(tmp_path / "templates.json")
+    source = store.create("Původní", "Ponechte kompozici.")
+    duplicate = store.duplicate(source.template_id, "Kopie")
+    assert duplicate.name == "Kopie"
+    assert duplicate.prompt == source.prompt
+
+
+def test_photo_job_can_defer_output_directory_until_download(tmp_path):
+    source = tmp_path / "photo.png"
+    source.write_bytes(_image_bytes())
+    job = new_job(
+        source_paths=[str(source)], human_prompt="x", professional_prompt="", final_prompt="x",
+        prompt_source="manual", template_id="", prompt_model="", prompt_response_id="",
+        image_model=_image_model(), quality="high", size="auto", output_format="png", output_dir="",
+    )
+    assert job.output_dir == ""
+    assert job.saved_output_dir == ""
+    with pytest.raises(ValueError, match="cílovou složku"):
+        download_results(Mock(), job, tmp_path / "LOG")
+
+
+def test_deleting_photo_job_hides_remote_identity_and_preserves_output(tmp_path):
+    source = tmp_path / "photo.png"
+    source.write_bytes(_image_bytes())
+    log_dir = tmp_path / "LOG"
+    job = new_job(
+        source_paths=[str(source)], human_prompt="x", professional_prompt="", final_prompt="x",
+        prompt_source="manual", template_id="", prompt_model="", prompt_response_id="",
+        image_model=_image_model(), quality="high", size="auto", output_format="png", output_dir="",
+    )
+    job.batch_id = "batch_to_hide"
+    job.input_file_id = "file_to_hide"
+    saved = save_job(job, log_dir)
+    output = tmp_path / "kept.png"
+    output.write_bytes(_image_bytes())
+    delete_job(job, log_dir)
+    assert not saved.exists()
+    assert output.is_file()
+    assert deleted_job_markers(log_dir) == [{
+        "job_id": job.job_id,
+        "batch_id": "batch_to_hide",
+        "input_file_id": "file_to_hide",
+    }]
 
 
 def test_professionalize_payload_is_real_responses_work_not_preflight():
@@ -436,6 +485,33 @@ def test_photo_studio_page_constructs_without_api(qtbot, tmp_path):
     assert page.start_button.isEnabled()
 
 
+def test_photo_folder_import_recurses_through_subdirectories(qtbot, tmp_path, monkeypatch):
+    from kajovo.core.config import AppSettings
+    from kajovo.studio.context import StudioContext
+    from kajovo.studio.operations import Operations
+    from kajovo.studio.photos import PhotosPage
+
+    folder = tmp_path / "album"
+    nested = folder / "subfolder"
+    nested.mkdir(parents=True)
+    (folder / "first.png").write_bytes(_image_bytes())
+    (nested / "second.jpg").write_bytes(_image_bytes("JPEG"))
+    (nested / "ignore.txt").write_text("not a photo", encoding="utf-8")
+    context = StudioContext(
+        AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache")),
+        Operations(None),
+        api_key="",
+    )
+    page = PhotosPage(context)
+    qtbot.addWidget(page)
+    monkeypatch.setattr("kajovo.studio.photos.get_existing_directory", lambda *args: str(folder))
+
+    page.pick_folder()
+
+    assert page.photos.count() == 2
+    assert {page.photos.item(i).text() for i in range(2)} == {"first.png", "second.jpg"}
+
+
 def test_photo_studio_is_real_main_navigation_page(qtbot, tmp_path):
     from kajovo.core.config import AppSettings
     from kajovo.studio.application import create_window
@@ -449,6 +525,30 @@ def test_photo_studio_is_real_main_navigation_page(qtbot, tmp_path):
     assert isinstance(window.pages["photos"], PhotosPage)
     window.select_page("photos")
     assert window.stack.widget(window.stack.currentIndex()).widget() is window.pages["photos"]
+
+
+def test_opening_photo_progress_schedules_quiet_refresh(qtbot, tmp_path, monkeypatch):
+    from kajovo.core.config import AppSettings
+    from kajovo.studio.context import StudioContext
+    from kajovo.studio.operations import Operations
+    from kajovo.studio.photos import PhotosPage
+
+    context = StudioContext(
+        AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache")),
+        Operations(None),
+        api_key="test-key",
+        client_factory=lambda *args, **kwargs: Mock(),
+    )
+    page = PhotosPage(context)
+    qtbot.addWidget(page)
+    calls = []
+    monkeypatch.setattr(page, "execute", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    page.page_activated()
+
+    assert calls
+    assert calls[0][1]["popup"] is False
+    assert calls[0][1]["identifier"] == "photos.jobs.refresh"
 
 
 

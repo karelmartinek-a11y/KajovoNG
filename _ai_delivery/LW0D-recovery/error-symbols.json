@@ -1,0 +1,41 @@
+{
+  "canonical_additions": {
+    "APPROVAL_ALREADY_DECIDED": {"classification": "conflict", "retry": "DO_NOT_RETRY", "source": "51.21", "action": "READ_COMMITTED_APPROVAL", "effect": "Neprovést druhé rozhodnutí; vrátit immutable outcome stejného idempotentního requestu."},
+    "PROTOCOL_CONFLICT": {"classification": "protocol", "retry": "DO_NOT_RETRY", "source": "51.14", "action": "STOP_PRODUCER_AND_INSPECT_EVIDENCE", "effect": "Uchovat obě evidence; případný effect samostatně reconciliovat, nikoli označit not-applied."}
+  },
+  "aliases": {
+    "UNRESOLVED_MUTATION_SEMANTICS": "BROWSER_MUTATION_TRIGGER_UNRESOLVED",
+    "OUTCOME_UNKNOWN": "KCIP_OUTCOME_UNKNOWN"
+  },
+  "non_error_symbols": {
+    "ALREADY_ACTIVE": "no-op výsledek, nikoli chyba",
+    "CANCELLED_CONFIRMED": "stav potvrzeného zrušení",
+    "CANCELLED_FINAL": "idempotency terminal state",
+    "CLIENT_CERTIFICATE_REQUIRED": "browser auth mode",
+    "CONTRACT_ERROR": "retry classifier",
+    "CREDENTIAL_REQUIRED": "generation blocker classification",
+    "DEPENDENCY_UNAVAILABLE": "retry classifier",
+    "FAILED_FINAL": "terminal state",
+    "FAILED_KNOWN": "recovery classification",
+    "FAILED_NOT_APPLIED": "známý effect outcome",
+    "CHALLENGE_REQUIRED": "browser session lifecycle",
+    "IGNORED_ALREADY_SATISFIED": "no-op výsledek",
+    "IGNORED_UNKNOWN": "výsledek ignorované neznámé položky",
+    "IN_PROGRESS": "stav práce",
+    "INPUT_REQUIRED": "stav čekání na vstup",
+    "MODEL_ERROR_HANDLER": "agent guardrail/error-handler druh",
+    "NEW_CAPABILITY_REQUIRED": "capability decision",
+    "NO_NEW_CODE_REQUIRED": "capability decision",
+    "NOT_FOUND": "lookup výsledek; na wire použít konkrétní subsystem code",
+    "OWNER_DECISION_REQUIRED": "approval policy",
+    "OWNER_DEVICE_REQUIRED": "browser auth mode",
+    "OWNER_INPUT_REQUIRED": "retry/blocker classification",
+    "POLICY_BLOCKED": "blocker classification",
+    "PROTOCOL_INVALID": "MCP era classification; wire code MCP_PROTOCOL_INVALID",
+    "REJECTED_INVALID": "stav odmítnutého kandidáta",
+    "SOURCE_CONFLICT": "generation blocker classification",
+    "STABLE_ERROR_CODE": "schematický placeholder v definici, nesmí být emitován",
+    "TRANSPORT_ERROR": "transport outcome classification",
+    "UNKNOWN_SIDE_EFFECT": "retry classifier, nikoli wire code"
+  }
+}

@@ -136,7 +136,7 @@ class MultiProgressDialog(QDialog):
     def show_details(self):
         if self.error is not None:
             DetailDialog("Podrobnosti chyby", self.error.message, self,
-                         self.error.detail + "\n\n" + self.error.next_step).exec()
+                         f"Kód: {self.error.code}\n\n{self.error.detail}\n\nDalší krok: {self.error.next_step}").exec()
 
     def show_result(self):
         value = asdict(self.result) if is_dataclass(self.result) else self.result

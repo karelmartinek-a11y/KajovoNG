@@ -1,0 +1,23 @@
+[
+  {
+    "name": "genesis-empty-object",
+    "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "sequence": "1",
+    "canonical_hex": "7b7d",
+    "expected_sha256": "0dd6a8d7b43b3e5f04ff06ab6da431a9032efa8bc89fda8ee46c6fcff381b860"
+  },
+  {
+    "name": "unicode-bytes",
+    "previous_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "sequence": "2",
+    "canonical_hex": "7b2278223a22c5be6c75c5a56f75c48d6bc3bd227d",
+    "expected_sha256": "126fe7c49228692bdf9de0483c13c2b55153d15fb79b9146072653d5c7aa02b8"
+  },
+  {
+    "name": "bigint-sequence",
+    "previous_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "sequence": "9223372036854775807",
+    "canonical_hex": "7b2273657175656e6365223a2239323233333732303336383534373735383037227d",
+    "expected_sha256": "7166e71c4d6bc3ce6ad271eadf3a31bc3dd5295632564d19dc5fb2719b9530d7"
+  }
+]

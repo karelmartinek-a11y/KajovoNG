@@ -1,0 +1,20 @@
+{
+  "version": 4,
+  "identity": "d9617135d6fdd0a2cde722d637a1dfcc3da37515708b3ea5d66ae607c8ac785e",
+  "saved_at": 1788996185.5753849,
+  "models": {
+    "gpt-5.2": {
+      "model": "gpt-5.2",
+      "tested_at": 1788993560.668492,
+      "ok_basic": true,
+      "supports_previous_response_id": true,
+      "supports_temperature": false,
+      "supports_tools": false,
+      "supports_file_search": false,
+      "supports_vector_store": false,
+      "supports_structured_outputs": true,
+      "notes": "Ověřeno automatickou přípravou běhu.",
+      "errors": {}
+    }
+  }
+}

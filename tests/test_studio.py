@@ -19,6 +19,7 @@ def studio(qtbot, tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     client = Mock()
     client.list_models.return_value = [{"id": "gpt-4.1"}]
+    client.list_batches.return_value = []
     widget = create_window(AppSettings(log_dir=str(tmp_path / "LOG"), cache_dir=str(tmp_path / "cache")),
                            api_key="test-key", client_factory=lambda *args, **kwargs: client)
     qtbot.addWidget(widget)
@@ -308,7 +309,7 @@ def test_history_page_has_no_old_workbench_resume_path(studio):
     assert not hasattr(studio.workbench, "resume_notice")
 
 
-def test_photo_submission_uses_only_explicit_selection(studio, monkeypatch, tmp_path):
+def test_photo_submission_uses_every_added_photo_without_a_second_selection(studio, monkeypatch, tmp_path):
     from PySide6.QtCore import Qt
     page = studio.photos
     paths = [tmp_path / "first.png", tmp_path / "second.png"]
@@ -327,4 +328,4 @@ def test_photo_submission_uses_only_explicit_selection(studio, monkeypatch, tmp_
     monkeypatch.setattr("kajovo.studio.photos.photo_batch.prepare_and_submit", Mock())
     monkeypatch.setattr(page, "execute", lambda title, function, receive=None: function(Mock(), Mock()))
     page.start()
-    assert captured.call_args.kwargs["source_paths"] == [page.photos.item(1).data(Qt.UserRole)]
+    assert captured.call_args.kwargs["source_paths"] == [page.photos.item(i).data(Qt.UserRole) for i in range(2)]

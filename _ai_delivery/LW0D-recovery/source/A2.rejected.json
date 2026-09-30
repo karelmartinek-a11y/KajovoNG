@@ -1,0 +1,1343 @@
+{
+  "files": [
+    {
+      "provides": ["handoff.formats"],
+      "dependencies": [],
+      "requirement_ids": ["E-002", "E-169", "I-001", "I-002", "I-006", "I-007"],
+      "purpose": "Definovat a skutečně validovat formáty pomocného předávacího balíku bez zavedení produktového Contract Pack compileru.",
+      "kind": "text",
+      "behavior": "Poskytuje striktní JSON reader, úplné typy vstupního A0/A1/A2 předání, serializaci dokumentačních JSON artefaktů a strukturované lokální diagnostiky. Rozlišuje deklarovaná E/I requirement IDs od globálních AC/Q/INV/B referencí. Nepoužívá eval, import vstupního JSON jako modulu, síť ani produktovou canonicalization. Odmítne duplicate JSON members, neplatné UTF-8, nebezpečně nereprezentovatelná čísla, osamocené Unicode surrogate a neúplný vstup.",
+      "path": "tools/handoff/formats.mjs",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-05-CANONICALIZATION", "N-06-CONTRACT-PACK-PHASES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": [],
+      "language": "JavaScript ES modules s JSDoc typy"
+    },
+    {
+      "provides": ["handoff.reference-repair"],
+      "dependencies": ["tools/handoff/formats.mjs"],
+      "requirement_ids": ["E-001", "E-002", "E-004", "E-169", "E-170", "I-001", "I-002", "I-005"],
+      "purpose": "Mechanicky a bezeztrátově opravit skutečný zdroj dodané validační chyby v /plan/architecture_items[].requirement_ids.",
+      "kind": "text",
+      "behavior": "Implementuje pure normalizaci referencí, nikoli pouze popis budoucí opravy. Každý původní token a jeho pozici zaznamená do sidecar mapy. E/I uzná pouze členstvím v explicit_requirements/implicit_requirements; AC/Q/INV/B mapuje podle jednoznačného původního prefixu na přesný JSON pointer. Zachová responsibility doslova a ověří její neprázdnost. Vytvoří úplný normalizovaný A1 a novou validační obálku, v níž je /plan skutečně nahrazen normalizovanou hodnotou a /structure aktuální dodanou A2 specifikací. Lokální kontrola dokazuje pouze referenční opravu; produktové admission zůstává BLOCKED.",
+      "path": "tools/handoff/normalize.mjs",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "ARC-02-CONTRACT-SURFACES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.formats"],
+      "language": "JavaScript ES modules s JSDoc typy"
+    },
+    {
+      "provides": ["handoff.materializer"],
+      "dependencies": ["tools/handoff/formats.mjs", "tools/handoff/normalize.mjs"],
+      "requirement_ids": ["E-001", "E-002", "E-169", "I-001", "I-002", "I-016"],
+      "purpose": "Poskytnout použitelný offline příkaz pro materializaci a ověření opraveného předání, včetně celé obálky pro upstream validátor.",
+      "kind": "text",
+      "behavior": "CLI nabízí prepare, verify a render. Prepare načte samostatný původní vstup a aktuální A2 specifikaci, vykoná skutečné kontroly a publikuje osm datových artefaktů jako jeden úplný balík do nového výstupního adresáře. Verify znovu odvodí všechny očekávané bytes a porovná je s balíkem. Render vypíše přesné bytes jediného allowlisted artefaktu pro samostatnou souborovou úlohu. Nepřepisuje vstupy, existující odlišný balík ani projektový zdrojový strom; nespouští pnpm, SQL, OpenAI, browser, deployment nebo externí validátor. Výstupní soubor validation-input.json je skutečný opravený vstup, nikoli instrukce ponechat nevalidní /plan beze změny.",
+      "path": "tools/handoff/cli.mjs",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.formats", "handoff.reference-repair"],
+      "language": "JavaScript ES modules s JSDoc typy"
+    },
+    {
+      "provides": ["handoff.input-original"],
+      "dependencies": ["tools/handoff/formats.mjs"],
+      "requirement_ids": ["E-001", "E-002", "E-169", "I-001", "I-002"],
+      "purpose": "Uchovat celé původní předání včetně původní struktury, delivery instrukce a validační diagnostiky.",
+      "kind": "text",
+      "behavior": "Mechanicky serializuje celý dekódovaný vstupní objekt beze změny hodnot. Zachová source, requirements, plan, původní structure, delivery, validation_errors a všechna případná další vstupní pole. Tento archiv se nikdy nepoužije jako údajně opravená validační obálka.",
+      "path": "docs/handoff/input.original.json",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.formats"],
+      "language": "JSON"
+    },
+    {
+      "provides": ["handoff.ssot-text"],
+      "dependencies": ["docs/handoff/input.original.json", "tools/handoff/formats.mjs"],
+      "requirement_ids": ["E-001", "E-002", "E-169", "I-001"],
+      "purpose": "Samostatně a bezeztrátově uchovat celý dodaný normativní text.",
+      "kind": "text",
+      "behavior": "Zapíše přesně UTF-8 reprezentaci dekódovaného input.source. Nepřidává BOM, frontmatter, normalizaci, koncový newline ani opravu rozporných ustanovení. Zachová všech 55 kapitol, 360 bodů, A–W a deklaraci §55.22 jako původní text, nikoli jako ověřený PASS.",
+      "path": "SSOT_CURRENT.md",
+      "architecture_item_ids": ["ARC-01-CONTRACT-COMPILER", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.input-original", "handoff.formats"],
+      "language": "Markdown"
+    },
+    {
+      "provides": ["handoff.a0r-snapshot"],
+      "dependencies": ["docs/handoff/input.original.json", "tools/handoff/formats.mjs"],
+      "requirement_ids": ["E-001", "E-002", "E-169", "I-001", "I-002"],
+      "purpose": "Zpřístupnit úplný původní A0R a jedinou množinu deklarovaných lokálních requirement IDs.",
+      "kind": "text",
+      "behavior": "Serializuje přesně input.requirements. Deklarované requirement IDs jsou pouze id objektů explicit_requirements a implicit_requirements, v tomto předání 170 E a 30 I. AC, Q, INV a B zůstávají původními globálními položkami; nepřidávají se jako nové requirement objekty.",
+      "path": "docs/handoff/a0r.json",
+      "architecture_item_ids": ["N-06-CONTRACT-PACK-PHASES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.input-original", "handoff.formats"],
+      "language": "JSON"
+    },
+    {
+      "provides": ["handoff.a1-snapshot"],
+      "dependencies": ["docs/handoff/input.original.json", "tools/handoff/formats.mjs"],
+      "requirement_ids": ["E-001", "E-004", "E-158", "E-169", "I-001", "I-002"],
+      "purpose": "Uchovat původní podmíněný A1 včetně referenční vady jako nezměněný diagnostický důkaz.",
+      "kind": "text",
+      "behavior": "Serializuje přesně input.plan, včetně všech 66 architecture_items, původních requirement_ids a neprázdných responsibility textů. Zachová A2_START=BLOCKED, všechny prerequisites, příkazy a P0–P8. Oprava vzniká pouze v oddělené projekci.",
+      "path": "docs/handoff/a1.json",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.input-original", "handoff.formats"],
+      "language": "JSON"
+    },
+    {
+      "provides": ["handoff.a1-reference-map"],
+      "dependencies": ["docs/handoff/a0r.json", "docs/handoff/a1.json", "tools/handoff/formats.mjs", "tools/handoff/normalize.mjs"],
+      "requirement_ids": ["E-002", "E-004", "E-169", "I-001", "I-002"],
+      "purpose": "Zachovat přesnou vazbu každé původní A1 reference po opravě její kategorie.",
+      "kind": "text",
+      "behavior": "Obsahuje všechny původní reference s architecture item ID, pozicí, tokenem a přesným source pointerem. REQUIREMENT odkazuje na deklarovaný E/I objekt; GLOBAL_OBLIGATION na původní AC/Q/INV/B položku. normalizedRequirementIds je neprázdná uspořádaná podposloupnost REQUIREMENT referencí. Mapa musí umožnit přesnou rekonstrukci původního A1 a nesmí obsahovat unknown nebo ambiguous mapping.",
+      "path": "docs/handoff/a1-reference-map.json",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "ARC-02-CONTRACT-SURFACES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.a0r-snapshot", "handoff.a1-snapshot", "handoff.formats", "handoff.reference-repair"],
+      "language": "JSON"
+    },
+    {
+      "provides": ["handoff.a1-normalized"],
+      "dependencies": ["docs/handoff/a1.json", "docs/handoff/a1-reference-map.json", "tools/handoff/formats.mjs", "tools/handoff/normalize.mjs"],
+      "requirement_ids": ["E-001", "E-002", "E-004", "E-158", "E-169", "I-001", "I-002"],
+      "purpose": "Poskytnout úplný A1_PLAN se správným requirement namespace.",
+      "kind": "text",
+      "behavior": "Jedinou změnou proti a1.json jsou architecture_items[i].requirement_ids nahrazené přesnou E/I podposloupností ze sidecar mapy. Všechny ostatní hodnoty, responsibility, ID, pořadí a podmínky BLOCKED jsou totožné. Kořenový contract zůstává A1_PLAN; nepřidávají se neznámá pole.",
+      "path": "docs/handoff/a1-normalized.json",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "ARC-02-CONTRACT-SURFACES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.a1-snapshot", "handoff.a1-reference-map", "handoff.formats", "handoff.reference-repair"],
+      "language": "JSON"
+    },
+    {
+      "provides": ["handoff.validation-input"],
+      "dependencies": ["docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1-normalized.json", "docs/handoff/a1-reference-map.json", "tools/handoff/formats.mjs", "tools/handoff/normalize.mjs"],
+      "requirement_ids": ["E-001", "E-002", "E-004", "E-169", "E-170", "I-001", "I-002"],
+      "purpose": "Dodat opravenou nadřazenou validační obálku, aby další validátor neověřoval znovu původní vadné /plan.",
+      "kind": "text",
+      "behavior": "Vytvoří úplnou kopii input.original.json se dvěma přesně vymezenými změnami: /plan je obsah a1-normalized.json a /structure je aktuální samostatně dodaná A2_STRUCTURE specifikace. /source, /requirements, /delivery, historické /validation_errors a ostatní vstupní hodnoty zůstanou stejné. Původní /structure zůstává v input.original.json. Nepřidává novou produktovou sémantiku a neprohlašuje úspěch externího validátoru.",
+      "path": "docs/handoff/validation-input.json",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": ["handoff.input-original", "handoff.ssot-text", "handoff.a0r-snapshot", "handoff.a1-normalized", "handoff.a1-reference-map", "handoff.formats", "handoff.reference-repair"],
+      "language": "JSON"
+    },
+    {
+      "provides": ["handoff.a2-admission"],
+      "dependencies": ["docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/validation-input.json", "tools/handoff/formats.mjs", "tools/handoff/normalize.mjs"],
+      "requirement_ids": [
+        "E-001", "E-002", "E-003", "E-004", "E-005", "E-006", "E-007", "E-008", "E-009", "E-010",
+        "E-011", "E-012", "E-013", "E-014", "E-015", "E-016", "E-017", "E-018", "E-019", "E-020",
+        "E-021", "E-022", "E-023", "E-024", "E-025", "E-026", "E-027", "E-028", "E-029", "E-030",
+        "E-031", "E-032", "E-033", "E-034", "E-035", "E-036", "E-037", "E-038", "E-039", "E-040",
+        "E-041", "E-042", "E-043", "E-044", "E-045", "E-046", "E-047", "E-048", "E-049", "E-050",
+        "E-051", "E-052", "E-053", "E-054", "E-055", "E-056", "E-057", "E-058", "E-059", "E-060",
+        "E-061", "E-062", "E-063", "E-064", "E-065", "E-066", "E-067", "E-068", "E-069", "E-070",
+        "E-071", "E-072", "E-073", "E-074", "E-075", "E-076", "E-077", "E-078", "E-079", "E-080",
+        "E-081", "E-082", "E-083", "E-084", "E-085", "E-086", "E-087", "E-088", "E-089", "E-090",
+        "E-091", "E-092", "E-093", "E-094", "E-095", "E-096", "E-097", "E-098", "E-099", "E-100",
+        "E-101", "E-102", "E-103", "E-104", "E-105", "E-106", "E-107", "E-108", "E-109", "E-110",
+        "E-111", "E-112", "E-113", "E-114", "E-115", "E-116", "E-117", "E-118", "E-119", "E-120",
+        "E-121", "E-122", "E-123", "E-124", "E-125", "E-126", "E-127", "E-128", "E-129", "E-130",
+        "E-131", "E-132", "E-133", "E-134", "E-135", "E-136", "E-137", "E-138", "E-139", "E-140",
+        "E-141", "E-142", "E-143", "E-144", "E-145", "E-146", "E-147", "E-148", "E-149", "E-150",
+        "E-151", "E-152", "E-153", "E-154", "E-155", "E-156", "E-157", "E-158", "E-159", "E-160",
+        "E-161", "E-162", "E-163", "E-164", "E-165", "E-166", "E-167", "E-168", "E-169", "E-170",
+        "I-001", "I-002", "I-003", "I-004", "I-005", "I-006", "I-007", "I-008", "I-009", "I-010",
+        "I-011", "I-012", "I-013", "I-014", "I-015", "I-016", "I-017", "I-018", "I-019", "I-020",
+        "I-021", "I-022", "I-023", "I-024", "I-025", "I-026", "I-027", "I-028", "I-029", "I-030"
+      ],
+      "purpose": "Poctivě oddělit provedenou lokální referenční opravu od stále blokovaného produktového A2 admission.",
+      "kind": "text",
+      "behavior": "Report v3 vzniká výhradně skutečným výpočtem normalizátoru. Obsahuje výsledky lokálních membership/nonempty/diff/round-trip kontrol, ale externí validátor a 18 architecture gates označí NOT_RUN. B-01 až B-18 zůstávají OPEN/critical. Všech 200 E/I požadavků eviduje jako BLOCKED_NOT_IMPLEMENTED s prázdnými productionFilePaths a testEvidenceRefs; dokumentační vztah není produktové pokrytí. Každou globální povinnost této implementation.scopes uvede právě jednou s přesným vlastníkem a source pointerem. a2Start=BLOCKED a productTasksReleased=false.",
+      "path": "docs/handoff/a2-blocked.json",
+      "architecture_item_ids": [
+        "N-01-NAMESPACE", "N-02-STATE-MACHINES", "N-03-POSTGRES", "N-04-POLICIES", "N-05-CANONICALIZATION",
+        "N-06-CONTRACT-PACK-PHASES", "N-07-RECOVERY-ADMISSION", "N-08-UDS-PROOF", "N-09-BOOTSTRAP", "N-10-CLOSURE-SCOPE",
+        "ARC-01-CONTRACT-COMPILER", "ARC-02-CONTRACT-SURFACES", "ARC-03-TRANSACTION-KERNEL", "ARC-04-WORK-AND-EFFECTS",
+        "ARC-05-ARTIFACT-PUBLICATION", "ARC-06-RECOVERY-AND-CLOSURE", "ARC-07-OWNER-IDENTITY", "ARC-08-OWNER-API-CREDENTIAL",
+        "ARC-09-SECRET-MANAGER", "ARC-10-EXTERNAL-INTEGRATIONS", "ARC-11-COMPONENT-REGISTRY", "ARC-12-TOPOLOGY",
+        "ARC-13-KCIP", "ARC-14-CONTROL-AND-PULSE", "ARC-15-MCP-WIRE", "ARC-16-MCP-CONTRACT-COMPILER",
+        "ARC-17-MCP-EXECUTION", "ARC-18-MCP-CONTINUATIONS", "ARC-19-MCP-REGISTRATION", "ARC-20-OPENAI-CLIENT",
+        "ARC-21-OPENAI-LOOP", "ARC-22-AGENT-COMPILER", "ARC-23-AGENT-EXECUTION", "ARC-24-SESSION-AND-MEMORY",
+        "ARC-25-AGENT-EVALUATION", "ARC-26-CENTRAL-CHAT", "ARC-27-GENERATION-DISCUSSION", "ARC-28-GENERATION-SPECIFICATION",
+        "ARC-29-GENERATION-WORKSPACE", "ARC-30-GENERATION-INTEGRATION", "ARC-31-GENERATION-VALIDATION",
+        "ARC-32-BROWSER-SESSIONS", "ARC-33-BROWSER-CONTROL-PREVIEW", "ARC-34-BROWSER-ACTIONS", "ARC-35-BROWSER-ACCOUNTS",
+        "ARC-36-OWNER-DEVICE-BRIDGE", "ARC-37-BROWSER-TRANSFERS-CLEANUP", "ARC-38-BROWSER-AUTOMATION",
+        "ARC-39-RUNTIME-GATEWAY", "ARC-40-RUNTIME-SANDBOX", "ARC-41-COMPONENT-STATE", "ARC-42-MONITORING-REPAIR",
+        "ARC-43-AUDIT-OBSERVABILITY", "ARC-44-CONFIGURATION", "ARC-45-OWNER-UI", "ARC-46-ACTIVATION",
+        "ARC-47-MIGRATIONS", "ARC-48-SEMANTIC-AUTHORITY", "ARC-49-HOST-DNS-TLS", "ARC-50-CI-DEPLOYMENT",
+        "ARC-51-BACKUP-RESTORE", "ARC-52-SELF-TEST", "ARC-53-FORMAL-CHAOS", "ARC-54-PERFORMANCE",
+        "ARC-55-PROJECT-CLOSURE", "DEL-01-SELF-CONTAINED-TASKS"
+      ],
+      "requires": [
+        "handoff.input-original", "handoff.ssot-text", "handoff.a0r-snapshot", "handoff.a1-snapshot",
+        "handoff.a1-reference-map", "handoff.a1-normalized", "handoff.validation-input", "handoff.formats", "handoff.reference-repair"
+      ],
+      "language": "JSON"
+    },
+    {
+      "provides": ["handoff.repair-tests"],
+      "dependencies": [
+        "tools/handoff/formats.mjs", "tools/handoff/normalize.mjs", "tools/handoff/cli.mjs",
+        "docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json",
+        "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json",
+        "docs/handoff/validation-input.json", "docs/handoff/a2-blocked.json"
+      ],
+      "requirement_ids": ["E-002", "E-004", "E-169", "I-001", "I-002", "I-006", "I-016"],
+      "purpose": "Behaviorálně ověřit skutečnou normalizaci, úplnou validační obálku a bezpečnou materializaci předání.",
+      "kind": "text",
+      "behavior": "Node test suite vykonává produkční pomocné funkce a CLI, nikoli alternativní opravný algoritmus. Obsahuje focused syntetické testovací vstupy i kontrolu skutečných úplných snapshotů. Ověří přesný povolený diff, rekonstrukci původního vstupu, namespace chyby, neprázdné responsibilities, nezměněné blockers a žádný falešný externí PASS. CLI testy používají soukromý dočasný adresář, skutečné soubory, souběžnou publikaci a přerušení před/po publikačním bodu.",
+      "path": "tests/handoff/normalization.test.mjs",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": [
+        "handoff.formats", "handoff.reference-repair", "handoff.materializer",
+        "handoff.input-original", "handoff.ssot-text", "handoff.a0r-snapshot", "handoff.a1-snapshot",
+        "handoff.a1-reference-map", "handoff.a1-normalized", "handoff.validation-input", "handoff.a2-admission"
+      ],
+      "language": "JavaScript ES modules"
+    },
+    {
+      "provides": ["handoff.instructions"],
+      "dependencies": [
+        "tools/handoff/cli.mjs", "docs/handoff/input.original.json", "docs/handoff/a1.json",
+        "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json",
+        "docs/handoff/validation-input.json", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs"
+      ],
+      "requirement_ids": ["E-001", "E-002", "E-169", "I-001", "I-002"],
+      "purpose": "Dodat jednoznačný návod, který dokument předat validátoru a co oprava skutečně prokazuje.",
+      "kind": "text",
+      "behavior": "Vysvětlí konkrétní příčinu chyby, rozdíl raw A1/normalized A1/sidecar/celé opravené obálky a přesné offline příkazy. Výslovně uvede, že samotná změna A2 files[].requirement_ids nebo existence normalizovaného souboru neopraví validátor čtoucí původní /plan. Popíše úplné vstupy pro samostatné úlohy, bezpečné opakování a cleanup přerušené materializace. Produktové B nálezy a architecture gates zůstávají blokované; nepíše neprovedené výsledky testů.",
+      "path": "docs/handoff/README.md",
+      "architecture_item_ids": ["N-01-NAMESPACE", "N-06-CONTRACT-PACK-PHASES", "DEL-01-SELF-CONTAINED-TASKS"],
+      "requires": [
+        "handoff.materializer", "handoff.input-original", "handoff.a1-snapshot", "handoff.a1-reference-map",
+        "handoff.a1-normalized", "handoff.validation-input", "handoff.a2-admission", "handoff.repair-tests"
+      ],
+      "language": "Markdown"
+    }
+  ],
+  "contract": "A2_STRUCTURE",
+  "packages": [],
+  "implementation": {
+    "files": [
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "Čtení JSON detekuje duplicate member dříve, než by JSON.parse mohl jednu hodnotu přepsat.",
+          "Dekódované řetězce zůstávají stejné; source se nikdy NFC-normalizací nebo newline úpravou nemění.",
+          "A0 deklarace E/I a globální aliasy mají odlišné typy a validátory.",
+          "Vstupy jsou inertní data; reader nikdy nespustí vložený JavaScript, SQL nebo příkaz.",
+          "Všechny formátové typy používané normalizátorem, CLI a datovými soubory mají jednu definici."
+        ],
+        "expected_output_tokens": 6500,
+        "assumptions": [
+          "Pomocný nástroj používá Node.js 24 a standardní knihovnu; nejde o volbu exact produkčního SDK patch release.",
+          "Limit readeru je 128 MiB vstupních bytes a hloubka 128. Překročení vrací explicitní lokální chybu, nikdy truncation.",
+          "JSON formátování dokumentačních snapshotů není KCML-CANONICAL-JSON/1. Číselné hodnoty, které nelze bezeztrátově zachovat v podporovaném JSON modelu, se odmítají."
+        ],
+        "interface_bindings": [{"id": "handoff.formats", "version": "1.0.0"}],
+        "path": "tools/handoff/formats.mjs",
+        "unresolved_questions": [],
+        "required_facets": ["types", "serialization", "errors", "security", "invariants", "versions"],
+        "facets": [
+          {
+            "source_refs": ["/requirements/assumptions/1", "/requirements/explicit_requirements", "/requirements/implicit_requirements", "/plan/architecture_items"],
+            "definition": "Definovat všechny pomocné typy podle handoff.formats@1.0.0. RequirementId je ověřené členství v A0 deklaraci, nikoli libovolný string s podobným prefixem. Responsibility je původní string s trim().length > 0; trim se nepoužije k přepsání hodnoty.",
+            "kind": "types"
+          },
+          {
+            "source_refs": ["/source", "/requirements/assumptions/21", "/structure/rules/1"],
+            "definition": "Striktní UTF-8 reader odmítá BOM, duplicate keys, neplatné JSON tokeny, nonfinite nebo unsafe integer a nevalidní Unicode scalar strings. Dokumentační JSON encoder používá dvě mezery, LF a jeden koncový LF; pořadí arrays a decoded values zachovává. SSOT encoder nepřidává koncový znak.",
+            "kind": "serialization"
+          },
+          {
+            "source_refs": ["/validation_errors", "/requirements/implicit_requirements/1"],
+            "definition": "HandoffError nese kind, přesný source pointer nebo null a lidský popis. Lokální error kinds nejsou stable produktové codes §32. Chyba readeru nebo shape kontroly zastaví celý výpočet bez částečného výsledku.",
+            "kind": "errors"
+          },
+          {
+            "source_refs": ["/requirements/security_and_privacy/13", "/requirements/security_and_privacy/16"],
+            "definition": "Používat vlastní data properties a bezpečné objekty; __proto__ ani constructor key nesmí změnit prototyp nebo běh nástroje. Žádný eval, dynamický import vstupu, embedded-script execution nebo síťový lookup.",
+            "kind": "security"
+          },
+          {
+            "source_refs": ["/requirements/invariants/35", "/requirements/assumptions/21"],
+            "definition": "Formátový helper neřeší normativní B-11 ani nepočítá produktové requirement/pack/audit digests. Zachování hodnot a lokální byte equality jsou odlišné od dosud neuzavřené produktové canonicalization.",
+            "kind": "invariants"
+          },
+          {
+            "source_refs": ["/plan/assumptions/3", "/plan/assumptions/4"],
+            "definition": "Pomocný ES module kontrakt 1.0.0. Žádné externí package importy; JSDoc type definitions jsou poskytovány tímto souborem, nikoli domnělým budoucím packages/schemas.",
+            "kind": "versions"
+          }
+        ],
+        "test_scenarios": [
+          "Duplicate klíč uvnitř vnořeného objektu je odmítnut s přesným pointerem.",
+          "Příklady SQL, backticks a řetězce fake system/OWNER zůstanou beze změny jako data.",
+          "Neplatné UTF-8, BOM, unsafe integer, lone surrogate a překročená hloubka selžou před normalizací.",
+          "Encode/decode round-trip zachová celý skutečný A0/A1 objekt včetně všech stringů a pořadí seznamů."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "N-01-NAMESPACE získá přesně E-001, E-003, E-169, E-170, I-002 jako requirement_ids.",
+          "B-01, B-02, B-17, AC-01 a AC-03 z N-01 zůstanou v sidecaru s původními pozicemi.",
+          "ARC-03-TRANSACTION-KERNEL získá E-140, E-141, E-142, E-143; AC-28, INV-06 a INV-14 se přesunou pouze kategorií.",
+          "ARC-54-PERFORMANCE zachová E-167 a I-026; Q a AC reference zůstanou dohledatelné.",
+          "Deep diff raw/normalized A1 obsahuje pouze architecture_items[i].requirement_ids.",
+          "Nová validační obálka skutečně obsahuje normalizovaný /plan a přesně dodanou aktuální /structure.",
+          "Rekonstrukce původních reference arrays a původní /structure vrátí celý původní vstup.",
+          "Normalizátor nemění productTasksReleased na true ani žádný B finding na CLOSED."
+        ],
+        "expected_output_tokens": 6500,
+        "assumptions": [
+          "V dodaném A1 jsou responsibility neprázdné; identifikovatelnou příčinou hlášky jsou nedeklarovaná AC/Q/INV/B IDs v requirement_ids.",
+          "Použití opravené obálky v externím validátoru je samostatný krok; rozhraní ani příkaz tohoto validátoru nebyly dodány.",
+          "Focused unit fixtures smějí mít menší seznamy. Publikace tohoto konkrétního předání však ověřuje všech 200 requirement IDs a 66 architecture items."
+        ],
+        "interface_bindings": [
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.reference-repair", "version": "1.0.0"}
+        ],
+        "path": "tools/handoff/normalize.mjs",
+        "unresolved_questions": [],
+        "required_facets": ["types", "api", "serialization", "errors", "invariants", "lifecycle", "security"],
+        "facets": [
+          {
+            "source_refs": ["/requirements/assumptions/1", "/plan/assumptions/2"],
+            "definition": "normalizeReferences vrací úplný ReferenceRepairResult. Všechny source pointers jsou RFC6901 do původního vstupu; žádný alias není nahrazen domnělým requirement ID. Vrácené datové struktury se nesmějí aliasovat na mutovatelné vstupní arrays.",
+            "kind": "types"
+          },
+          {
+            "source_refs": ["/plan/architecture_items/0", "/plan/architecture_items/12", "/plan/architecture_items/63", "/validation_errors"],
+            "definition": "Nejprve validovat unique deklarace E/I a architecture IDs. Pro každý token použít exact membership; jinak hledat právě jeden leading AC-/Q-/INV-/B- alias v acceptance_criteria/quality_attributes/invariants/assumptions. Index získat skutečným lookupem, ne výpočtem číslo−1. Zachovat position a token. Odmítnout unknown, ambiguity, duplicate v témže reference listu, empty responsibility a empty výsledný E/I set.",
+            "kind": "api"
+          },
+          {
+            "source_refs": ["/structure/rules/1", "/structure/rules/2", "/requirements/implicit_requirements/1"],
+            "definition": "Pure výpočet nezávisí na clocku, random, síti, environmentu ani pořadí filesystem listing. Map items zachovají A1 pořadí; declaredRequirementIds pořadí A0 explicit následované implicit. Report globalObligations se řadí podle source pointeru.",
+            "kind": "serialization"
+          },
+          {
+            "source_refs": ["/validation_errors", "/requirements/validation_and_error_behaviour/24"],
+            "definition": "Chybná reference není silently dropped. Unknown/ambiguous/empty/diff/source/graph failure vrací HandoffError a žádný publishable bundle. Lokální strukturální oprava není řešením SSOT_NORMATIVE_CONFLICT nebo architecture gates.",
+            "kind": "errors"
+          },
+          {
+            "source_refs": ["/plan/requirements", "/plan/build_run", "/requirements/assumptions/29"],
+            "definition": "Prepared /plan se liší pouze povolenými requirement arrays. Prepared /structure je přesně currentStructure argument; ostatní envelope fields jsou deep-equal původnímu vstupu. Local checks se označí PASS pouze po skutečném provedení membership, nonempty, allowed-diff, complete-source a round-trip assertions. External validation zůstává NOT_RUN.",
+            "kind": "invariants"
+          },
+          {
+            "source_refs": ["/plan/assumptions/0", "/structure/rules/9"],
+            "definition": "Normalizace je dokončená mechanická handoff operace. Produktové A2 se neuvolní; všechny B nálezy a chybějící gate evidence zůstávají ve vygenerovaném admission reportu.",
+            "kind": "lifecycle"
+          },
+          {
+            "source_refs": ["/requirements/security_and_privacy/11", "/requirements/security_and_privacy/16"],
+            "definition": "Text inputu není instrukce pro helper. Provádět jen deklarovanou metadata transformaci; žádné business source rewriting, modelová parafráze nebo odvozování opravy produktu z vloženého textu.",
+            "kind": "security"
+          }
+        ],
+        "test_scenarios": [
+          "B-01 mapovat na /requirements/assumptions/11; INV-06 na /requirements/invariants/5; Q-16 na /requirements/quality_attributes/15.",
+          "E-999 a AC-99 odmítnout bez partial mapy.",
+          "Dvě položky se stejným AC prefixem odmítnout jako ambiguous.",
+          "Whitespace-only responsibility odmítnout; platný původní text nechat byte-ekvivalentní po dekódování.",
+          "Zmrazit vstup a ověřit, že normalizace jej nemutuje.",
+          "Dvě normalizace stejného vstupu/specifikace mají totožné výstupní bytes.",
+          "Záměrně znovu vložit raw plan do připravené obálky; kontrola musí detekovat původní chybu.",
+          "Změna jednoho prerequisite nebo responsibility znaku je forbidden diff."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "node tools/handoff/cli.mjs prepare --input <original.json> --structure <current-a2.json> --output <new-directory> materializuje všech osm datových artefaktů.",
+          "verify porovná všechny soubory s novým pure výpočtem, ne pouze jejich existenci.",
+          "render přijme pouze jednu z osmi přesných výstupních cest a stdout obsahuje jen bytes tohoto artefaktu.",
+          "Při chybě vstupu nebo normalizace nevznikne zveřejněný balík.",
+          "Stejný hotový balík lze ověřit/opakovaně přijmout; odlišný existující balík se nepřepíše.",
+          "Souběžné publikace stejného cíle nevytvoří smíšený balík.",
+          "Návratový kód 0 znamená pouze úspěch zvolené lokální operace, nikoli product nebo architecture PASS."
+        ],
+        "expected_output_tokens": 5500,
+        "assumptions": [
+          "Filesystem materializátor je určen pro důvěryhodné Linux/Ubuntu prostředí s Node.js 24 a podporovaným lokálním POSIX filesystemem.",
+          "Vstupní soubory a aktuální A2 JSON dodá orchestrátor jako samostatné úplné soubory; nástroj je nezískává z historie nebo sítě.",
+          "Lokální staging names a případné transportní byte hashes nejsou produktové identities, Contract Pack digests nebo business canonicalization."
+        ],
+        "interface_bindings": [
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.reference-repair", "version": "1.0.0"},
+          {"id": "handoff.materializer", "version": "1.0.0"}
+        ],
+        "path": "tools/handoff/cli.mjs",
+        "unresolved_questions": [],
+        "required_facets": ["api", "storage", "persistence", "transactions", "concurrency", "locking", "idempotency", "errors", "security", "lifecycle", "framework"],
+        "facets": [
+          {
+            "source_refs": ["/delivery", "/validation_errors", "/structure/rules/4"],
+            "definition": "Příkazy prepare/verify vyžadují --input, --structure a --output. Render vyžaduje --input, --structure a --artifact. Žádné implicitní cwd inputy nebo síť. Exit 0 success, 2 invalid input/reference/spec, 3 output conflict/lock held, 4 I/O failure, 5 verification mismatch; diagnostika pouze stderr.",
+            "kind": "api"
+          },
+          {
+            "source_refs": ["/requirements/implicit_requirements/15", "/structure/rules/7"],
+            "definition": "Nejdříve vypočítat a validovat celý bundle. Zapisovat pod owner-only staging adresář v témže filesystemu jako nový output root. Pouze pevný allowlist osmi relative paths; files 0600, directories 0700. Vstupy ani helper source files se nepřepisují.",
+            "kind": "storage"
+          },
+          {
+            "source_refs": ["/requirements/implicit_requirements/15", "/structure/rules/1"],
+            "definition": "Každý file write dokončit, fsyncnout a read-back porovnat; fsyncnout staging adresáře. Po úspěšné kontrole publikovat root atomic rename a fsyncnout jeho parent. Consumer přijímá jen kompletní ověřený balík. Toto není implementace produktového Artifact Publication service.",
+            "kind": "persistence"
+          },
+          {
+            "source_refs": ["/requirements/implicit_requirements/15"],
+            "definition": "Pomocná publikační transakce je staging celého balíku a jeden filesystem visibility switch, nikoli PostgreSQL business transaction. Error před switchem ponechá původní target beze změny; error po switchi vede k verify skutečného outputu, ne slepému přepsání.",
+            "kind": "transactions"
+          },
+          {
+            "source_refs": ["/structure/rules/1", "/structure/rules/7"],
+            "definition": "Použít exclusive sibling publication lock v privátním parentu. Marker identifikuje target, input/spec bytes a živou process identity; contention vrací 3. Žádné souběžné in-place aktualizace jednotlivých publikovaných souborů.",
+            "kind": "concurrency"
+          },
+          {
+            "source_refs": ["/requirements/implicit_requirements/15"],
+            "definition": "Lock získat atomicky a uvolnit v finally. Po pádu lze odstranit pouze helper-owned staging/lock s ověřeným markerem a prokazatelně neživou boot/PID/start identity; PID samotné nestačí. Nepoužívat obecný recursive delete nad callerem dodanou cestou. Nejasný stav vyžaduje nový bezpečný output target a diagnostiku.",
+            "kind": "locking"
+          },
+          {
+            "source_refs": ["/structure/rules/1", "/structure/rules/5"],
+            "definition": "Existing target se nikdy neslučuje s novým výpočtem. Je-li byte-identický všem osmi expected artefaktům, prepare může vrátit idempotentní lokální úspěch; jinak conflict. Neexistuje --force měnící raw podklady nebo produktový admission.",
+            "kind": "idempotency"
+          },
+          {
+            "source_refs": ["/validation_errors", "/structure/rules/5"],
+            "definition": "I/O, interruption nebo failed assertion nevydá success message ani partial report. Verify neshodu pojmenuje konkrétní path/pointer bez exekuce obsahu. Externí validátor není volán, protože jeho invocation contract nebyl dodán.",
+            "kind": "errors"
+          },
+          {
+            "source_refs": ["/requirements/security_and_privacy/16", "/structure/rules/8"],
+            "definition": "Odmítnout symlink input/output traversal, output uvnitř input file a nepovolené artifact paths. Žádný child shell, příkazy ze SSOT, provider klient, credential přenos nebo raw payload dump do běžné diagnostiky.",
+            "kind": "security"
+          },
+          {
+            "source_refs": ["/structure/rules/0", "/structure/rules/9"],
+            "definition": "Read→validate→derive→stage→verify→publish→verify je celý pomocný lifecycle. Produktové B findings zůstávají OPEN i po úspěšném prepare. Final response této fáze sama žádný CLI běh nedokládá.",
+            "kind": "lifecycle"
+          },
+          {
+            "source_refs": ["/plan/project", "/plan/assumptions/4"],
+            "definition": "Přímé Node ES modules a standardní fs/path/crypto/process primitives. Žádný package.json, pnpm install ani externí dependency není nutná pro tento helper.",
+            "kind": "framework"
+          }
+        ],
+        "test_scenarios": [
+          "Přerušení při zápisu posledního souboru nezveřejní output root.",
+          "Přerušení po rename se vyřeší verify všech skutečných bytes a nezaloží druhou různou verzi balíku.",
+          "Dva procesy publikující do stejného cíle: jeden výsledek, druhý conflict nebo exact replay.",
+          "Existing jiný output, symlink target a traversal --artifact se odmítnou.",
+          "Po selhání zápisu se uklidí pouze vlastní staging; raw input zůstane byte-identický.",
+          "Render SSOT nepřidá newline, render JSON má právě jeden koncový LF.",
+          "CLI nikdy nespustí příkazy obsažené v plan.build_run."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "Parsed dokument je deep-equal celému původnímu vstupnímu objektu.",
+          "Zachová původní structure a validační hlášku.",
+          "Žádný vstupní field ani array member není vynechán.",
+          "Neúplný vstup nebo nebezeztrátová serializace zastaví publikaci."
+        ],
+        "expected_output_tokens": 290000,
+        "assumptions": ["Autoritou je dekódovaný dodaný objekt; původní transportní whitespace JSON není k dispozici ani není normativní hodnotou."],
+        "interface_bindings": [
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.input-original", "version": "1.0.0"}
+        ],
+        "path": "docs/handoff/input.original.json",
+        "unresolved_questions": [],
+        "required_facets": ["types", "serialization", "storage", "security", "lifecycle", "invariants"],
+        "facets": [
+          {"source_refs": ["/source", "/requirements", "/plan", "/structure", "/delivery", "/validation_errors"], "definition": "Úplný InputEnvelope podle handoff.formats; původní /structure není nahrazena aktuálním A2 v tomto archivním souboru.", "kind": "types"},
+          {"source_refs": ["/structure/rules/1"], "definition": "JSON encoder handoff.formats, deep equality všech decoded values. Žádná oprava referencí v raw snapshotu.", "kind": "serialization"},
+          {"source_refs": ["/delivery", "/plan/deliverable_policy"], "definition": "Velký artefakt se mechanicky materializuje; nevyžaduje modelové znovuvypsání statisíců tokenů. Chunking nesmí zkrátit soubor.", "kind": "storage"},
+          {"source_refs": ["/requirements/security_and_privacy/16"], "definition": "Privátní inertní data včetně původní diagnostiky, kódu a případných credentials.", "kind": "security"},
+          {"source_refs": ["/requirements/definition_of_done/2"], "definition": "Neměnný archiv jednoho předání; změna vstupu tvoří nový balík, ne in-place opravu.", "kind": "lifecycle"},
+          {"source_refs": ["/requirements/assumptions/29"], "definition": "Raw claims PASS i známé chyby zůstávají evidence, nikoli vyhodnocený stav.", "kind": "invariants"}
+        ],
+        "test_scenarios": [
+          "Round-trip porovnání všech polí včetně původní structure.implementation.",
+          "Odstranění validation_errors nebo původního AC odkazu z raw planu musí selhat.",
+          "Stejné source inputy vytvoří stejný dokumentační snapshot."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "Celé bytes jsou přesně UTF8(input.original.source).",
+          "Zachová všech 55 kapitol, tabulky, fences, 360 bodů a A–W.",
+          "Neopraví normativní rozpory ani závěrečnou deklaraci PASS.",
+          "Nepřidá ani neodstraní koncový znak."
+        ],
+        "expected_output_tokens": 175000,
+        "assumptions": ["Jde výhradně o mechanické oddělení původního source stringu."],
+        "interface_bindings": [
+          {"id": "handoff.input-original", "version": "1.0.0"},
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.ssot-text", "version": "1.0.0"}
+        ],
+        "path": "SSOT_CURRENT.md",
+        "unresolved_questions": [],
+        "required_facets": ["serialization", "storage", "security", "lifecycle", "invariants", "versions"],
+        "facets": [
+          {"source_refs": ["/source", "/requirements/assumptions/2"], "definition": "Přesná UTF-8 encoding původního decoded source, bez normalizace line endings, Unicode nebo whitespace.", "kind": "serialization"},
+          {"source_refs": ["/plan/deliverable_policy", "/delivery"], "definition": "Úplný samostatný source dependency; materializovat byte copy, nikoli sumarizací.", "kind": "storage"},
+          {"source_refs": ["/requirements/security_and_privacy/16"], "definition": "SQL/shell/protocol ukázky jsou inertní text a neprovádějí se.", "kind": "security"},
+          {"source_refs": ["/requirements/definition_of_done/1"], "definition": "Opravený normativní SSOT vyžaduje nové předání; archiv se potichu nemění.", "kind": "lifecycle"},
+          {"source_refs": ["/requirements/assumptions/29"], "definition": "§55.22 není důkaz architecture gates; B findings zůstávají otevřené.", "kind": "invariants"},
+          {"source_refs": ["/source"], "definition": "Zachovat deklarovanou SSOT 2026.08.30.8; handoff interface 1.0.0 není nová produktová verze.", "kind": "versions"}
+        ],
+        "test_scenarios": [
+          "Porovnat celý source, nikoli jen nadpis a tail.",
+          "Chybějící kapitola nebo přidaný LF musí porušit exact equality.",
+          "Chunk split/join nevloží transportní oddělovače."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "Deep equality s input.original.requirements.",
+          "Přesně 170 E a 30 I unikátních declaration IDs.",
+          "Zachová 39 AC, 16 Q, 36 INV, 30 assumptions a všechna ostatní pole.",
+          "Žádné AC/Q/INV/B se nevydává za nový requirement objekt."
+        ],
+        "expected_output_tokens": 36000,
+        "assumptions": ["Formátování JSON se může lišit od transportu; decoded values a array order ne."],
+        "interface_bindings": [
+          {"id": "handoff.input-original", "version": "1.0.0"},
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.a0r-snapshot", "version": "1.0.0"}
+        ],
+        "path": "docs/handoff/a0r.json",
+        "unresolved_questions": [],
+        "required_facets": ["types", "serialization", "storage", "security", "lifecycle", "invariants"],
+        "facets": [
+          {"source_refs": ["/requirements"], "definition": "A0RInput úplného tvaru handoff.formats. Declaration membership se počítá jen z requirement objektů.", "kind": "types"},
+          {"source_refs": ["/requirements/assumptions/1"], "definition": "Dokumentační JSON bez překladu, synonymizace nebo změny pořadí seznamů.", "kind": "serialization"},
+          {"source_refs": ["/requirements/definition_of_done/2"], "definition": "Samostatný úplný dependency pro referenční lookup i block ledger.", "kind": "storage"},
+          {"source_refs": ["/requirements/security_and_privacy/16"], "definition": "Raw údaje zůstanou dostupné pouze jako inertní privátní data.", "kind": "security"},
+          {"source_refs": ["/requirements/definition_of_done/0"], "definition": "Archiv původní A0 fáze není produktová implementace.", "kind": "lifecycle"},
+          {"source_refs": ["/requirements/assumptions/11", "/requirements/assumptions/29"], "definition": "Metadata normalizace neuzavírá B-01 ani ostatní normativní nálezy.", "kind": "invariants"}
+        ],
+        "test_scenarios": [
+          "Přesná equality descriptions a všech globálních stringů.",
+          "Přidání AC-01 do explicit_requirements je odmítnuto jako změna zdroje.",
+          "Smazání B-15 nebo změna jeho textu poruší fidelity."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "Deep equality s input.original.plan.",
+          "Všech 66 architecture IDs a responsibility textů zachováno.",
+          "Raw mixed requirement_ids zůstávají nezměněny.",
+          "Budoucí commands a A2_START=BLOCKED jsou zachovány, ne provedeny."
+        ],
+        "expected_output_tokens": 20000,
+        "assumptions": ["Raw a1.json není dokument pro opakování opravené namespace validace."],
+        "interface_bindings": [
+          {"id": "handoff.input-original", "version": "1.0.0"},
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.a1-snapshot", "version": "1.0.0"}
+        ],
+        "path": "docs/handoff/a1.json",
+        "unresolved_questions": [],
+        "required_facets": ["types", "serialization", "storage", "security", "lifecycle", "invariants"],
+        "facets": [
+          {"source_refs": ["/plan"], "definition": "A1Input tvar handoff.formats; raw reference pole smí obsahovat diagnostikované globální tokeny.", "kind": "types"},
+          {"source_refs": ["/plan/architecture_items"], "definition": "Zachovat všechny hodnoty a jejich pořadí, bez filtrace raw requirement_ids.", "kind": "serialization"},
+          {"source_refs": ["/plan/architecture_items/65"], "definition": "Kompletní dependency snapshot; není dostačující odkaz na původní chat.", "kind": "storage"},
+          {"source_refs": ["/plan/build_run"], "definition": "Archivované příkazy zůstávají inertní; nejsou povolením deploymentu nebo testu.", "kind": "security"},
+          {"source_refs": ["/plan/assumptions/0"], "definition": "Podmíněný A1 se neodblokuje lokální opravou refs.", "kind": "lifecycle"},
+          {"source_refs": ["/plan/requirements"], "definition": "Žádné přepsání scope, responsibility, technologie, prerequisite nebo future verification.", "kind": "invariants"}
+        ],
+        "test_scenarios": [
+          "Ověřit 10 N, 55 ARC a jeden DEL item bez duplikace.",
+          "Odstranění B-01 z raw A1 musí selhat.",
+          "Samotné parsování nespustí žádný pnpm příkaz."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "Každý původní reference token má právě jednu position map položku.",
+          "Všech 66 itemů a 200 declared IDs je přítomno.",
+          "Každý source pointer resolveuje na správný původní objekt nebo globální položku.",
+          "Neexistuje unknown/ambiguous reference ani prázdná responsibility.",
+          "Počty v summary jsou skutečně vypočítané a souhlasí s položkami."
+        ],
+        "expected_output_tokens": 44000,
+        "assumptions": ["Mapa je mechanická oprava metadat, nikoli canonical Requirement Registry."],
+        "interface_bindings": [
+          {"id": "handoff.a0r-snapshot", "version": "1.0.0"},
+          {"id": "handoff.a1-snapshot", "version": "1.0.0"},
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.reference-repair", "version": "1.0.0"},
+          {"id": "handoff.a1-reference-map", "version": "1.0.0"}
+        ],
+        "path": "docs/handoff/a1-reference-map.json",
+        "unresolved_questions": [],
+        "required_facets": ["types", "serialization", "errors", "invariants", "lifecycle"],
+        "facets": [
+          {"source_refs": ["/plan/architecture_items", "/requirements/assumptions/1"], "definition": "ReferenceMapV1 má discriminated REQUIREMENT/GLOBAL_OBLIGATION reference; position je původní array index a source přesný RFC6901 pointer.", "kind": "types"},
+          {"source_refs": ["/structure/rules/2"], "definition": "Item a reference arrays zachovávají původní pořadí. Nepočítat produktové semantic digests ani nové IDs.", "kind": "serialization"},
+          {"source_refs": ["/validation_errors"], "definition": "Unknown, duplicate, ambiguous nebo unresolvable token brání publikaci celé mapy; žádný silent drop.", "kind": "errors"},
+          {"source_refs": ["/requirements/implicit_requirements/1", "/plan/requirements"], "definition": "Normalized E/I list je přesná podposloupnost. Přemístěná globální vazba zůstává zachována pro daný architecture item, nikoli pouze v obecné poznámce.", "kind": "invariants"},
+          {"source_refs": ["/structure/rules/9"], "definition": "Odvodit z úplných A0/A1; změna vstupů vyžaduje nové odvození. B resolution není součást této transformace.", "kind": "lifecycle"}
+        ],
+        "test_scenarios": [
+          "N-01, ARC-03 a ARC-54 mají výše uvedené konkrétní mappingy.",
+          "DEL-01 s původně platnými E/I refs má stejný normalized list.",
+          "Rekonstrukce všech raw reference arrays je přesná.",
+          "Přesun B-17 na nesprávný assumptions index se odmítne."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "Root zůstává A1_PLAN bez extra fields.",
+          "Všechna requirement_ids jsou existující E/I a žádný list není prázdný.",
+          "Responsibility a všechna ostatní pole jsou doslova původní.",
+          "Allowed diff a lossless round-trip mají skutečně ověřený výsledek.",
+          "A2_START a všechny B prerequisites zůstávají BLOCKED."
+        ],
+        "expected_output_tokens": 19000,
+        "assumptions": ["Samostatný normalized dokument pomáhá inspekci; pro úplný validator input se předává validation-input.json."],
+        "interface_bindings": [
+          {"id": "handoff.a1-snapshot", "version": "1.0.0"},
+          {"id": "handoff.a1-reference-map", "version": "1.0.0"},
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.reference-repair", "version": "1.0.0"},
+          {"id": "handoff.a1-normalized", "version": "1.0.0"}
+        ],
+        "path": "docs/handoff/a1-normalized.json",
+        "unresolved_questions": [],
+        "required_facets": ["types", "serialization", "errors", "invariants", "lifecycle"],
+        "facets": [
+          {"source_refs": ["/plan"], "definition": "A1Input strukturální typ se zpřísněným membership invariantem. Nezavádět source_refs nebo jiné extra fields do A1_PLAN; ty patří do sidecaru.", "kind": "types"},
+          {"source_refs": ["/plan/architecture_items"], "definition": "Úplný JSON; jediná transformace je replacement requirement_ids podle exact mapy.", "kind": "serialization"},
+          {"source_refs": ["/validation_errors"], "definition": "Map/order mismatch, empty E/I set nebo jakýkoli extra diff zastaví publikaci.", "kind": "errors"},
+          {"source_refs": ["/plan/requirements", "/plan/build_run"], "definition": "Oprava kategorizace reference nesmí upravit responsibility, architecture choice, command, prerequisite ani business scope.", "kind": "invariants"},
+          {"source_refs": ["/structure/rules/5"], "definition": "Lokálně opravený A1 není doklad externě vykonané validace nebo architecture readiness.", "kind": "lifecycle"}
+        ],
+        "test_scenarios": [
+          "Membership kontrolovat proti skutečnému A0 seznamu, ne regexem E-*.",
+          "Deep diff musí ukázat pouze povolená pole.",
+          "Round-trip s mapou obnoví raw A1.",
+          "Změna libovolného textu responsibility musí být odmítnuta."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "Parsed /plan je deep-equal a1-normalized.json.",
+          "Parsed /structure je deep-equal aktuální samostatně dodané A2 specifikaci.",
+          "Všechna ostatní envelope pole jsou deep-equal původnímu inputu.",
+          "Historická validation_errors se nezamění za novou validation evidence.",
+          "Žádný residual AC/Q/INV/B zůstane v /plan/architecture_items[].requirement_ids.",
+          "Původní obálku lze rekonstruovat z input.original.json a ověřené mapy."
+        ],
+        "expected_output_tokens": 310000,
+        "assumptions": [
+          "Aktuální A2 JSON je explicitní vstup --structure, nikoli hodnota získaná z neuchované konverzace.",
+          "Vložená /structure je konečný JSON objekt; soubor obsahuje reference na artefakty, nikoli rekurzivně jejich obsah.",
+          "Externí validátor musí skutečně přijmout tuto obálku. A2 odpověď sama nepřepíše již načtený původní /plan."
+        ],
+        "interface_bindings": [
+          {"id": "handoff.input-original", "version": "1.0.0"},
+          {"id": "handoff.ssot-text", "version": "1.0.0"},
+          {"id": "handoff.a0r-snapshot", "version": "1.0.0"},
+          {"id": "handoff.a1-normalized", "version": "1.0.0"},
+          {"id": "handoff.a1-reference-map", "version": "1.0.0"},
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.reference-repair", "version": "1.0.0"},
+          {"id": "handoff.validation-input", "version": "1.0.0"}
+        ],
+        "path": "docs/handoff/validation-input.json",
+        "unresolved_questions": [],
+        "required_facets": ["types", "serialization", "api", "errors", "invariants", "security", "lifecycle"],
+        "facets": [
+          {"source_refs": ["/source", "/requirements", "/plan", "/structure", "/delivery", "/validation_errors"], "definition": "ValidationInputV1 zachovává tvar původní obálky. Dovolené změny jsou normalizovaný plan a replacement structure exact currentStructure argumentem.", "kind": "types"},
+          {"source_refs": ["/structure/rules/1", "/structure/rules/7"], "definition": "Celý dokument se materializuje mechanicky stejným JSON encoderem; žádné zkrácené source stringy, placeholdery nebo vynechaná metadata.", "kind": "serialization"},
+          {"source_refs": ["/validation_errors", "/structure/rules/4"], "definition": "Toto je konkrétní output pro opakovanou upstream validaci. Validátor nesmí obdržet jen původní obálku s nezměněným /plan nebo pouze nový souborový graph.", "kind": "api"},
+          {"source_refs": ["/requirements/implicit_requirements/1"], "definition": "Raw normalized mismatch, extra envelope diff nebo neplatná aktuální structure způsobí failure před publish.", "kind": "errors"},
+          {"source_refs": ["/requirements/assumptions/29", "/plan/assumptions/0"], "definition": "Reference repair může odstranit lokální namespace vadu, ale nezmění produktové B findings, A2_START nebo požadavky 18 gates.", "kind": "invariants"},
+          {"source_refs": ["/requirements/security_and_privacy/16"], "definition": "Celá obálka je privátní data; předání nevolá deployment, provider nebo runtime.", "kind": "security"},
+          {"source_refs": ["/structure/rules/5"], "definition": "Prepared není externally validated. Záznam externího PASS smí vzniknout až skutečným během nezávislého validátoru, který tato specifikace nevymýšlí.", "kind": "lifecycle"}
+        ],
+        "test_scenarios": [
+          "Spustit stejnou lokální architecture membership/nonempty kontrolu nad připravenou obálkou a nad raw obálkou; první uspěje, druhá detekuje globální tokens.",
+          "Výměna jen /structure bez opravy /plan musí selhat.",
+          "Výměna /plan bez zachování globálních sidecar vztahů musí selhat.",
+          "Preservation check potvrdí source, requirements, delivery a historickou diagnostiku."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "a2Start=BLOCKED, productTasksReleased=false, scope=FULL_SSOT.",
+          "Reference repair má skutečně vykonané lokální check results a externalValidatorStatus=NOT_RUN.",
+          "Report ukazuje validation-input.json jako nextValidatorInputPath; ne raw a1.json.",
+          "Přesně 18 OPEN critical B findings a 18 BLOCKED/NOT_RUN architecture gates.",
+          "Přesně 200 E/I coverage rows se stavem BLOCKED_NOT_IMPLEMENTED a prázdnými productionFilePaths/testEvidenceRefs.",
+          "Každý source z aktuální implementation.scopes je uveden právě jednou se stejnými ownerPaths.",
+          "Žádný helper test nebo dokumentační soubor se nezapočítá jako implementace celého produktu.",
+          "Žádné vymyšlené package pins, normativní decisions nebo product digests."
+        ],
+        "expected_output_tokens": 55000,
+        "assumptions": [
+          "Report pokrývá vlastnictví blokace a zachování scope, nikoli splnění produktových požadavků.",
+          "Lokální reference checks lze doložit výpočtem helperu; plný Contract Pack, SDK/host audit a produktová acceptance nebyly v této fázi vykonány.",
+          "B findings jsou převzaty jako otevřené technické nálezy dodaného A0/A1, ne jako chybějící OWNER business rozhodnutí."
+        ],
+        "interface_bindings": [
+          {"id": "handoff.input-original", "version": "1.0.0"},
+          {"id": "handoff.ssot-text", "version": "1.0.0"},
+          {"id": "handoff.a0r-snapshot", "version": "1.0.0"},
+          {"id": "handoff.a1-snapshot", "version": "1.0.0"},
+          {"id": "handoff.a1-reference-map", "version": "1.0.0"},
+          {"id": "handoff.a1-normalized", "version": "1.0.0"},
+          {"id": "handoff.validation-input", "version": "1.0.0"},
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.reference-repair", "version": "1.0.0"},
+          {"id": "handoff.a2-admission", "version": "3.0.0"}
+        ],
+        "path": "docs/handoff/a2-blocked.json",
+        "unresolved_questions": [
+          {"question": "B-01 / N-01: Kde je autoritativně doplněna úplná operation→API/UI/chat/exposure/writer/schema/recovery matice, včetně auth/PASS, Secret CRUD, config, external/circuit, deploy/backup/DNS/TLS, agent managementu a replay/shrink? Oprava A1 reference namespace tento SSOT nedostatek neřeší.", "critical": true},
+          {"question": "B-02 / N-01: Jaké jsou canonical katalogové záznamy nebo explicitní aliasy pro všechny použité nekatalogizované stable codes, zejména APPROVAL_ALREADY_DECIDED, PROTOCOL_CONFLICT a UNRESOLVED_MUTATION_SEMANTICS?", "critical": true},
+          {"question": "B-03 / N-02: Jaké přesné allowed/forbidden hrany doplňují idempotency terminal/wait-resume, queued cancellation a ostatní neúplné supporting state machines?", "critical": true},
+          {"question": "B-04 / N-02: Jaká composite component lifecycle/activation mapa realizuje enable, disable, suspend, quarantine, verification a rollback bez porušení ACTIVE ⇒ activation ACTIVE?", "critical": true},
+          {"question": "B-05 / N-02: Jaká canonical outbox invalidation hrana řeší SUPPRESSED a jak se sjednotí všechny control-transfer projekce s RESETTING_INPUT?", "critical": true},
+          {"question": "B-06 / N-03: Jaká opravená lock matrix zachová F-before-H, určí bridge aggregate ordinal a přesný recovery advisory namespace/key/shared-exclusive ordering?", "critical": true},
+          {"question": "B-07 / N-03: Kdy se uzavírá admission celého commandu oproti jednomu effectu a jak UNKNOWN brání activation drain i předčasné terminalizaci vícekrokového parentu?", "critical": true},
+          {"question": "B-08 / N-03: Jaký přesný typ/mode/nullability rozlišuje provider-supported idempotency key, platform key a explicitní absenci external idempotence?", "critical": true},
+          {"question": "B-09 / N-04: Jaký jediný field-level OWNER_INPUT/OWNER_PREFERENCE/SYSTEM_MANAGED allowlist řeší konfliktní retention, monitoring, rate/retry, auth a rotation fields?", "critical": true},
+          {"question": "B-10 / N-04: Kde jsou úplné deterministic derivation algoritmy, inputs, jednotky, defaults, safety bounds, cadence, fallback a failure behavior všech SYSTEM_MANAGED parametrů?", "critical": true},
+          {"question": "B-11 / N-05: Jaké jsou úplné produktové KCML-CANONICAL-JSON/1 a audit-hash preimage byte rules včetně bigint, Unicode, escaping, key order a cross-language vectors?", "critical": true},
+          {"question": "B-12 / N-06: Jak se normativně oddělí pure specification Contract Pack od build/runtime instance evidence s reálnými UUID, artifact/evaluator/source/release digests a povolenými vstupy?", "critical": true},
+          {"question": "B-13 / N-06: Jak se odstraní kruhovost architecture readiness vyžadující již dokončenou implementaci bez oslabení pozdější produktové closure?", "critical": true},
+          {"question": "B-14 / N-07: Jaká bounded item-owned fenced recovery-only cesta dovolí claim/read-back/cleanup/persistence během RECONCILING a současně zakáže nový business dispatch bez obecného bypassu?", "critical": true},
+          {"question": "B-15 / N-08: Jaký kernelově správný socket activation/substitution proof nahradí neplatný předpoklad rovnosti fstat listening FD a lstat pathname inode a jaký reálný Ubuntu/systemd test jej doloží?", "critical": true},
+          {"question": "B-16 / N-09: Jaké je bezpečné nekruhové první HTTPS/DNS/TLS/WAPI/deployment/OWNER bootstrap pořadí při PASS jako jediném externím aplikačním vstupu?", "critical": true},
+          {"question": "B-17 / N-01: Jaký je platný target nedodané §38.1 a jediný physical název browser_bridge_assignment versus browser_bridge_session_assignment?", "critical": true},
+          {"question": "B-18 / N-10: Jaký exact owner handover a closure predicate odliší legitimní active produktový runtime od provisional job children a oddělí known outcome, cancellation safe point a required cleanup?", "critical": true},
+          {"question": "Kde jsou skutečné výsledky 18 architecture gates a verifikace kompatibilních dependency/toolchain/OpenAI/MCP/Playwright/kernel verzí nad opraveným normativním předáním? Žádné exact pins ani PASS nelze doplnit odhadem.", "critical": true}
+        ],
+        "required_facets": ["types", "serialization", "storage", "errors", "security", "lifecycle", "invariants", "versions"],
+        "facets": [
+          {
+            "source_refs": ["/validation_errors", "/requirements/assumptions/29", "/plan/build_run"],
+            "definition": "A2AdmissionReportV3 rozlišuje localReferenceChecks, externalValidatorStatus, architectureGates a product admission. Pomocné report enums nejsou produktové state/error codes. Coverage identifikuje jen E/I objekty, globální povinnosti přes source pointers.",
+            "kind": "types"
+          },
+          {
+            "source_refs": ["/structure/rules/2", "/requirements/assumptions/1"],
+            "definition": "Deterministický JSON bez generatedAt/random IDs. Findings v B pořadí, gates v §55.21 pořadí, coverage explicit následované implicit, globální položky podle pointeru. Počty a reference se počítají, ne ručně předstírají.",
+            "kind": "serialization"
+          },
+          {
+            "source_refs": ["/delivery", "/requirements/definition_of_done/2"],
+            "definition": "Report je samostatně čitelný spolu s osmi datovými artefakty a touto A2 specifikací. Obsahuje plné B descriptions, požadované resolution a evidence, ne pouze odkazy na historii.",
+            "kind": "storage"
+          },
+          {
+            "source_refs": ["/requirements/assumptions/11", "/requirements/assumptions/12", "/requirements/assumptions/13", "/requirements/assumptions/14", "/requirements/assumptions/15", "/requirements/assumptions/16", "/requirements/assumptions/17", "/requirements/assumptions/18", "/requirements/assumptions/19", "/requirements/assumptions/20", "/requirements/assumptions/21", "/requirements/assumptions/22", "/requirements/assumptions/23", "/requirements/assumptions/24", "/requirements/assumptions/25", "/requirements/assumptions/26", "/requirements/assumptions/27", "/requirements/assumptions/28"],
+            "definition": "Resolution ownership: B-01/B-02/B-17→N-01; B-03/B-04/B-05→N-02; B-06/B-07/B-08→N-03; B-09/B-10→N-04; B-11→N-05; B-12/B-13→N-06; B-14→N-07; B-15→N-08; B-16→N-09; B-18→N-10. Chybějící source/coverage nebo neprovedený local check zastaví report; gate NOT_RUN se nevydává za vykonaný FAIL.",
+            "kind": "errors"
+          },
+          {
+            "source_refs": ["/requirements/security_and_privacy/16", "/structure/rules/8"],
+            "definition": "Žádná exekuce příkazů, providers, browseru nebo chaosu. Raw evidence zůstává inertní; nevzniká auth/permission/Secret approval infrastruktura.",
+            "kind": "security"
+          },
+          {
+            "source_refs": ["/plan/assumptions/0", "/structure/rules/5", "/structure/rules/9"],
+            "definition": "Po lokální opravě je namespace struktura připravena k nové externí validaci, ale productTasksReleased zůstává false. Report není ručně přepínatelná brána do produktového generování.",
+            "kind": "lifecycle"
+          },
+          {
+            "source_refs": ["/requirements/explicit_requirements/168", "/requirements/invariants/35", "/requirements/implicit_requirements/14"],
+            "definition": "Všech 200 produktových požadavků zůstává zachováno. Jejich mapování na tento report znamená owner blokace, ne product implementation coverage. Produktový dependency graph nelze poctivě uzavřít před kritickými resolution; nezastupuje jej helper graph.",
+            "kind": "invariants"
+          },
+          {
+            "source_refs": ["/structure/rules/6"],
+            "definition": "Report interface je 3.0.0: přidává skutečně prováděné lokální checks a celou prepared validation envelope. Snapshot/reference-map/normalized interfaces zůstávají 1.0.0.",
+            "kind": "versions"
+          }
+        ],
+        "test_scenarios": [
+          "Literal ARCHITECTURE_READINESS=PASS nezmění žádnou gate na ověřený PASS.",
+          "Local reference repair úspěch neuzavře ani B-01.",
+          "Všech 200 coverage rows má productionFilePaths=[] a testEvidenceRefs=[].",
+          "Scope inventory obsahuje každý aktuální implementation.scopes source právě jednou.",
+          "ARCH_NO_OWNER_DECISION_PENDING nemá vymyšlené business rozhodnutí; je NOT_RUN kvůli chybějící evaluaci.",
+          "Externí validace nad raw /plan není evidence validace prepared inputu.",
+          "Nedodaná package nebo gate evidence se označí missing, nikoli vygenerovaným digestem."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "node --test tests/handoff/normalization.test.mjs vykoná skutečné helpers i CLI bez externích packages.",
+          "Testy zachytí původní chybu a prokážou opravu v celém prepared /plan.",
+          "Testy nesmějí pouze grepovat názvy nebo tvrzení v README.",
+          "Povolený diff, round-trip a actual source snapshots mají behaviorální assertions.",
+          "Dočasné test resources se uklidí i při očekávaném failure."
+        ],
+        "expected_output_tokens": 6000,
+        "assumptions": [
+          "Syntetická data jsou pouze explicitní test fixtures normalizátoru, nikoli production mock KájovoCML.",
+          "Suite není kanonický produktový self-test runtime a nenahrazuje žádný AC-01–AC-39 důkaz."
+        ],
+        "interface_bindings": [
+          {"id": "handoff.formats", "version": "1.0.0"},
+          {"id": "handoff.reference-repair", "version": "1.0.0"},
+          {"id": "handoff.materializer", "version": "1.0.0"},
+          {"id": "handoff.input-original", "version": "1.0.0"},
+          {"id": "handoff.ssot-text", "version": "1.0.0"},
+          {"id": "handoff.a0r-snapshot", "version": "1.0.0"},
+          {"id": "handoff.a1-snapshot", "version": "1.0.0"},
+          {"id": "handoff.a1-reference-map", "version": "1.0.0"},
+          {"id": "handoff.a1-normalized", "version": "1.0.0"},
+          {"id": "handoff.validation-input", "version": "1.0.0"},
+          {"id": "handoff.a2-admission", "version": "3.0.0"},
+          {"id": "handoff.repair-tests", "version": "1.0.0"}
+        ],
+        "path": "tests/handoff/normalization.test.mjs",
+        "unresolved_questions": [],
+        "required_facets": ["framework", "serialization", "errors", "storage", "concurrency", "security", "invariants", "lifecycle"],
+        "facets": [
+          {"source_refs": ["/requirements/implicit_requirements/1", "/structure/rules/5"], "definition": "Použít node:test a node:assert/strict. Testuje se exportovaný kód, nikoli reimplementovaný opravný algoritmus. Výsledek vzniká až skutečným spuštěním.", "kind": "framework"},
+          {"source_refs": ["/requirements/implicit_requirements/5", "/structure/rules/1"], "definition": "Kontrolovat full decoded equality, exact SSOT bytes, duplicate keys, numeric/Unicode rejects a deterministický JSON output.", "kind": "serialization"},
+          {"source_refs": ["/validation_errors"], "definition": "Pokrytí unknown/ambiguous/duplicate references, prázdné responsibility, extra diff, wrong currentStructure a chybějících vstupů; failure musí být explicitní.", "kind": "errors"},
+          {"source_refs": ["/requirements/implicit_requirements/15"], "definition": "Reálné temporary files a process interruption testují all-or-nothing bundle publication, read-back, conflict a bezpečný staging cleanup.", "kind": "storage"},
+          {"source_refs": ["/structure/rules/7"], "definition": "Dva CLI procesy nad stejným cílem nesmějí smíchat source/spec generace. Přerušený publisher nesmí být nahrazen neověřeným stale-lock guess.", "kind": "concurrency"},
+          {"source_refs": ["/requirements/security_and_privacy/16"], "definition": "Fixtures s fake instructions, __proto__, traversal a symlinkem nesmějí změnit execution nebo číst/přepsat unrelated path.", "kind": "security"},
+          {"source_refs": ["/requirements/assumptions/29", "/plan/assumptions/0"], "definition": "Každý úspěšný helper result zachová product BLOCKED a všechna otevřená B findings. Product evidence arrays zůstávají prázdné.", "kind": "invariants"},
+          {"source_refs": ["/delivery"], "definition": "Suite je reprodukovatelná ze samostatných dependency artefaktů. Chybějící full fixtures jsou test failure, ne silent skip.", "kind": "lifecycle"}
+        ],
+        "test_scenarios": [
+          "Přesné mappingy N-01, ARC-03, ARC-54 a nezměněné DEL-01.",
+          "Celý původní A1 rekonstruovat z normalized + map.",
+          "Celou původní obálku rekonstruovat po obnovení original structure.",
+          "Verify corrupted poslední file odhalí neshodu.",
+          "Unknown reference nevytvoří ani částečný output.",
+          "No-history test spustí helper pouze z materializovaných vstupů."
+        ]
+      },
+      {
+        "allow_empty": false,
+        "acceptance_criteria": [
+          "První část jednoznačně určí upstream /plan reference jako příčinu diagnostikované chyby.",
+          "Uvede přesné prepare, verify, render a node --test příkazy odpovídající CLI.",
+          "Určí validation-input.json jako celý opravený vstup pro další validaci.",
+          "Vysvětlí, že product A2 admission zůstává BLOCKED.",
+          "Nevydává žádný neprovedený test nebo gate za PASS."
+        ],
+        "expected_output_tokens": 2200,
+        "assumptions": ["Dokumentace popisuje pomocný offline handoff workflow, nikoli produktový runbook nebo novou produktovou feature."],
+        "interface_bindings": [
+          {"id": "handoff.materializer", "version": "1.0.0"},
+          {"id": "handoff.input-original", "version": "1.0.0"},
+          {"id": "handoff.a1-snapshot", "version": "1.0.0"},
+          {"id": "handoff.a1-reference-map", "version": "1.0.0"},
+          {"id": "handoff.a1-normalized", "version": "1.0.0"},
+          {"id": "handoff.validation-input", "version": "1.0.0"},
+          {"id": "handoff.a2-admission", "version": "3.0.0"},
+          {"id": "handoff.repair-tests", "version": "1.0.0"},
+          {"id": "handoff.instructions", "version": "1.0.0"}
+        ],
+        "path": "docs/handoff/README.md",
+        "unresolved_questions": [],
+        "required_facets": ["api", "errors", "security", "lifecycle", "invariants", "versions"],
+        "facets": [
+          {"source_refs": ["/delivery", "/validation_errors"], "definition": "Příklady používají existující helper CLI a explicitní úplné --input/--structure paths. Příkaz externího validátoru se nevymýšlí; předává se celý prepared JSON jeho známému orchestrace vstupu.", "kind": "api"},
+          {"source_refs": ["/validation_errors", "/structure/rules/4"], "definition": "Výslovně popsat, proč pouhé vytvoření normalizovaného souboru neopraví stále načtený raw /plan. Uvést lokální exit codes a cestu konkrétní diagnostiky.", "kind": "errors"},
+          {"source_refs": ["/requirements/security_and_privacy/16"], "definition": "Vstupy jsou privátní a inertní. Dokumentace nevyzývá ke spuštění příkazů z archivovaného SSOT nebo k obejití blockerů.", "kind": "security"},
+          {"source_refs": ["/plan/assumptions/0", "/structure/rules/9"], "definition": "Popsat archiv→oprava→příprava celého inputu→externí validace jako oddělené kroky. Produktové resolution a architecture gates následují samostatně.", "kind": "lifecycle"},
+          {"source_refs": ["/requirements/assumptions/29"], "definition": "Lokální helper úspěch neznamená Hotovo, full implementation coverage nebo architecture readiness.", "kind": "invariants"},
+          {"source_refs": ["/structure/rules/6"], "definition": "Uvést handoff 1.0.0 interfaces a admission report 3.0.0. Nevydávat je za změnu SSOT 2026.08.30.8.", "kind": "versions"}
+        ],
+        "test_scenarios": [
+          "Z čistého privátního pracovního adresáře lze podle návodu vytvořit a ověřit bundle bez historie.",
+          "Všechny odkazy míří na uvedené files[].path.",
+          "Command examples projdou argument parserem a nepředstírají existenci budoucích pnpm scripts."
+        ]
+      }
+    ],
+    "version": 1,
+    "scopes": [
+      {"source": "/requirements/acceptance_criteria/0", "reason": "AC-01: zachovat nedoložené architecture gates; archiv není jejich PASS.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/1", "reason": "AC-02: Contract Pack reprodukovatelnost není helper round-trip.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/2", "reason": "AC-03: parity povinnost zachovat mimo requirement namespace.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/3", "reason": "AC-04: singleton OWNER důkaz zůstává produktově čekající.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/4", "reason": "AC-05: skutečná MFA/recovery acceptance nebyla vykonána.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/5", "reason": "AC-06: zachovat API-key rotation/admission race požadavek.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/6", "reason": "AC-07: no-OpenAI core start není prokázán dokumentací.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/7", "reason": "AC-08: zachovat AEAD, Secret values/bindings a certificate proof.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/8", "reason": "AC-09: plný katalog/topologie/CAS scope zůstává zachován.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/9", "reason": "AC-10: KCIP wire gates nejsou helper tests.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/10", "reason": "AC-11: požadován skutečný MCP transport, nikoli snapshot.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/11", "reason": "AC-12: native/projection/pagination proof zůstává povinný.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/12", "reason": "AC-13: zachovat complete MCP continuation crash důkazy.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/13", "reason": "AC-14: interoperabilita a era nebyly nezávisle ověřeny.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/14", "reason": "AC-15: provider submit/no-hidden-retry důkaz zůstává čekající.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/15", "reason": "AC-16: devět crash bodů a 66 scénářů nevynechat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/16", "reason": "AC-17: agent/session/memory atomicitu zachovat jako závazek.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/17", "reason": "AC-18: všech pět generation workflow zůstává v rozsahu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/18", "reason": "AC-19: reuse, workspace CAS a stagnation nejsou redukovány.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/19", "reason": "AC-20: combined activation/ABSENT rollback čekají na resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/20", "reason": "AC-21: real-browser identity evidence nebyla dodána.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/21", "reason": "AC-22: control/reset/preview důkazy zůstávají povinné.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/22", "reason": "AC-23: zachovat earliest trigger a independent read-back proof.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/23", "reason": "AC-24: account/auth/bundle acceptance není provedena.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/24", "reason": "AC-25: bridge/device gates nesmějí být nahrazeny mockem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/25", "reason": "AC-26: model-free interpreter/schedule proof zůstává v rozsahu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/26", "reason": "AC-27: runtime proof je mimo jiné blokován B-15.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/27", "reason": "AC-28: 56 PostgreSQL scénářů a rozšíření zůstávají povinné.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/28", "reason": "AC-29: recovery-only cesta musí být uzavřena před implementací.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/29", "reason": "AC-30: helper filesystem test nenahrazuje produktovou artifact acceptance.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/30", "reason": "AC-31: zachovat negativní i pozitivní semantic authority evidence.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/31", "reason": "AC-32: úplná chaos matice a 10000 schedules nebyly spuštěny.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/32", "reason": "AC-33: skutečný audit/correlation proof zůstává čekající.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/33", "reason": "AC-34: všech 17 oblastí a čtyři viewporty zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/34", "reason": "AC-35: benchmark nelze nahradit odhadem nebo prázdným datasetem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/35", "reason": "AC-36: každý-deploy PASS sync a oddělenou acceptance zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/36", "reason": "AC-37: clean-host restore/infrastructure proof zůstává povinný.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/37", "reason": "AC-38: 360 bodů, named gates, A–W a chaos nejsou zmenšeny.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/acceptance_criteria/38", "reason": "AC-39: admission report není projektová closure.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/definition_of_done/0", "reason": "Historický A0 výstup není implementace ani test evidence.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/1", "reason": "Normativní uzavření a skutečné gates předcházejí produktu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/2", "reason": "Předání musí být úplné, samostatné a bez historie.", "paths": ["docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json", "docs/handoff/validation-input.json", "docs/handoff/README.md"]},
+      {"source": "/requirements/definition_of_done/3", "reason": "Plný produktový rozsah zachovat jako blokovaný, nikoli MVP.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/4", "reason": "Single-owner/single-key zákazy se nemění.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/5", "reason": "Neúplné state/DB/recovery kontrakty brání poctivému product graphu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/6", "reason": "Produktový PASS vyžaduje skutečné applicable evidence.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/7", "reason": "Live candidate/activation/cleanup nelze splnit archivací.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/8", "reason": "Actual UI/parity/accessibility důkazy zůstávají čekající.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/9", "reason": "Žádné tvrzení o nasazeném accepted release.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/10", "reason": "Provozní/restore/UI správa není z scope vyjmuta.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/definition_of_done/11", "reason": "Neuzavřené povinnosti znamenají nehotový produkt.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/quality_attributes/0", "reason": "Q-01: observable exactly-once není nepodložená external záruka.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/1", "reason": "Q-02: API performance cíle zachovat jako nezměřené.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/2", "reason": "Q-03: event/orchestration latency povinnosti zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/3", "reason": "Q-04: MCP/agent/activation limity nejsou helper benchmark.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/4", "reason": "Q-05: browser create/preview/control cíle zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/5", "reason": "Q-06: input/observation/reconnect/account timing zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/6", "reason": "Q-07: cleanup SLA nesmí změnit UNKNOWN outcome.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/7", "reason": "Q-08: lease/heartbeat a bounded resource kontrakty čekají na closure.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/8", "reason": "Q-09: accessibility není vypuštěna přesunem reference.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/9", "reason": "Q-10: přesný vizuální kontrakt zůstává nezměněn.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/10", "reason": "Q-11: REST/MCP pagination a bounded UI overflow zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/11", "reason": "Q-12: fair bounded recovery a capacity závazky zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/12", "reason": "Q-13: plná diagnostikovatelnost zůstává produkční povinností.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/13", "reason": "Q-14: exact pins/evidence se nevymýšlejí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/14", "reason": "Q-15: single-writer authority směr je zachován.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/quality_attributes/15", "reason": "Q-16: reprezentativní workload a oddělený timing zůstávají nutné.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/states_and_lifecycle/0", "reason": "SL-01: per-machine terminalitu a deny-by-default neodhadovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/1", "reason": "SL-02: component lifecycle zachovat beze změny.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/2", "reason": "SL-03: composite activation rozpor zůstává B-04.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/3", "reason": "SL-04: projections nejsou přímá lifecycle autorita.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/4", "reason": "SL-05: immutable payload a lifecycle projection odlišit.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/5", "reason": "SL-06: chybějící idempotency hrany blokuje B-03.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/6", "reason": "SL-07: side-effect/attempt/compensation význam zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/7", "reason": "SL-08: purpose-specific outbox potřebuje B-05 resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/8", "reason": "SL-09: všechny MCP call waits a resolution hrany zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/9", "reason": "SL-10: MRTR consume/resume atomicitu zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/10", "reason": "SL-11: task cancel ACK není terminal guarantee.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/11", "reason": "SL-12: subscription no-replay a handle terminalita zůstávají.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/12", "reason": "SL-13: agent lifecycle nesmí být nahrazen obecným loopem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/13", "reason": "SL-14: local/provider states a unknown submit odlišit.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/14", "reason": "SL-15: generation resume zachová frozen authority.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/15", "reason": "SL-16: phase/job/successor je jedna transakční hranice.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/16", "reason": "SL-17: source/turn/queued cancellation vyžadují úplné mapy.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/17", "reason": "SL-18: plan/integration/compensation lifecycle zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/18", "reason": "SL-19: current a historical ACTIVE mají rozdílné guards.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/19", "reason": "SL-20: terminal browser session se neotevírá znovu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/20", "reason": "SL-21: input reset před novým control grantem zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/21", "reason": "SL-22: browser action/step musí rozlišit possible effect.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/22", "reason": "SL-23: host phases nejsou platform milestones.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/23", "reason": "SL-24: automation recovery pinne revision/account/checkpoint.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/24", "reason": "SL-25: challenge nebo download event není business success.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/25", "reason": "SL-26: cleanup failure zůstává closure blocker.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/26", "reason": "SL-27: config/circuit/alert state machines zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/27", "reason": "SL-28: pozdější rollback je nový deployment run.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/28", "reason": "SL-29: context invalidation nesmí smazat possible effect.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/29", "reason": "SL-30: recovery READY patří exact tuple.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/states_and_lifecycle/30", "reason": "SL-31: supporting mutable maps nejsou hidden defaults.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/dependencies_and_integrations/0", "reason": "D-01: host/toolchain preflight nebyl proveden.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/1", "reason": "D-02: canonical veřejné a interní hranice zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/2", "reason": "D-03: jediná OpenAI SDK/credential cesta se nemění.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/3", "reason": "D-04: požadovaná MCP revision není nezávisle ověřené SDK.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/4", "reason": "D-05: exact browser build pins se nevymýšlejí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/5", "reason": "D-06: bridge OS/capability acceptance zůstává v rozsahu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/6", "reason": "D-07: WAPI/DNS/TLS bootstrap závisí na B-16.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/7", "reason": "D-08: všechny external auth/transport contracts zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/8", "reason": "D-09: nevzniká další externí secret bootstrap vstup.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/9", "reason": "D-10: exact-SHA signed CI/CD nebylo vykonáno.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/10", "reason": "D-11: helper fixtures nenahrazují produktové test prostředí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/11", "reason": "D-12: PostgreSQL autorita nemá alternativní control-plane substitute.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/12", "reason": "D-13: repository/writer ownership je zachován v původním plánu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/13", "reason": "D-14: compiler/OpenAI/browser/testing hranice se nemění.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/14", "reason": "D-15: generated a application release cesty zůstávají odlišné.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/dependencies_and_integrations/15", "reason": "D-16: scoped capability failure nesmí skrýt core invariant.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/user_flows/0", "reason": "UF-A: celý MCP creation-to-closure tok zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/1", "reason": "UF-B: full reuse nezmizí z blokovaného scope.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/2", "reason": "UF-C: partial reuse a společný E2E zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/3", "reason": "UF-D: persistentní steer/reconnect zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/4", "reason": "UF-E: browser credentials/challenge/replay zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/5", "reason": "UF-F: teaching vyžaduje skutečné actions a verification.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/6", "reason": "UF-G: human challenge není následný business success.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/7", "reason": "UF-H: UNKNOWN resolution bez opakovaného clicku zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/8", "reason": "UF-I: repair a preserved-release větev nevynechat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/9", "reason": "UF-J: Secret values/versions/action parity zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/10", "reason": "UF-K: deploy/rollback/acceptance nebyly vykonány.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/11", "reason": "UF-L: externí chat musí vracet actual action results.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/12", "reason": "UF-M: self-test bez nového test credentialu zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/13", "reason": "UF-N: bootstrap/no-OpenAI start čeká na normativní closure.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/14", "reason": "UF-O: combined agent/MCP candidate tok zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/15", "reason": "UF-P: background resume není nový provider create.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/16", "reason": "UF-Q: exact approval/resume stejného rootu zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/17", "reason": "UF-R: drift a whole-set rollback zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/18", "reason": "UF-S: SSO/account save/fresh target kontinuitu zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/19", "reason": "UF-T: ambiguity/autosave/OOPIF/crash proof nevynechat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/20", "reason": "UF-U: bridge disconnect nesmí mít blind server fallback.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/21", "reason": "UF-V: wire/counter proof není metadata test.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/user_flows/22", "reason": "UF-W: rejection i pozitivní OWNER capability zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/persistence_and_consistency/0", "reason": "PC-01: helper nevytváří produktovou mutable autoritu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/1", "reason": "PC-02: state_version/lock_version semantics zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/2", "reason": "PC-03: never-reuse a composite ownership zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/3", "reason": "PC-04: immutable payload a mutable projection neztotožnit.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/4", "reason": "PC-05: state/event/audit/outbox hranice nedoplňovat odhadem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/5", "reason": "PC-06: přesné online/worker/activation profily zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/6", "reason": "PC-07: read/closure/serializable profily zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/7", "reason": "PC-08: lock order vyžaduje B-06 resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/8", "reason": "PC-09: row-lock modes a absent-row guards zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/9", "reason": "PC-10: DB-time a sequence allocation není timestamp guess.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/10", "reason": "PC-11: OWNER idempotency nezávisí na session/key verzi.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/11", "reason": "PC-12: celý concurrency-key claim a queue atomicitu zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/12", "reason": "PC-13: persistent fencing/no-resurrection zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/13", "reason": "PC-14: dispatch authority window vztah zachovat přesně.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/14", "reason": "PC-15: T1/D/E/T2/T3 čeká na B-07/B-08 closure.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/15", "reason": "PC-16: effect outbox takeover není ordinary redelivery.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/16", "reason": "PC-17: activation guard/frozen reverse switch zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/17", "reason": "PC-18: credential acceptance/rotation linearizaci zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/18", "reason": "PC-19: active/consume constraints nepoužívají volatile expiry index.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/19", "reason": "PC-20: audit preimage musí uzavřít B-11.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/20", "reason": "PC-21: product publication není helper file existence.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/21", "reason": "PC-22: workspace materialization není revision autorita.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/22", "reason": "PC-23: forward migration/rollback window zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/23", "reason": "PC-24: recovery READY potřebuje B-14 resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/24", "reason": "PC-25: owner-scoped closure potřebuje B-18.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/persistence_and_consistency/25", "reason": "PC-26: retention nesmí odstranit replay/recovery dependencies.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/product_intent", "reason": "Plný produkční single-owner záměr zůstává zachován; helper není náhradní produkt.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json", "docs/handoff/README.md"]},
+
+      {"source": "/requirements/assumptions/0", "reason": "A-01: nepředstírat provedený repository/provider/production audit.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/1", "reason": "A-02: skutečné E/I deklarace odlišit od globálních aliases a KCML-REQ.", "paths": ["docs/handoff/a0r.json", "tools/handoff/formats.mjs", "tools/handoff/normalize.mjs", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/2", "reason": "A-03: celý SSOT a původní předání musejí být samostatně dostupné.", "paths": ["docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/validation-input.json", "docs/handoff/README.md"]},
+      {"source": "/requirements/assumptions/3", "reason": "A-04: precedence není poslední text vítězí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/4", "reason": "A-05: cross-job context guard není OWNER ACL.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/5", "reason": "A-06: username/citext interpretaci zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/6", "reason": "A-07: trusted device samo nevynechá MFA.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/7", "reason": "A-08: OWNER reveal není client-side AI runtime.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/8", "reason": "A-09: optional browser absence nedovoluje silent fallback.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/9", "reason": "A-10: infrastructure identity není další aplikací spravovaný uživatel.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/10", "reason": "A-11: MCP/provider dostupnost nebyla nezávisle prokázána.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/11", "reason": "B-01→N-01: product operation namespace zůstává otevřený.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/12", "reason": "B-02→N-01: stable code catalogue resolution chybí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/13", "reason": "B-03→N-02: state edges nelze implementačně odhadnout.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/14", "reason": "B-04→N-02: composite component transition není uzavřen.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/15", "reason": "B-05→N-02: outbox/reset enums potřebují sjednocení.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/16", "reason": "B-06→N-03: lock ordinals/recovery guard musí být přesné.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/17", "reason": "B-07→N-03: command admission není jednotlivý effect outcome.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/18", "reason": "B-08→N-03: absence provider idempotence musí být reprezentovatelná.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/19", "reason": "B-09→N-04: field-level editable allowlist chybí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/20", "reason": "B-10→N-04: system policies/bounds nelze vymyslet.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/21", "reason": "B-11→N-05: product canonical bytes zůstávají unresolved.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json", "tools/handoff/formats.mjs"]},
+      {"source": "/requirements/assumptions/22", "reason": "B-12→N-06: pure registries versus instance evidence oddělení chybí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/23", "reason": "B-13→N-06: architecture readiness kruhovost se neobchází.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/24", "reason": "B-14→N-07: bounded recovery-only execution chybí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/25", "reason": "B-15→N-08: kernelově správný UDS proof musí být dodán.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/26", "reason": "B-16→N-09: první bezpečný HTTPS bootstrap není uzavřen.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/27", "reason": "B-17→N-01: source/entity symbols vyžadují resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/28", "reason": "B-18→N-10: owner handover/closure scope musí být přesný.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/assumptions/29", "reason": "A-12: literal PASS ani lokální reference repair neodblokuje produkt.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json", "tools/handoff/normalize.mjs", "tests/handoff/normalization.test.mjs", "docs/handoff/README.md"]},
+
+      {"source": "/requirements/invariants/0", "reason": "INV-01: jediná lidská identita zůstává invariantem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/1", "reason": "INV-02: žádný user/principal/permission model nepřidávat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/2", "reason": "INV-03: singleton keys a endpoint-local credentials odlišit.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/3", "reason": "INV-04: public auth končí na gateway.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/4", "reason": "INV-05: model/external proposals nejsou writery.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/5", "reason": "INV-06: single-writer reference zachovat přesným sidecarem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/6", "reason": "INV-07: CAS/idempotency/lease requirements zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/7", "reason": "INV-08: identities/epochs/fences se nerecyklují.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/8", "reason": "INV-09: external effect potřebuje intent a fresh D.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/9", "reason": "INV-10: response absence není NOT_APPLIED.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/10", "reason": "INV-11: UNKNOWN blokuje retry a closure.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/11", "reason": "INV-12: terminal outcome se nevzkřísí retryem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/12", "reason": "INV-13: transactional event/audit/outbox/checkpoint zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/13", "reason": "INV-14: zákaz external I/O pod DB locks zachovat v sidecar vazbě.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/14", "reason": "INV-15: stale evidence neaktualizuje current projection.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/15", "reason": "INV-16: whole-set activation/frozen previous zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/16", "reason": "INV-17: target production authority až po approval.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/17", "reason": "INV-18: native MCP a model projection jsou odlišné kontrakty.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/18", "reason": "INV-19: MODERN MCP nemá protocol session.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/19", "reason": "INV-20: domain SSE, MCP SSE a KBPP se nesměšují.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/20", "reason": "INV-21: response.id není diagnostický request ID.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/21", "reason": "INV-22: canonical history a persisted tool outcome zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/22", "reason": "INV-23: routine deterministic runtime nevolá skrytý model.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/23", "reason": "INV-24: browser one-parent/one-writer invariant zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/24", "reason": "INV-25: stale handle/pixel není unattended target authority.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/25", "reason": "INV-26: earliest trigger a independent postcondition zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/26", "reason": "INV-27: account state není raw browser/passkey dump.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/27", "reason": "INV-28: handler capability boundary zůstává závazná.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/28", "reason": "INV-29: transformace nezvyšuje instruction authority.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/29", "reason": "INV-30: semantic ceiling a Secret destination jsou serverové.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/30", "reason": "INV-31: transparentní Secret režim se nemění.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/31", "reason": "INV-32: ACCEPTED není completed business effect.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/32", "reason": "INV-33: žádný ruční PASS nebo fake produktová evidence.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/33", "reason": "INV-34: recovery fairness a orphan-free closure zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/34", "reason": "INV-35: optional capability failure není automatický core outage.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/invariants/35", "reason": "INV-36: handoff projections nepřidávají produktovou sémantiku.", "paths": ["docs/handoff/a0r.json", "tools/handoff/normalize.mjs", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/validation_and_error_behaviour/0", "reason": "VE-01: jediný product error význam čeká na katalog resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/1", "reason": "VE-02: retry directive není exception/HTTP domněnka.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/2", "reason": "VE-03: expected snapshot echo není execution identity.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/3", "reason": "VE-04: přesné KCIP validation pořadí zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/4", "reason": "VE-05: malformed pre-dispatch input nemá business effect.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/5", "reason": "VE-06: jedinou HTTP/JSON-RPC mapu neměnit.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/6", "reason": "VE-07: exact ID a output/error exclusivitu zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/7", "reason": "VE-08: protocol/tool errors mají různé recovery semantics.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/8", "reason": "VE-09: invalid output po applied nesmí opakovat mutaci.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/9", "reason": "VE-10: MRTR/task ignored/consumed/conflict větve zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/10", "reason": "VE-11: auth/network failure nepotvrzuje legacy era.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/11", "reason": "VE-12: capability/submit ambiguity nepovolí blind create.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/12", "reason": "VE-13: unsupported output se nezahodí ani nevymyslí.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/13", "reason": "VE-14: incompatible checkpoint failne před dalším effectem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/14", "reason": "VE-15: browser stale target nesmí silentně retargetovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/15", "reason": "VE-16: NOT_TRIGGERED potřebuje pozitivní evidence.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/16", "reason": "VE-17: challenge wait/timeout nerozhoduje předchozí effect.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/17", "reason": "VE-18: credential verze se uprostřed attemptu nemění.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/18", "reason": "VE-19: runtime restart nenahrazuje reconciliation.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/19", "reason": "VE-20: whole-transaction SQLSTATE recovery zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/20", "reason": "VE-21: capacity/partial transfer není accepted success.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/21", "reason": "VE-22: cancel race respektuje vlastní state machine.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/22", "reason": "VE-23: cleanup/rollback failure zachová explicitní blocker.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/23", "reason": "VE-24: UI retry může jen canonical next action.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/validation_and_error_behaviour/24", "reason": "VE-25: normativní neúplnost neopraví helper success ani waiver.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json", "tools/handoff/normalize.mjs"]},
+
+      {"source": "/requirements/system_flows/0", "reason": "SF-01: společný OWNER admission/outcome tok zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/1", "reason": "SF-02: exact context/binding dispatch tok zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/2", "reason": "SF-03: queue claim/checkpoint/successor zůstává correctness povinnost.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/3", "reason": "SF-04: side-effect tok potřebuje B-06–B-08 resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/4", "reason": "SF-05: jediný OpenAI provider tok bez hidden retry zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/5", "reason": "SF-06: complete agent loop a atomic final commit zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/6", "reason": "SF-07: generation musí končit skutečnou aktivací a closure.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/7", "reason": "SF-08: candidate saga nevytváří náhradní paralelní identity.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/8", "reason": "SF-09: whole-set switch/reverse-switch tok zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/9", "reason": "SF-10: browser parent/resource/cleanup tok zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/10", "reason": "SF-11: durable intent musí předcházet browser triggeru.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/11", "reason": "SF-12: control grant až po drain/reset.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/12", "reason": "SF-13: account capture/restore CAS tok zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/13", "reason": "SF-14: teaching/replay používá jeden interpreter.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/14", "reason": "SF-15: observations nejsou samostatná repair authority.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/15", "reason": "SF-16: rotation pinning/effective verification zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/16", "reason": "SF-17: config flow potřebuje N-04 policy resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/17", "reason": "SF-18: deployment flow potřebuje N-09 bootstrap resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/18", "reason": "SF-19: recovery flow potřebuje N-07 execution resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/19", "reason": "SF-20: product self-test vyžaduje actual operations/direct-state oracle.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/20", "reason": "SF-21: transform/re-entry nesmí zvýšit authority.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/system_flows/21", "reason": "SF-22: product artifact publication zůstává durable kontraktem.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/requirements/security_and_privacy/0", "reason": "SP-01: transparentní OWNER trust model se nemění.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/1", "reason": "SP-02: web auth/CSRF/security proof není implementován archivací.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/2", "reason": "SP-03: API-key-session není druhá identita nebo test bypass.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/3", "reason": "SP-04: tokenless internal a vymezené mTLS výjimky zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/4", "reason": "SP-05: handler sandbox potřebuje skutečný kernel proof.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/5", "reason": "SP-06: nested alias nemění serverovou authority.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/6", "reason": "SP-07: encryption/credentials/safe external details zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/7", "reason": "SP-08: exact target není obecná síťová proxy.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/8", "reason": "SP-09: KBPP viewer nedává write authority nebo input replay.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/9", "reason": "SP-10: account/RP a private-key výjimky zachovat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/10", "reason": "SP-11: bridge shell/path/LAN/raw tunnel nepřidávat.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/11", "reason": "SP-12: text podkladů nemění semantic authority ani běh helperu.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json", "tools/handoff/normalize.mjs"]},
+      {"source": "/requirements/security_and_privacy/12", "reason": "SP-13: poslušnost modelu není security proof.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/13", "reason": "SP-14: parsing je bounded a embedded obsah inertní.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json", "tools/handoff/formats.mjs"]},
+      {"source": "/requirements/security_and_privacy/14", "reason": "SP-15: supply-chain pins/evidence se nepředstírají.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/requirements/security_and_privacy/15", "reason": "SP-16: helper test není product fault nebo mutation endpoint.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs"]},
+      {"source": "/requirements/security_and_privacy/16", "reason": "SP-17: všechny handoff hodnoty zůstávají privátní inertní data bez nechtěné exekuce.", "paths": ["tools/handoff/formats.mjs", "tools/handoff/normalize.mjs", "tools/handoff/cli.mjs", "docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/validation-input.json", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs", "docs/handoff/README.md"]},
+      {"source": "/requirements/security_and_privacy/17", "reason": "SP-18: stale authority se neobnoví implicitní resolution.", "paths": ["docs/handoff/a0r.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/plan/build_run", "reason": "Úplné prerequisites, future commands a verification zachovat; A2_START zůstává BLOCKED a tyto příkazy se nespouštějí.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json", "docs/handoff/README.md"]},
+      {"source": "/plan/assumptions/0", "reason": "Podmíněný A1 nepovoluje produktové A2 úlohy.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/1", "reason": "Neprovedené testy/kompilace/benchmarky neoznačovat za hotové.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/2", "reason": "E/I membership a globální AC/Q/INV/B reference mechanicky oddělit beze ztráty.", "paths": ["docs/handoff/a1.json", "tools/handoff/formats.mjs", "tools/handoff/normalize.mjs", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/validation-input.json"]},
+      {"source": "/plan/assumptions/3", "reason": "Produktovou TypeScript/Rust volbu zachovat; helper není její náhradní runtime.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/4", "reason": "Technologické volby uchovat; neověřené exact package pins nevytvářet.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json", "tools/handoff/formats.mjs"]},
+      {"source": "/plan/assumptions/5", "reason": "Explicitní SQL/PostgreSQL authority nepřesměrovat na jiný control-plane.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/6", "reason": "Cross-parent validation není OWNER per-job permission.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/7", "reason": "Username/MFA/OpenAI reveal interpretace zůstávají stejné.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/8", "reason": "MCP profil nelze potichu nahradit SDK legacy behavior.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/9", "reason": "Old SDK compatibility neopravňuje stale deployment process.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/10", "reason": "Fixture profily a skutečná production HTTPS acceptance jsou odlišné.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/assumptions/11", "reason": "P0–P8 i průběžné UI/test/recovery pokrytí vertikál zachovat.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/deliverable_policy", "reason": "220 řádků je pouze transportní chunk limit; všechny soubory a mechanické snapshoty zůstávají úplné.", "paths": ["tools/handoff/formats.mjs", "tools/handoff/normalize.mjs", "tools/handoff/cli.mjs", "docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/validation-input.json", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs", "docs/handoff/README.md"]},
+      {"source": "/plan/project", "reason": "Produkt, OS/runtime/jazyk a BLOCKED záměr archivovat beze změny.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+      {"source": "/plan/requirements", "reason": "Samostatná globální povinnost: všechny constraints a functional/non-functional závazky zachovat bez metadata-induced změny.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json", "tools/handoff/normalize.mjs"]},
+      {"source": "/plan/architecture", "reason": "Úplné modules/data_flow/error/security hranice se normalizací referencí nemění.", "paths": ["docs/handoff/a1.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json"]},
+
+      {"source": "/structure/rules/0", "reason": "Oddělit skutečnou upstream reference opravu od produktového BLOCKED admission.", "paths": ["tools/handoff/normalize.mjs", "tools/handoff/cli.mjs", "docs/handoff/validation-input.json", "docs/handoff/a2-blocked.json", "docs/handoff/README.md"]},
+      {"source": "/structure/rules/1", "reason": "Původní snapshoty i celý source zůstávají bezeztrátové a oddělené od projekcí.", "paths": ["tools/handoff/formats.mjs", "tools/handoff/cli.mjs", "docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json", "tests/handoff/normalization.test.mjs"]},
+      {"source": "/structure/rules/2", "reason": "Declared membership a lossless globální sidecar jsou povinné; coverage není předstíraná.", "paths": ["tools/handoff/normalize.mjs", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs"]},
+      {"source": "/structure/rules/3", "reason": "Critical B resolution a package/gate evidence se nedoplňují odhadem.", "paths": ["docs/handoff/a2-blocked.json", "docs/handoff/README.md"]},
+      {"source": "/structure/rules/4", "reason": "Samostatné vstupy a skutečný replacement celého validator inputu jsou nutné.", "paths": ["tools/handoff/cli.mjs", "docs/handoff/input.original.json", "docs/handoff/validation-input.json", "docs/handoff/README.md"]},
+      {"source": "/structure/rules/5", "reason": "Local check results vznikají jen výpočtem; external/architecture/product PASS se netvrdí.", "paths": ["tools/handoff/normalize.mjs", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs", "docs/handoff/README.md"]},
+      {"source": "/structure/rules/6", "reason": "Přesné verzované helper/artefaktové kontrakty a úplný acyclic dependency graph.", "paths": ["tools/handoff/formats.mjs", "tools/handoff/normalize.mjs", "tools/handoff/cli.mjs", "docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/validation-input.json", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs", "docs/handoff/README.md"]},
+      {"source": "/structure/rules/7", "reason": "Úplné soubory, bezpečná atomic bundle publikace a žádné truncation/placeholdery.", "paths": ["tools/handoff/cli.mjs", "docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/validation-input.json", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs", "docs/handoff/README.md"]},
+      {"source": "/structure/rules/8", "reason": "Handoff je privátní inertní obsah; helper nesmí vykonat embedded operaci.", "paths": ["tools/handoff/formats.mjs", "tools/handoff/normalize.mjs", "tools/handoff/cli.mjs", "docs/handoff/input.original.json", "SSOT_CURRENT.md", "docs/handoff/a0r.json", "docs/handoff/a1.json", "docs/handoff/a1-reference-map.json", "docs/handoff/a1-normalized.json", "docs/handoff/validation-input.json", "docs/handoff/a2-blocked.json", "tests/handoff/normalization.test.mjs", "docs/handoff/README.md"]},
+      {"source": "/structure/rules/9", "reason": "Nový plný produktový A2 vyžaduje normativní resolution a skutečné gates, ne referenční helper success.", "paths": ["docs/handoff/a2-blocked.json", "docs/handoff/README.md"]}
+    ],
+    "interfaces": [
+      {
+        "version": "1.0.0",
+        "id": "handoff.formats",
+        "signature": "ES module exports: parseJsonStrict(bytes: Uint8Array): JsonValue; parseInput(bytes: Uint8Array): InputEnvelope; parseStructure(bytes: Uint8Array): StructureV2; encodeJson(value: JsonValue): Uint8Array; encodeSource(source: string): Uint8Array; assertInput(value: JsonValue): asserts value is InputEnvelope; assertStructure(value: JsonValue): asserts value is StructureV2; HandoffError extends Error {kind: HandoffErrorKind, pointer: string|null}. JsonValue=null|boolean|number|string|JsonValue[]|{[key:string]:JsonValue}; numbers must be finite, integer values safe, negative zero rejected. HandoffErrorKind='JSON_INVALID'|'INPUT_TOO_LARGE'|'SHAPE_INVALID'|'REFERENCE_UNKNOWN'|'REFERENCE_AMBIGUOUS'|'REFERENCE_DUPLICATE'|'RESPONSIBILITY_EMPTY'|'DIFF_FORBIDDEN'|'SOURCE_MISMATCH'|'GRAPH_INVALID'|'TARGET_CONFLICT'|'IO_FAILURE'|'VERIFY_MISMATCH'. Requirement={id:string,description:string}. A0RInput={contract:'A0R_REQUIREMENTS',product_intent:string,explicit_requirements:Requirement[],implicit_requirements:Requirement[],acceptance_criteria:string[],definition_of_done:string[],quality_attributes:string[],states_and_lifecycle:string[],dependencies_and_integrations:string[],user_flows:string[],persistence_and_consistency:string[],assumptions:string[],invariants:string[],validation_and_error_behaviour:string[],system_flows:string[],security_and_privacy:string[]}. ArchitectureItem={id:string,responsibility:string,requirement_ids:string[]}. A1Input={contract:'A1_PLAN',build_run:{prerequisites:string[],commands:string[],verification:string[]},architecture_items:ArchitectureItem[],assumptions:string[],deliverable_policy:{max_lines_per_chunk:number},project:{target_os:string,runtime:string,one_liner:string,name:string,language:string},requirements:{constraints:string[],functional:string[],non_functional:string[]},architecture:{error_handling:string[],data_flow:string[],modules:{name:string,responsibility:string}[],security_notes:string[]}}. StructureV2 is the complete A2_STRUCTURE version 2 document with implementation.version=1 and the exact files/interfaces/packages/rules/implementation field shapes enforced by this phase; the helper validates required fields, unique paths/IDs, interface bindings, providers/dependencies and source scopes before use. InputEnvelope={source:string,requirements:A0RInput,plan:A1Input,structure:StructureV2,delivery:string,validation_errors:string} plus preserved own JSON-valued input fields. All named fields required and non-null except explicitly nullable fields.",
+        "lifecycle": "Pure format functions; no I/O, environment lookup, scheduler or product authority. Reader→validation→typed data; serialization never executes content. All dependent modules use this one type definition.",
+        "error_semantics": "Throws HandoffError; never returns partial parsed or silently repaired values. Duplicate members, invalid UTF-8/Unicode, unsupported numeric representation, missing fields and exceeded bounds are blocking local input errors, not new product stable codes."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.reference-repair",
+        "signature": "ES module exports normalizeReferences(a0: Readonly<A0RInput>, a1: Readonly<A1Input>): ReferenceRepairResult; prepareHandoff(input: Readonly<InputEnvelope>, currentStructure: Readonly<StructureV2>): PreparedHandoff; renderArtifact(prepared: Readonly<PreparedHandoff>, path: HandoffOutputPath): Uint8Array. ReferenceRepairResult={referenceMap:ReferenceMapV1,normalizedPlan:A1Input,checks:LocalCheck[]}. LocalCheck={name:'DECLARATIONS_UNIQUE'|'RESPONSIBILITIES_NONEMPTY'|'REFERENCES_RESOLVED'|'NORMALIZED_MEMBERSHIP'|'ALLOWED_PLAN_DIFF'|'LOSSLESS_ROUND_TRIP'|'ENVELOPE_REPLACEMENT'|'SOURCE_FIDELITY'|'HANDOFF_GRAPH'|'GLOBAL_SCOPE_COVERAGE',status:'PASS',expected:JsonValue,actual:JsonValue}; a PASS row exists only after its actual assertion succeeded. PreparedHandoff={originalInput:InputEnvelope,referenceMap:ReferenceMapV1,normalizedPlan:A1Input,validationInput:InputEnvelope,admissionReport:A2AdmissionReportV3}. HandoffOutputPath is exactly 'docs/handoff/input.original.json'|'SSOT_CURRENT.md'|'docs/handoff/a0r.json'|'docs/handoff/a1.json'|'docs/handoff/a1-reference-map.json'|'docs/handoff/a1-normalized.json'|'docs/handoff/validation-input.json'|'docs/handoff/a2-blocked.json'. ReferenceMapV1 and A2AdmissionReportV3 are the exact artifact types defined by their interfaces below and implemented in formats.mjs. No parameter/result is nullable; input objects are never mutated.",
+        "lifecycle": "Pure derive→assert→return. normalizeReferences is generic for unit fixtures; prepareHandoff additionally verifies this complete delivered inventory of 200 E/I requirements, 66 architecture items, 18 B findings and 18 architecture gate definitions. No publishable return on failed assertion.",
+        "error_semantics": "Unknown/ambiguous/duplicate references, empty responsibility, empty normalized requirement set, source mismatch, forbidden diff or invalid current structure throw HandoffError. No silent filtering without sidecar, model-based mapping or product blocker resolution."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.materializer",
+        "signature": "CLI: node tools/handoff/cli.mjs prepare --input <file> --structure <file> --output <directory>; node tools/handoff/cli.mjs verify --input <file> --structure <file> --output <directory>; node tools/handoff/cli.mjs render --input <file> --structure <file> --artifact <HandoffOutputPath>. ES module exports main(argv: readonly string[]): Promise<0|2|3|4|5>; publishBundle(bundle: readonly {path:HandoffOutputPath,bytes:Uint8Array}[], outputRoot:string): Promise<'PUBLISHED'|'IDENTICAL'>; verifyBundle(bundle: readonly {path:HandoffOutputPath,bytes:Uint8Array}[], outputRoot:string): Promise<void>. All values non-null. prepare writes exactly the eight HandoffOutputPath artifacts; render stdout is only requested bytes. No implicit external-validator invocation.",
+        "lifecycle": "Read complete input/spec, run pure repair and assertions, acquire exclusive publication lock, stage/write/fsync/read-back, atomically publish new bundle root, fsync parent, release lock. Identical existing bundle is idempotent; different existing bundle is conflict. Recovery inspects proven helper-owned staging without deleting published data.",
+        "error_semantics": "Exit 2 invalid input/spec/reference, 3 conflict/live lock, 4 I/O/publication failure, 5 verify mismatch. main catches HandoffError and emits bounded stderr diagnostics. Exit 0 certifies only the requested local helper operation; product admission remains BLOCKED."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.input-original",
+        "signature": "File docs/handoff/input.original.json: InputEnvelope from handoff.formats@1.0.0, required/non-null, deep-equal to the complete decoded original user input including its original structure, delivery and validation_errors. UTF-8 JSON with two-space indentation and final LF. No normalization of embedded strings.",
+        "lifecycle": "Mechanically capture once, verify full equality, then read-only use. New inputs produce a new bundle rather than mutation of this evidence.",
+        "error_semantics": "Missing, malformed, truncated or altered snapshot blocks all consumers. Cannot be substituted by conversation history or reconstructed guesses."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.ssot-text",
+        "signature": "File SSOT_CURRENT.md: nonempty UTF-8 text, nullable=false, bytes exactly UTF8(InputEnvelope.source). No BOM, wrapper, newline adjustment or normative repair. Declared source version remains 2026.08.30.8.",
+        "lifecycle": "Exact archival extraction and read-only dependency. Normative changes require a new resolved handoff.",
+        "error_semantics": "Any byte difference from encoded source, invalid scalar string or truncation blocks publication and consumption. Literal architecture PASS in the text is not evaluated evidence."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.a0r-snapshot",
+        "signature": "File docs/handoff/a0r.json: A0RInput from handoff.formats@1.0.0, required/non-null and deep-equal to originalInput.requirements. DeclaredRequirementId is exact membership in explicit_requirements[].id or implicit_requirements[].id; this input contains E-001 through E-170 and I-001 through I-030, each once. Global prose prefixes are not declaration objects.",
+        "lifecycle": "Immutable input snapshot consumed by reference lookup and blocked coverage projection.",
+        "error_semantics": "Missing/changed fields, duplicate IDs, altered descriptions or incomplete global lists are source mismatch. No newly invented requirement objects are accepted."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.a1-snapshot",
+        "signature": "File docs/handoff/a1.json: A1Input from handoff.formats@1.0.0, required/non-null and deep-equal to originalInput.plan. All 66 architecture_items, original responsibility text and mixed requirement_ids remain intact. This raw artifact deliberately does not satisfy normalized membership.",
+        "lifecycle": "Read-only evidence of the original plan and defect; future commands are not executed.",
+        "error_semantics": "Any repair performed in this raw snapshot is source mismatch. Consumers requiring normalized architecture must use handoff.a1-normalized instead."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.a1-reference-map",
+        "signature": "File docs/handoff/a1-reference-map.json: ReferenceMapV1={contract:'A1_REFERENCE_MAP',version:1,sourcePlanPath:'docs/handoff/a1.json',sourceRequirementsPath:'docs/handoff/a0r.json',declaredRequirementIds:string[],items:ItemReferenceMap[],summary:{architectureItemCount:66,declaredRequirementCount:200,originalReferenceCount:number,requirementReferenceCount:number,globalReferenceCount:number,unknownReferenceCount:0,emptyResponsibilityCount:0}}. ItemReferenceMap={architectureItemId:string,architectureItemSourceRef:string,responsibilitySourceRef:string,normalizedRequirementIds:string[],originalReferences:Reference[]}. Reference={position:number,token:string,kind:'REQUIREMENT',requirementId:string,source:string}|{position:number,token:string,kind:'GLOBAL_OBLIGATION',source:string}. All fields required/non-null; numeric positions/counts nonnegative safe integers; no extra union fields. source is exact RFC6901 into original input, each position appears exactly once, and normalizedRequirementIds is a nonempty ordered declared-ID subsequence.",
+        "lifecycle": "Derived only from complete raw A0/A1 by normalizeReferences; frozen once published. Source changes require recomputation.",
+        "error_semantics": "Unknown/ambiguous/duplicate mapping, absent source target, wrong order or non-lossless reconstruction prohibits publication. No global reference is silently discarded."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.a1-normalized",
+        "signature": "File docs/handoff/a1-normalized.json: A1Input with unchanged A1_PLAN shape. For each architecture item, requirement_ids equals its ReferenceMapV1.normalizedRequirementIds and each ID belongs to the declared A0 set. Every other value and array order is identical to handoff.a1-snapshot@1.0.0. Responsibility is nonempty and exactly original. Required/non-null throughout.",
+        "lifecycle": "Complete corrected plan projection used in the prepared validation envelope; raw source and sidecar remain available for reconstruction. Product A2_START remains BLOCKED.",
+        "error_semantics": "Any difference outside architecture requirement_ids, missing sidecar relation or unresolved membership blocks output. Local referential validity is not full architecture readiness."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.validation-input",
+        "signature": "File docs/handoff/validation-input.json: InputEnvelope from handoff.formats@1.0.0. plan is exactly handoff.a1-normalized@1.0.0. structure is exactly the current StructureV2 explicitly supplied to prepareHandoff. source, requirements, delivery, validation_errors and all other original fields are unchanged. The old structure is preserved in handoff.input-original. No fields nullable unless their original preserved JSON value permits null.",
+        "lifecycle": "Prepared complete request for the next validator/orchestrator invocation. It must replace the actual consumed envelope; merely adding it beside the raw input does not change upstream validation.",
+        "error_semantics": "Wrong plan/structure selection, any extra envelope mutation or truncated source is a blocking mismatch. External validator status remains NOT_RUN until a real external result is supplied."
+      },
+      {
+        "version": "3.0.0",
+        "id": "handoff.a2-admission",
+        "signature": "File docs/handoff/a2-blocked.json: A2AdmissionReportV3={reportVersion:'3.0.0',reportKind:'A2_ADMISSION',a2Start:'BLOCKED',productTasksReleased:false,scope:'FULL_SSOT',declaredSsotVersion:'2026.08.30.8',productEvidenceStatus:'NOT_PROVIDED',referenceRepair:{reportedValidationError:string,cause:'GLOBAL_REFERENCES_IN_REQUIREMENT_IDS',rawPlanPath:'docs/handoff/a1.json',referenceMapPath:'docs/handoff/a1-reference-map.json',normalizedPlanPath:'docs/handoff/a1-normalized.json',nextValidatorInputPath:'docs/handoff/validation-input.json',changeClass:'TRACE_METADATA_ONLY',responsibilityPolicy:'PRESERVE_NONEMPTY',localChecks:LocalCheck[],externalValidatorStatus:'NOT_RUN'},findings:Finding[],architectureGates:Gate[],requirements:Coverage[],globalObligations:GlobalObligation[],missingEvidence:MissingEvidence[],releaseConditions:string[]}. Finding={id:string,critical:true,state:'OPEN',sourceRefs:string[],architectureItemIds:string[],description:string,requiredNormativeDecision:string,requiredClosureEvidence:string[]}; Gate={gateId:string,status:'BLOCKED',evaluation:'NOT_RUN',findingIds:string[],reason:string}; Coverage={requirementId:string,status:'BLOCKED_NOT_IMPLEMENTED',architectureItemIds:string[],productionFilePaths:[],testEvidenceRefs:[]}; GlobalObligation={source:string,ownerPaths:string[],status:'PRESERVED_PENDING_PRODUCT_MAPPING',textRef:string}; MissingEvidence={subject:string,sourceRefs:string[],requiredEvidence:string[],critical:true}. All fields required/non-null, no extra fields. Findings are exactly B-01–B-18; coverage exactly the 200 declared E/I IDs; gates exactly the 18 §55.21 IDs; globalObligations exactly the current StructureV2.implementation.scopes source/path set. LocalCheck is defined by handoff.reference-repair@1.0.0 and may be PASS only after its assertion really ran.",
+        "lifecycle": "Computed after full source/reference/envelope assertions. Remains a blocked-product report regardless of helper success. Normative resolution and real gate evaluation require a new handoff and new product structure.",
+        "error_semantics": "Incomplete coverage, missing source, failed local assertion or fabricated evidence prevents report publication. NOT_RUN is not evaluated FAIL or PASS. No B finding can be closed by metadata repair."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.repair-tests",
+        "signature": "Executable test contract: node --test tests/handoff/normalization.test.mjs. Inputs are the listed complete project dependencies plus explicit temporary test fixtures. Output is Node test runner evidence on stdout/stderr and process exit 0 only when all assertions pass; no product JSON/API return and no nullable success result.",
+        "lifecycle": "Create private fixture resources, invoke actual helpers/CLI, assert results, clean temporary resources in teardown. No product service, provider or deployment is started.",
+        "error_semantics": "Missing real snapshots, failed equality, source mutation, unsafe publication or false admission evidence fails the suite with nonzero exit. No silent skip and no claim that this suite satisfies product acceptance."
+      },
+      {
+        "version": "1.0.0",
+        "id": "handoff.instructions",
+        "signature": "File docs/handoff/README.md: nonempty UTF-8 Markdown. Required sections: cause and exact affected path; raw/normalized/map/prepared artifact roles; explicit input prerequisites; prepare/verify/render/test commands; publication/error/recovery handling; external-validator handoff; unchanged product blockers. No callable API and no null/placeholder sections.",
+        "lifecycle": "Documentation shipped with the exact helper/artifact contract versions. Changes must match implemented command signatures.",
+        "error_semantics": "Incorrect command, stale path, false test claim or direction to revalidate raw /plan is a documentation acceptance failure."
+      }
+    ]
+  },
+  "interfaces": [
+    {"definition": "Společné striktní typy, reader, encoder a lokální diagnostiky pomocného handoff workflow.", "id": "handoff.formats"},
+    {"definition": "Pure skutečná oprava A1 reference namespace, lossless sidecar, prepared obálka a poctivý admission report.", "id": "handoff.reference-repair"},
+    {"definition": "Offline CLI pro úplnou bezpečnou materializaci, exact verify a samostatný render artefaktů.", "id": "handoff.materializer"},
+    {"definition": "Úplný nezměněný původní vstup včetně původní struktury a validační diagnostiky.", "id": "handoff.input-original"},
+    {"definition": "Přesný původní SSOT text bez normativních oprav.", "id": "handoff.ssot-text"},
+    {"definition": "Úplný původní A0R a autorita deklarovaných E/I IDs.", "id": "handoff.a0r-snapshot"},
+    {"definition": "Úplný původní raw A1 včetně mixed references a podmíněné blokace.", "id": "handoff.a1-snapshot"},
+    {"definition": "Bezeztrátová poziční mapa requirement a globálních source referencí každého architecture itemu.", "id": "handoff.a1-reference-map"},
+    {"definition": "Úplný A1_PLAN opravený pouze v requirement_ids namespace.", "id": "handoff.a1-normalized"},
+    {"definition": "Celá opravená validační obálka se skutečně nahrazeným /plan a aktuální /structure.", "id": "handoff.validation-input"},
+    {"definition": "Report v3 odlišující skutečné lokální reference checks od neprovedené externí validace a blokovaného produktu.", "id": "handoff.a2-admission"},
+    {"definition": "Behaviorální testy skutečného normalizátoru, obálky a materializátoru, nikoli produktový self-test.", "id": "handoff.repair-tests"},
+    {"definition": "Přesný samostatný návod pro opravený upstream handoff a zachování produktové blokace.", "id": "handoff.instructions"}
+  ],
+  "version": 2,
+  "rules": [
+    "Dodaná hláška míří na /plan/architecture_items[].requirement_ids: AC/Q/INV/B nejsou deklarované E/I requirement objekty. Dodané responsibility texty jsou neprázdné a nesmějí se přepsat. Tato A2 proto doplňuje skutečný offline normalizátor a celou opravenou validační obálku. Produktové A2_START však zůstává BLOCKED podle A0/A1; nevzniká produktový app/runtime/migration/UI/self-test/deployment skeleton.",
+    "input.original.json, SSOT_CURRENT.md, a0r.json a a1.json uchovávají původní hodnoty bezeztrátově. a1-normalized.json je oddělená projekce; jedinou změnou A1 jsou architecture requirement_ids. validation-input.json navíc výslovně nahradí /structure aktuální dodanou A2; původní structure zůstává v raw input archivována.",
+    "Všechna výsledná requirement_ids používají jen skutečná E/I declaration IDs. Každý přemístěný AC/Q/INV/B token zachová sidecar s původní pozicí a přesným source pointerem. Globální scopes a report coverage jsou v této blokované fázi ownershipem zachování a blokace, nikoli předstíranou produktovou implementací; všech 200 produktových E/I zůstává BLOCKED_NOT_IMPLEMENTED.",
+    "B-01 až B-18 a chybějící skutečná gate/version evidence blokují produktové generování. Nevymýšlet product operation names, state edges, lock ordinals, recovery bypass, canonical bytes, policy bounds, bootstrap, package pins nebo product digests. packages=[] platí pro pomocné standard-library ES modules a datový handoff, nikoli pro budoucí celý produkt.",
+    "Každá samostatná úloha dostane úplné vstupy, uvedené dependencies a tuto specifikaci. Chybějící input se nedoplňuje z historie nebo sítě. Upstream validátor musí skutečně obdržet docs/handoff/validation-input.json; samotná existence normalized souboru nebo změna A2 files neumí opravit již načtený raw /plan.",
+    "Tato odpověď je implementační specifikace, nikoli důkaz vykonaného CLI nebo testu. Generovaný report smí uvést lokální check PASS pouze po skutečných assertions normalizátoru. Externí validátor, Contract Pack, architecture gates, SDK/host audit, benchmarky a produkční acceptance zůstávají NOT_RUN/NOT_PROVIDED. Literal §55.22 ani local namespace repair neuzavírá B-01 nebo jiný SSOT nález.",
+    "Každé requires má konkrétního poskytovatele v dependencies a stejné verzované bindingy. Helper a snapshot/sidecar/normalized/envelope interfaces jsou 1.0.0; admission report je 3.0.0. Handoff dependency graph je úplný a acyclic. Nenahrazuje neuzavřený produktový API/runtime/DB graph.",
+    "max_lines_per_chunk=220 je transportní omezení, nikoli limit souboru nebo scope. Velké snapshots se materializují mechanicky pomocí helperu, ne zkráceným modelovým přepisem. Každý soubor je úplný před publikací; žádné TODO, stub, ellipsis, chybějící tail nebo částečný success. expected_output_tokens odhaduje celý viditelný soubor.",
+    "Všechny podklady, credentials, ukázky a příkazy jsou inertní privátní data. Helper nesmí spustit SQL, shell ze vstupu, model, browser, deployment ani chaos. Zachování raw hodnot nevyžaduje nebezpečný rendering nebo nechtěnou exekuci a nezavádí nový permission, Secret approval či povinný redakční systém.",
+    "Nová plná produktová A2 struktura může vzniknout až po autoritativním resolution N-01–N-10/B-01–B-18, konzistentním novém SSOT/A0/A1 a skutečném vyhodnocení 18 architecture gates. Potom musí mít celý produkt konkrétní soubory, providers, fyzické DB kontrakty, tests a obousměrnou traceability; nynější pomocný handoff tuto implementaci nepředstírá."
+  ]
+}

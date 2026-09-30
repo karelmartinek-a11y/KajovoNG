@@ -16,11 +16,12 @@ def recovery_comic(tmp_path):
     return comic_fixture.__wrapped__(tmp_path)
 
 
-def test_sunburst_fidelity_follows_selected_model_capability(comic):
+def test_sunburst_omits_unsupported_input_fidelity(comic):
     service, _, _ = comic
     body = service.image_body("Scéna", "1024x1024", ["file_reference"])
     from kajovo.core.image_runtime import preferred_input_fidelity, validate_image_request
-    assert body.get("input_fidelity") == preferred_input_fidelity(body["model"])
+    assert preferred_input_fidelity(body["model"]) is None
+    assert "input_fidelity" not in body
     validate_image_request("/v1/images/edits", body)
     with pytest.raises(ComicError, match="věrnost"):
         validate_image_request("/v1/images/edits", {**body, "input_fidelity": "unsupported"})

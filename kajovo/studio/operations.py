@@ -26,9 +26,10 @@ class Task(QThread):
     status = Signal(str)
     logline = Signal(str)
 
-    def __init__(self, function, parent=None, planned_steps=()):
+    def __init__(self, function, parent=None, planned_steps=(), operation="Operaci"):
         super().__init__(parent)
         self.function = function
+        self.operation = str(operation or "Operaci")
         self.planned_steps = tuple(planned_steps) or (
             "Příprava operace",
             "Provedení operace",
@@ -93,12 +94,13 @@ class Task(QThread):
                 state = "cancelled"
             else:
                 state = "failed"
+            report = describe_error(error, operation=self.operation)
             self.progress_event.emit(
-                ProgressEvent(self.execute_stage, state, source="local", detail=str(error))
+                ProgressEvent(self.execute_stage, state, source="local", detail=report.message)
             )
             if state != "failed":
-                self.progress_event.emit(ProgressEvent("RUN", state, detail=str(error)))
-            self.failure.emit(describe_error(error))
+                self.progress_event.emit(ProgressEvent("RUN", state, detail=report.message))
+            self.failure.emit(report)
 
 
 STATES = {
@@ -207,7 +209,7 @@ class Operations(QObject):
             str(title),
             *(("Převzetí výsledku",) if receive else ()),
         )
-        worker = Task(function, self, stages)
+        worker = Task(function, self, stages, operation=title)
         return self.adopt(
             title,
             worker,
@@ -243,7 +245,7 @@ class Operations(QObject):
             str(title),
             *(("Převzetí výsledku",) if receive else ()),
         )
-        worker = Task(function, self, stages)
+        worker = Task(function, self, stages, operation=title)
         record = Operation(identifier, title, worker, None)
         self.records[identifier] = record
 
@@ -264,12 +266,12 @@ class Operations(QObject):
                 try:
                     receive(record.result)
                 except Exception as error:
-                    record.error = describe_error(error)
+                    record.error = describe_error(error, operation=title)
                     record.terminal = "failed"
                     if stage:
                         self._event(
                             record,
-                            ProgressEvent(stage, "failed", source="local", detail=str(error)),
+                            ProgressEvent(stage, "failed", source="local", detail=record.error.message),
                         )
                 else:
                     if stage:
@@ -362,13 +364,13 @@ class Operations(QObject):
             lambda error: setattr(
                 record,
                 "error",
-                error if isinstance(error, UserError) else describe_error(RuntimeError(str(error))),
+                error if isinstance(error, UserError) else describe_error(RuntimeError(str(error)), operation=title),
             )
         )
         if not isinstance(worker, Task) and hasattr(worker, "failure_detail"):
             worker.finished_err.connect(
                 lambda error: setattr(
-                    record, "error", record.error or describe_error(RuntimeError(str(error)))
+                    record, "error", record.error or describe_error(RuntimeError(str(error)), operation=title)
                 )
             )
         worker.finished.connect(lambda: self._finished(record, receive))
@@ -445,12 +447,12 @@ class Operations(QObject):
             try:
                 receive(record.result)
             except Exception as error:
-                record.error = describe_error(error)
+                record.error = describe_error(error, operation=record.title)
                 record.terminal = "failed"
                 if stage:
                     self._event(
                         record,
-                        ProgressEvent(stage, "failed", source="local", detail=str(error)),
+                        ProgressEvent(stage, "failed", source="local", detail=record.error.message),
                     )
             else:
                 if stage:

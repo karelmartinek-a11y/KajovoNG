@@ -194,6 +194,14 @@ Stažení preferuje OUT uložené u souvisejícího běhu, poté OUT panelu nebo
 
 Pouze legacy import podporuje historické chunkové obálky: počet částí 0 až 5001, index 0 až 5000, konzistentní ukončení a návaznost. Nové LIVE ani BATCH žádné chunky souborů nevytvářejí. Kolize cílových cest a rozporné výsledky se odmítají před ukládáním.
 
+## Dávky a fotografické úpravy
+
+Přehledy Dávky a Průběh úprav fotografií po otevření obnoví vzdálený stav a zobrazují běhy v kompaktních kartách. Karta uvádí druh, stav, datum a čas spuštění, stručný výsledek a dostupné akce; interní identifikátory a čas poslední kontroly se v UI nezobrazují. Dávku lze zrušit, odstranit z místního přehledu a stáhnout výsledky. Odstranění zachovává již stažené soubory; běžící vzdálenou dávku se program před odebráním pokusí zrušit. Místní skrývací značky brání jejímu opětovnému zobrazení po obnovení.
+
+Vstupní galerie fotografií obsahuje všechny přidané soubory; adresář se prochází rekurzivně bez sledování symbolických odkazů. Cílový adresář výstupu je volitelný a lze jej zvolit při ukládání dávky; původní WorkOrder zůstává neměnný. Kolize názvů nikdy nepřepíše cizí obsah. Smazání fotografické dávky odstraní její místní pracovní podklady, zachová výstupní fotografie a eviduje značku proti znovunačtení vzdáleného běhu.
+
+Známé chyby poskytovatele, sítě, souborů, kontraktů a interních operací se překládají do stručné češtiny s návrhem dalšího kroku. HTTP 429 bez podrobnějšího kódu nerozlišuje rychlost požadavků od limitu účtu. Neznámá chyba dostane bezpečné obecné vysvětlení; technické podrobnosti jsou odděleny a citlivé údaje se maskují. Dialogy výběru souborů a složek jsou vlastní Qt dialogy s pojmenovanými akcemi Zpět, O úroveň výš a Nová složka.
+
 ## Vlastní kaskády
 
 `CascadeDefinition` obsahuje název, verzi, časy, `default_out_dir` a kroky. Prázdnou kaskádu worker odmítne. Každý `CascadeStep` má model, volitelnou teplotu, instrukce, vstupní text nebo strukturovaný `input_content_json`, existující ID a lokální cesty příloh, výraz návaznosti, typ výstupu, schéma a `expected_out_files`.
@@ -382,6 +390,8 @@ Historie ověřuje checkpoint nad kanonickými daty; redakce slouží pouze zobr
 ### Parametry obrazové editace
 
 Společná validace `photo_batch.validate_image_edit_parameters` probíhá před vytvořením úlohy i před prvním uploadem. Model musí podporovat editaci v pracovní dávce podle pevné matice. GPT Image 2 dovoluje vlastní rozměry dělitelné 16, nejvýše 3840 bodů na hranu, poměr stran nejvýše 3 : 1 a plochu 655360 až 8294400 bodů. Starší modely používají automatickou velikost, 1024 × 1024, 1536 × 1024 nebo 1024 × 1536. Formáty jsou png, jpeg a webp. Hodnota uvedená poskytovatelem sama neobchází lokální zákaz dávkového modelu. Zdroje a validační důkazy jsou v `docs/ui/validation-plan.csv`.
+
+`input_fidelity` se přidává pouze tehdy, když jej přesná capability modelu povoluje. GPT Image 2.5 Sunburst i Flare včetně snapshotů `2026-09-08` jej vynechávají podle modelově specifického průvodce OpenAI; Sunburst jej odmítl také v konkrétní dávce. Obecná reference Image Edit parametr uvádí, což samo nedokládá podporu každého modelu. Regresní test ověřuje vynechání ve PHOTO BATCH a lokální odmítnutí nepodporované hodnoty.
 
 PHOTO a COMIC sdílejí technickou kontrolu přes `image_runtime.inspect_image`. Aplikační maxima jsou 50 000 000 bajtů a 64 000 000 dekódovaných pixelů, vždy dále omezená capability vybraného modelu. Distribuovaná `orchestration/policies/images.json` je neměnná kopie obrazové politiky; samotná přítomnost jejích dalších pravidel nedokládá implementaci nového schvalování nebo repair workflow. PHOTO importer přijme právě jeden obraz, ověří base64, úplné dekódování a skutečný formát před zápisem; neplatný nebo víceznačný výsledek nevybere heuristicky a nezapíše do OUT. Technické ověření není obsahové schválení.
 

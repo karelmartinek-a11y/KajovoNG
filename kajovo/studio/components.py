@@ -339,12 +339,24 @@ class DetailDialog(QDialog):
 
 
 def show_error(parent, error):
+    from kajovo.core.user_errors import UserError, describe_error
+
+    report = error if isinstance(error, UserError) else describe_error(error)
+    dialog = DetailDialog(
+        "Operace vyžaduje pozornost",
+        f"{report.message}\n\nDalší krok: {report.next_step}",
+        parent,
+        f"Kód: {report.code}\n\n{report.detail}",
+    )
+    dialog.exec()
+
+
+def friendly_error(error, operation="Operaci") -> str:
+    """Krátké uživatelské hlášení; surový text výjimky zůstává v technických podrobnostech."""
     from kajovo.core.user_errors import describe_error
 
-    report = describe_error(error)
-    dialog = DetailDialog("Operace vyžaduje pozornost", report.message, parent,
-                          report.detail + "\n\nDalší krok: " + report.next_step)
-    dialog.exec()
+    report = describe_error(error, operation=operation)
+    return f"{report.message} {report.next_step}"
 
 
 def confirm(parent, title, message):

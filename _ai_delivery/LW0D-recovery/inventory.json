@@ -1,0 +1,14 @@
+{
+    "source_run":  "RUN_160920260039_LW0D",
+    "source_state_sha256":  "066d5dbf80faaf349b4947b015491028b7be44700cf1843553082222409a9ef8",
+    "source_a2_response":  "KájovoCML_RUN_160920260039_LW0D_A2_response_resp_0dbb4f1dd0999352006aa9d4a777e487d289dc1cbb40d6de2d_e0b5af783f73.json",
+    "source_a2_response_sha256":  "8a3e8f879f8703ca321cbd6e01b0a3e5c30a43c65b620020ac2f054f1f4424b0",
+    "requirement_count":  200,
+    "architecture_count":  66,
+    "relocated_reference_count":  70,
+    "rejected_a2_file_count":  13,
+    "maximum_quality":  true,
+    "target_directory":  "D:/CML D",
+    "batch_submitted":  false,
+    "readiness":  "INCOMPLETE_NOT_FOR_SUBMISSION"
+}

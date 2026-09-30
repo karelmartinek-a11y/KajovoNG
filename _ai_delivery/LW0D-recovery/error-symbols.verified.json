@@ -1,0 +1,349 @@
+{
+  "source_sha256": "6cb63d0d1aa11a1ae7e4a880e81d49b0fa78f157c4a0c43753260bfc46be27b7",
+  "records": [
+    {
+      "symbol": "ALREADY_ACTIVE",
+      "kind": "non_error",
+      "source_lines": [
+        16247
+      ],
+      "resolution": "no-op výsledek, nikoli chyba"
+    },
+    {
+      "symbol": "APPROVAL_ALREADY_DECIDED",
+      "kind": "canonical_addition",
+      "source_lines": [
+        16288
+      ],
+      "resolution": {
+        "classification": "conflict",
+        "retry": "DO_NOT_RETRY",
+        "source": "51.21",
+        "action": "READ_COMMITTED_APPROVAL",
+        "effect": "Neprovést druhé rozhodnutí; vrátit immutable outcome stejného idempotentního requestu."
+      }
+    },
+    {
+      "symbol": "CANCELLED_CONFIRMED",
+      "kind": "non_error",
+      "source_lines": [
+        17457
+      ],
+      "resolution": "stav potvrzeného zrušení"
+    },
+    {
+      "symbol": "CANCELLED_FINAL",
+      "kind": "non_error",
+      "source_lines": [
+        6140,
+        7679,
+        13193,
+        13203,
+        13204
+      ],
+      "resolution": "idempotency terminal state"
+    },
+    {
+      "symbol": "CHALLENGE_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        2422,
+        3850,
+        4278,
+        4304,
+        4643,
+        4718,
+        10546,
+        13588,
+        13595,
+        13803,
+        13804,
+        13806,
+        13976,
+        13977,
+        13979,
+        13981,
+        13995,
+        13997
+      ],
+      "resolution": "browser session lifecycle"
+    },
+    {
+      "symbol": "CLIENT_CERTIFICATE_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        4629,
+        4633
+      ],
+      "resolution": "browser auth mode"
+    },
+    {
+      "symbol": "CONTRACT_ERROR",
+      "kind": "non_error",
+      "source_lines": [
+        3496
+      ],
+      "resolution": "retry classifier"
+    },
+    {
+      "symbol": "CREDENTIAL_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        3543
+      ],
+      "resolution": "generation blocker classification"
+    },
+    {
+      "symbol": "DEPENDENCY_UNAVAILABLE",
+      "kind": "non_error",
+      "source_lines": [
+        3496
+      ],
+      "resolution": "retry classifier"
+    },
+    {
+      "symbol": "FAILED_FINAL",
+      "kind": "non_error",
+      "source_lines": [
+        6140,
+        7679,
+        7704,
+        7724,
+        13192,
+        13203,
+        13204,
+        13295,
+        13304,
+        13305,
+        13307,
+        13310,
+        13321,
+        13330,
+        16072,
+        16687,
+        16801,
+        16803
+      ],
+      "resolution": "terminal state"
+    },
+    {
+      "symbol": "FAILED_KNOWN",
+      "kind": "non_error",
+      "source_lines": [
+        17453
+      ],
+      "resolution": "recovery classification"
+    },
+    {
+      "symbol": "FAILED_NOT_APPLIED",
+      "kind": "non_error",
+      "source_lines": [
+        18982
+      ],
+      "resolution": "známý effect outcome"
+    },
+    {
+      "symbol": "IGNORED_ALREADY_SATISFIED",
+      "kind": "non_error",
+      "source_lines": [
+        6042,
+        6118
+      ],
+      "resolution": "no-op výsledek"
+    },
+    {
+      "symbol": "IGNORED_UNKNOWN",
+      "kind": "non_error",
+      "source_lines": [
+        6042,
+        6118
+      ],
+      "resolution": "výsledek ignorované neznámé položky"
+    },
+    {
+      "symbol": "INPUT_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        6096,
+        13551,
+        13552,
+        13554,
+        13570,
+        16375
+      ],
+      "resolution": "stav čekání na vstup"
+    },
+    {
+      "symbol": "IN_PROGRESS",
+      "kind": "non_error",
+      "source_lines": [
+        2898,
+        10640,
+        13606,
+        13607,
+        13608,
+        17212,
+        17241,
+        17242,
+        17243,
+        17368
+      ],
+      "resolution": "stav práce"
+    },
+    {
+      "symbol": "MODEL_ERROR_HANDLER",
+      "kind": "non_error",
+      "source_lines": [
+        17426
+      ],
+      "resolution": "agent guardrail/error-handler druh"
+    },
+    {
+      "symbol": "NEW_CAPABILITY_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        3055,
+        6588,
+        10625
+      ],
+      "resolution": "capability decision"
+    },
+    {
+      "symbol": "NOT_FOUND",
+      "kind": "non_error",
+      "source_lines": [
+        679
+      ],
+      "resolution": "lookup výsledek; na wire použít konkrétní subsystem code"
+    },
+    {
+      "symbol": "NO_NEW_CODE_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        2762
+      ],
+      "resolution": "capability decision"
+    },
+    {
+      "symbol": "OUTCOME_UNKNOWN",
+      "kind": "alias",
+      "source_lines": [
+        651,
+        17458,
+        17461
+      ],
+      "resolution": "KCIP_OUTCOME_UNKNOWN"
+    },
+    {
+      "symbol": "OWNER_DECISION_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        2400
+      ],
+      "resolution": "approval policy"
+    },
+    {
+      "symbol": "OWNER_DEVICE_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        4628,
+        4633
+      ],
+      "resolution": "browser auth mode"
+    },
+    {
+      "symbol": "OWNER_INPUT_REQUIRED",
+      "kind": "non_error",
+      "source_lines": [
+        3496,
+        3543
+      ],
+      "resolution": "retry/blocker classification"
+    },
+    {
+      "symbol": "POLICY_BLOCKED",
+      "kind": "non_error",
+      "source_lines": [
+        3543
+      ],
+      "resolution": "blocker classification"
+    },
+    {
+      "symbol": "PROTOCOL_CONFLICT",
+      "kind": "canonical_addition",
+      "source_lines": [
+        16074
+      ],
+      "resolution": {
+        "classification": "protocol",
+        "retry": "DO_NOT_RETRY",
+        "source": "51.14",
+        "action": "STOP_PRODUCER_AND_INSPECT_EVIDENCE",
+        "effect": "Uchovat obě evidence; případný effect samostatně reconciliovat, nikoli označit not-applied."
+      }
+    },
+    {
+      "symbol": "PROTOCOL_INVALID",
+      "kind": "non_error",
+      "source_lines": [
+        1860,
+        1863,
+        1870,
+        2092,
+        5912,
+        10430
+      ],
+      "resolution": "MCP era classification; wire code MCP_PROTOCOL_INVALID"
+    },
+    {
+      "symbol": "REJECTED_INVALID",
+      "kind": "non_error",
+      "source_lines": [
+        6042,
+        6118
+      ],
+      "resolution": "stav odmítnutého kandidáta"
+    },
+    {
+      "symbol": "SOURCE_CONFLICT",
+      "kind": "non_error",
+      "source_lines": [
+        3543
+      ],
+      "resolution": "generation blocker classification"
+    },
+    {
+      "symbol": "STABLE_ERROR_CODE",
+      "kind": "non_error",
+      "source_lines": [
+        663
+      ],
+      "resolution": "schematický placeholder v definici, nesmí být emitován"
+    },
+    {
+      "symbol": "TRANSPORT_ERROR",
+      "kind": "non_error",
+      "source_lines": [
+        7712
+      ],
+      "resolution": "transport outcome classification"
+    },
+    {
+      "symbol": "UNKNOWN_SIDE_EFFECT",
+      "kind": "non_error",
+      "source_lines": [
+        3496
+      ],
+      "resolution": "retry classifier, nikoli wire code"
+    },
+    {
+      "symbol": "UNRESOLVED_MUTATION_SEMANTICS",
+      "kind": "alias",
+      "source_lines": [
+        4668
+      ],
+      "resolution": "BROWSER_MUTATION_TRIGGER_UNRESOLVED"
+    }
+  ],
+  "scope": "Všechny error-like uppercase symboly celého původního SSOT mimo §32; nejde o test implementovaných error handlers."
+}

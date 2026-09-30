@@ -116,12 +116,24 @@ def deny_network(*args, **kwargs):
 
 def schema_inventory():
     import jsonschema
-    from kajovo.core.structured_output import file_content_format, qa_answer_format, qfile_plan_format, text_format, validate_schema
+    from kajovo.core.structured_output import file_content_format, obj, qa_answer_format, qfile_plan_format, response_format, text_format, validate_schema
     from kajovo.core.orchestration.batch_manifest import BATCH_MANIFEST_V4_SCHEMA
     from kajovo.core.orchestration.contracts import parse_json_strict
     from kajovo.core.orchestration.run_config import RUN_CONFIG_V2_SCHEMA
     from kajovo.core.orchestration.verification import VERIFICATION_REPORT_V3_SCHEMA
     from kajovo.core.orchestration.work_order import WORK_ORDER_V2_SCHEMA, WORK_ORDER_V3_SCHEMA
+    from kajovo.core.cascade_types import (
+        CASCADE_FILE_TYPES,
+        CascadeDecisionOption,
+        CascadeOutput,
+        CascadeStep,
+    )
+    from kajovo.core.cascade_contract import runtime_schema_for_step
+    from kajovo.core.photo_prompt import professionalize_payload
+    from kajovo.core.contracts import file_response_format, historical_file_response_format, structure_response_format
+    from kajovo.core.structured_output import builtin_format
+    from kajovo.core.generate_batch import plan_format as legacy_plan_format, structure_format as legacy_structure_format
+    from kajovo.core.comic_types import BIBLE_SCHEMA, DESCRIPTOR_SCHEMA, STORY_SCHEMA, SCRIPT_SCHEMA, STORYBOARD_SCHEMA, CONTINUITY_SCHEMA
 
     records, errors = [], []
     modules = [
@@ -132,6 +144,7 @@ def schema_inventory():
         "kajovo.core.orchestration.verification",
         "kajovo.core.comic_types",
         "kajovo.core.photo_prompt",
+        "kajovo.core.photo_batch",
         "kajovo.core.cascade_contract",
     ]
     for module_name in modules:
@@ -163,6 +176,77 @@ def schema_inventory():
         fmt = factory()["format"]
         validate_schema(fmt["schema"])
         records.append({"name": factory.__name__, "contract": fmt["name"], "kind": "provider_mask", "sha256": fingerprint(fmt["schema"]), "status": "passed"})
+
+    # Provider contracts assembled outside FORMATS/factory registries.
+    photo_payload = professionalize_payload("gpt-5.4", "forensic inventory probe")
+    for name, fmt in (
+        ("PHOTO_PLAN_V1", photo_payload["text"]["format"]),
+    ):
+        validate_schema(fmt["schema"])
+        if fmt.get("type") != "json_schema" or fmt.get("strict") is not True or fmt.get("name") != name:
+            raise ValueError(f"Neplatná provider maska {name}.")
+        records.append({"name": name, "contract": name, "kind": "provider_mask", "sha256": fingerprint(fmt["schema"]), "status": "passed"})
+
+    for factory in (lambda: builtin_format("B1_PLAN"), lambda: builtin_format("C_FILES_ALL"),
+                    lambda: structure_response_format("A2_STRUCTURE"), lambda: structure_response_format("B2_STRUCTURE")):
+        fmt = factory()["format"]
+        validate_schema(fmt["schema"])
+        records.append({"name": fmt["name"], "contract": fmt["name"], "kind": "provider_mask", "sha256": fingerprint(fmt["schema"]), "status": "passed"})
+
+    explicit_formats = [legacy_plan_format, legacy_structure_format, historical_file_response_format]
+    explicit_formats.extend(
+        lambda stage=stage: file_response_format(stage, "audit.txt", 0)
+        for stage in ("A3_FILE", "B3_FILE")
+    )
+    explicit_formats.append(lambda: response_format("SCHEMA_PREPARATION", obj({"schema_json": {"type": "string"}})))
+    explicit_formats.extend(
+        lambda name=name, schema=schema: response_format(name, schema)
+        for name, schema in (
+            ("COMIC_BIBLE", BIBLE_SCHEMA), ("COMIC_ENTITY", DESCRIPTOR_SCHEMA),
+            ("COMIC_STORY", STORY_SCHEMA), ("COMIC_SCRIPT", SCRIPT_SCHEMA),
+            ("COMIC_STORYBOARD", STORYBOARD_SCHEMA), ("COMIC_CONTINUITY", CONTINUITY_SCHEMA),
+        )
+    )
+    explicit_formats.append(lambda: response_format(
+        "CASCADE_DOCUMENT_ARTIFACT_V1", obj({"filename": {"type": "string", "enum": ["audit.pdf"]}})
+    ))
+    for factory in explicit_formats:
+        fmt = factory()["format"]
+        validate_schema(fmt["schema"])
+        records.append({"name": fmt["name"], "contract": fmt["name"], "kind": "provider_mask", "sha256": fingerprint(fmt["schema"]), "status": "passed"})
+
+    # Exercise every dynamic Cascade output shape, including every supported suffix.
+    cascade_cases = [
+        ("text", CascadeOutput(id="text", name="Text", kind="text")),
+        ("json", CascadeOutput(id="json", name="JSON", kind="json", json_schema={
+            "type": "object", "properties": {"value": {"type": "string"}},
+            "required": ["value"], "additionalProperties": False,
+        })),
+        ("decision", CascadeOutput(id="decision", name="Decision", kind="decision",
+                                    decision_options=[CascadeDecisionOption(value="yes"), CascadeDecisionOption(value="no")])),
+    ]
+    for suffix in CASCADE_FILE_TYPES:
+        cascade_cases.append((f"file_{suffix}", CascadeOutput(
+            id=f"file_{suffix}", name=f"File {suffix}", kind="file", file_type=suffix, file_name=f"out/result.{suffix}"
+        )))
+    for case_name, output in cascade_cases:
+        schema = runtime_schema_for_step(CascadeStep(id=f"audit_{case_name}", outputs=[output]))
+        validate_schema(schema)
+        records.append({"name": f"Cascade:{case_name}", "contract": "CASCADE_STEP_DYNAMIC_V1", "kind": "provider_mask", "sha256": fingerprint(schema), "status": "passed"})
+
+    referenced = CascadeOutput(id="refs", name="Refs", kind="json", json_schema={
+        "type": "object", "$defs": {"item": {"type": "string"}},
+        "properties": {"items": {"type": "array", "items": {"$ref": "#/$defs/item"}}},
+        "required": ["items"], "additionalProperties": False,
+    })
+    mixed = runtime_schema_for_step(CascadeStep(id="audit_mixed", outputs=[
+        referenced,
+        CascadeOutput(id="route", name="Route", kind="decision",
+                      decision_options=[CascadeDecisionOption(value="continue"), CascadeDecisionOption(value="stop")]),
+    ]))
+    validate_schema(mixed)
+    records.append({"name": "Cascade:mixed_refs_decision", "contract": "CASCADE_STEP_DYNAMIC_V1", "kind": "provider_mask", "sha256": fingerprint(mixed), "status": "passed"})
+
     from kajovo.core.orchestration.manual_resources import MANUAL_RESOURCE_BINDINGS_V1_SCHEMA
 
     contract_root = ROOT / "resources" / "orchestration" / "contracts"

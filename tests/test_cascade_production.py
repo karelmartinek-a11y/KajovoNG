@@ -15,6 +15,46 @@ from kajovo.core.runlog import RunLogger
 from test_cascade_v2 import _worker, _client
 
 
+@pytest.mark.parametrize(
+    ("suffix", "route"),
+    [
+        ("txt", "text"), ("md", "text"), ("json", "text"), ("csv", "text"),
+        ("png", "image"), ("jpg", "image"), ("jpeg", "image"),
+        ("xlsx", "document"), ("docx", "document"), ("pdf", "document"),
+        ("pptx", "document"), ("zip", "document"),
+    ],
+)
+def test_every_cascade_file_type_routes_to_its_matching_consumer(tmp_path, monkeypatch, suffix, route):
+    import kajovo.core.cascade_production as production
+
+    output = CascadeOutput(kind="file", file_type=suffix, file_name=f"result.{suffix}")
+    step = CascadeStep(outputs=[output])
+    key = output_machine_key(output)
+    decoded = {key: {"contract": "CASCADE_BINARY_TASK_V1", "path": output.file_name, "instructions": "Create artifact"}}
+    logger = Mock()
+    logger.find_json.return_value = None
+    logger._cascade_resume_root = ""
+    worker = SimpleNamespace(logger=logger, _step_input_bindings=[])
+    calls = []
+
+    def produce(kind):
+        def _produce(*args):
+            calls.append(kind)
+            return b"artifact bytes"
+        return _produce
+
+    monkeypatch.setattr(production, "_image", produce("image"))
+    monkeypatch.setattr(production, "_document", produce("document"))
+    result = produce_binary_outputs(worker, Mock(), step, 1, {"input": "task"}, decoded)
+    expected_calls = [] if route == "text" else [route]
+    assert calls == expected_calls
+    if route == "text":
+        assert result == decoded
+    else:
+        assert base64.b64decode(result[key]["content"]) == b"artifact bytes"
+        assert result[key]["encoding"] == "base64"
+
+
 def document_worker(tmp_path):
     output = CascadeOutput(kind="file", file_type="pdf", file_name="report.pdf")
     step = CascadeStep(model="gpt-5.6-luna", deterministic=True, outputs=[output])

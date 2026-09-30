@@ -1,6 +1,6 @@
 {
-  "version": "2026-09-22.2",
-  "checked_at": "2026-09-22",
+  "version": "2026-09-28.1",
+  "checked_at": "2026-09-28",
   "sources": {
     "batch": {
       "url": "https://developers.openai.com/api/docs/guides/batch",
@@ -6541,7 +6541,7 @@
         "default"
       ],
       "notes": [
-        "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
+        "Image Edit: průvodce OpenAI pro GPT Image 2.5 (https://developers.openai.com/api/docs/guides/image-prompting) uvádí vynechat input_fidelity; Sunburst parametr odmítl i v reálném BATCH 2026-09-28."
       ],
       "image_capabilities": {
         "endpoints": [
@@ -6576,10 +6576,7 @@
           "opaque",
           "transparent"
         ],
-        "input_fidelity": [
-          "low",
-          "high"
-        ],
+        "input_fidelity": [],
         "min_pixels": 655360,
         "max_pixels": 8294400,
         "max_edge": 3840,
@@ -6630,7 +6627,7 @@
         "default"
       ],
       "notes": [
-        "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
+        "Image Edit: průvodce OpenAI pro GPT Image 2.5 (https://developers.openai.com/api/docs/guides/image-prompting) uvádí vynechat input_fidelity; Sunburst parametr odmítl i v reálném BATCH 2026-09-28."
       ],
       "image_capabilities": {
         "endpoints": [
@@ -6665,10 +6662,7 @@
           "opaque",
           "transparent"
         ],
-        "input_fidelity": [
-          "low",
-          "high"
-        ],
+        "input_fidelity": [],
         "min_pixels": 655360,
         "max_pixels": 8294400,
         "max_edge": 3840,
@@ -6719,7 +6713,7 @@
         "default"
       ],
       "notes": [
-        "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
+        "Image Edit: průvodce OpenAI pro GPT Image 2.5 (https://developers.openai.com/api/docs/guides/image-prompting) uvádí vynechat input_fidelity; Sunburst parametr odmítl i v reálném BATCH 2026-09-28."
       ],
       "image_capabilities": {
         "endpoints": [
@@ -6754,10 +6748,7 @@
           "opaque",
           "transparent"
         ],
-        "input_fidelity": [
-          "low",
-          "high"
-        ],
+        "input_fidelity": [],
         "min_pixels": 655360,
         "max_pixels": 8294400,
         "max_edge": 3840,
@@ -6808,7 +6799,7 @@
         "default"
       ],
       "notes": [
-        "Sampling aplikace neposílá; u variant bez jednoznačného parametrového kontraktu není volba doložena."
+        "Image Edit: průvodce OpenAI pro GPT Image 2.5 (https://developers.openai.com/api/docs/guides/image-prompting) uvádí vynechat input_fidelity; Sunburst parametr odmítl i v reálném BATCH 2026-09-28."
       ],
       "image_capabilities": {
         "endpoints": [
@@ -6843,10 +6834,7 @@
           "opaque",
           "transparent"
         ],
-        "input_fidelity": [
-          "low",
-          "high"
-        ],
+        "input_fidelity": [],
         "min_pixels": 655360,
         "max_pixels": 8294400,
         "max_edge": 3840,

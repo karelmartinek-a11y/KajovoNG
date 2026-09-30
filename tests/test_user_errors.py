@@ -6,7 +6,8 @@ import smtplib
 import pytest
 
 from kajovo.core.openai_client import OpenAIError
-from kajovo.core.user_errors import describe_error
+from kajovo.core.contracts import ContractError
+from kajovo.core.user_errors import describe_error, describe_recorded_error
 
 
 @pytest.mark.parametrize("code", ["insufficient_quota", "rate_limit_exceeded"])
@@ -49,3 +50,29 @@ def test_arbitrary_message_cannot_fake_a_known_cause():
     report = describe_error(RuntimeError("invalid_api_key insufficient_quota"))
     assert report.domain == "unknown"
     assert not report.cause_known
+
+
+def test_unknown_english_validation_error_is_not_shown_as_user_message():
+    report = describe_error(ValueError("invalid parameter foo_bar"), operation="Uložení")
+    assert "zadaným nebo uloženým údajům" in report.message
+    assert "invalid parameter" not in report.message
+    assert report.next_step.startswith("Zkontrolujte")
+
+
+def test_legacy_user_launch_path_error_has_plain_czech_explanation():
+    report = describe_error(
+        ContractError("IFC-USER-LAUNCH: interface odkazuje na neznámou cestu.")
+    )
+    assert report.code == "interface.unknown_path"
+    assert "chybně propojil jeho části" in report.message
+    assert "vznikly soubory programu" in report.message
+    assert "IFC-USER-LAUNCH" not in report.message
+
+
+def test_recorded_provider_error_uses_human_catalog_and_redacts_secrets():
+    report = describe_recorded_error(
+        '{"error":{"code":"invalid_input_fidelity_model","message":"Bearer sk-proj-secretvalue"}}'
+    )
+    assert "volbu pro zachov\u00e1n\u00ed detail\u016f p\u016fvodn\u00ed fotografie" in report.message
+    assert "sk-proj-secretvalue" not in report.detail
+    assert "[SKRYTÝ KLÍČ]" in report.detail

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QPlainTextEdit, QWidget
+from PySide6.QtWidgets import QMainWindow, QPlainTextEdit, QWidget
 
 from kajovo.core.progress import ProgressEvent
 from .components import (
-    BranchMark, Form, PathInput, action, actions, caption, panel, scroll, vertical,
+    BranchMark, Form, PathInput, action, actions, caption, friendly_error, panel, scroll, vertical,
 )
+from .file_dialogs import get_existing_directory
 from .operations import Operations
 
 
@@ -85,7 +86,7 @@ class ConverterWindow(QMainWindow):
         self.operations.changed.connect(self.validate)
 
     def browse(self, target):
-        path = QFileDialog.getExistingDirectory(self, "Vybrat adresář", target.text())
+        path = get_existing_directory(self, "Vybrat adresář", target.text())
         if path:
             target.setText(path)
 
@@ -97,7 +98,7 @@ class ConverterWindow(QMainWindow):
             for path in (*(target.path for target in result[0]), result[1]):
                 self.operations.assert_output_available(path)
         except ValueError as error:
-            self.validation.setText(str(error))
+            self.validation.setText(friendly_error(error))
             self.start_button.setEnabled(False)
             return None
         self.validation.setText("Adresáře jsou připravené; před úpravami vznikne záloha.")

@@ -88,7 +88,7 @@ def test_io_runs_outside_gui_while_timer_remains_responsive(qtbot):
     failed.start()
     qtbot.waitUntil(lambda: bool(errors))
     failed.wait()
-    assert errors[0].message == "Operaci se nepodařilo dokončit a přesná příčina není doložena."
+    assert "kvůli zadaným nebo uloženým údajům" in errors[0].message
     timer.stop()
 
 

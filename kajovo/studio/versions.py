@@ -3,10 +3,11 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QFileDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QTabWidget, QWidget
+from PySide6.QtWidgets import QDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QTabWidget, QWidget
 
 from kajovo.core.project_git import ProjectGit
-from .components import Form, PathInput, action, actions, caption, confirm, vertical
+from .components import Form, PathInput, action, actions, caption, confirm, friendly_error, vertical
+from .file_dialogs import get_existing_directory
 from .resources import ValueDialog
 
 
@@ -70,7 +71,7 @@ class VersionsPage(QWidget):
             self.editor.setReadOnly(True)
 
     def browse(self):
-        path = QFileDialog.getExistingDirectory(self, "Adresář projektu", self.path.text())
+        path = get_existing_directory(self, "Adresář projektu", self.path.text())
         if path:
             self.path.setText(path)
             self.refresh()
@@ -83,7 +84,7 @@ class VersionsPage(QWidget):
             if reserve:
                 self.context.operations.assert_output_available(service.root)
         except ValueError as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         self.busy = True
         root = self.path.text()

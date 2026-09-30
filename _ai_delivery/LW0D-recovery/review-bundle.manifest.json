@@ -1,0 +1,59 @@
+{
+  "status": "REVIEW_ONLY",
+  "sources": [
+    {
+      "path": "source/SSOT.original.md",
+      "sha256": "6cb63d0d1aa11a1ae7e4a880e81d49b0fa78f157c4a0c43753260bfc46be27b7",
+      "bytes": 1255676
+    },
+    {
+      "path": "TECHNICKY_DODATEK.md",
+      "sha256": "f304e27bee5bf1f6e49a59bceae05e92bb2c8271e9b716c20959053672c625c6",
+      "bytes": 7886
+    },
+    {
+      "path": "RESENI_KONKRETNI.md",
+      "sha256": "ba9ce1959f690f618f64b0369f19f28c488ed8687e8477c304bcbe2e567c102b",
+      "bytes": 17917
+    },
+    {
+      "path": "AUDIT_FORMAT.md",
+      "sha256": "b9b98c2bb795b8f250dc4837f2f72607df762e28f99fc8906e281b3577e67286",
+      "bytes": 2974
+    },
+    {
+      "path": "KONFIGURACE.md",
+      "sha256": "ee7b0a33348c65fa3637d604039c2b7213c327aeb4c3c2d044b6c17822ef28c2",
+      "bytes": 8877
+    },
+    {
+      "path": "OPERATION_MAPPING.md",
+      "sha256": "1cb8f8114ac831d3fa65eb025f9e4a538c1bfffac0301352c5729a7169eaf34f",
+      "bytes": 6159
+    },
+    {
+      "path": "operation-map.expanded.json",
+      "sha256": "2b84a712804339abcf896b8f17f80d7f3e3ab10bd0c1806fd2190d76a5c49cfd",
+      "bytes": 263403
+    },
+    {
+      "path": "canonical-vectors.json",
+      "sha256": "af97c4a4c8360fc56a84dbcdc65989923b7a1cbc339aa61f71d2d6ef2ef004ff",
+      "bytes": 1366
+    },
+    {
+      "path": "audit-vectors.json",
+      "sha256": "cebbc9b21f2c77833d6d2a657684147e9fa16afad48f9d3ddcda28e5904ff247",
+      "bytes": 933
+    }
+  ],
+  "bundle": "SSOT.recovery-review.md",
+  "bundle_sha256": "fbbc4836c76c3fe468c95ac4e8077d9c9a48f618fa037b3cfbd3a98eaf761906",
+  "unresolved_findings": [
+    "B-01",
+    "B-02",
+    "B-03",
+    "B-10"
+  ],
+  "submitted_batch_id": null
+}

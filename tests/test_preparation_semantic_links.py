@@ -11,6 +11,7 @@ from kajovo.core.contracts import ContractError
 from kajovo.core.openai_client import OpenAIClient
 from kajovo.core.orchestration.preparation import reconcile_modify_plan, validate_requirements_v2, validate_spine_v1
 from kajovo.core.orchestration.projection import projection_from_file_context
+from kajovo.core.user_errors import describe_error
 
 
 def inputs():
@@ -54,6 +55,35 @@ def test_spine_rejects_broken_relations(fault):
         spine["obligation_owners"] = [{"obligation_id": "UNKNOWN", "paths": ["hello.txt"], "reason": "Vlastník"}]
     with pytest.raises(ContractError):
         validate_spine_v1("GENERATE", requirements, plan_data(), spine)
+
+
+def test_spine_reports_external_user_misfiled_as_interface_consumer_in_plain_czech():
+    _, requirements = inputs()
+    files = default_files("GENERATE")
+    files[0]["provides"] = ["IFC-USER-LAUNCH"]
+    spine = spine_data("GENERATE", files)
+    spine["interfaces"] = [{
+        "id": "IFC-USER-LAUNCH",
+        "version": 1,
+        "kind": "process",
+        "definition": "Veřejné spuštění programu.",
+        "input_contract": "Spuštění uživatelem.",
+        "output_contract": "Spustí program.",
+        "error_semantics": "Při chybě se program nespustí.",
+        "lifecycle": "Jeden běh programu.",
+        "providers": ["hello.txt"],
+        "consumers": ["Uživatel"],
+        "requirement_ids": ["REQ-1"],
+    }]
+
+    with pytest.raises(ContractError) as caught:
+        validate_spine_v1("GENERATE", requirements, plan_data(), spine)
+
+    report = describe_error(caught.value)
+    assert report.code == "interface.unknown_path"
+    assert "uživatele programu jako soubor projektu" in report.message
+    assert "vznikly soubory programu" in report.message
+    assert "Uživatel" in report.detail
 
 
 def compiled_snapshot():

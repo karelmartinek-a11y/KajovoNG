@@ -1,0 +1,461 @@
+[
+    {
+        "architecture_id":  "N-01-NAMESPACE",
+        "source_references":  [
+                                  "B-01",
+                                  "B-02",
+                                  "B-17",
+                                  "AC-01",
+                                  "AC-03"
+                              ]
+    },
+    {
+        "architecture_id":  "N-02-STATE-MACHINES",
+        "source_references":  [
+                                  "B-03",
+                                  "B-04",
+                                  "B-05",
+                                  "AC-01"
+                              ]
+    },
+    {
+        "architecture_id":  "N-03-POSTGRES",
+        "source_references":  [
+                                  "B-06",
+                                  "B-07",
+                                  "B-08",
+                                  "AC-28"
+                              ]
+    },
+    {
+        "architecture_id":  "N-04-POLICIES",
+        "source_references":  [
+                                  "B-09",
+                                  "B-10",
+                                  "AC-03"
+                              ]
+    },
+    {
+        "architecture_id":  "N-05-CANONICALIZATION",
+        "source_references":  [
+                                  "B-11",
+                                  "AC-02",
+                                  "AC-10"
+                              ]
+    },
+    {
+        "architecture_id":  "N-06-CONTRACT-PACK-PHASES",
+        "source_references":  [
+                                  "B-12",
+                                  "B-13",
+                                  "AC-01",
+                                  "AC-02"
+                              ]
+    },
+    {
+        "architecture_id":  "N-07-RECOVERY-ADMISSION",
+        "source_references":  [
+                                  "B-14",
+                                  "AC-29"
+                              ]
+    },
+    {
+        "architecture_id":  "N-08-UDS-PROOF",
+        "source_references":  [
+                                  "B-15",
+                                  "AC-27"
+                              ]
+    },
+    {
+        "architecture_id":  "N-09-BOOTSTRAP",
+        "source_references":  [
+                                  "B-16",
+                                  "AC-07",
+                                  "AC-36",
+                                  "AC-37"
+                              ]
+    },
+    {
+        "architecture_id":  "N-10-CLOSURE-SCOPE",
+        "source_references":  [
+                                  "B-18",
+                                  "AC-20",
+                                  "AC-39"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-01-CONTRACT-COMPILER",
+        "source_references":  [
+                                  "AC-01",
+                                  "AC-02"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-02-CONTRACT-SURFACES",
+        "source_references":  [
+                                  "AC-03"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-03-TRANSACTION-KERNEL",
+        "source_references":  [
+                                  "AC-28",
+                                  "INV-06",
+                                  "INV-14"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-04-WORK-AND-EFFECTS",
+        "source_references":  [
+                                  "AC-28",
+                                  "AC-29"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-05-ARTIFACT-PUBLICATION",
+        "source_references":  [
+                                  "AC-30"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-06-RECOVERY-AND-CLOSURE",
+        "source_references":  [
+                                  "AC-29",
+                                  "AC-39"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-07-OWNER-IDENTITY",
+        "source_references":  [
+                                  "AC-04",
+                                  "AC-05",
+                                  "AC-36"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-08-OWNER-API-CREDENTIAL",
+        "source_references":  [
+                                  "AC-06"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-09-SECRET-MANAGER",
+        "source_references":  [
+                                  "AC-08"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-10-EXTERNAL-INTEGRATIONS",
+        "source_references":  [
+                                  "AC-08",
+                                  "AC-33"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-11-COMPONENT-REGISTRY",
+        "source_references":  [
+                                  "AC-09"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-12-TOPOLOGY",
+        "source_references":  [
+                                  "AC-09",
+                                  "AC-34"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-13-KCIP",
+        "source_references":  [
+                                  "AC-10"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-14-CONTROL-AND-PULSE",
+        "source_references":  [
+                                  "AC-10",
+                                  "AC-33"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-15-MCP-WIRE",
+        "source_references":  [
+                                  "AC-11"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-16-MCP-CONTRACT-COMPILER",
+        "source_references":  [
+                                  "AC-12"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-17-MCP-EXECUTION",
+        "source_references":  [
+                                  "AC-10",
+                                  "AC-11",
+                                  "AC-12"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-18-MCP-CONTINUATIONS",
+        "source_references":  [
+                                  "AC-13"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-19-MCP-REGISTRATION",
+        "source_references":  [
+                                  "AC-14",
+                                  "AC-20"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-20-OPENAI-CLIENT",
+        "source_references":  [
+                                  "AC-07",
+                                  "AC-15"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-21-OPENAI-LOOP",
+        "source_references":  [
+                                  "AC-16"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-22-AGENT-COMPILER",
+        "source_references":  [
+                                  "AC-17"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-23-AGENT-EXECUTION",
+        "source_references":  [
+                                  "AC-17"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-24-SESSION-AND-MEMORY",
+        "source_references":  [
+                                  "AC-17"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-25-AGENT-EVALUATION",
+        "source_references":  [
+                                  "AC-17",
+                                  "AC-20"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-26-CENTRAL-CHAT",
+        "source_references":  [
+                                  "AC-07",
+                                  "AC-03",
+                                  "AC-17"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-27-GENERATION-DISCUSSION",
+        "source_references":  [
+                                  "AC-18",
+                                  "AC-19"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-28-GENERATION-SPECIFICATION",
+        "source_references":  [
+                                  "AC-18",
+                                  "AC-19"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-29-GENERATION-WORKSPACE",
+        "source_references":  [
+                                  "AC-19",
+                                  "AC-30"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-30-GENERATION-INTEGRATION",
+        "source_references":  [
+                                  "AC-18",
+                                  "AC-20"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-31-GENERATION-VALIDATION",
+        "source_references":  [
+                                  "AC-18",
+                                  "AC-20",
+                                  "AC-38"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-32-BROWSER-SESSIONS",
+        "source_references":  [
+                                  "AC-21"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-33-BROWSER-CONTROL-PREVIEW",
+        "source_references":  [
+                                  "AC-22",
+                                  "Q-05",
+                                  "Q-06"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-34-BROWSER-ACTIONS",
+        "source_references":  [
+                                  "AC-23"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-35-BROWSER-ACCOUNTS",
+        "source_references":  [
+                                  "AC-24",
+                                  "AC-25"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-36-OWNER-DEVICE-BRIDGE",
+        "source_references":  [
+                                  "AC-25"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-37-BROWSER-TRANSFERS-CLEANUP",
+        "source_references":  [
+                                  "AC-23",
+                                  "AC-30",
+                                  "Q-07"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-38-BROWSER-AUTOMATION",
+        "source_references":  [
+                                  "AC-26"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-39-RUNTIME-GATEWAY",
+        "source_references":  [
+                                  "AC-27"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-40-RUNTIME-SANDBOX",
+        "source_references":  [
+                                  "AC-27"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-41-COMPONENT-STATE",
+        "source_references":  [
+                                  "AC-27",
+                                  "AC-28"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-42-MONITORING-REPAIR",
+        "source_references":  [
+                                  "AC-33"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-43-AUDIT-OBSERVABILITY",
+        "source_references":  [
+                                  "AC-33"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-44-CONFIGURATION",
+        "source_references":  [
+                                  "AC-03",
+                                  "AC-07"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-45-OWNER-UI",
+        "source_references":  [
+                                  "AC-34",
+                                  "Q-09",
+                                  "Q-10",
+                                  "Q-11"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-46-ACTIVATION",
+        "source_references":  [
+                                  "AC-20"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-47-MIGRATIONS",
+        "source_references":  [
+                                  "AC-28",
+                                  "AC-36"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-48-SEMANTIC-AUTHORITY",
+        "source_references":  [
+                                  "AC-31"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-49-HOST-DNS-TLS",
+        "source_references":  [
+                                  "AC-27",
+                                  "AC-37"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-50-CI-DEPLOYMENT",
+        "source_references":  [
+                                  "AC-36"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-51-BACKUP-RESTORE",
+        "source_references":  [
+                                  "AC-37"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-52-SELF-TEST",
+        "source_references":  [
+                                  "AC-38"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-53-FORMAL-CHAOS",
+        "source_references":  [
+                                  "AC-28",
+                                  "AC-32",
+                                  "AC-38"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-54-PERFORMANCE",
+        "source_references":  [
+                                  "Q-02",
+                                  "Q-03",
+                                  "Q-04",
+                                  "Q-05",
+                                  "Q-06",
+                                  "Q-07",
+                                  "Q-08",
+                                  "Q-16",
+                                  "AC-35"
+                              ]
+    },
+    {
+        "architecture_id":  "ARC-55-PROJECT-CLOSURE",
+        "source_references":  [
+                                  "AC-39"
+                              ]
+    }
+]

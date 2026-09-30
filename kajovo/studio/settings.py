@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QPlainTextEdit, QSpinBo
 
 from kajovo.core.config import save_settings
 from kajovo.core.secret_store import persist_api_key
-from .components import Form, action, actions, caption, confirm, scroll, vertical
+from .components import Form, action, actions, caption, confirm, friendly_error, scroll, vertical
 
 
 LABELS = {
@@ -115,7 +115,7 @@ class SettingsPage(QWidget):
             if not persist_api_key(value):
                 raise ValueError("Trvalé uložení klíče nebylo ověřeno.")
         except Exception as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         self.context.set_key(value)
         self.notice.setText("Přístupový klíč byl uložen a aktivován.")
@@ -127,7 +127,7 @@ class SettingsPage(QWidget):
             if not persist_api_key(""):
                 raise ValueError("Odstranění klíče nebylo ověřeno.")
         except Exception as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         self.key.clear()
         self.context.set_key("")
@@ -163,7 +163,7 @@ class SettingsPage(QWidget):
             settings = self.snapshot()
             save_settings(settings)
         except Exception as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         for field in fields(settings):
             setattr(self.context.settings, field.name, getattr(settings, field.name))
@@ -184,7 +184,7 @@ class SettingsPage(QWidget):
             if not settings.smtp.host or not settings.smtp.to_email:
                 raise ValueError("Vyplňte poštovní server a příjemce.")
         except ValueError as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
 
         def execute(task):

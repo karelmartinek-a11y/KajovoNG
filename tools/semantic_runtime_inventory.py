@@ -248,9 +248,9 @@ RUNTIME_VARIANTS = (
                 "PHOTO batch submit identity",
                 "kajovo/core/photo_batch.py::prepare_and_submit",
                 "preparing -> submitted|submission_unknown",
-                "kajovo/core/photo_batch.py::validate_photo_job + provider operation binding",
+                "kajovo/core/photo_batch.py::validate_photo_job",
                 "tests/test_photo_studio.py::test_photo_batch_submit_creates_work_order_and_provider_operation",
-                "submitted",
+                'operations == [("submitted", "batch_photo")]',
                 "tests/test_photo_studio.py::test_photo_batch_uncertain_submit_is_not_reposted",
                 "submission_unknown",
             ),
@@ -275,14 +275,14 @@ RUNTIME_VARIANTS = (
                 "not list",
             ),
             StepEvidence(
-                "PHOTO UI cancellation",
-                "kajovo/studio/photos.py::PhotosPage.cancel_job",
-                "selected batch -> cancel_batch -> apply_batch_status -> persisted job",
-                "kajovo/core/photo_batch.py::apply_batch_status",
-                "tests/test_provider_ui_semantics.py::test_photo_cancel_calls_provider_and_persists_returned_status",
-                "cancel_batch.assert_called_once_with",
-                "tests/test_provider_ui_semantics.py::test_photo_cancel_without_batch_id_never_calls_provider",
-                "cancel_batch.assert_not_called",
+                "PHOTO UI status monitor",
+                "kajovo/studio/photos.py::PhotosPage.page_activated",
+                "open page -> quiet batch refresh -> compact job cards",
+                "Operations + list_batches + local PHOTO jobs",
+                "tests/test_photo_studio.py::test_opening_photo_progress_schedules_quiet_refresh",
+                "photos.jobs.refresh",
+                "tests/test_provider_ui_semantics.py::test_photo_progress_has_no_cancel_action",
+                "cancel_job",
             ),
         ),
     ),
@@ -517,7 +517,7 @@ RUNTIME_VARIANTS = (
                 "response_pending -> GET inherited response -> continue",
                 "live continuation envelope + ResponseJournal",
                 "tests/test_history_pending_live.py::test_child_gets_frozen_pending_and_completes_without_duplicate_post",
-                "create_response.assert_not_called",
+                'payload != pending["payload"]',
                 "tests/test_history_pending_live.py::test_missing_journal_fails_before_client_creation",
                 "create_response.assert_not_called",
             ),
@@ -675,10 +675,18 @@ def _test_source(reference: str) -> str | None:
     if not path.is_file() or not symbol:
         return None
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    source_text = path.read_text(encoding="utf-8")
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == symbol:
-            segment = ast.get_source_segment(path.read_text(encoding="utf-8"), node)
-            return segment or ""
+            # Parametrizace je součást důkazu větve stejně jako tělo testu.
+            # Zahrň její literály, jinak manifest nemůže ověřit, že test
+            # skutečně instanciuje deklarovaný režim nebo hodnotu.
+            decorators = [
+                ast.get_source_segment(source_text, decorator) or ""
+                for decorator in node.decorator_list
+            ]
+            body = ast.get_source_segment(source_text, node) or ""
+            return "\n".join((*decorators, body))
     return None
 
 

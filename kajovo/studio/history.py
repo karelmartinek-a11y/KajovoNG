@@ -11,14 +11,15 @@ from uuid import uuid4
 
 from PySide6.QtCore import QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QWidget
 
 from kajovo.core.batch_completion import batch_ids, complete_saved_batch, pending_batch_ids, read_state
 from kajovo.core.run_bundle import HistoryIndex
 from kajovo.core.orchestration.publish import publish_staged_run
 from kajovo.core.utils import safe_join_under_root
 
-from .components import action, actions, caption, panel, vertical
+from .components import action, actions, caption, friendly_error, panel, vertical
+from .file_dialogs import get_open_file_name, get_save_file_name
 from .history_artifacts import ArtifactGuard
 from .history_composer import BranchComposer
 from .history_details import RunDetailDialog
@@ -375,7 +376,7 @@ class HistoryPage(QWidget):
         names = [str(row.get("display_name") or "Soubor") for row in records]
         error = (getattr(self, "_state", {}) or {}).get("human_error") or (getattr(self, "_state", {}) or {}).get("error")
         self.selected_files.setText(("Soubory: " + ", ".join(names[:4]) + (f" a dalších {len(names) - 4}" if len(names) > 4 else ""))
-                                    if names else str(error)[:240] if error else "Soubory, odpovědi a podklady najdete v detailu běhu.")
+                                    if names else friendly_error(ValueError(str(error)), "Načtení běhu") if error else "Soubory, odpovědi a podklady najdete v detailu běhu.")
 
     def update_actions(self):
         if not self.adapter or not self.run:
@@ -404,7 +405,7 @@ class HistoryPage(QWidget):
             composer.confirm_button.setEnabled(False)
             self.notice.setText("Připravuji novou větev; průběh ověření a spuštění je v okně operace.")
         except (ValueError, OSError, KeyError) as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
 
     def focus_new_branch(self, run_id):
         self._focus_new_run = run_id
@@ -449,7 +450,7 @@ class HistoryPage(QWidget):
                     lineage["inherited_artifact_ids"] = [artifact.get("artifact_id")]
                 return cloned, lineage, ""
             except (OSError, ValueError, TypeError) as error:
-                return None, None, str(error)
+                return None, None, friendly_error(error, "Klonování běhu")
 
         def receive(value):
             if clone_generation != self._clone_generation:
@@ -481,7 +482,7 @@ class HistoryPage(QWidget):
         try:
             self.context.operations.assert_output_available(output)
         except (ValueError, OSError) as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         root = str(self.adapter.root)
         def received(_value):
@@ -510,7 +511,7 @@ class HistoryPage(QWidget):
             target, accepted = QInputDialog.getItem(self, "Dodat podklad", "Cílový soubor", targets, 0, False)
             if not accepted:
                 return
-            source, _ = QFileDialog.getOpenFileName(self, "Zdroj podkladu pro " + target)
+            source, _ = get_open_file_name(self, "Zdroj podkladu pro " + target)
             if not source:
                 return
             self.context.operations.start(
@@ -518,7 +519,7 @@ class HistoryPage(QWidget):
                 lambda value: self.refresh(), write_roots=(root,),
             )
         except (ValueError, OSError) as exc:
-            self.notice.setText(str(exc))
+            self.notice.setText(friendly_error(exc))
 
     def complete_batch(self):
         if not self.adapter:
@@ -548,7 +549,7 @@ class HistoryPage(QWidget):
             output = Path(state["out_dir"]).resolve() if state.get("out_dir") else None
             self.context.operations.assert_output_available(output)
         except (ValueError, OSError) as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         self.context.operations.start(
             "Převzetí výsledků dávky",
@@ -595,7 +596,7 @@ class HistoryPage(QWidget):
     def export_bundle(self):
         if not self.adapter:
             return
-        destination, _ = QFileDialog.getSaveFileName(self, "Exportovat Run Bundle", self.adapter.run_id + ".zip", "ZIP (*.zip)")
+        destination, _ = get_save_file_name(self, "Exportovat Run Bundle", self.adapter.run_id + ".zip", "ZIP (*.zip)")
         if not destination:
             return
         source, target = self.adapter.root.resolve(), Path(destination).resolve()
@@ -665,4 +666,4 @@ class HistoryPage(QWidget):
         try:
             self.clone_with_artifact(record)
         except (ValueError, OSError) as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))

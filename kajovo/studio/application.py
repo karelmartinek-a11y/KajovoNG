@@ -14,7 +14,7 @@ from kajovo.core.model_registry import model_spec, selectable
 from kajovo.core.resources import resource_path
 from .batches import BatchesPage
 from .cascades import CascadesPage
-from .components import BranchMark, DetailDialog, Form, action, actions, caption, install_theme, scroll, vertical
+from .components import BranchMark, DetailDialog, Form, action, actions, caption, friendly_error, install_theme, scroll, vertical
 from .context import StudioContext
 from .history import HistoryPage
 from .operations import Operations
@@ -59,7 +59,7 @@ class ModelsPage(QWidget):
         try:
             self.context.refresh_models()
         except ValueError as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
 
     def render(self):
         self.listing.clear()
@@ -109,7 +109,7 @@ class ModelsPage(QWidget):
         try:
             save_settings(settings)
         except Exception as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         self.context.settings.default_model = model
         self.context.settings_changed.emit()
@@ -253,7 +253,7 @@ class StudioWindow(QMainWindow):
             self.comics.tabs.setCurrentWidget(self.comics.history_page)
             self.select_page("comics")
         except ValueError as error:
-            self.history.notice.setText(str(error))
+            self.history.notice.setText(friendly_error(error))
 
     def select_page(self, key):
         self.stack.setCurrentIndex(list(self.pages).index(key))
@@ -262,6 +262,10 @@ class StudioWindow(QMainWindow):
             button.setChecked(name == key)
         if key == "history" and not self.history.records:
             self.history.refresh()
+        if key == "photos":
+            self.photos.page_activated()
+        if key == "batch":
+            self.batches.page_activated()
         if key in {"photos", "cascade", "models"}:
             self.context.ensure_models()
         if self.width() < 1000:

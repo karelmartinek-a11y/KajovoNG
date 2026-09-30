@@ -13,7 +13,7 @@ from .contracts import canonical_sha256
 from .waves import build_execution_dag
 from ..context_limits import preparation_measurement
 from ..context_compiler import owned_obligations
-from ..contracts import ContractError, extract_text_from_response, validate_paths
+from ..contracts import ContractError, ValidationIssue, extract_text_from_response, validate_paths
 from ..structured_output import (
     array, blocked_result_schema, clarification_question_schema, obj,
     prepare_payload, response_format, validate_output,
@@ -523,6 +523,7 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
     covered_requirements: set[str] = set()
     used_components: set[str] = set()
     relationship_errors: list[str] = []
+    validation_issues: list[ValidationIssue] = []
     for row in files:
         if row["component_id"] not in component_ids:
             raise ContractError(f"{row['path']}: neznámá component.")
@@ -548,8 +549,31 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
     for interface in interfaces:
         if interface["version"] < 1:
             raise ContractError(f"{interface['id']}: interface version musí být >=1.")
-        if not set(interface["providers"]) <= paths or not set(interface["consumers"]) <= paths:
-            relationship_errors.append(f"{interface['id']}: interface odkazuje na neznámou cestu.")
+        unknown_providers = sorted(set(interface["providers"]) - paths)
+        unknown_consumers = sorted(set(interface["consumers"]) - paths)
+        if unknown_providers or unknown_consumers:
+            invalid_references = {
+                role: values
+                for role, values in (
+                    ("providers", unknown_providers),
+                    ("consumers", unknown_consumers),
+                )
+                if values
+            }
+            relationship_errors.append(
+                f"{interface['id']}: interface odkazuje mimo seznam souborů návrhu: "
+                f"{invalid_references}."
+            )
+            validation_issues.append(
+                ValidationIssue(
+                    code="interface.unknown_path",
+                    stage="A2_SPINE",
+                    pointer=f"/interfaces/{interface['id']}",
+                    message="Rozhraní odkazuje na položku, která není souborem v návrhu.",
+                    expected="Cesty k souborům uvedeným v návrhu.",
+                    actual=invalid_references,
+                )
+            )
         if not interface["providers"]:
             relationship_errors.append(f"{interface['id']}: interface nemá providera.")
         if not set(interface["requirement_ids"]) <= req_ids:
@@ -615,7 +639,7 @@ def validate_spine_v1(mode: str, requirements: dict[str, Any], plan: dict[str, A
                     f"{row['path']}: requires {interface_id} není potvrzeno jako consumer."
                 )
     if relationship_errors:
-        raise ContractError("\n".join(relationship_errors))
+        raise ContractError("\n".join(relationship_errors), issues=validation_issues)
     owned: set[str] = set()
     obligations = {
         row["id"] for kind in ("invariants", "flows", "lifecycles")

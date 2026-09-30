@@ -200,9 +200,11 @@ def test_desktop_end_to_end_with_isolated_provider(comic_window, qtbot, tmp_path
     assert page.prompt.prompt_document()["nodes"][-1]["entity_id"] == entity
     page.overlays.add_layer()
     page.overlays.text.setPlainText("Dobrý večer!")
-    from PySide6.QtWidgets import QFileDialog
     destination = tmp_path / "export.png"
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args, **kwargs: (str(destination), "PNG (*.png)"))
+    monkeypatch.setattr(
+        "kajovo.studio.comics.get_save_file_name",
+        lambda *args, **kwargs: (str(destination), "PNG (*.png)"),
+    )
     page.export_panel()
     assert destination.is_file(), page.notice.text()
     assert page.versions.count() == 2

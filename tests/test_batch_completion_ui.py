@@ -1,7 +1,6 @@
 """Kanonické vazby Studio stránky dávek na lokální stav a core dokončení."""
 
 import json
-import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -41,7 +40,7 @@ def make_run(studio, tmp_path):
     return run
 
 
-def test_batch_page_renders_remote_and_local_state(studio, tmp_path):
+def test_batch_page_renders_compact_card_without_identifiers(studio, tmp_path):
     run = make_run(studio, tmp_path)
     page = studio.batches
     page.records = [{
@@ -49,14 +48,29 @@ def test_batch_page_renders_remote_and_local_state(studio, tmp_path):
         "remote": {"id": "batch_work", "status": "completed", "request_counts": {"total": 2, "completed": 2, "failed": 0}},
         "state": read_state(run),
         "run_dir": str(run),
+        "kind": "GENERATE",
+        "photo": None,
+        "started_at": 1726050000,
     }]
-    page.last_refresh = time.time()
     page.render()
-    assert page.table.rowCount() == 1
-    assert "Ukázkový projekt" in page.table.item(0, 0).text()
-    assert page.table.item(0, 1).text() == "Zpracováno službou"
-    assert "2 z 2" in page.table.item(0, 2).text()
-    assert page.table.item(0, 3).text() == "Čeká na převzetí"
+    card = page.card_widgets["batch_work"]
+    text = " ".join(label.text() for label in card.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel))
+    assert "Ukázkový projekt" not in text
+    assert "Dokon" in text
+    assert "2 z 2 úloh" in text
+    assert "Čeká na stažení výsledků" in text
+    assert "batch_work" not in text
+    assert page.refresh_button.text() == "Obnovit"
+
+
+def test_opening_batch_page_requests_quiet_status_refresh(studio, monkeypatch):
+    calls = []
+    monkeypatch.setattr(studio.context, "api_key", "test-key")
+    monkeypatch.setattr(studio.batches, "refresh", lambda **kwargs: calls.append(kwargs))
+
+    studio.batches.page_activated()
+
+    assert calls == [{"quiet": True}]
 
 
 def test_batch_complete_delegates_to_core_and_refreshes_local_evidence(studio, tmp_path, monkeypatch):
@@ -67,10 +81,12 @@ def test_batch_complete_delegates_to_core_and_refreshes_local_evidence(studio, t
         "remote": {"id": "batch_work", "status": "completed"},
         "state": read_state(run),
         "run_dir": str(run),
+        "kind": "GENERATE",
+        "photo": None,
+        "started_at": 1726050000,
     }
     page.records = [record]
     page.render()
-    page.table.selectRow(0)
     calls = []
 
     def complete(_client, root, identifier, _settings, progress=None):
@@ -89,7 +105,7 @@ def test_batch_complete_delegates_to_core_and_refreshes_local_evidence(studio, t
 
     monkeypatch.setattr("kajovo.studio.batches.complete_saved_batch", complete)
     monkeypatch.setattr(page, "execute", execute)
-    page.complete()
+    monkeypatch.setattr(page, "refresh", lambda *args, **kwargs: None)
+    page.download(record)
     assert calls == [(run, "batch_work", True)]
-    assert record["state"]["status"] == "files_complete_unverified"
-    assert "Soubory" in page.table.item(0, 3).text() or page.table.item(0, 3).text()
+    assert read_state(run)["status"] == "files_complete_unverified"

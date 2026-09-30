@@ -16,6 +16,19 @@ def test_file_dialog_labels_are_czech(qtbot):
     assert dialog.labelText(QFileDialog.FileType) == "Typ souborů:"
 
 
+def test_shared_file_dialog_exposes_named_back_and_up_navigation(qtbot):
+    from PySide6.QtWidgets import QFileDialog, QToolButton
+
+    from kajovo.studio.file_dialogs import FileDialog
+
+    dialog = FileDialog()
+    qtbot.addWidget(dialog)
+    assert dialog.testOption(QFileDialog.DontUseNativeDialog)
+    assert dialog.findChild(QToolButton, "backButton").text() == "Zpět"
+    assert dialog.findChild(QToolButton, "toParentButton").text() == "O úroveň výš"
+    assert dialog.findChild(QToolButton, "newFolderButton").text() == "Nová složka"
+
+
 def test_wrapped_checkbox_labels_get_required_height(qtbot):
     install_theme(QApplication.instance())
     form = Form()

@@ -7,7 +7,7 @@ from dataclasses import asdict
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QDialog, QPlainTextEdit, QSplitter, QWidget
 
-from .components import action, actions, caption, panel, scroll, vertical
+from .components import action, actions, caption, friendly_error, panel, scroll, vertical
 
 
 RELATIONS = {"continue": "Pokračovat", "rerun": "Znovu spustit", "repair": "Opravit"}
@@ -113,7 +113,7 @@ class BranchComposer(QDialog):
                 run = build_run(self.adapter.run_record(), steps=self.adapter.steps())
                 return preview, run
             except (ValueError, OSError, KeyError) as error:
-                return str(error)
+                return friendly_error(error, "Přípravu náhledu")
 
         def receive(result):
             if generation != self.generation:
@@ -131,7 +131,7 @@ class BranchComposer(QDialog):
             titles = {**STAGE_TITLES, **self.titles}
             first = titles.get(value['first_paid_operation'], value['first_paid_operation'])
             inherited = [titles.get(stage, stage) for stage in value['inherited_stages']]
-            self.error.setText(value['source_error'])
+            self.error.setText(friendly_error(ValueError(value['source_error']), "Obnovu běhu"))
             self.technical.setPlainText(value['technical_error'])
             self.preserved.setText("Zachované soubory:\n" + ("\n".join(value['skipped_paths']) or "Žádné ověřené soubory k převzetí."))
             self.summary.setText(

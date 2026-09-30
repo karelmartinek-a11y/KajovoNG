@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QInputDialog, QPlainTextEdit, QTabWidget, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QInputDialog, QPlainTextEdit, QTabWidget, QWidget,
 )
 
 from kajovo.core.model_capabilities import ModelCapabilitiesCache
@@ -19,9 +19,10 @@ from kajovo.studio.workers.run_worker import RunWorker
 from kajovo.core.request_rules import validate_run_options
 from kajovo.core.runlog import RunLogger
 from kajovo.core.utils import atomic_write_text, new_run_id, validate_relative_path
-from .components import Form, PathInput, action, actions, caption, panel, scroll, vertical
+from .components import Form, PathInput, action, actions, caption, friendly_error, panel, scroll, vertical
 from .evidence import EvidenceView
 from .components import DetailDialog
+from .file_dialogs import get_existing_directory, get_open_file_name, get_save_file_name
 
 
 MODES = [("Vytvořit projekt", "GENERATE"), ("Upravit projekt", "MODIFY"),
@@ -156,7 +157,7 @@ class Workbench(QWidget):
         self.refresh_models()
 
     def browse(self, field):
-        value = QFileDialog.getExistingDirectory(self, "Vybrat adresář", field.text())
+        value = get_existing_directory(self, "Vybrat adresář", field.text())
         if value:
             field.setText(value)
 
@@ -345,7 +346,7 @@ class Workbench(QWidget):
                 raise ValueError("Uložte přístupový klíč v Nastavení.")
             validate_run_options(cfg)
         except (ValueError, TypeError) as error:
-            self.validation.setText(str(error))
+            self.validation.setText(friendly_error(error))
             self.start_button.setEnabled(False)
             return False
         self.validation.setText("Zadání splňuje místní technickou a kontraktní kontrolu.")
@@ -368,7 +369,7 @@ class Workbench(QWidget):
         try:
             self.context.operations.assert_output_available(target)
         except ValueError as error:
-            self.validation.setText(str(error))
+            self.validation.setText(friendly_error(error))
             return
         if target and any(target == other or target in other.parents or other in target.parents for other in self.busy_outputs.values()):
             self.validation.setText("Do tohoto adresáře nebo jeho části již zapisuje jiná operace.")
@@ -501,7 +502,7 @@ class Workbench(QWidget):
                 cfg.out_dir, remote, expected_digest=expected_digest
             )
         except (ValueError, OSError) as error:
-            self.validation.setText(str(error))
+            self.validation.setText(friendly_error(error))
             return
         target = cfg.ssh_user + "@" + cfg.ssh_host if remote else "Tento počítač Windows"
         details = {"cíl": target, "soubor": str(proposal.script), "otisk SHA-256": proposal.digest,
@@ -512,15 +513,15 @@ class Workbench(QWidget):
                                           self.result.set_value, output_dir=cfg.out_dir)
 
     def save(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Uložit zadání", "zadani.json", "Zadání (*.json)")
+        path, _ = get_save_file_name(self, "Uložit zadání", "zadani.json", "Zadání (*.json)")
         if path:
             try:
                 atomic_write_text(path, json.dumps(self.state(), ensure_ascii=False, indent=2))
             except OSError as error:
-                self.validation.setText(str(error))
+                self.validation.setText(friendly_error(error))
 
     def load(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Načíst zadání", "", "Zadání (*.json)")
+        path, _ = get_open_file_name(self, "Načíst zadání", "", "Zadání (*.json)")
         if path:
             try:
                 from kajovo.core.orchestration.contracts import parse_json_strict
@@ -530,4 +531,4 @@ class Workbench(QWidget):
                 self.reset()
                 self.apply_state(loaded)
             except (OSError, ValueError, TypeError) as error:
-                self.validation.setText(str(error))
+                self.validation.setText(friendly_error(error))

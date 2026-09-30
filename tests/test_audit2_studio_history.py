@@ -72,7 +72,10 @@ def test_clone_read_failure_is_visible_without_changing_workbench(tmp_path, clon
     clone_page.clone_source(SimpleNamespace(root=tmp_path, run_id="source"), None)
     _, read, receive = clone_page.context.operations.start_read.call_args.args
     receive(read(None))
-    clone_page.notice.setText.assert_called_once_with(str(error))
+    clone_page.notice.setText.assert_called_once()
+    message = clone_page.notice.setText.call_args.args[0]
+    assert message.startswith("Klonov") or message.startswith(str(error))
+    assert message != str(error)
     clone_page.workbench.reset.assert_not_called()
 
 

@@ -222,10 +222,10 @@ class PhotoTemplateStore:
             raise KeyError(template_id)
         self._write_custom(output)
 
-    def duplicate(self, template_id: str) -> PhotoPromptTemplate:
+    def duplicate(self, template_id: str, name: str | None = None) -> PhotoPromptTemplate:
         source = self.get(template_id)
         return self.create(
-            source.name + " – kopie",
+            name or source.name + " – kopie",
             source.prompt,
             source.description,
             source.category,

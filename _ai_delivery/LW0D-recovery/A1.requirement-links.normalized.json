@@ -1,0 +1,988 @@
+{
+    "build_run":  {
+                      "prerequisites":  [
+                                            "A2_START je BLOCKED. Nejprve musí být v autoritativním SSOT uzavřeny nálezy B-01 až B-18, zachována jejich rozhodovací evidence a znovu vyhodnoceno všech 18 gates §55.21. Tento plán žádný nález nepřepisuje implementačním předpokladem.",
+                                            "Předávací vstup musí obsahovat samostatně dostupné exact SSOT bytes, A0R_REQUIREMENTS, tento A1_PLAN a výsledky normativního sjednocení. Po změně SSOT se ověří dopad do A0/A1 a requirement lineage; původní ani nový digest se nevymýšlí.",
+                                            "Po uzavření B-11 až B-13 musí být dostupný jednoznačný canonicalization contract, úplné registry schemas a nekruhové rozlišení specification, build a runtime evidence. Contract Pack nesmí získávat produktovou sémantiku ze sítě, modelu nebo implementačních souborů.",
+                                            "Ověřený Ubuntu 24.04 LTS profil s PostgreSQL 16, pgcrypto, citext, Node.js 24 LTS, pnpm 11, Nginx, systemd, cgroups v2, potřebnými namespace/seccomp/pidfd/openat2 capabilities a podporovaným filesystemem. Unsupported bezpečnostní capability nesmí aktivovat oslabený fallback.",
+                                            "Exact patch verze závislostí, Rust/native toolchainu, OpenAI SDK, Agents SDK, Playwright, browserů, parseru a testovacích nástrojů se zvolí až podle ověřené kompatibility a uzamknou manifestem a lockfilem. Dostupnost požadované MCP revision a provider capabilities musí mít samostatnou evidence.",
+                                            "Privátní repozitář, protected main a production environment, důvěryhodná deployment identity, podpisový řetězec release a bezpečný SSH přístup. PASS zůstává jediným externím aplikačním bootstrap vstupem; ostatní credentials vznikají systémově nebo přicházejí přes OWNER UI/chat.",
+                                            "Před prvním produkčním spuštěním musí být uzavřen B-16: bezpečná počáteční dostupnost HTTPS UI, DNS/TLS provisioning a zavedení WAPI/deployment credentials bez kruhové závislosti a bez druhého tajného bootstrap kanálu.",
+                                            "Testovací infrastruktura musí poskytovat disposable PostgreSQL a privileged Ubuntu/systemd prostředí, multi-origin browser portal s durable mutation ledgerem, izolované provider účty a Windows/macOS/Linux bridge runners pro aplikovatelné gates.",
+                                            "Self-test a acceptance nástroje získávají aktuální jediný KCML_OWNER_API_KEY uvnitř schváleného trust perimeteru. Nevzniká test token, další OWNER credential ani veřejný endpoint pro neautentizované získání klíče.",
+                                            "Níže uvedené příkazy definují budoucí závazná root-script rozhraní pro A2. V této fázi nebyly vytvořeny, spuštěny ani ověřeny. Testovací příkazy musí obalovat kanonický self-test katalog, nikoli paralelní test-only doménovou implementaci."
+                                        ],
+                      "commands":  [
+                                       "pnpm install --frozen-lockfile",
+                                       "pnpm environment:preflight --profile development",
+                                       "pnpm contracts:compile --source SSOT_CURRENT.md",
+                                       "pnpm contracts:verify-reproducibility --source SSOT_CURRENT.md",
+                                       "pnpm architecture:verify --source SSOT_CURRENT.md",
+                                       "pnpm lab:up --profile CROSS_SUBSYSTEM",
+                                       "pnpm dev",
+                                       "pnpm self-test:run --suite repository --profile CROSS_SUBSYSTEM --wait",
+                                       "pnpm self-test:run --suite postgres --profile POSTGRES_REAL --wait",
+                                       "pnpm self-test:run --suite runtime-boundary --profile SYSTEMD_RUNTIME --wait",
+                                       "pnpm self-test:run --suite browser --profile BROWSER_FIXTURE --wait",
+                                       "pnpm self-test:run --suite openai --profile OPENAI_FAKE_TRANSPORT --wait",
+                                       "pnpm self-test:run --suite openai-smoke --profile OPENAI_LIVE --wait",
+                                       "pnpm self-test:run --suite blocking-chaos --profile CROSS_SUBSYSTEM --random-schedules 10000 --wait",
+                                       "pnpm release:build --frozen-lockfile",
+                                       "pnpm release:verify",
+                                       "pnpm deploy:apply --environment production --source-sha \"$GITHUB_SHA\" --wait",
+                                       "pnpm acceptance:production --expected-sha \"$GITHUB_SHA\" --wait",
+                                       "pnpm acceptance:infrastructure --suite dns-tls-alerts-backup --wait",
+                                       "pnpm disaster-recovery:verify --profile DISASTER_RESTORE --wait",
+                                       "pnpm closure:verify --expected-sha \"$GITHUB_SHA\""
+                                   ],
+                      "verification":  [
+                                           "P0 — Normativní vstup: B-01 až B-18 jsou uzavřeny v SSOT; source relations, symbol tables a všech 18 architecture gates mají skutečné výsledky. Nevyhodnocená gate není PASS a §55.22 není náhradou evaluace.",
+                                           "P1 — Základ: reprodukovatelný Contract Pack, canonical codecs, baseline/migration ledger, transaction kernel, audit, idempotency, queue, artifact publication, recovery guards a provenance primitives. Ověřit jejich skutečné PostgreSQL constraints a fault points ještě před napojením produktových workerů.",
+                                           "P2 — Ne-AI control-plane: kompletní OWNER login/MFA/recovery/session/API-key lifecycle, Secrets, základní registry, konfigurace, audit/logy, self-test katalog a UI fungují bez OPENAI_API_KEY. PASS sync nemění MFA ani negeneruje další OWNER klíč.",
+                                           "P3 — Runtime a protokoly: reálný Linux sandbox, brokers, KCIP/PULSE/control, canonical component routes, MCP wire/discovery/schema/MRTR/task/subscription/handle behavior, topologie a monitoring. Splnit AC-09 až AC-14 a AC-27 bez přímého handler bypassu.",
+                                           "P4 — AI: jediný OpenAIClientService, capability gates, všech devět provider crash bodů, ordered outputs/call_id, agent graph/approval/session/memory/compaction a centrální chat. Live Responses a Agents SDK smoke jsou oddělené od fake-transport testů.",
+                                           "P5 — Browser: skutečné hosty a KBPP, session/page/frame/document identity, control reset, autosave trigger ledger, account/state bundles, challenges, bridge a model-free automation. Aplikovatelné engine/OS/device gates bez prostředí zůstávají BLOCKED.",
+                                           "P6 — Výroba: CREATE, UPDATE, FOLLOW_UP, RETRY, REPAIR, FULL_REUSE i PARTIAL_REUSE projdou úplným tokem včetně live candidate, UI registrace, společného MCP+agent setu, postflight, ABSENT/previous rollback a dokončeného cleanupu.",
+                                           "P7 — Provoz: signed release, exact-SHA deploy, forward-schema application rollback, systemd credential rotation, DNS/TLS renewal, alert delivery, backup a clean-host restore. Production acceptance sama nemění release, migrations, DNS ani TLS.",
+                                           "P8 — Důkaz celku: 360 integračních bodů, named gates §34.8, A–W, 56 PostgreSQL scénářů a rozšíření §51.38, 66 OpenAI scénářů, 30 runtime negative tests, 24 chaos gates, úplné applicable cutpoint/pairwise pokrytí, osm tříporuchových a šestnáct cross-subsystem scénářů, nejméně 10 000 schedules a všechny oracle mutations.",
+                                           "UI a výkon: interakční QA na 390×844, 768×1024, 1366×768 a 1920×1080; klávesnice, asistivní technologie, remote-input escape, reconnect, stale/conflict a dlouhý obsah. Měřit všechny cíle Q-02 až Q-08 na pinovaném reprezentativním workloadu bez vypínání guards.",
+                                           "Finální closure: exact release/SHA/SSOT/pack/evaluator/runtime digests, obousměrná traceability a nulový unresolved mandatory requirement, UNKNOWN/MANUAL_REVIEW, orphan authority, mixed epoch nebo required incomplete cleanup. Nejde pouze o zelenou HTTP odpověď."
+                                       ]
+                  },
+    "contract":  "A1_PLAN",
+    "architecture_items":  [
+                               {
+                                   "requirement_ids":  [
+                                                           "E-001",
+                                                           "E-003",
+                                                           "E-169",
+                                                           "E-170",
+                                                           "I-002"
+                                                       ],
+                                   "responsibility":  "N-01 — Uzavření jmen a referencí před P1. Požadovaným výstupem opravy SSOT je úplná matice každé REST/WSS route a object action na jednu canonical operation, exposure class, writera, schema a recovery. Doplnit chybějící auth/config/external/deploy/test operace, sjednotit stable error katalog, odkaz §38.1 a browser bridge entity. A2 nesmí chybějící názvy vytvořit pouze v kódu; unknown symbol musí zastavit kompilaci.",
+                                   "id":  "N-01-NAMESPACE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-004",
+                                                           "E-141",
+                                                           "E-146",
+                                                           "E-147",
+                                                           "E-169"
+                                                       ],
+                                   "responsibility":  "N-02 — Uzavření stavových automatů. SSOT musí dodat úplné idempotency terminal/wait-resume a queued-cancellation hrany, composite component lifecycle/activation transitions a jednotné outbox/control-transfer enumy. Zvlášť prokázat disable/enable/activation verification bez porušení ACTIVE invariantů a pre-dispatch invalidaci bez nespecifikovaného SUPPRESSED stavu. Výsledkem jsou explicitní transition a forbidden-edge tabulky, nikoli obecný fallback handler.",
+                                   "id":  "N-02-STATE-MACHINES"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-142",
+                                                           "E-143",
+                                                           "E-144",
+                                                           "E-145",
+                                                           "E-146",
+                                                           "E-169"
+                                                       ],
+                                   "responsibility":  "N-03 — Uzavření fyzické transakční matice. Opravit child-before-concurrency postupy na jediný lock order, přidělit chybějící bridge root ordinal a recovery advisory namespace/key/mode. Jednoznačně určit, kdy končí admission celého commandu oproti jednotlivému effectu a jak UNKNOWN blokuje activation drain. Rozlišit lokální idempotency od providerem skutečně podporovaného klíče; non-null vymyšlený klíč nesmí předstírat external idempotenci.",
+                                   "id":  "N-03-POSTGRES"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-005",
+                                                           "E-135",
+                                                           "E-169"
+                                                       ],
+                                   "responsibility":  "N-04 — Uzavření konfigurace. Pro každý field sestavit jedinou normativní klasifikaci OWNER_INPUT, OWNER_PREFERENCE nebo SYSTEM_MANAGED a source relations ke starším UI ustanovením. Pro system-managed fields musí SSOT určit algoritmus, vstupy, jednotku, default, bounds, fallback a update/recovery pravidlo. A2 implementuje jejich evaluator; nesmí chybějící hodnotu nahradit konfiguračním formulářem, ML autotunerem nebo skrytým defaultem.",
+                                   "id":  "N-04-POLICIES"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-002",
+                                                           "E-003",
+                                                           "E-031",
+                                                           "E-133",
+                                                           "E-169",
+                                                           "I-006"
+                                                       ],
+                                   "responsibility":  "N-05 — Uzavření canonical bytes. Před návrhem wire/DB codeců vyžaduje SSOT úplná pravidla čísel, bigint, Unicode, escaping, pořadí klíčů, timestampů a audit hash preimage. Dodat cross-language pozitivní i negativní vectors. A2 nesmí automaticky zaměnit KCML canonicalization za JSON.stringify nebo jiný standard bez normativního rozhodnutí; nesmí ztratit precision přes JavaScript Number.",
+                                   "id":  "N-05-CANONICALIZATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-002",
+                                                           "E-003",
+                                                           "E-166",
+                                                           "E-169",
+                                                           "I-001"
+                                                       ],
+                                   "responsibility":  "N-06 — Uzavření derivovatelnosti a gate fází. SSOT musí oddělit deterministicky odvoditelné contract records od build/runtime instancí, jejich UUID, content digests a skutečné evidence, včetně povolených vstupů každé projekce. Architecture readiness nesmí kruhově vyžadovat již dokončenou implementaci, kterou má teprve umožnit navrhnout. Compiler nesmí chybějící artifact, evaluator nebo binding instance vyrobit fikcí.",
+                                   "id":  "N-06-CONTRACT-PACK-PHASES"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-148",
+                                                           "E-169",
+                                                           "I-014"
+                                                       ],
+                                   "responsibility":  "N-07 — Uzavření recovery execution. Před implementací barrieru musí být normativně určena cesta, kterou current recovery attempt může během RECONCILING claimnout inventory, provést read-back/cleanup a persistovat klasifikaci, zatímco nový business dispatch zůstává zakázaný. Cesta musí být fenced, bounded a svázaná s existujícím recovery itemem; nesmí vzniknout univerzální bypass flag.",
+                                   "id":  "N-07-RECOVERY-ADMISSION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-123",
+                                                           "E-124",
+                                                           "E-125",
+                                                           "E-169",
+                                                           "I-021"
+                                                       ],
+                                   "responsibility":  "N-08 — Uzavření kernelově proveditelného socket proofu. Požadavek na shodu fstat listening FD a lstat pathname inode musí být nahrazen normativně správným důkazem socket activation, path ownership/substitution a peer identity; pouhé vypnutí testu je zakázané. Opravený kontrakt musí mít skutečné Ubuntu/systemd testy restartu, substitution, stale connection a PID reuse.",
+                                   "id":  "N-08-UDS-PROOF"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-011",
+                                                           "E-155",
+                                                           "E-156",
+                                                           "E-169",
+                                                           "I-010"
+                                                       ],
+                                   "responsibility":  "N-09 — Uzavření prvního bootstrapu. Specifikovat nekruhové pořadí dosažitelného TLS UI, instalace host credentials, OWNER/PASS synchronizace, prvního API klíče a UI vložení WAPI/OpenAI credentials. Nepředpokládat existující certifikát nebo DNS oprávnění bez evidence a nepřidávat WAPI/API klíče jako nové povinné environment bootstrap vstupy. Chybějící infrastruktura je technický blocker, ne údajně chybějící business rozhodnutí OWNERa.",
+                                   "id":  "N-09-BOOTSTRAP"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-093",
+                                                           "E-149",
+                                                           "E-168",
+                                                           "E-169",
+                                                           "I-015"
+                                                       ],
+                                   "responsibility":  "N-10 — Uzavření ownership a closure scopes. SSOT musí přesně popsat handover aktivovaného produktu ze job/candidate scope na stable component/runtime ownera. Legitimní active runtime není pending child dokončeného jobu. Oddělit immutable known business outcome, cancellation safe point a finální cleanup closure; UNKNOWN ani orphan authority se tím nesmějí skrýt. Na výsledný owner-scope predicate naváže SQL closure a inventární oracle.",
+                                   "id":  "N-10-CLOSURE-SCOPE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-001",
+                                                           "E-002",
+                                                           "E-003",
+                                                           "E-169",
+                                                           "I-002"
+                                                       ],
+                                   "responsibility":  "P1 — Implementovat packages/contract-pack jako pure AST compiler po uzavření N-01 až N-10. Postup: parse/atomizace, identity a source relations, symbol tables, registry records, cross-reference/single-writer/parity kontroly, canonical digest a readiness report. Žádné NLP doplňování významu. Kompilace musí být byte-identická; změna code-fence/schema constraintu musí změnit správné requirement lineage. Build/runtime evidence se připojí jen schválenou fázovou projekcí.",
+                                   "id":  "ARC-01-CONTRACT-COMPILER"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-004",
+                                                           "E-006",
+                                                           "E-170",
+                                                           "I-003",
+                                                           "I-004",
+                                                           "I-005",
+                                                           "I-006",
+                                                           "I-007"
+                                                       ],
+                                   "responsibility":  "P1 — Ze schválených registrů vytvořit packages/schemas a centrální operation/action metadata. Fastify routes, OWNER invoke, chat tools, formuláře, applicability, error presentation a self-test odkazují na stejné operation/schema IDs. Implementovat bounded UTF-8/duplicate-member parser, lossless wire codecs a typed expected-snapshot versus server-authority typy. Aliasy volají tentýž handler a sdílejí outcome; interní evidence nikdy nezíská veřejný writer endpoint.",
+                                   "id":  "ARC-02-CONTRACT-SURFACES"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-140",
+                                                           "E-141",
+                                                           "E-142",
+                                                           "E-143"
+                                                       ],
+                                   "responsibility":  "P1 — packages/domain vlastní registered command handlers; packages/database implementuje typed SQL UnitOfWork nad PostgreSQL. Wrapper deklaruje celý lock set před BEGIN, nastaví přesný profil, získá locks v registry pořadí, načte DB čas, znovu ověří guards a provede CAS/event/checkpoint/outbox/audit commit. Baseline vynutí singleton, composite FK, immutable payload, partial unique a deferred consistency constraints. Pool resetuje session state; žádné ORM save, MAX+1 ani externí I/O v transakci.",
+                                   "id":  "ARC-03-TRANSACTION-KERNEL"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-144",
+                                                           "E-145",
+                                                           "E-146",
+                                                           "I-029"
+                                                       ],
+                                   "responsibility":  "P1 — Work domain implementuje idempotency, logical commands, persistent claims, lease heartbeat/takeover, queue fairness/capacity, outbox/inbox a side-effect ledger. Zvlášť realizovat F-before-H claim a fresh D transakci; jeden effect attempt má jediný authority outbox. Event delivery může být duplicitní, DISPATCH_AUTHORIZED effect se po ztrátě ACK jen reconciliuje. Fault tests kontrolují 100 paralelních replayů, no-resurrection, NOTIFY loss, reserved recovery kapacitu a nulové partial claims.",
+                                   "id":  "ARC-04-WORK-AND-EFFECTS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-088",
+                                                           "E-114",
+                                                           "E-149",
+                                                           "I-016"
+                                                       ],
+                                   "responsibility":  "P1 — Sdílený Artifact Publication service poskytne scoped upload/write/read/export handles, content-addressed immutable blobs a reference ledger. Pipeline: intent, bezpečný temp, bounded streaming, file fsync, content/digest validation, atomic rename, durability adresáře včetně post-rename fsync a DB reference commit. Workspace materializace je oddělená projekce. Cleanup ověřuje current i frozen rollback references; disk-full, permissions a crash nesmějí publikovat partial bytes.",
+                                   "id":  "ARC-05-ARTIFACT-PUBLICATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-148",
+                                                           "E-149",
+                                                           "I-013",
+                                                           "I-014",
+                                                           "I-015"
+                                                       ],
+                                   "responsibility":  "P1 — Platform Recovery domain vlastní DB-start/incarnation/deployment/recovery head a recovery itemy. Po N-07 implementovat exclusive barrier, fenced inventory/classification a druhý stabilní průchod před READY. Každá business admission a D ověří current tuple. Closure service vyhodnotí root-scoped blocking predicates pod locks a uloží matching evidence; child creation po terminal commitu odmítne DB. Restart/recovery je součást každé další fáze, nikoli dodatečný opravný skript.",
+                                   "id":  "ARC-06-RECOVERY-AND-CLOSURE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-007",
+                                                           "E-008",
+                                                           "E-009",
+                                                           "E-010",
+                                                           "E-011",
+                                                           "I-008",
+                                                           "I-009"
+                                                       ],
+                                   "responsibility":  "P2 — Identity domain implementuje singleton bootstrap, Argon2id login, throttle, omezené MFA enrollment sessions, TOTP/recovery consume, full sessions, reauthentication a revoke. Login UI nenapovídá username; DB ukládá KRMAR78 a používá schválený citext lookup. Security změny používají current session/identity CAS a audit. PASS sync je idempotentní deployment command s explicitní politikou session epoch; nesmí resetovat MFA ani OWNER key. Ověřit fixation, replay a souběžné recovery-code consume.",
+                                   "id":  "ARC-07-OWNER-IDENTITY"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-012",
+                                                           "E-013",
+                                                           "E-014",
+                                                           "I-010"
+                                                       ],
+                                   "responsibility":  "P2 — OWNER credential state machine vytvoří jedinou kryptograficky náhodnou hodnotu nejméně 256 bitů, encrypted Secret version, verifier a fingerprint. Authentication a durable command acceptance drží credential FOR SHARE; rotate FOR UPDATE atomicky změní Secret pointer/verifier/epochs. Implementovat reveal/copy/usage a API-key-session exchange; generic Secret actions jsou pro reserved key nepřípustné. Ověřit rotation/admission race, lost-response replay a key-authenticated stream admissions po rotaci.",
+                                   "id":  "ARC-08-OWNER-API-CREDENTIAL"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-016",
+                                                           "E-017",
+                                                           "E-018",
+                                                           "E-019",
+                                                           "E-020",
+                                                           "E-021",
+                                                           "I-011",
+                                                           "I-012"
+                                                       ],
+                                   "responsibility":  "P2 — Secret domain a Secret Broker dokončí všechny typy, metadata, version lifecycle, AEAD storage, historical compare/activate, generátory, TOTP a certificate/key import/export. Zvolená technická realizace je AES-256-GCM envelope encryption s AAD identity/verze/typu a ochranou nonce uniqueness. OWNER value actions mají plnou viditelnost; runtime resolve vyžaduje exact alias/binding/Secret-use context a pinne attempt version. Bulk impact, rotace, invalidace account state a usage graph používají stejnou doménu.",
+                                   "id":  "ARC-09-SECRET-MANAGER"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-022",
+                                                           "E-023",
+                                                           "E-024",
+                                                           "E-025",
+                                                           "I-017",
+                                                           "I-020"
+                                                       ],
+                                   "responsibility":  "P3 — External Integration domain a egress broker implementují všechny auth modes, HTTPS/form/binary/TCP_TLS, OAuth authorization/refresh lifecycle, inbound signature/challenge a circuits. Request descriptor pinne target, credential, argument origins a expected response. DNS/IP se validují a pinují pro connection, každý redirect se znovu ověří před credential forwarding. Webhook ukládá raw verification/inbox evidence; HALF_OPEN má jediný fenced probe. UI tester vykonává skutečné requesty se stejným ledgerem.",
+                                   "id":  "ARC-10-EXTERNAL-INTEGRATIONS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-026",
+                                                           "E-027",
+                                                           "E-028",
+                                                           "E-029",
+                                                           "I-012"
+                                                       ],
+                                   "responsibility":  "P2 až P3 — Component/Release/Binding domains vytvoří jednotnou registraci generátoru, importu, externího serveru, agenta a seed manifestu. Identity/code/hostname mají DB uniqueness; revisions a complete binding sets jsou immutable. Metadata změny, review, retirement, quarantine, recertification a deregistration používají explicitní state mapu a dependency impact. Active pointers zapisuje pouze Activation writer. Dokončit katalog, registered-elements views, export a schema-generated detail/test formuláře.",
+                                   "id":  "ARC-11-COMPONENT-REGISTRY"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-030",
+                                                           "I-023",
+                                                           "I-024"
+                                                       ],
+                                   "responsibility":  "P3 — Dashboard read model skládá nodes/ports/edges, runtime stav, Secrets, alarmy a activity z canonical registrů. React topology canvas poskytne drag i keyboard connect, compatibility/impact preview a stejné action menus jako detail/tabulka/search. Layout je samostatný OWNER preference aggregate s optimistic lockingem. SSE reducer používá snapshot watermark a dedupe; výpadek streamu označí stale stav, nikoli vymaže poslední známou topologii.",
+                                   "id":  "ARC-12-TOPOLOGY"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-031",
+                                                           "E-032",
+                                                           "E-033",
+                                                           "E-034",
+                                                           "E-035",
+                                                           "E-036",
+                                                           "I-005"
+                                                       ],
+                                   "responsibility":  "P3 — packages/kcip implementuje tři transportní profily, canonical request/response codecs a přesnou patnáctikrokovou validaci. Public wrapper nesmí přepsat source/target/binding/context; gateway je vytvoří ze serverového snapshotu. Zachovat message dedupe odděleně od business scope, correlation/causation, CONTIGUOUS versus MONOTONIC_WITH_GAPS a absolute deadlines. Každý reject prokáže poslední processing stage a nulový downstream dispatch; result se serializuje pouze z persistovaného outcome.",
+                                   "id":  "ARC-13-KCIP"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-037",
+                                                           "E-038",
+                                                           "E-130"
+                                                       ],
+                                   "responsibility":  "P3 — Component control a PULSE použijí shared command/work kernel. Business enable/disable vlastní jeden outcome a interní control/ACK jsou jeho children. Producer state/event/outbox a consumer inbox-before-ACK jsou atomické. Implementovat sequence gaps, blocking DLQ a explicitní repaired replay. Heartbeat/state/probe projections vyhodnocují release/runtime generation/binding/epoch/source sequence; starý ACK nebo heartbeat nikdy neaktivuje komponentu, neprodlouží lease ani nepotvrdí disable.",
+                                   "id":  "ARC-14-CONTROL-AND-PULSE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-039",
+                                                           "E-040",
+                                                           "E-041",
+                                                           "E-042",
+                                                           "E-043",
+                                                           "E-044",
+                                                           "E-045"
+                                                       ],
+                                   "responsibility":  "P3 — MCP Runtime realizuje přesný SSOT MODERN codec a POST-only public boundary, nikoli implicitní použití legacy SDK behavior. Fastify parser a Nginx musí zachovat nebo předem odmítnout singleton-header multiplicitu. Implementovat exact string/integer IDs, in-flight reservation, per-request metadata/capabilities, HTTP/JSON-RPC mapu a request-scoped SSE bez replay. Transport reservation, call lifecycle a response delivery jsou oddělené. Wire fuzz/matrix běží přes skutečný HTTPS edge.",
+                                   "id":  "ARC-15-MCP-WIRE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-046",
+                                                           "E-047",
+                                                           "E-048",
+                                                           "E-049",
+                                                           "E-050",
+                                                           "I-006",
+                                                           "I-007"
+                                                       ],
+                                   "responsibility":  "P3 — Implementovat discover/list/read immutable snapshots, context-aware cache, opaque cursor traversal a okamžitou invalidaci driftu. Schema compiler používá plný schválený dialect, vendored refs bez runtime fetch a bounded validační resources; constrainty nesmí zjednodušovat. x-mcp-header má strict path/type/sensitivity/Base64 proof. OpenAI projection je samostatný immutable mapping s inverse validation a differential vectors; nemožný lossless převod vyžaduje explicitní adapter nebo blocker.",
+                                   "id":  "ARC-16-MCP-CONTRACT-COMPILER"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-051",
+                                                           "E-052"
+                                                       ],
+                                   "responsibility":  "P3 — tools/call přeložit na exact KCIP/domain command s idempotency, concurrency, checkpoint a side-effect ledgerem. Handler output nejprve uložit raw, potom validovat resultType/native schema/render/error a teprve po reconciliation materializovat response. Resources/templates/prompts mají vlastní versioned URI/argument/render contracts a bezpečný Secret binding. Schema failure po applied effectu je non-retryable evidence, nikoli důvod druhého handler callu.",
+                                   "id":  "ARC-17-MCP-EXECUTION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-053",
+                                                           "E-054",
+                                                           "E-055",
+                                                           "E-056"
+                                                       ],
+                                   "responsibility":  "P3 — MRTR, Tasks, subscriptions a state handles implementovat jako oddělené state machines nad společným call ownerem. MRTR consume+resume a task create-before-ID jsou atomické; task cancel ACK není terminal. Subscription ACK je první protocol message a empty filter graceful končí; reconnect pouze full refresh. Handle je ordinary data, ne credential. Ověřit partial/unknown/changed consumed input, expiry/cancel/complete races, duplicate resume, lost response a nikdy nerecyklovaná IDs.",
+                                   "id":  "ARC-18-MCP-CONTINUATIONS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-057",
+                                                           "E-058",
+                                                           "E-059"
+                                                       ],
+                                   "responsibility":  "P3 — Externí registrace provede bounded URL/TLS/auth/era probe, complete snapshots, schema/header/capability verification a harmless live call. Legacy adapter má explicitní upstream lifecycle a moderní KCML rozhraní; auth/network/5xx není fallback signál. Compatibility engine porovná celé observable/recovery semantics a znovu sestaví exact bindings/projections. UI poskytne raw wire, era, cache, call/task/MRTR/subscription a reconciliation consoles; žádný tester neobejde skutečnou gateway.",
+                                   "id":  "ARC-19-MCP-REGISTRATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-060",
+                                                           "E-061",
+                                                           "E-062",
+                                                           "E-063",
+                                                           "I-013"
+                                                       ],
+                                   "responsibility":  "P4 — packages/openai-runtime je jediné místo importující openai a @openai/agents. OpenAIClientService a KcmlOpenAIResponsesModel realizují capability preflight, model inheritance, credential pinning, immutable descriptor, budgets a submit ledger. Vypnout create-class hidden retries v obou SDK vrstvách. Missing key/capability vrátí konkrétní blocker před sítí; unknown submit bez response.id blokuje parent. Core boot ani ne-AI služby na konstrukci OpenAI klienta nezávisí.",
+                                   "id":  "ARC-20-OPENAI-CLIENT"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-064",
+                                                           "E-065",
+                                                           "E-066"
+                                                       ],
+                                   "responsibility":  "P4 — Implementovat foreground stream, background store/retrieve/resume/cancel, ordered event/output/content store a refusal/incomplete/failure normalization. Function calls se vykonají až z complete itemu po strict/inverse/native a semantic validation; outputs používají původní call_id a provider pořadí. Tool outcomes, checkpoint a jediný successor descriptor vzniknou atomicky. Hosted MCP/effects vyžadují ověřitelný exact target/semantic enforcement adapter; jeho absence blokuje danou revision, nikdy nezpůsobí blind provider retry.",
+                                   "id":  "ARC-21-OPENAI-LOOP"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-067",
+                                                           "E-068",
+                                                           "E-069",
+                                                           "E-070",
+                                                           "E-071"
+                                                       ],
+                                   "responsibility":  "P4 — Agent compiler vytvoří immutable instructions/variable/I/O/model/tool/graph/policy revision a preflight evidence. Aliasy resolveují exact bindings, nikdy serverInfo jméno. Podporovat všechny agent modes, agent-as-tool a handoff; graph validator kontroluje cycles/depth/progress a descendant semantic ceiling. Default dispatch je sekvenční, paralelní skupina vznikne pouze při splnění všech příslušných kontraktů. Metadata edit nesmí měnit active behavior in-place.",
+                                   "id":  "ARC-22-AGENT-COMPILER"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-072",
+                                                           "E-073",
+                                                           "E-076",
+                                                           "E-077",
+                                                           "I-018"
+                                                       ],
+                                   "responsibility":  "P4 — Agent Runtime writer řídí preparation/model/tool/MRTR/task/handoff/OWNER waits, guardrails, pause/cancel a terminal result. Approval obsahuje exact arguments/target/checkpoint/expiry; decision+resume jsou jeden commit. RunState selector načítá exact kompatibilní SDK/code generaci, ale vykonává ji pod current deployment/recovery autoritou. Ambiguous checkpoint nesmí pokračovat. Run console ukazuje skutečné pending sets, usage, output provenance a povolené recovery actions.",
+                                   "id":  "ARC-23-AGENT-EXECUTION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-074",
+                                                           "E-075",
+                                                           "I-018"
+                                                       ],
+                                   "responsibility":  "P4 — KcmlAgentSession stageuje SDK items a canonical append provádí pouze Agent writer. Implementovat čtyři vzájemně výlučné history strategie, source-key dedupe, contiguous sequences a full provider mirror. Mandatory memory writes používají typed namespaces/CAS/provenance a commitují s run success. Compaction má vlastní immutable candidate, source range a semantic-preservation gate; race s active turnem/approval/pending tool blokuje switch a failure ponechá původní history.",
+                                   "id":  "ARC-24-SESSION-AND-MEMORY"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-078"
+                                                       ],
+                                   "responsibility":  "P4 — Evaluation runner vykoná exact candidate agent/tool graph na izolovaných skutečných fixture targets. Deterministické assertions měří routing, argumenty, binding abstention, approval/resume, effects, memory, cancellation a cleanup; model grader smí hodnotit pouze deklarovanou variabilní kvalitu. Persistovat thresholds, grader/evaluator/model digests, token/cost/latency a promotion verdict. Agent aktivace bez PASS blocking suite není dostupná ani v chatu.",
+                                   "id":  "ARC-25-AGENT-EVALUATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-079",
+                                                           "E-080",
+                                                           "I-025"
+                                                       ],
+                                   "responsibility":  "P4 — Centrální chat použije Agent Runtime a OWNER action registry pro lidské dotazy i příkazy; /chat/ask, stránka a drawer sdílejí conversation/message/action IDs. Kontext objektu a browser target chips jsou serverově revalidované. Credential setup card funguje deterministicky i bez OpenAI a nepředstírá AI odpověď. Voice řeší microphone permission, supported OpenAI audio contract, editovatelný přepis a standardní send; unsupported režim zachová textový vstup bez alternativního AI providera.",
+                                   "id":  "ARC-26-CENTRAL-CHAT"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-081",
+                                                           "E-082",
+                                                           "E-083"
+                                                       ],
+                                   "responsibility":  "P6 — Generation Orchestrator implementuje source intake, provenance/facts/OWNER decisions, message/turn dedupe, steer a capability-first lookup. Capability index je projekce exact active contracts; rozhodnutí obsahuje behavior/schema/operational coverage a freshness. FULL_REUSE zachová identities, PARTIAL_REUSE generuje jen missing delta. Turn completion/interrupt/successor používá jeden job/turn commit. Vše je dostupné po reloadu a ze současných OWNER sessions bez per-job ACL.",
+                                   "id":  "ARC-27-GENERATION-DISCUSSION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-084",
+                                                           "E-085",
+                                                           "E-086",
+                                                           "E-087"
+                                                       ],
+                                   "responsibility":  "P6 — Specification compiler a precheck vytvoří complete canonical JSON i věrný Markdown se všemi authority/provenance/binding/browser/eval/rollback fields. Approval zamkne current completed turn, spec a capability digests a atomicky vytvoří execution authority/planning enqueue. Planner vytvoří validní requirement-covered DAG. Specialist templates mají strict outputs a bounded tools; jsou proposals, nikoli release writery. Před approval nevznikne target production identity/runtime/binding/release.",
+                                   "id":  "ARC-28-GENERATION-SPECIFICATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-088",
+                                                           "E-089",
+                                                           "I-016"
+                                                       ],
+                                   "responsibility":  "P6 — Workspace domain aplikuje ADD/UPDATE/DELETE patch set proti exact base/file digests a publikuje úplný immutable file map. Materializer obnoví pracovní strom z DB/blob autority. Build/test subprocessy běží v job-scoped OS/resource boundary; package scripts/generated dependencies nejsou trusted host commands. Po každém patchi complete read-back, export/import/type/schema/static checks a focused+downstream tests. Stagnation detector zastaví opakující se root cause bez pokroku.",
+                                   "id":  "ARC-29-GENERATION-WORKSPACE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-090",
+                                                           "E-091",
+                                                           "I-012",
+                                                           "I-015"
+                                                       ],
+                                   "responsibility":  "P6 — Integration worker vykoná idempotentní saga steps identity, candidate revisions/releases, exact bindings, Secrets/external targets, filesystem/systemd, canonical candidate route, readiness/heartbeat, monitoring/UI/test registrace. Každý resource má deterministic identity, intent, exact read-back a compensation. Candidate routing vzniká serverově z verification/activation relation, nikoli z callerem podvrženého contextu. Žádný mock candidate; cleanup předchůdce blokuje konfliktní remediation.",
+                                   "id":  "ARC-30-GENERATION-INTEGRATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-092",
+                                                           "E-093",
+                                                           "E-094",
+                                                           "E-095"
+                                                       ],
+                                   "responsibility":  "P6 — Validation/conformance evaluator spustí celý applicable gate DAG podle input digests a seskupí nezávislé diagnostiky. Combined MCP+agent evaluation používá live candidate a společný set. Coordinator jako jediný atomicky dokončí fázi a založí následující. UPDATE/FOLLOW_UP schvalují novou funkci; RETRY/REPAIR zachovají frozen authority. Generation UI dokončit včetně spec/DAG/files/diffs/gates/blockers/activation/trace a přesných cancel/resume akcí; žádná ruční PASS nebo phase změna.",
+                                   "id":  "ARC-31-GENERATION-VALIDATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-096",
+                                                           "E-097",
+                                                           "E-098",
+                                                           "E-099",
+                                                           "E-100"
+                                                       ],
+                                   "responsibility":  "P5 — BrowserSessionService vytvoří jeden parent-owned session model pro chat/generation/agent/automation/test. Browser build a host assignment jsou pinované; server-managed sessions mají nonpersistent isolated contexts. Typed host observations mění page/frame/document/navigation projections jen při current generation/sequence. Implementovat popup/opener/OOPIF/full/same-document/BFCache/prerender lifecycle adapters, fresh recovery inventory a blue-green host drain bez raw handle migrace.",
+                                   "id":  "ARC-32-BROWSER-SESSIONS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-101",
+                                                           "E-102",
+                                                           "E-103",
+                                                           "I-022",
+                                                           "I-024"
+                                                       ],
+                                   "responsibility":  "P5 — Control writer a KBPP gateway oddělí one-writer lease od mnoha viewers. Takeover drainuje/reconciliuje a před grantem neutralizuje skutečný input state. WSS ověří cookie/key/ticket, Origin, expiry a current stream snapshot; input se nepřehrává. Preview implementuje keyframes/patches/ACK/backpressure a přesné viewport transformy. Pointer/key/text/touch/IME/focus strategies mají typed host adapters a evidence; frame dropping nesmí zahodit control/action/challenge událost.",
+                                   "id":  "ARC-33-BROWSER-CONTROL-PREVIEW"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-104",
+                                                           "E-105",
+                                                           "E-106",
+                                                           "E-107",
+                                                           "E-108",
+                                                           "I-017",
+                                                           "I-022"
+                                                       ],
+                                   "responsibility":  "P5 — Observation/locator compiler vytvoří bounded semantic tree, target reference AST a current one-match/actionability proof. Action writer pinne intent, account/resource, focus/viewport, earliest trigger, pre-armed waiters a independent read-back. Host provede fresh revalidation a emituje monotonic phases; worker sám rozhodne postcondition/reconciliation. Force/visual/native control je jen exact podporovaný contract, nikdy stale retarget. Ověřit autosave/input/change/blur i crash mezi triggerem a method return.",
+                                   "id":  "ARC-34-BROWSER-ACTIONS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-109",
+                                                           "E-110",
+                                                           "E-111",
+                                                           "I-011"
+                                                       ],
+                                   "responsibility":  "P5 — Account/auth writer implementuje exact account/tenant condition, credential refs, auth epoch a session-family concurrency. Explicitní save/capture provede mutation barrier, quiescence, allowed member inventory a encrypted bundle CAS; restore vytváří fresh compatible context před app bootstrapem. Challenge state machines pokryjí OTP/push/WebAuthn assertion versus registration/CAPTCHA/certificate/dialog/permission. Late challenge completion se čte z provider state; direct password typing samo Secret nevytváří.",
+                                   "id":  "ARC-35-BROWSER-ACCOUNTS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-112",
+                                                           "E-113",
+                                                           "I-021"
+                                                       ],
+                                   "responsibility":  "P5 — apps/owner-device-bridge bude skutečný podepsaný desktop agent s typed protocol core a OS-specific native adapters. Enrollment/local key storage, outbound mTLS, build/capability/certificate/connection epochs a exclusive profile/process proof předcházejí assignmentu. Native/passkey/client-certificate actions jsou session/window/challenge-scoped a klíče neopouštějí zařízení. Revoke/disconnect zavře admission; post-trigger outcome se reconciliuje bez server fallbacku. Každý podporovaný OS má vlastní funkční a negative acceptance.",
+                                   "id":  "ARC-36-OWNER-DEVICE-BRIDGE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-114",
+                                                           "E-121",
+                                                           "I-016"
+                                                       ],
+                                   "responsibility":  "P5 — Browser transfers používají shared Artifact service a scoped opaque handles, nikdy host paths. Filechooser/download listeners se pre-armují; download success vyžaduje complete durable bytes a origin/MIME/size/digest/content proof před context close. Cleanup je persistentní ordered saga revokace, reconciliation, final artifacts, browser resources, temp/auth handles a platform claims. COMPLETE ověřuje host/bridge inventář i DB refs; selhaný terminal attempt se nevzkřísí.",
+                                   "id":  "ARC-37-BROWSER-TRANSFERS-CLEANUP"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-115",
+                                                           "E-116",
+                                                           "E-117",
+                                                           "E-118",
+                                                           "E-119",
+                                                           "E-120"
+                                                       ],
+                                   "responsibility":  "P5 — Jeden Automation interpreter vykonává DSL při preflight, teaching replay, verification i production. Compiler převede skutečné input events na semantic steps/locators/typed inputs/Secret bindings/triggers/read-back; unresolved/visual-only unattended mutace blokuje activation. Implementovat všechny auth modes, bounded loops/branches, exact schedule timezone/DST/misfire/overlap/fire idempotency a account claims. Routine run má model network disabled a model-call count nula; drift opravuje nová ověřená revision.",
+                                   "id":  "ARC-38-BROWSER-AUTOMATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-015",
+                                                           "E-122",
+                                                           "E-123",
+                                                           "E-124",
+                                                           "I-005",
+                                                           "I-021"
+                                                       ],
+                                   "responsibility":  "P3 — Runtime Gateway writer vytváří immutable execution contexts z public acceptance nebo commitnutého trusted parentu. Native peer adapter ověří SO_PEERCRED, pidfd, boot/start ticks, systemd InvocationID/cgroup a DB runtime generation. Runtime-host launch manifest není credential. Po N-08 implementovat správný socket activation/path proof; pouze socket unit vlastní canonical path. Nested handler calls mapují local aliases na exact bindings a nikdy nepropagují OWNER bearer.",
+                                   "id":  "ARC-39-RUNTIME-GATEWAY"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-125",
+                                                           "E-126",
+                                                           "E-128",
+                                                           "E-129",
+                                                           "I-021"
+                                                       ],
+                                   "responsibility":  "P3 — Rust native launcher/IPC jádro v runtime-boundary realizuje namespaces, mount/FD setup, capability drop, seccomp, pidfd supervision a cgroup closure; TypeScript host vlastní domain adapter. Implementovat KCR1 framing, recvmsg ancillary rejection, bounded stream credits, deadline/cancel a přesné FD 0–3. Child spouští jen manifest alias bez shellu a capability FD. Skutečné host preflighty musí prokázat proveditelnost Node threading/JIT, exec bootstrapu a Ubuntu security profile bez globálního vypnutí ochrany.",
+                                   "id":  "ARC-40-RUNTIME-SANDBOX"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-127",
+                                                           "E-129"
+                                                       ],
+                                   "responsibility":  "P3 — State Broker přijímá pouze trusted gateway a serverem přidělený component namespace. Implementovat get/create/CAS put/delete+tombstone, bounded multi-key namespace transaction a deduplicated append se schváleným schema digestem. Handler nedostane SQL ani DB credential. Každý write sdílí current runtime/binding/activation/fence guards a event/audit/outbox hranici; state migrations se aktivují spolu s runtime a rollback preflight ověří forward compatibility.",
+                                   "id":  "ARC-41-COMPONENT-STATE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-130",
+                                                           "E-131",
+                                                           "E-132",
+                                                           "I-013",
+                                                           "I-029"
+                                                       ],
+                                   "responsibility":  "P3 — Monitor worker materializuje stable schedule occurrences, probes a current-lineage projections. SLO/alert evaluator pracuje jen s validní evidence; alert episode a primary/backup delivery jsou oddělené state machines. Implementovat ack/suppress/close/test/runbook, HMAC/idempotent deliveries, retry/DLQ, recertification a deduplicated technical repair enqueue. Monitoring bez OpenAI funguje dál; AI-dependent probe má explicitní capability stav místo falešného PASS.",
+                                   "id":  "ARC-42-MONITORING-REPAIR"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-133",
+                                                           "E-134",
+                                                           "I-019",
+                                                           "I-029"
+                                                       ],
+                                   "responsibility":  "P1 až P3 — Audit append contract je součást každého writer commitu a zamyká head poslední; archiver pouze doručuje sealed JSONL evidence s dedupe/read-back. Observability package poskytne structured logs, local traces, metrics, PostgreSQL fulltext/time partitions a bounded replay streams. OWNER viewer spojí request→command→attempt→effect→result→cleanup včetně raw hodnot. Bezpečný render odděluje čitelný obsah od executable HTML/CSV; mandatory audit failure nikdy nespadne na async-only log.",
+                                   "id":  "ARC-43-AUDIT-OBSERVABILITY"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-005",
+                                                           "E-135",
+                                                           "I-012"
+                                                       ],
+                                   "responsibility":  "P2 až P7 — Configuration domain po N-04 implementuje typed field-level allowlist a deterministic policy evaluator nad persistovanými vstupy. Effective values se pinují do run/release; UI vysvětluje derivaci, nikoli nabízí zakázané tunables. Desired revision+apply run vznikne atomicky; service materialization/restart proběhne s intentem mimo DB a APPLIED až po všech effective ACK/read-back. Import/reset/bulk group mají stejné schema/CAS/rollback a Secret fields používají Password Manager.",
+                                   "id":  "ARC-44-CONFIGURATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-136",
+                                                           "E-137",
+                                                           "E-138",
+                                                           "E-139",
+                                                           "I-003",
+                                                           "I-019",
+                                                           "I-023",
+                                                           "I-024"
+                                                       ],
+                                   "responsibility":  "P2 až P7 — React OWNER UI a ui-kit realizují všech 17 oblastí, shared action renderer, schema forms, tables/cards/diffs/graphs/logs a globální chat/browser shell. Zachovat přesné design tokeny, Montserrat, 228px sidebar, 6px radius a responsive layouts. Server state je autorita; optimistic změna je pouze pending presentation. Každá vertikála dodá loading/empty/partial/error/stale/conflict, unsaved editor recovery, keyboard/ARIA/focus a actual API chování před označením hotová.",
+                                   "id":  "ARC-45-OWNER-UI"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-027",
+                                                           "E-093",
+                                                           "E-147",
+                                                           "I-012",
+                                                           "I-015"
+                                                       ],
+                                   "responsibility":  "P3 základ, P6 celek — Activation writer freezeuje complete membership, gates a previous/candidate snapshots, uzavře domain admission a drainuje pending mutations. Jediná ACTIVATION_SWITCH transakce přepne všechny pointers a vyšší epoch; desired/effective runtime/proxy reconciliation pokračuje mimo DB. Postflight používá canonical HTTPS a skutečný agent-to-MCP call. Failure reverse-switchne celý set na frozen previous nebo ABSENT; handover a cleanup closure se řídí N-10.",
+                                   "id":  "ARC-46-ACTIVATION"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-140",
+                                                           "E-150"
+                                                       ],
+                                   "responsibility":  "P1 základ, každý další krok — Database migrator implementuje checksumovaný phasePlan EXPAND/MIGRATE/VALIDATE/ACTIVATE/CONTRACT s persistentním lease/fence a schema fingerprintem. Transactional DDL a concurrent-index steps mají odlišné exact execution/recovery kontrakty. Backfill je bounded a restart-safe; immutable historická payload/audit data se nepřepisují. Každá schema změna musí prokázat clean install, upgrade a previous application provoz nad forward schema před promotion.",
+                                   "id":  "ARC-47-MIGRATIONS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-151",
+                                                           "E-152",
+                                                           "E-153",
+                                                           "E-154",
+                                                           "I-005",
+                                                           "I-019"
+                                                       ],
+                                   "responsibility":  "P1 primitives, P4 až P6 enforcement — agentic-authority/content-provenance jsou pure compilers/validators, persistence patří parent writerům. Implementovat immutable source/transform graph, instruction/data segments, OWNER intent, exact operation context/action plan, leaf argument origins, dynamic value derivations a Secret-use destinations. Každý re-entry/handoff/compaction zachová authority. Steer invaliduje jen bezpečně nedispatchnuté contexts; possible effects se reconciliují. Red-team musí zachytit i model, který útok skutečně navrhne.",
+                                   "id":  "ARC-48-SEMANTIC-AUTHORITY"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-155",
+                                                           "E-156",
+                                                           "E-157",
+                                                           "E-158",
+                                                           "I-021",
+                                                           "I-030"
+                                                       ],
+                                   "responsibility":  "P2 bootstrap základ, P7 úplnost — Installer materializuje canonical users/groups/paths/units/socket profiles a Nginx public domain/wildcard routes. DNS/TLS domain vykonává WAPI/ACME ledger s exact TXT row IDs, authoritative propagation, parallel challenge isolation a cleanup; cert install ověří SAN/key match, nginx -t, reload a actual TLS read-back. Service actions vybírají jen registrovanou unit identity, ne arbitrary shell/path. UI/chat zobrazuje desired/effective stav a canonical runbooks.",
+                                   "id":  "ARC-49-HOST-DNS-TLS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-159",
+                                                           "E-160",
+                                                           "E-011",
+                                                           "I-018",
+                                                           "I-030"
+                                                       ],
+                                   "responsibility":  "P2 nasaditelný základ, P7 release proces — CI nad exact SHA sestaví signed self-contained server/UI/native/SDK/schema/unit/test/browser/bridge bundle a ověří complete file manifest. Deploy writer provede backup, forward migrations, config/PASS sync, staging, current/deployment-epoch saga, restart/recovery a healthy samples. Každý krok má immutable intent/timing/read-back; mixed release blokuje mutation readiness. Production acceptance je samostatný opakovatelný workflow bez redeploye.",
+                                   "id":  "ARC-50-CI-DEPLOYMENT"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-161",
+                                                           "I-011",
+                                                           "I-030"
+                                                       ],
+                                   "responsibility":  "P7 — Backup/Restore domain pořizuje autentizované konzistentní DB/data/config/credential/audit/state snapshots s digesty a dependencies. Ověření na čistém hostu musí skutečně dešifrovat Secrets a obnovit current i rollback artifacts. Restore zavede novou incarnation před workers a reconciliuje pending effects přes recovery barrier. Application rollback je nový fenced deployment run nad frozen previous evidence, nikoli down migration nebo odhad předchozí konfigurace.",
+                                   "id":  "ARC-51-BACKUP-RESTORE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-162",
+                                                           "I-010",
+                                                           "I-027",
+                                                           "I-028"
+                                                       ],
+                                   "responsibility":  "P1 test harness, rozšiřovat v každé fázi — Self-test runtime poskytne catalog/run/events/evidence/cancel/cleanup/replay/shrink přes canonical API. Suite bundluje skutečné lint/build/unit/integration/runtime test implementace; produktové commandy jdou přes produkční gateways a direct-state inspektor je read-only. Fixture setup/cleanup má canonical ownership a idempotency. Public hostname testy a API-key-session nejsou nahrazeny route injection. Missing required environment je BLOCKED, nikoli mock PASS.",
+                                   "id":  "ARC-52-SELF-TEST"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-163",
+                                                           "E-164",
+                                                           "E-165",
+                                                           "E-166",
+                                                           "I-027",
+                                                           "I-028"
+                                                       ],
+                                   "responsibility":  "P1 až P8 — packages/testing implementuje nezávislý stateful model DSL, TLA+/PlusCal modely, deterministic scheduler/fault catalog, linearizability checker, direct-state oracles, shrinking a replay. Fault hooks jsou inertní bez konkrétního test runu. Každá vertikála dodá before/after cutpoints a oracle mutation; nightly/release corpus pokryje celou applicable single/pairwise/three-way/cross-subsystem matici a nejméně 10 000 schedules. Vadný release musí reprodukovat stejný invariant failure; retry není flaky waiver.",
+                                   "id":  "ARC-53-FORMAL-CHAOS"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-167",
+                                                           "I-026"
+                                                       ],
+                                   "responsibility":  "P1 měření, P8 závěrečný gate — Definovat pinovaný workload/hardware/dataset manifest, warm/cold cache a concurrency profiles. Instrumentovat API/admission/DB/audit-head/queue/provider/locator/input/preview/postflight odděleně. Indexy, pagination, virtualizace a bounded cache optimalizují skutečný provoz; nesmějí měnit guards nebo canonical outcomes. Load test ověří všechny §31 cíle, reserved recovery kapacitu i degradované dependencies a doloží regresní baseline.",
+                                   "id":  "ARC-54-PERFORMANCE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-168",
+                                                           "E-169",
+                                                           "E-166",
+                                                           "I-015"
+                                                       ],
+                                   "responsibility":  "P8 — Closure controller sestaví §47 report výhradně z exact release-bound evidence a live inventářů. Pro každý requirement dohledá artifact, operation/writer, test, evaluator a runtime outcome; pro každý terminal root matching closure predicate. Připojí 360/360, A–W, architecture/chaos/formal/DB/browser/OpenAI/runtime/backup výsledky. Jakýkoli povinný gap, unknown effect, orphan authority nebo incomplete cleanup vrací blocking report, nikoli text HOTOVO.",
+                                   "id":  "ARC-55-PROJECT-CLOSURE"
+                               },
+                               {
+                                   "requirement_ids":  [
+                                                           "E-001",
+                                                           "E-002",
+                                                           "E-004",
+                                                           "E-158",
+                                                           "E-168",
+                                                           "I-001"
+                                                       ],
+                                   "responsibility":  "A2 delivery — Každá samostatná souborová úloha obdrží celý task manifest: exact SSOT/A0/A1/pack refs, vlastníka souboru/writera, relevantní normativní výňatky a rozhodnutí B nálezů, vstupní artifact digests, export/import interfaces, state/DB/runtime/security kontrakt, závislosti, acceptance příkazy a zákaz unrelated změn. Odevzdá kompletní funkční změnu s test/evidence a trace updates; ne stub pro další chat. Chunk limit je transportní, ne limit scope ani povolení nekompletního souboru.",
+                                   "id":  "DEL-01-SELF-CONTAINED-TASKS"
+                               }
+                           ],
+    "assumptions":  [
+                        "Tento A1 je úplný podmíněný realizační plán, nikoli potvrzení normativně uzavřeného handoffu. Závazné technické hranice a pořadí prací jsou popsány; uvolnění produktových souborových úloh do A2 zůstává BLOCKED podle A0 nálezů B-01 až B-18.",
+                        "Nebyla provedena kompilace Contract Packu, kontrola repozitáře, běh testů, ověření oficiálních SDK/protocol releases ani zásah do produkce. Žádný PASS, digest, benchmark nebo infrastruktura se zde nepředstírá.",
+                        "E-001 až E-170, I-001 až I-030, AC-01 až AC-39, Q a INV jsou odkazy na dodanou A0R_REQUIREMENTS. B identifikují její normativní nálezy. Nejsou náhradou skutečných content-addressed KCML-REQ IDs.",
+                        "Primárním jazykem bude strict TypeScript. Pro skutečné Linux syscalls, descriptor handling, sandbox launcher a potřebné desktop OS integrace bude použit omezený Rust native core; business state-machine autorita zůstává v packages/domain.",
+                        "Webová implementace bude Fastify, React, Vite, TanStack Query/Table, přístupné headless UI primitives, CodeMirror a topology adapter nad React Flow. Tyto volby jsou technické, nevytvářejí nové produktové chování; přesné kompatibilní verze se ověří a pinují před použitím.",
+                        "Persistence bude realizována typed explicitním SQL nad PostgreSQL, bez Redis/Temporal nebo jiného paralelního workflow control-plane. Read models a cache lze obnovit z canonical DB/evidence.",
+                        "Cross-job/session odmítnutí znamená chybně svázaný parent, ticket, artifact nebo execution context, nikoli zákaz OWNERovi spravovat jiný vlastní job. Browser account není KájovoCML user.",
+                        "Kanonicá uložená username hodnota je KRMAR78; lookup zachová A0 citext interpretaci. Trusted device samo neruší povinné MFA. OWNER reveal OpenAI klíče je povolená Secret operace, nikoli client-side AI runtime.",
+                        "Požadovaný MCP profil 2026-07-28 se nesmí potichu nahradit legacy profilem. Pokud current SDK neumí požadovanou wire hranici, použije se ověřený explicitní codec/adapter; tvrzení o oficiální interoperabilitě vyžaduje skutečnou evidence.",
+                        "Side-by-side SDK kompatibilita neznamená povolení stale application procesu. Starý serializer/SDK může obsloužit svůj checkpoint pouze uvnitř current fenced runtime assignmentu.",
+                        "Self-test fixture transporty jsou povoleny pouze v normativních test profilech. Disposable prostředí má izolovanou síť, data a provider scope; produkční acceptance používá skutečný veřejný canonical origin a platný TLS.",
+                        "Pořadí realizace je P0 normativní uzavření, P1 kontrakty a correctness kernel, P2 plný ne-AI control-plane, P3 runtime/KCIP/MCP, P4 AI/agent/chat, P5 browser/bridge/automation, P6 generation a combined activation, P7 kompletní provoz, P8 release acceptance a closure. Testy, UI parity, recovery a audit vznikají s každou vertikálou, nikoli až v P8."
+                    ],
+    "deliverable_policy":  {
+                               "max_lines_per_chunk":  220
+                           },
+    "project":  {
+                    "target_os":  "Produkční Ubuntu 24.04 LTS; OWNER Device Bridge Windows, macOS a Linux; responzivní webové UI pro desktop, tablet a mobil.",
+                    "runtime":  "Node.js 24 LTS, pnpm 11, PostgreSQL 16, Fastify, React, Nginx, systemd, pinovaný Playwright a oficiální OpenAI Responses/Agents SDK; minimální native Rust boundary.",
+                    "one_liner":  "Jednotný single-owner control-plane pro skutečnou výrobu a provoz MCP, agentů, komponent a browser automatizací s linearizovatelnou autoritou, transparentní evidence a ověřenou recovery; A2 admission je do normativního uzavření BLOCKED.",
+                    "name":  "KájovoCML NG",
+                    "language":  "TypeScript; Rust pouze pro nezbytné native OS/IPC hranice; SQL; TLA+/PlusCal pro formální modely."
+                },
+    "requirements":  {
+                         "constraints":  [
+                                             "Zachovat celý dodaný SSOT a A0 rozsah. Architekt nesmí doplnit chybějící business/state/recovery význam nebo vydávat unresolved B nález za implementační volnost.",
+                                             "Jediný normativní produktový zdroj je SSOT; Contract Pack je deterministická projekce. Implementace, testy a runtime evidence nesmějí vytvářet druhou produktovou specifikaci.",
+                                             "Jediná lidská identita je OWNER KRMAR78. Žádné users/roles/groups/tenants/RBAC/ABAC/ACL ani obecný principal/permission registr.",
+                                             "Jediný KCML_OWNER_API_KEY poskytuje OWNER_FULL bez scopes/expiry; právě jedna active verze. OPENAI_API_KEY je jediná canonical OpenAI credential.",
+                                             "PASS je deployment-managed heslo a jediný externí aplikační bootstrap vstup. Každý deploy jej synchronizuje; ostatní OWNER vstupy mají UI/chat/API cestu.",
+                                             "Public OWNER autentizace končí na gateway. Interní komponenty nepoužívají bearer/JWT/OAuth/mTLS tokens; vzdálený bridge a endpoint-local externí auth zůstávají explicitními výjimkami.",
+                                             "PostgreSQL je mutable autorita. Každý authoritative objekt má jediného writera, state machine, CAS, idempotency, příslušný fence a transaction-bound audit/outbox.",
+                                             "Žádné externí I/O pod DB lockem. Každý non-DB effect má intent, fresh dispatch authority, immutable attempt, outcome/reconciliation a cleanup.",
+                                             "Exactly-once znamená canonical observable outcome ve vymezeném scope, nikoli nepodloženou záruku external execution. UNKNOWN se nesmí automaticky retryovat nebo přejmenovat na success/cancel.",
+                                             "Žádný partial activation/binding/route/runtime set, stale worker write nebo resurrection terminal řádku. Restore invaliduje staré authority novou incarnation.",
+                                             "Generated handler nemá síť, DB, host filesystem, broker/browser socket, OWNER klíč ani arbitrary shell; používá pouze šest context APIs přes anonymous capability FD.",
+                                             "AI je pouze OpenAI přes packages/openai-runtime. Modelové výstupy jsou proposals; create hidden retry je vypnutý a response.id není zaměnitelný s request ID.",
+                                             "Jeden Browser Interaction Plane; žádný public/raw Playwright/CDP tunnel. One-writer control, current document/target identity a post-trigger reconciliation jsou povinné.",
+                                             "Domain/UI SSE replay, MCP no-replay SSE a KBPP snapshot reconnect jsou odlišné kontrakty a nesmějí sdílet nesprávnou transportní sémantiku.",
+                                             "OWNER-transparent secret režim zůstává zachován. Nepřidávat povinnou redakci nebo secret approval; explicitní ticket/private-key a runtime-distribution zákazy se dodrží.",
+                                             "Každá UI/API/chat funkce je skutečná. Žádné production mocky, fake data/success/progress, prázdné handlers, stuby nebo TODO nahrazující behavior.",
+                                             "SYSTEM_MANAGED policies nesmějí mít skrytý default ani volnou AI optimalizaci safety bounds. Každá použitá hodnota je validovaná, verzovaná a vysvětlitelná.",
+                                             "Gate PASS vytváří jen evaluator nad exact vstupy a evidence. Chybějící aplikovatelné prostředí je BLOCKED; NOT_APPLICABLE potřebuje normativní predicate."
+                                         ],
+                         "functional":  [
+                                            "E-001–E-006, E-169–E-170 — Normativní compiler, registry, traceability, single-writer ownership a exposure-driven UI/API/chat/audit/self-test parity.",
+                                            "E-007–E-015 — Kompletní fixed OWNER authentication, MFA/recovery/session lifecycle, PASS sync, singleton API-key rotace a API-key-session exchange.",
+                                            "E-016–E-025 — Plný Password Manager, Secret versions/bindings/resolve, externí targets a auth, egress/TCP_TLS, OAuth/webhooks a circuit management.",
+                                            "E-026–E-038 — Component/revision/release katalog, všechny registration a lifecycle cesty, topologie/layout, KCIP request/outcome, PULSE, controls, state a heartbeat.",
+                                            "E-039–E-059 — Kompletní moderní MCP wire, schema/discovery/cache/pagination/projection, tool/resource/prompt, MRTR, Tasks, subscriptions, handles, legacy adapters a compatibility/diagnostic UI.",
+                                            "E-060–E-080 — Jednotný OpenAI lifecycle, exact agents/tools/handoffs/guardrails/approvals, sessions/memory/compaction/evals a centrální textový/voice chat s actual action results.",
+                                            "E-081–E-095 — Generation od persistentního zadání a capability-first přes immutable approval/DAG/workspace až po live integration, validation, combined activation, rollback, repair a closure.",
+                                            "E-096–E-121 — Browser sessions/builds/identities, live preview a control, semantic targets/actions, account bundles/challenges, Device Bridge, transfers, teaching a deterministic automation/scheduling.",
+                                            "E-122–E-129 — Trusted runtime gateway/host, native Linux sandbox, bounded IPC, exact brokers, persistent component state a orphan-free process cleanup.",
+                                            "E-130–E-139 — Monitoring/probes/SLO/alerts/repair/recertification, audit/logs/export, desired/effective konfigurace a všech 17 plně přístupných responzivních OWNER obrazovek.",
+                                            "E-140–E-150 — Greenfield physical PostgreSQL baseline, canonical transactions/queues/fences/effects/activation, startup recovery barrier, atomic artifacts, closure a forward-only migrations.",
+                                            "E-151–E-154 — Authority/provenance/instruction-data separation, semantic action/argument/target validation, exact Secret-use a confused-deputy evidence bez omezení legitimní OWNER capability.",
+                                            "E-155–E-161 — Produkční Ubuntu/Nginx/systemd/DNS/TLS/filesystem, privátní signed CI/CD, samostatná acceptance, backup/restore a disaster recovery.",
+                                            "E-162–E-168 — API řízený skutečný test katalog, formální modely, deterministic chaos/shrinking/replay/oracles, performance gates a complete release-bound project closure."
+                                        ],
+                         "non_functional":  [
+                                                "Q-01, Q-12 — Correctness-first, bounded convergence a fair recovery. Bez decisive evidence je správným výsledkem explicitní MANUAL_REVIEW, nikoli odhad.",
+                                                "Q-02 — Read API p95 do 500 ms, UI mutation admission p95 do 1 s, health do 200 ms, readiness do 2 s a dashboard first useful render do 2 s na reprezentativním datasetu.",
+                                                "Q-03 — Obecný persist-to-SSE do 500 ms; generation/agent p95 do 250 ms; message persistence a phase transition/enqueue p95 do 500 ms; cancellation viditelná do 1 s.",
+                                                "Q-04 — MCP tools/list cache miss p95 do 500 ms, gateway overhead p95 do 100 ms, agent preparation p95 do 1 s a activation pointer commit p95 do 2 s bez postflight.",
+                                                "Q-05–Q-07 — Browser create p95 do 500 ms bez launch queue; ready context a první frame do 2 s; action event do 250 ms; safe control grant do 500 ms; input dispatch do 150 ms bez WAN; observation/reconnect do 1 s; account verify do 2 s; cleanup do 10 s bez external reconciliation.",
+                                                "Q-08 — Worker/host/bridge heartbeat nejvýše třetina lease. Resource, payload, deadline, stream a loop limity jsou konečné a versioned.",
+                                                "Q-09–Q-11 — WCAG AA, plná klávesnice/focus/ARIA, reduced motion, mobilní targets nejméně 40×40 px, předepsané design tokeny a čtyři QA viewporty. REST default 50/max 200; MCP pagination samostatně.",
+                                                "Q-13–Q-14 — Complete raw/normalized correlation evidence, přesný processing/commit/delivery bod a pinované source/schema/SDK/browser/evaluator/fault digests.",
+                                                "Q-15 — Acyclic authority dependencies, jeden canonical writer a žádná paralelní business implementace v UI, SDK, workeru, testu nebo deployment skriptu.",
+                                                "Q-16 — Měření odděluje platformu, provider a WAN; pinne workload/hardware/cache režim a nesmí získat výkon vynecháním persistence, freshness, postcondition nebo cleanup."
+                                            ]
+                     },
+    "architecture":  {
+                         "error_handling":  [
+                                                "Public routes a adapters vracejí chyby pouze přes Error and Retry Registry. Každý code má canonical meaning, processing/effect point a fixed directive nebo jednoznačnou ordered evidence decision table.",
+                                                "Validation se ukončí na první chybě předepsané příslušnou wire pipeline. Rejection evidence může vzniknout, ale pre-dispatch error nesmí založit handler, model request, Secret resolve nebo business side effect.",
+                                                "CAS/idempotency/stale conflicts vracejí current snapshot a canonical next action. Klient nesmí automaticky použít vyšší stateVersion se stejným zamýšleným přepisem; nový command vzniká až po skutečném refresh rozhodnutí.",
+                                                "Při nejednoznačném COMMIT ACK se nejprve čte původní idempotency/command record. Opakuje se transaction closure pouze tam, kde to contract dovoluje a external dispatch nebyl možný.",
+                                                "SQLSTATE mapping zachová §51.32. Expected unique race není automatický success; conflicting row/digest se musí ověřit. Deterministický deadlock v canonical lock planu je implementation defect i po úspěšném retry.",
+                                                "Po DISPATCHING nebo possible mutation triggeru absence response, EOF, OOM, kill, timeout nebo credential error neprokazuje NOT_APPLIED. Reconciliation vrací applied/not-applied/unknown a drží příslušný conflicting key.",
+                                                "Cancel je monotonic intent, nikoli rollback. Běžné cancel-first a cooperative MCP task terminal race se řídí vlastní state machines; již potvrzený applied effect se nemaže.",
+                                                "OpenAI unknown submit bez response.id blokuje nový create. Known handle používá retrieve/resume/cancel stejného response; schema repair je explicitní nová operation bez replay potvrzeného toolu.",
+                                                "Browser stale identity/focus/viewport/target se odmítne před inputem. Post-trigger failure spouští pouze independent read-back; tlačítko Reconcile nikdy nezopakuje click.",
+                                                "Runtime protocol/descriptor/peer/sandbox violation ukončí call nebo channel podle severity a označí runtime unhealthy. Restart neprohlásí pending effect za neprovedený; cleanup ověří cgroup i references.",
+                                                "Capability failure má scoped dopad: chybějící OpenAI nebo optional browser/bridge nevyřadí core. Porušený DB/security invariant nebo recovery barrier se nesmí skrýt jako neškodná optional degradace.",
+                                                "Cleanup/rollback failure zachová business outcome a frozen snapshots, vytvoří alarm a blokuje closure/reuse. Late contradictory evidence otevře incident/manual conflict, nikdy last-write-wins terminal update.",
+                                                "UI zobrazí lidský popis, stable code, correlation, affected object, current snapshot a konkrétní povolenou recovery. OWNER má plný debug; externí endpoint binding jen contract-safe details.",
+                                                "SSOT/Contract Pack/state/DB/ownership/parity neúplnost se opravuje v autoritativním vstupu a následnou kompilací. Runtime retry, feature removal, gate waiver nebo ruční úprava projekce nejsou recovery."
+                                            ],
+                         "data_flow":  [
+                                           "DF-01 — OWNER session/key → Fastify public boundary → registered operation → server-derived intent/context → ordered admission transaction → command/idempotency/audit/work commit → canonical response nebo durable 202 reference. Cookie mutace mají CSRF; stejný OWNER scope nezávisí na session nebo key fingerprintu.",
+                                           "DF-02 — Handler business args/alias → anonymous KCR1 channel → trusted runtime host → identity-validated UDS gateway → exact source/target binding a semantic context → broker/target. Public Authorization/cookies se nepředávají; child má nově vytvořený server context.",
+                                           "DF-03 — Queue hint → ordered concurrency rows → exact SKIP LOCKED work row → fresh DB-time eligibility/fence → commit claim → práce mimo transaction → guarded outcome/checkpoint/successor. Polling zajišťuje liveness nezávisle na NOTIFY.",
+                                           "DF-04 — Side-effect T1 intent/immutable attempt/authority outbox → delivery claim → fresh D authority commit → external execution → T2 raw evidence → T3 canonical confirmation nebo reconciliation. Jediný owner ledger rozhoduje observable outcome a propagaci do parentu.",
+                                           "DF-05 — Public MCP bytes/headers → transport/JSON-RPC/current-request capability validation → in-flight ID reservation → exact tool/native schema → KCIP command → persisted result → MCP JSON/SSE materialization. Domain SSE event IDs se na MCP stream nikdy nepřenášejí.",
+                                           "DF-06 — Canonical agent/chat/generation input → provenance compiler → capability/Secret/model descriptor → OpenAI submit → persisted response.id/events/items → strict output nebo semantic tool proposal → canonical tool operation → persisted function output → unique successor model call.",
+                                           "DF-07 — Agent final candidate → output schema/guardrails/known-effect checks → single transaction run result + canonical session items + mandatory memory + checkpoint/audit/outbox. Derived indexes jsou následný delivery sink, nikoli druhá session autorita.",
+                                           "DF-08 — OWNER generation source/message → facts/capability decision → complete spec/precheck → exact approval/authority freeze → DAG → atomic workspace patches/build → integration saga/live candidate → validation/evaluation/conformance → activation/postflight → ownership handover a job closure.",
+                                           "DF-09 — Activation request → frozen members/previous/candidate → domain barrier → drain/reconcile → one higher-epoch pointer commit → runtime/proxy effective read-back → smoke/monitoring → ACTIVE nebo whole-set reverse switch na previous/ABSENT.",
+                                           "DF-10 — Session create → parent/scope/account/capacity → compatible host nebo bridge assignment → isolated context → page/frame/document inventory → READY snapshot → fenced control → typed action. Připojení stejné session do jiného view není nový context.",
+                                           "DF-11 — Preview input/agent action → current document/viewport/focus/locator validation → semantic context + earliest trigger + pre-arm plan → durable intent → host fresh checks/input phases → independent postcondition → action/step outcome a next-step reservation nebo MANUAL_REVIEW.",
+                                           "DF-12 — Explicit account save → exact account/tenant condition → mutation barrier/quiescence → allowed state inventory → encrypted bundle → credential/auth/build CAS pointer. Restore instaluje state do fresh compatible contextu před bootstrapem a znovu ověří účet.",
+                                           "DF-13 — Secret/config desired change → immutable version + CAS → invalidation/apply outbox → affected service/session action mimo DB → effective fingerprint/version evidence → applied nebo rollback. In-flight effect zůstává na své pinované credential verzi.",
+                                           "DF-14 — Probe/heartbeat/current ACK → immutable observation → guarded projection/SLO → deduplicated alert → signed primary/backup delivery → případný inherited technical repair. Free-text log ani heartbeat loss sám neprokazuje business outcome.",
+                                           "DF-15 — Artifact publication → validated durable immutable bytes → DB reference → authorized handle/read/export. Audit/log/event outbox → bounded query/read models a replay streams; všechny views odkazují na canonical object/correlation IDs.",
+                                           "DF-16 — Startup/DB restart/restore/deploy switch → recovery barrier → DB/runtime/filesystem/provider inventory → exact item classification/unique successor → stabilní druhý průchod → READY. Read-only OWNER diagnostika zůstává dostupná; new business dispatch čeká.",
+                                           "DF-17 — Self-test API → pinned profile/seed/release → canonical fixture setup → production operations + independent direct-state oracle → deterministic faults/history → shrink/replay → canonical cleanup → coverage a closure evidence. Výsledek testu není náhradou produktové implementace."
+                                       ],
+                         "modules":  [
+                                         {
+                                             "name":  "packages/contract-pack; contracts/registry-schemas; contracts/registries",
+                                             "responsibility":  "Pure SSOT compiler, symbol/reference consistency, requirement identity, registry digests, ownership/parity a architecture gates. Není runtime control-plane a nesmí přidávat význam."
+                                         },
+                                         {
+                                             "name":  "packages/schemas; packages/domain operation/action catalog",
+                                             "responsibility":  "Canonical wire/JSON Schema codecs, typed authority versus expected guards, operation metadata, action applicability a error registry projekce pro API/UI/chat/tests."
+                                         },
+                                         {
+                                             "name":  "packages/domain correctness kernel; packages/database",
+                                             "responsibility":  "Jediné business command/state-machine handlers a jejich explicitní PostgreSQL transaction adapters, lock plans, constraints, idempotency, queues, fences, effects, recovery a closure."
+                                         },
+                                         {
+                                             "name":  "apps/server — kcml-web-api",
+                                             "responsibility":  "Fastify OWNER/public API, auth/session, registered route adapters, OpenAPI explorer, domain/UI SSE, BrowserSessionService a Preview Gateway. HTTP handler nesmí přímo měnit systemd, files nebo business pointer."
+                                         },
+                                         {
+                                             "name":  "Identity, Secret, Component, Release a Binding domains v packages/domain",
+                                             "responsibility":  "Singleton identity/key, Secret lifecycle, registrace objektů, immutable revisions/releases/binding sets a metadata. Active dependency pointers předávají výhradně Activation writeru."
+                                         },
+                                         {
+                                             "name":  "apps/runtime-gateway; packages/kcip",
+                                             "responsibility":  "Trusted peer/context derivace, exact alias/binding/epoch admission a KCIP dispatch. Gateway odděluje OWNER_FULL, CONTRACT a EXTERNAL bez obecného permission registru."
+                                         },
+                                         {
+                                             "name":  "apps/runtime-host; packages/runtime-boundary; packages/runtime-capability-ipc; packages/component-sdk",
+                                             "responsibility":  "Per-instance host, native sandbox launcher, kernel peer/FD primitives, KCR1 framing/backpressure, handler bootstrap, šest context APIs, child supervision a cgroup cleanup."
+                                         },
+                                         {
+                                             "name":  "apps/secret-broker; apps/state-broker; apps/egress-gateway",
+                                             "responsibility":  "Exact Secret resolve, component namespace CAS a bounded external HTTPS/TCP_TLS execution. Přijímají trusted gateway, ne generated handler; adapters vracejí evidence shared writerům."
+                                         },
+                                         {
+                                             "name":  "packages/mcp-runtime",
+                                             "responsibility":  "Moderní a explicitně adaptovaný legacy wire, transport ID reservation, discovery/schema/projection/cache, call/MRTR/task/subscription/handle state machines a raw wire evidence."
+                                         },
+                                         {
+                                             "name":  "packages/openai-runtime",
+                                             "responsibility":  "Jediné přímé OpenAI/Agents SDK importy, client/model/session adapters, capability gates, descriptors, provider attempts/events/items, no-hidden-retry a versioned RunState recovery."
+                                         },
+                                         {
+                                             "name":  "apps/agent-worker; packages/agent-sdk",
+                                             "responsibility":  "Vykonání shared Agent Runtime writerů, graph/tool compilation, guardrails, approval/resume, history/memory/evals a exact browser/MCP integration."
+                                         },
+                                         {
+                                             "name":  "apps/central-chat-worker",
+                                             "responsibility":  "Centrální systémový agent nad týmž Agent Runtime a OWNER action registry; zachovává conversation/action/generation/browser lineage bez vlastního bypassu."
+                                         },
+                                         {
+                                             "name":  "apps/generation-coordinator; packages/generation-orchestrator",
+                                             "responsibility":  "Canonical writer job/turn/phase/plan/source/blocker lifecycle. Specialist/workspace/integration/validation workers dodávají typed outcomes, coordinator atomicky posouvá workflow."
+                                         },
+                                         {
+                                             "name":  "apps/generation-openai-worker",
+                                             "responsibility":  "Bounded Responses a Agents specialistické úlohy pouze přes openai-runtime, se frozen execution authority, budgets, checkpointy a návrhy místo přímých production writes."
+                                         },
+                                         {
+                                             "name":  "apps/generation-workspace-worker; packages/generation-workspace",
+                                             "responsibility":  "CAS patches, complete immutable workspace file maps, bezpečná materializace/build/test execution, artifact manifests a stagnation evidence."
+                                         },
+                                         {
+                                             "name":  "apps/generation-integration-worker; apps/generation-validation-worker",
+                                             "responsibility":  "Checkpointované candidate resource sagy a skutečné validation/eval/conformance gates. Každý external krok má shared effect ledger a přesný cleanup."
+                                         },
+                                         {
+                                             "name":  "apps/generation-activation-worker; Activation domain",
+                                             "responsibility":  "Jediný activation-set/barrier/pointer-switch/reverse-switch writer pro všechny component/MCP/agent/automation/binding/route/runtime členy."
+                                         },
+                                         {
+                                             "name":  "BrowserSessionService; packages/browser-interaction; packages/browser-runtime-contracts",
+                                             "responsibility":  "Jediná session/context/page/frame/document/control/action/account/state/bridge assignment autorita. Runtime hosts poskytují observations, nikoli business state."
+                                         },
+                                         {
+                                             "name":  "apps/browser-worker; packages/browser-automation-runtime",
+                                             "responsibility":  "Typed action execution, observation/locator compilation, postconditions/reconciliation, teaching a jeden model-free DSL interpreter pro verify i production."
+                                         },
+                                         {
+                                             "name":  "apps/browser-host; packages/browser-preview-protocol",
+                                             "responsibility":  "Pinované Playwright/private browser transporty a isolated contexts za typed UDS; engine-neutral frames/observations pro KBPP. Žádný veřejný CDP/Playwright endpoint."
+                                         },
+                                         {
+                                             "name":  "apps/browser-bridge-gateway; apps/owner-device-bridge",
+                                             "responsibility":  "Outbound mTLS enrollment/connections, signed desktop runtimes, native protected storage/capability adapters, exact session/profile/local-target routing a revoke/recovery."
+                                         },
+                                         {
+                                             "name":  "apps/component-control-worker; apps/component-e2e-worker",
+                                             "responsibility":  "Canonical control commands, state/heartbeat challenges a manifest E2E přes příslušné skutečné runtime/public hranice; observation není přímý component writer."
+                                         },
+                                         {
+                                             "name":  "apps/monitor-worker; apps/alert-worker; packages/observability",
+                                             "responsibility":  "Probe scheduling, current projections, SLO/alert episodes, primary/backup delivery assignments, repair enqueue, structured logs/metrics/traces a query projections."
+                                         },
+                                         {
+                                             "name":  "apps/audit-archiver; shared Audit append contract",
+                                             "responsibility":  "Canonical chain se appenduje v parent transakci; archiver doručuje neměnné evidence s dedupe a integrity kontrolou, nemění business audit."
+                                         },
+                                         {
+                                             "name":  "Artifact, Configuration, Deployment, Recovery a Cleanup domains; deploy",
+                                             "responsibility":  "Durable file publication, desired/effective policies, signed deployment/migrations/epochs, DNS/TLS, backup/restore a fenced inventory/closure. Scripts volají canonical writery."
+                                         },
+                                         {
+                                             "name":  "apps/owner-ui; packages/ui-kit",
+                                             "responsibility":  "Responzivní přístupný enterprise shell, všech 17 oblastí, shared actions/forms/viewers, topology, chat a browser panels s actual server-derived stavem."
+                                         },
+                                         {
+                                             "name":  "apps/self-test-runtime; apps/acceptance-runner; packages/testing",
+                                             "responsibility":  "API-driven catalog, isolated environments, actual production-boundary suites, reference models, fault scheduler, direct-state oracles, shrinking/replay a release-bound acceptance/closure evidence."
+                                         }
+                                     ],
+                         "security_notes":  [
+                                                "Zachovat single-owner a transparentní trust perimeter. Infrastructure PostgreSQL role isolation a systemd UID/GID nejsou aplikační RBAC; žádný nový obecný grant/scope/token model.",
+                                                "Session/key authentication se validuje při každé nové admission včetně dlouhých spojení. Dříve accepted immutable command může doběhnout podle rotation/cancellation kontraktu; otevřený WSS sám neudržuje neomezenou autoritu.",
+                                                "OWNER reveal/export může vrátit skutečné secrets. Generated handler, browser host a interní broker request nedostávají KCML_OWNER_API_KEY; OpenAI workers používají pouze svoji exact OpenAI credential cestu.",
+                                                "At-rest ochrana pokrývá encrypted Secrets/state bundles a citlivé artifact/log/backup úložiště. Master/service credentials používají pouze schválené root-owned encrypted systemd sources a per-invocation materializaci; restore musí prokázat dešifrovatelnost.",
+                                                "Native launcher nesmí spouštět generated code před dokončením namespace/mount/FD/capability/seccomp setupu. Unsupported kernel/AppArmor/systemd capability blokuje runtime, nikoli zapíná privileged fallback.",
+                                                "Egress a browser ověřují skutečný connection destination po DNS/redirectu, exact account/tenant/origin a Secret placement. Typed TCP_TLS není obecný socket/FD proxy; bridge local binding není obecný LAN přístup.",
+                                                "Provenance a semantic containment jsou kontrolovány serverem i při škodlivém model proposal/generated code. Promptová instrukce modelu sama není bezpečnostní důkaz.",
+                                                "Malicious content, Markdown, logs, filenames, JSON a exports se zobrazují jako data s bezpečným renderem. Zachování raw hodnot neznamená povolení XSS, macros nebo CSV formula execution.",
+                                                "KBPP tickets jsou single-use, no-store a bez URL/access-log exposure. Private platform passkeys, bridge keys a non-exportable certificates se nepřenášejí na server; explicitní transparentní Secret režim tyto výjimky neruší.",
+                                                "Self-test mutation builds nikdy nejsou deployable release. Fault hooks jsou compile-time allowlisted a svázané s immutable test run/profile/fixture ownership; nesmějí poskytovat arbitrary production fault nebo shell endpoint.",
+                                                "Signed exact-SHA builds, lockfile integrity, CodeQL/dependency audit a private repository controls chrání supply chain. Secret inventory zůstává informativní, nikoli nepřiznanou blocking redaction branou.",
+                                                "Plná evidence a OWNER control zůstávají dostupné při capability degradaci. Bezpečnostní ani recovery UI nesmí nabízet přímé SQL/state/PASS override, raw browser tunnel nebo obejití immutable contractu."
+                                            ]
+                     }
+}

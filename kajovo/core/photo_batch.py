@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 import uuid
 from dataclasses import asdict, dataclass, field, fields
@@ -93,6 +94,9 @@ class PhotoBatchJob:
     request_completed: int = 0
     request_failed: int = 0
     items: list[PhotoBatchItem] = field(default_factory=list)
+    # Skutečné místo převzetí lze zvolit až po odeslání dávky. Toto pole není
+    # součástí zmrazeného požadavku ani WorkOrder.
+    saved_output_dir: str = ""
 
 
 def _now() -> str:
@@ -409,14 +413,13 @@ def new_job(
     if not _is_image_edit_model(image_model):
         raise ValueError(f"{image_model}: model není povolený pro Image Edit BATCH.")
     validate_image_edit_parameters(image_model, quality, size, output_format)
-    output = Path(output_dir).expanduser().resolve()
-    output.mkdir(parents=True, exist_ok=True)
+    output = str(Path(output_dir).expanduser().resolve()) if output_dir else ""
     plan = copy_photo_plan(photo_plan or manual_photo_plan(prompt), prompt)
     plan_hash = canonical_sha256(plan)
     stamp = _now()
     items = make_items(source_paths)
     job = PhotoBatchJob(
-        3,
+        4,
         "photojob_" + uuid.uuid4().hex,
         stamp,
         stamp,
@@ -433,7 +436,7 @@ def new_job(
         quality,
         size,
         output_format,
-        str(output),
+        output,
         photo_plan=plan,
         photo_plan_sha256=plan_hash,
         request_total=len(items),
@@ -484,6 +487,62 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
     return jobs
 
 
+def deleted_job_markers(log_dir: str | Path) -> list[dict]:
+    """Vrátí minimální značky smazaných úloh, aby je výpis vzdálených dávek neobnovil."""
+    path = Path(log_dir) / "PHOTO" / "deleted_jobs.json"
+    if not path.exists():
+        return []
+    try:
+        payload = parse_json_strict(path.read_text(encoding="utf-8"))
+    except (OSError, ContractError) as exc:
+        raise ValueError("Evidence odstraněných fotografických dávek se nedá načíst.") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or not isinstance(payload.get("jobs"), list)
+    ):
+        raise ValueError("Evidence odstraněných fotografických dávek má neplatný formát.")
+    markers = payload["jobs"]
+    if any(
+        not isinstance(row, dict)
+        or set(row) != {"job_id", "batch_id", "input_file_id"}
+        or any(not isinstance(row[key], str) for key in row)
+        for row in markers
+    ):
+        raise ValueError("Evidence odstraněných fotografických dávek má neplatný formát.")
+    return markers
+
+
+def delete_job(job: PhotoBatchJob, log_dir: str | Path) -> None:
+    """Odstraní místní PHOTO soubory a zachová značku pro skrytí vzdálené dávky."""
+    validate_photo_job(job)
+    photo_root = (Path(log_dir) / "PHOTO").resolve()
+    target = photo_root / job.job_id
+    resolved = target.resolve()
+    if (
+        resolved.parent != photo_root
+        or resolved.name != job.job_id
+        or not re.fullmatch(r"photojob_[A-Za-z0-9_-]+", job.job_id)
+    ):
+        raise ValueError("Místo místních podkladů neodpovídá této fotografické dávce.")
+    markers = deleted_job_markers(log_dir)
+    marker = {
+        "job_id": job.job_id,
+        "batch_id": job.batch_id,
+        "input_file_id": job.input_file_id,
+    }
+    if marker not in markers:
+        markers.append(marker)
+        atomic_write_text(
+            str(photo_root / "deleted_jobs.json"),
+            json.dumps(
+                {"schema_version": 1, "jobs": markers}, ensure_ascii=False, indent=2
+            ) + "\n",
+        )
+    if resolved.exists():
+        shutil.rmtree(resolved)
+
+
 def validate_photo_job(job: PhotoBatchJob) -> None:
     """Stejná hranice pro nové i obnovené úlohy; legacy evidence se nedoplňuje."""
     if not isinstance(job, PhotoBatchJob):
@@ -500,7 +559,7 @@ def validate_photo_job(job: PhotoBatchJob) -> None:
         if re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise ValueError("PHOTO: neplatný SHA-256.")
     types(job)
-    if job.schema_version not in {1, 2, 3}:
+    if job.schema_version not in {1, 2, 3, 4}:
         raise ValueError("PHOTO: neznámá verze úlohy.")
     if not re.fullmatch(r"photojob_[A-Za-z0-9_-]+", job.job_id):
         raise ValueError("PHOTO: neplatná identita úlohy.")
@@ -1360,19 +1419,20 @@ def _stable_output_target(
     stable_suffix = hashlib.sha256(
         f"{item.custom_id}:{result_sha256}".encode("utf-8")
     ).hexdigest()[:12]
-    candidates = [
-        primary,
-        output / f"{stem}_edited_{stable_suffix}.{ext}",
-    ]
+    candidates = iter((primary, output / f"{stem}_edited_{stable_suffix}.{ext}"))
     for target in candidates:
         if not target.exists():
             return target
-        if _hash_file(target) == result_sha256:
+        if target.is_file() and _hash_file(target) == result_sha256:
             return target
-    raise ValueError(
-        f"{item.source_name}: cílové názvy již obsahují cizí soubor; "
-        "výsledek nebyl přepsán."
-    )
+    index = 2
+    while True:
+        target = output / f"{stem}_edited_{index}.{ext}"
+        if not target.exists():
+            return target
+        if target.is_file() and _hash_file(target) == result_sha256:
+            return target
+        index += 1
 
 
 def _photo_job_lock(root: Path) -> ExecutionLock:
@@ -1380,14 +1440,17 @@ def _photo_job_lock(root: Path) -> ExecutionLock:
     return ExecutionLock(Path(tempfile.gettempdir()) / "kajovo-photo-job-locks" / (key + ".lock"))
 
 
-def download_results(client, job, log_dir, reporter=None, progress=None):
+def download_results(client, job, log_dir, reporter=None, progress=None, output_dir=None):
     validate_photo_job(job)
     root = Path(log_dir) / "PHOTO" / job.job_id
     with _photo_job_lock(root):
-        return _download_results_locked(client, job, log_dir, reporter, progress)
+        return _download_results_locked(client, job, log_dir, reporter, progress, output_dir)
 
 
-def _download_results_locked(client, job, log_dir, reporter=None, progress=None):
+def _download_results_locked(client, job, log_dir, reporter=None, progress=None, output_dir=None):
+    destination = output_dir or job.output_dir or job.saved_output_dir
+    if not destination:
+        raise ValueError("Před uložením výsledků vyberte cílovou složku.")
     _photo_progress(
         progress,
         ProgressEvent(
@@ -1411,9 +1474,10 @@ def _download_results_locked(client, job, log_dir, reporter=None, progress=None)
             "output_file_id ani error_file_id."
         )
 
-    root = save_job(job, log_dir)
-    output = Path(job.output_dir)
+    output = Path(destination).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
+    job.saved_output_dir = str(output)
+    root = save_job(job, log_dir)
     by_id = {item.custom_id: item for item in job.items}
     seen: set[str] = set()
 

@@ -7,7 +7,7 @@ import json
 from PySide6.QtWidgets import QComboBox, QDialog, QLineEdit, QPlainTextEdit, QWidget
 
 from kajovo.core.cascade_types import CASCADE_FILE_TYPES, CascadeInput
-from .components import Form, action, actions, caption, scroll, vertical
+from .components import Form, action, actions, caption, friendly_error, scroll, vertical
 
 
 class CascadeItemDialog(QDialog):
@@ -104,6 +104,6 @@ class CascadeItemDialog(QDialog):
                 value["json_schema"] = None
             self.record = type(self.record).from_dict(value)
         except (ValueError, TypeError) as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
             return
         self.accept()

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "meaning": "DECIDED znamená konkrétní návrhové rozhodnutí, nikoli ověření implementace nebo runtime.",
+  "findings": [
+    {"id": "B-01", "status": "PARTIAL", "artifact": "OPERATION_MAPPING.md", "remaining": "503/503 API cest má explicitní operation/writer/exposure a parity mapping. Zbývá kompletní §55.6 contract pro operace a coverage ne-API akcí."},
+    {"id": "B-02", "status": "DECIDED", "artifact": "error-symbols.verified.json", "decision": "R13/R19: explicitní role všech 33 error-like symbolů mimo §32, canonical additions a alias targets ověřeny; nejde o runtime test error handlers."},
+    {"id": "B-03", "status": "PARTIAL", "artifact": "RESENI_KONKRETNI.md", "remaining": "R02/R14 doplňují konkrétní hrany; zbývá coverage všech mutable supporting entities proti physical modelu."},
+    {"id": "B-04", "status": "DECIDED", "artifact": "RESENI_KONKRETNI.md", "decision": "R06"},
+    {"id": "B-05", "status": "DECIDED", "artifact": "TECHNICKY_DODATEK.md", "decision": "R03 a R14 v RESENI_KONKRETNI.md"},
+    {"id": "B-06", "status": "DECIDED", "artifact": "RESENI_KONKRETNI.md", "decision": "R07"},
+    {"id": "B-07", "status": "DECIDED", "artifact": "RESENI_KONKRETNI.md", "decision": "R08"},
+    {"id": "B-08", "status": "DECIDED", "artifact": "TECHNICKY_DODATEK.md", "decision": "R04"},
+    {"id": "B-09", "status": "DECIDED", "artifact": "KONFIGURACE.md", "decision": "R16"},
+    {"id": "B-10", "status": "PARTIAL", "artifact": "KONFIGURACE.md", "remaining": "R17 má základní policy; chybí úplné browser/runtime/model/generation/backup/network/resource položky."},
+    {"id": "B-11", "status": "DECIDED", "artifact": "AUDIT_FORMAT.md", "decision": "R05 a R15; Python/Node audit vectors ověřeny, produkční codec není implementován."},
+    {"id": "B-12", "status": "DECIDED", "artifact": "TECHNICKY_DODATEK.md", "decision": "R01"},
+    {"id": "B-13", "status": "DECIDED", "artifact": "TECHNICKY_DODATEK.md", "decision": "R01"},
+    {"id": "B-14", "status": "DECIDED", "artifact": "RESENI_KONKRETNI.md", "decision": "R09"},
+    {"id": "B-15", "status": "DECIDED", "artifact": "RESENI_KONKRETNI.md", "decision": "R11"},
+    {"id": "B-16", "status": "DECIDED", "artifact": "RESENI_KONKRETNI.md", "decision": "R12"},
+    {"id": "B-17", "status": "DECIDED", "artifact": "RESENI_KONKRETNI.md", "decision": "R13"},
+    {"id": "B-18", "status": "DECIDED", "artifact": "RESENI_KONKRETNI.md", "decision": "R10"}
+  ],
+  "batch_ready": false,
+  "batch_id": null,
+  "required_next_artifacts": ["effective requirements and plan", "implementation A2 structure", "quality gate", "validated batch manifest and JSONL"]
+}

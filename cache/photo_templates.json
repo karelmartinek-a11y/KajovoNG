@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "templates": [
+    {
+      "template_id": "tpl_99f64ec9d1714112b75c156527c775b8",
+      "name": "tajemno",
+      "description": "",
+      "category": "Vlastní",
+      "prompt": "Transform the existing photograph into a mysterious, futuristic fine-art photograph evoking a distant, otherworldly future in a gloomy, post-apocalyptic world. Preserve the original subject and overall scene identity while creating an atmosphere of mystery, ambiguity, and visual surprise. Maintain a convincing photographic appearance with realistic materials, natural spatial relationships, coherent perspective, and physically plausible lighting. Use a dark, subdued visual mood and carefully controlled cinematic tonality while retaining refined artistic composition and photographic detail.",
+      "builtin": false,
+      "created_at": "2026-09-17T22:03:33.226222+00:00",
+      "updated_at": "2026-09-17T22:03:33.226222+00:00"
+    },
+    {
+      "template_id": "tpl_c3e03abe81b6475e91a15d33f48be8fa",
+      "name": "duši",
+      "description": "",
+      "category": "Vlastní",
+      "prompt": "Přidej na fotografii létající duchy a hodně. takové průhlédné postavy zabarvené do běla. je to jako na halloween",
+      "builtin": false,
+      "created_at": "2026-09-24T17:50:20.422995+00:00",
+      "updated_at": "2026-09-24T17:50:20.422995+00:00"
+    }
+  ]
+}

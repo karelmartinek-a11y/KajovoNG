@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QDoubleSpinBox,
-    QFileDialog,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
@@ -25,7 +24,8 @@ from kajovo.core.cascade_types import CascadeDefinition, CascadeInput, CascadeOu
 from kajovo.core.utils import atomic_write_text, new_run_id
 
 from .cascade_items import CascadeItemDialog
-from .components import Form, PathInput, action, actions, caption, confirm, scroll, vertical
+from .components import Form, PathInput, action, actions, caption, confirm, friendly_error, scroll, vertical
+from .file_dialogs import get_open_file_name, get_save_file_name
 from .resources import ValueDialog
 from .workers.cascade_worker import CascadeRunWorker
 
@@ -290,7 +290,7 @@ class CascadesPage(QWidget):
                 self.definition.steps[self.definition.step_index(step.id)] = updated
                 self.draw_steps(step.id)
             except (TypeError, ValueError) as error:
-                self.validation.setText(str(error))
+                self.validation.setText(friendly_error(error))
 
     def definition_options(self):
         self.commit_step(redraw=False)
@@ -306,7 +306,7 @@ class CascadesPage(QWidget):
                 self.output.blockSignals(False)
                 self.draw_steps()
             except (TypeError, ValueError) as error:
-                self.validation.setText(str(error))
+                self.validation.setText(friendly_error(error))
 
     def validate(self):
         self.definition.name = self.name.text()
@@ -317,7 +317,7 @@ class CascadesPage(QWidget):
                 raise ValueError("Zvolený model není dostupný pro kaskádu; vyberte jiný model.")
             validate_cascade_definition(self.definition)
         except ValueError as error:
-            self.validation.setText(str(error))
+            self.validation.setText(friendly_error(error))
             return False
         self.validation.setText("Definice kaskády splňuje místní pravidla návazností.")
         return True
@@ -331,7 +331,7 @@ class CascadesPage(QWidget):
 
     def load(self):
         base = Path(self.context.settings.log_dir).parent / "cascades"
-        path, _ = QFileDialog.getOpenFileName(self, "Načíst kaskádu", str(base), "Kaskády (*.json)")
+        path, _ = get_open_file_name(self, "Načíst kaskádu", str(base), "Kaskády (*.json)")
         if path:
             try:
                 from kajovo.core.orchestration.contracts import parse_json_strict
@@ -343,7 +343,7 @@ class CascadesPage(QWidget):
                 self.output.setText(definition.default_out_dir)
                 self.draw_steps()
             except (ValueError, OSError) as error:
-                self.validation.setText(str(error))
+                self.validation.setText(friendly_error(error))
 
     def save(self, checked=False, force_path=False):
         self.commit_step(redraw=False)
@@ -353,14 +353,14 @@ class CascadesPage(QWidget):
         if not path or force_path:
             base = Path(self.context.settings.log_dir).parent / "cascades"
             base.mkdir(parents=True, exist_ok=True)
-            path, _ = QFileDialog.getSaveFileName(self, "Uložit kaskádu", str(base / "kaskada.json"), "Kaskády (*.json)")
+        path, _ = get_save_file_name(self, "Uložit kaskádu", str(base / "kaskada.json"), "Kaskády (*.json)")
         if path:
             try:
                 atomic_write_text(path, json.dumps(self.definition.to_dict(), ensure_ascii=False, indent=2))
                 self.location = path
                 self.validation.setText("Kaskáda byla uložena.")
             except OSError as error:
-                self.validation.setText(str(error))
+                self.validation.setText(friendly_error(error))
 
     def start(self):
         self.commit_step(redraw=False)
@@ -380,7 +380,7 @@ class CascadesPage(QWidget):
         try:
             self.context.operations.assert_output_available(cfg.out_dir)
         except ValueError as error:
-            self.validation.setText(str(error))
+            self.validation.setText(friendly_error(error))
             return
         worker = CascadeRunWorker(cfg, copy.deepcopy(self.context.settings), self.context.api_key)
         return self.context.operations.adopt("Kaskáda · " + self.definition.name, worker, identifier=cfg.run_id, output_dir=cfg.out_dir)

@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFormLayout,
                               QInputDialog, QLineEdit, QListWidget, QListWidgetItem,
                               QPlainTextEdit, QSpinBox, QSplitter, QTabWidget, QWidget)
 
@@ -15,9 +15,9 @@ from kajovo.core.comic_service import ComicService
 from kajovo.comic_layout import prepare_storyboard_layout
 from kajovo.core.comic_types import DEFAULT_STYLE, ComicError, PanelFormat
 from kajovo.core.image_runtime import image_capability
-from kajovo.core.user_errors import describe_error
 from .comic_editor import EntityPromptEdit, OverlayEditor, render_panel
-from .components import DetailDialog, action, actions, caption, confirm, scroll, vertical
+from .components import DetailDialog, action, actions, caption, confirm, friendly_error, scroll, vertical
+from .file_dialogs import get_open_file_names, get_save_file_name
 
 
 class ComicsPage(QWidget):
@@ -335,8 +335,9 @@ class ComicsPage(QWidget):
         return True
 
     def fail(self, error):
-        value = describe_error(error)
-        self.notice.setText(f"{getattr(error, 'code', None) or value.code}: {error}")
+        from .components import friendly_error
+
+        self.notice.setText(friendly_error(error, "Úpravu komiksu"))
 
     def service_for(self, task, network=True):
         return ComicService(self.context.settings, self.context.client() if network else None,
@@ -467,7 +468,7 @@ class ComicsPage(QWidget):
             return False
 
     def files(self):
-        return QFileDialog.getOpenFileNames(self, "Referenční obrázky", "", "Obrázky (*.png *.jpg *.jpeg *.webp)")[0]
+        return get_open_file_names(self, "Referenční obrázky", "", "Obrázky (*.png *.jpg *.jpeg *.webp)")[0]
 
     def add_style_refs(self):
         if not self.project_id:
@@ -689,7 +690,7 @@ class ComicsPage(QWidget):
             fmt = self.format()
             self.format_info.setText(f"Generování: {fmt.native_size(image_capability())} px → výsledný panel: {fmt.width} × {fmt.height} px. Bez deformace.")
         except Exception as exc:
-            self.format_info.setText(str(exc))
+            self.format_info.setText(friendly_error(exc))
 
     def apply_preset(self, *_):
         if self.loading:
@@ -819,7 +820,7 @@ class ComicsPage(QWidget):
                 raise ComicError("missing_version", "Nejprve vygenerujte panel.")
             version = self.service.store.get("panel_versions", identifier)
             image = render_panel(self.service.store.asset_path(version["asset_id"]).read_bytes(), self.overlays.layers)
-            path, _ = QFileDialog.getSaveFileName(self, "Exportovat jednotlivý panel", self.panel_name.text() + ".png", "PNG (*.png);;JPEG (*.jpg);;WebP (*.webp)")
+            path, _ = get_save_file_name(self, "Exportovat jednotlivý panel", self.panel_name.text() + ".png", "PNG (*.png);;JPEG (*.jpg);;WebP (*.webp)")
             if path:
                 from pathlib import Path
                 from PySide6.QtCore import QSaveFile

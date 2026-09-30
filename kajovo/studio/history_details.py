@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTextEdit, QWidget,
 )
 
-from .components import action, actions, caption, scroll, vertical
+from .components import action, actions, caption, friendly_error, scroll, vertical
 from .evidence import EvidenceView
 from .history_artifacts import ArtifactBrowser, ArtifactGuard, TEXT_DIFF_LIMIT
 from .history_models import RunView, format_duration
@@ -170,7 +170,7 @@ class ModifyMap(QWidget):
             try:
                 return calculate(task)
             except (ValueError, OSError) as error:
-                return str(error)
+                return friendly_error(error, "Porovnání souborů")
 
         def show(value):
             if generation != self.generation:
@@ -517,7 +517,7 @@ class RunDetailDialog(QDialog):
                 self.accept()
             except (ValueError, OSError, KeyError) as error:
                 from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Větev nebyla spuštěna", str(error))
+                QMessageBox.warning(self, "Větev nebyla spuštěna", friendly_error(error, "Spuštění větve"))
 
     def clone(self):
         if self.page:

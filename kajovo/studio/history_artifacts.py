@@ -15,13 +15,14 @@ import zipfile
 from PySide6.QtCore import QUrl, Qt, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
-    QFileDialog, QLabel, QPlainTextEdit, QStackedWidget, QTableWidget, QTableWidgetItem, QWidget,
+    QLabel, QPlainTextEdit, QStackedWidget, QTableWidget, QTableWidgetItem, QWidget,
 )
 
 from kajovo.core.safe_config import redact_evidence
 from kajovo.core.utils import safe_join_under_root
 
-from .components import action, actions, caption, vertical
+from .components import action, actions, caption, friendly_error, vertical
+from .file_dialogs import get_save_file_name
 
 
 TEXT_PREVIEW_LIMIT = 1024 * 1024
@@ -365,7 +366,8 @@ class ArtifactBrowser(QWidget):
                 return {"kind": "pdf", "path": str(path)}
             return {"kind": "metadata", "value": self._metadata_text(record) + "\n\nBinární obsah se nezobrazuje jako text."}
         except (ValueError, OSError) as error:
-            return {"kind": "error", "value": self._metadata_text(record) + "\n\n" + str(error), "error": str(error)}
+            message = friendly_error(error, "Načtení náhledu")
+            return {"kind": "error", "value": self._metadata_text(record) + "\n\n" + message, "error": message}
 
     def _show_preview(self, prepared):
         kind = prepared["kind"]
@@ -445,13 +447,13 @@ class ArtifactBrowser(QWidget):
         try:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._path())))
         except (ValueError, OSError) as error:
-            self.notice.setText(str(error))
+            self.notice.setText(friendly_error(error))
 
     def save(self):
         record = self.selected()
         if not record or not self.guard:
             return
-        destination, _ = QFileDialog.getSaveFileName(self, "Exportovat ověřený artefakt", str(record.get("display_name") or "artefakt"))
+        destination, _ = get_save_file_name(self, "Exportovat ověřený artefakt", str(record.get("display_name") or "artefakt"))
         if destination:
             if self.context:
                 guard = self.guard
@@ -463,13 +465,13 @@ class ArtifactBrowser(QWidget):
                 self.guard.export(record, destination)
                 self.notice.setText("Ověřená kopie artefaktu byla uložena.")
             except (ValueError, OSError) as error:
-                self.notice.setText(str(error))
+                self.notice.setText(friendly_error(error))
 
     def copy_text(self):
         QGuiApplication.clipboard().setText(self.text_preview.toPlainText())
 
     def save_text(self):
-        destination, _ = QFileDialog.getSaveFileName(self, "Uložit textový náhled", "nahled.txt", "Text (*.txt)")
+        destination, _ = get_save_file_name(self, "Uložit textový náhled", "nahled.txt", "Text (*.txt)")
         if destination:
             try:
                 target = Path(destination).resolve()
@@ -478,7 +480,7 @@ class ArtifactBrowser(QWidget):
                     raise ValueError("Uložení nesmí přepsat zdrojový Run Bundle.")
                 target.write_text(self.text_preview.toPlainText(), encoding="utf-8")
             except (OSError, ValueError) as error:
-                self.notice.setText(str(error))
+                self.notice.setText(friendly_error(error))
 
     def compare(self):
         rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()})
@@ -507,7 +509,7 @@ class ArtifactBrowser(QWidget):
                     tofile=str(records[1].get("display_name") or "Nový"))) or "Obsah je totožný."
                 return "text", value
             except (ValueError, OSError, UnicodeError) as error:
-                return "metadata", self._metadata_text(records[0]) + "\n\n" + self._metadata_text(records[1]) + "\n\n" + str(error)
+                return "metadata", self._metadata_text(records[0]) + "\n\n" + self._metadata_text(records[1]) + "\n\n" + friendly_error(error, "Porovnání souborů")
 
         def receive(result):
             if generation != self.preview_generation:

@@ -4,9 +4,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QFileDialog, QPlainTextEdit, QWidget
+from PySide6.QtWidgets import QPlainTextEdit, QWidget
 
-from .components import action, actions, caption, panel, vertical
+from .components import action, actions, caption, friendly_error, panel, vertical
+from .file_dialogs import get_save_file_name
 from .history_data import unique_responses
 from .history_models import format_duration
 
@@ -35,7 +36,7 @@ class TextCard(QWidget):
         root.addWidget(box, 1)
 
     def save(self):
-        destination, _ = QFileDialog.getSaveFileName(self, "Uložit text", "text.txt", "Text (*.txt)")
+        destination, _ = get_save_file_name(self, "Uložit text", "text.txt", "Text (*.txt)")
         if destination:
             target = Path(destination).resolve()
             try:
@@ -43,7 +44,7 @@ class TextCard(QWidget):
                     raise ValueError("Uložení nesmí přepsat zdrojový běh.")
                 target.write_text(self.text, encoding="utf-8")
             except (OSError, ValueError) as error:
-                self.notice.setText(str(error))
+                self.notice.setText(friendly_error(error))
                 self.notice.show()
 
 
@@ -127,8 +128,16 @@ class PhaseInspector(QWidget):
         self.validation.setText("\n".join(str(row.get("human_message") or row.get("summary") or row.get("status") or "")
                                            for row in validations) or "Validace nebyla uložena.")
         self.validation.setVisible(bool(validations))
-        errors = [str(row.get("error") or row.get("incomplete_reason") or "") for row in responses
-                  if row.get("error") or row.get("incomplete_reason")]
+        from kajovo.core.user_errors import describe_recorded_error
+
+        errors = [
+            describe_recorded_error(
+                row.get("error") or row.get("incomplete_reason"),
+                operation="Zpracování odpovědi",
+            ).message
+            for row in responses
+            if row.get("error") or row.get("incomplete_reason")
+        ]
         self.error.setText("\n".join(errors))
         self.error.setVisible(bool(errors))
         answer = human_answer(self.payload, stage.step_id)

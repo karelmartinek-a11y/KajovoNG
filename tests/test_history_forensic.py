@@ -396,7 +396,7 @@ def test_corrupt_artifact_disables_open_after_real_preview(qtbot, tmp_path):
     view.set_artifacts(logger.paths.run_dir, [record])
     assert not view.buttons["open"].isEnabled()
     assert not view.buttons["copy"].isEnabled()
-    assert "SHA-256" in view.notice.text()
+    assert "Soubor se změnil od uložení" in view.notice.text()
 
 
 def test_required_response_hash_and_checkpoint_path_are_validated(tmp_path):
