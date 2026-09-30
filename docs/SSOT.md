@@ -22,6 +22,8 @@ Předstartovní kontrola navíc skutečně importuje provozní balíčky a sesta
 
 Proměnná `KAJOVO_SETTINGS_FILE` výslovně vybírá lokální soubor nastavení pro předstartovní kontrolu, spuštění aplikace i uložení změn z UI. Bez ní platí `kajovo_settings.json`. Prázdná hodnota je chyba. Relativní cesta se při startu spouštěčem vztahuje ke kořeni repozitáře. Volba lokální konfigurace nepřepisuje archivované nastavení jiné instalace; chybné cesty se automaticky nehádají ani nepřevádějí na nové adresáře.
 
+Sestavená macOS aplikace bez `KAJOVO_SETTINGS_FILE` používá pro výchozí konfiguraci a relativní runtime adresáře `~/Library/Application Support/KajovoNG`; spuštění z Finderu proto nezapisuje vůči `/` ani do aplikačního balíčku. Nedostupný datový adresář zobrazí jako chybu před načtením credentials. Při výslovné volbě konfigurace zůstává interpretace cest volajícího zachovaná. Zdrojový spouštěč a ostatní platformy tento macOS bundle kontrakt nepřebírají.
+
 ## Architektura
 
 | Oblast | Zdrojové moduly | Odpovědnost |

@@ -58,6 +58,19 @@ def _load_app_icon() -> QIcon:
     return _embedded_icon()
 
 
+def _prepare_runtime_directory() -> None:
+    """Finder startuje bundle bez projektového cwd; výchozí data patří uživateli.
+
+    Výslovná volba konfigurace zachovává původní interpretaci cest volajícího.
+    Zdrojový spouštěč a jiné platformy používají svůj dosavadní kontrakt.
+    """
+    if (getattr(sys, "frozen", False) and sys.platform == "darwin"
+            and "KAJOVO_SETTINGS_FILE" not in os.environ):
+        directory = Path.home() / "Library" / "Application Support" / "KajovoNG"
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chdir(directory)
+
+
 def main():
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
     QCoreApplication.setAttribute(Qt.AA_DontUseNativeDialogs, True)
@@ -73,6 +86,12 @@ def main():
     app_icon = _load_app_icon()
     app.setWindowIcon(app_icon)
 
+    try:
+        _prepare_runtime_directory()
+    except OSError as error:
+        from kajovo.studio.components import show_error
+        show_error(None, error)
+        sys.exit(1)
     settings = load_settings()
     key_error = None
     try:
