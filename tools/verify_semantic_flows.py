@@ -57,6 +57,7 @@ PROCESS_FAMILIES = (
             "tests/test_attachments.py",
             "tests/test_audit2_preparation.py",
             "tests/test_preparation_boundaries.py",
+            "tests/test_preparation_content_dependency_boundary.py",
             "tests/test_requirements.py",
             "tests/test_context_compiler.py",
         ),
@@ -90,6 +91,7 @@ PROCESS_FAMILIES = (
             "tests/test_run_cancellation.py",
             "tests/test_desktop_preparation_recovery.py",
             "tests/test_history_pending_live.py",
+            "tests/test_runtime_end_to_end.py",
         ),
     ),
     ProcessFamily(
@@ -150,6 +152,8 @@ PROCESS_FAMILIES = (
         "PHOTO_PLAN_V1, image batch, identity výsledků, recovery a zákaz opakovaného submitu.",
         (
             "tests/test_photo_studio.py",
+            "tests/test_photo_refresh_isolation.py",
+            "tests/test_photo_refresh_qt.py",
             "tests/test_batch_recovery_boundaries.py",
         ),
     ),
@@ -161,6 +165,11 @@ PROCESS_FAMILIES = (
             "tests/test_comic_recovery.py",
             "tests/test_live_acceptance.py",
         ),
+    ),
+    ProcessFamily(
+        "startup",
+        "Importy, prostředky, konfigurace a použitelnost lokálních runtime adresářů bez klíčů.",
+        ("tests/test_startup.py", "tests/test_startup_sanity.py"),
     ),
 )
 
