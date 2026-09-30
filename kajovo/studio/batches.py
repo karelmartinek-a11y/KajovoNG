@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
@@ -112,13 +113,20 @@ class BatchesPage(QWidget):
             self.notice.setText(friendly_error(error, title))
             return
         self.busy = True
+        key = self.context.api_key
+        log_dir = self.context.settings.log_dir
         self.refresh_button.setEnabled(False)
         for widget in self.action_buttons:
             widget.setEnabled(False)
+
+        def accept(value):
+            if receive and key == self.context.api_key and log_dir == self.context.settings.log_dir:
+                receive(value)
+
         record = self.context.operations.start(
             title,
             lambda task: function(client, task),
-            receive,
+            accept if receive else None,
             popup=popup,
             output_dir=output_dir,
             identifier=identifier,
@@ -166,7 +174,8 @@ class BatchesPage(QWidget):
         markers = photo_batch.deleted_job_markers(root)
         hidden_photo_ids = {item["batch_id"] for item in markers if item["batch_id"]}
         hidden_photo_files = {item["input_file_id"] for item in markers if item["input_file_id"]}
-        for job in photo_batch.load_jobs(root):
+        errors = []
+        for job in photo_batch.load_jobs(root, errors=errors):
             if job.batch_id in hidden or job.batch_id in hidden_photo_ids or job.input_file_id in hidden_photo_files:
                 continue
             records.append({
@@ -178,6 +187,8 @@ class BatchesPage(QWidget):
                 "photo": job,
                 "started_at": job.created_at,
             })
+        if errors:
+            self.notice.setText("Část dávek se nepodařilo načíst.\n" + "\n".join(errors))
         return sorted(records, key=lambda row: _timestamp_value(row["started_at"]), reverse=True)
 
     def refresh(self, checked=False, automatic=False, quiet=False):
@@ -188,6 +199,7 @@ class BatchesPage(QWidget):
             return
         key = self.context.api_key
         root = Path(self.context.settings.log_dir)
+        errors = []
 
         def fetch(client, task):
             remote = {row["id"]: row for row in client.list_batches() if row.get("id")}
@@ -218,15 +230,21 @@ class BatchesPage(QWidget):
                             "photo": None,
                             "started_at": state.get("started_at") or state.get("created_at") or remote_record.get("created_at"),
                         })
-            for job in photo_batch.load_jobs(root):
+            for original in photo_batch.load_jobs(root, errors=errors):
+                job = deepcopy(original)
                 if job.batch_id in hidden or job.batch_id in hidden_photo_ids or job.input_file_id in hidden_photo_files:
                     if job.batch_id:
                         remote.pop(job.batch_id, None)
                     continue
                 remote_record = remote.pop(job.batch_id, {}) if job.batch_id else {}
                 if remote_record:
-                    photo_batch.apply_batch_status(job, remote_record)
-                    photo_batch.save_job(job, root)
+                    try:
+                        photo_batch.refresh_job(client, job, root, batch=remote_record)
+                    except Exception as error:
+                        message = f"Dávka {job.job_id}: {friendly_error(error, 'Obnovení stavu')}"
+                        errors.append(message)
+                        task.logline.emit(message)
+                        job = original
                 records.append({
                     "id": job.batch_id or job.job_id,
                     "remote": remote_record,
@@ -253,7 +271,7 @@ class BatchesPage(QWidget):
             return sorted(records, key=lambda row: _timestamp_value(row["started_at"]), reverse=True)
 
         def receive(records):
-            if key != self.context.api_key:
+            if key != self.context.api_key or root != Path(self.context.settings.log_dir):
                 return
             self.records = records
             self.render()
@@ -261,7 +279,10 @@ class BatchesPage(QWidget):
             if active:
                 interval = self.context.settings.batch_poll_interval_s
                 self.timer.start(max(1, int(interval * 1000)))
-            self.notice.setText("Stavy dávek jsou aktualizované.")
+            self.notice.setText(
+                "Část dávek se nepodařilo obnovit. Ostatní výsledky zůstávají dostupné.\n"
+                + "\n".join(dict.fromkeys(errors)) if errors else "Stavy dávek jsou aktualizované."
+            )
 
         self.execute(
             "Obnovení přehledu dávek",
@@ -283,8 +304,10 @@ class BatchesPage(QWidget):
     def _summary(self, record):
         photo = record["photo"]
         if photo is not None:
-            summary = (f"{photo.request_total} fotografií · "
-                       f"{photo.request_completed} dokončeno · {photo.request_failed} se nepodařilo")
+            downloaded = sum(item.status == "downloaded" for item in photo.items)
+            failed = sum(item.status == "failed" for item in photo.items)
+            summary = (f"{len(photo.items)} fotografií · "
+                       f"{downloaded} uloženo · {failed} se nepodařilo")
             reason = photo_failure_summary(photo)
             return f"{summary} · {reason}" if reason else summary
         counts = record["remote"].get("request_counts") or {}
@@ -354,6 +377,8 @@ class BatchesPage(QWidget):
         self.refresh()
 
     def download(self, record):
+        log_dir = self.context.settings.log_dir
+        settings = deepcopy(self.context.settings)
         if record["photo"] is not None:
             job = record["photo"]
             directory = job.output_dir or job.saved_output_dir
@@ -367,7 +392,7 @@ class BatchesPage(QWidget):
                 return photo_batch.download_results(
                     client,
                     job,
-                    self.context.settings.log_dir,
+                    log_dir,
                     reporter=task.logline.emit,
                     progress=task.progress_event.emit,
                     output_dir=directory,
@@ -389,7 +414,7 @@ class BatchesPage(QWidget):
         self.execute(
             "Stažení výsledků dávky",
             lambda client, task: complete_saved_batch(
-                client, root, identifier, self.context.settings, progress=task.progress_event.emit
+                client, root, identifier, settings, progress=task.progress_event.emit
             ),
             receive,
             output_dir=record["state"].get("out_dir"),
@@ -415,6 +440,8 @@ class BatchesPage(QWidget):
         ):
             return
 
+        log_dir = self.context.settings.log_dir
+
         def remove(client, task):
             cancel_error = None
             if record["remote"].get("status") in CANCELLABLE:
@@ -423,9 +450,9 @@ class BatchesPage(QWidget):
                 except Exception as error:
                     cancel_error = error
             if record["photo"] is not None:
-                photo_batch.delete_job(record["photo"], self.context.settings.log_dir)
+                photo_batch.delete_job(record["photo"], log_dir)
             else:
-                _hide_batch(self.context.settings.log_dir, record["id"])
+                _hide_batch(log_dir, record["id"])
             return cancel_error
 
         def receive(cancel_error):
