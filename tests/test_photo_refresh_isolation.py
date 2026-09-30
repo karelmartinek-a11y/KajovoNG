@@ -68,7 +68,7 @@ def _setup(tmp_path):
     return log_dir, source, good, client, state
 
 
-@pytest.mark.parametrize("fault", ["interrupted_preparation", "unknown_without_order", "corrupt_evidence", "bad_remote_identity"])
+@pytest.mark.parametrize("fault", ["interrupted_preparation", "unknown_without_order", "corrupt_evidence", "bad_remote_identity", "array_evidence", "null_evidence"])
 def test_one_broken_photo_job_cannot_hide_other_completed_downloads(tmp_path, fault):
     log_dir, source, good, client, state = _setup(tmp_path)
     bad_dir = tmp_path / "bad"
@@ -86,6 +86,10 @@ def test_one_broken_photo_job_cannot_hide_other_completed_downloads(tmp_path, fa
     path = photo_batch.save_job(bad, log_dir) / "photo_job.json"
     if fault == "corrupt_evidence":
         path.write_text("{not valid JSON", encoding="utf-8")
+    elif fault == "array_evidence":
+        path.write_text("[]", encoding="utf-8")
+    elif fault == "null_evidence":
+        path.write_text("null", encoding="utf-8")
     before = path.read_bytes()
     original = source.read_bytes()
     _controller_method("refresh_jobs")(state)
@@ -160,3 +164,31 @@ def test_valid_photo_refresh_has_no_false_warning(tmp_path):
     _controller_method("refresh_jobs")(state)
     assert state.jobs[0].status == "completed"
     assert "nepodařilo" not in state.notice.setText.call_args.args[0]
+
+
+@pytest.mark.parametrize("failure", [PermissionError, FileNotFoundError])
+def test_photo_job_metadata_failure_is_isolated(tmp_path, monkeypatch, failure):
+    log_dir, source, good, client, state = _setup(tmp_path)
+    bad_dir = tmp_path / "bad"
+    bad_dir.mkdir()
+    _, bad = _frozen_job(bad_dir)
+    damaged = photo_batch.save_job(bad, log_dir) / "photo_job.json"
+    original = damaged.read_bytes()
+    original_stat = Path.stat
+
+    def stat(path, *args, **kwargs):
+        if path == damaged:
+            raise failure("Nedostupná metadata jedné úlohy.")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    with pytest.raises(ValueError, match="poškozená"):
+        photo_batch.load_jobs(log_dir)
+    _controller_method("refresh_jobs")(state)
+    assert [job.job_id for job in state.jobs] == [good.job_id]
+    assert state.jobs[0].status == "completed"
+    assert state.jobs[0].output_file_id == "file_ready"
+    assert bad.job_id in state.notice.setText.call_args.args[0]
+    assert damaged.read_bytes() == original
+    client.create_image_batch.assert_not_called()
+    client.upload_file.assert_not_called()

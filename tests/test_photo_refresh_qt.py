@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 
 
-@pytest.mark.parametrize("fault", ["interrupted", "unknown", "corrupt"])
+@pytest.mark.parametrize("fault", ["interrupted", "unknown", "corrupt", "array", "null"])
 def test_completed_photo_card_remains_downloadable(qtbot, tmp_path, monkeypatch, fault):
     log_dir, source, good, client, state = _setup(tmp_path)
     bad_dir = tmp_path / "bad"
@@ -31,6 +31,10 @@ def test_completed_photo_card_remains_downloadable(qtbot, tmp_path, monkeypatch,
     path = photo_batch.save_job(bad, log_dir) / "photo_job.json"
     if fault == "corrupt":
         path.write_text("{not valid JSON", encoding="utf-8")
+    elif fault == "array":
+        path.write_text("[]", encoding="utf-8")
+    elif fault == "null":
+        path.write_text("null", encoding="utf-8")
     original = path.read_bytes()
     context = StudioContext(
         AppSettings(log_dir=str(log_dir), cache_dir=str(tmp_path / "cache")),

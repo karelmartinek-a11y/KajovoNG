@@ -464,16 +464,15 @@ def load_jobs(log_dir: str | Path, *, errors: list[str] | None = None) -> list[P
     Poškozené podklady se neopravují ani nemažou. Volající tolerantního čtení
     musí zobrazit předané chyby, aby neúplný přehled nevydával za úplný.
     """
-    jobs: list[PhotoBatchJob] = []
+    jobs: list[tuple[float, PhotoBatchJob]] = []
     root = Path(log_dir) / "PHOTO"
     if not root.exists():
         return jobs
-    for path in sorted(
-        root.glob("photojob_*/photo_job.json"),
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
-    ):
+    for path in root.glob("photojob_*/photo_job.json"):
         try:
+            # Metadata mohou selhat stejně jako čtení evidence. Obojí patří
+            # do hranice jedné úlohy, nikoli do společného řazení přehledu.
+            modified = path.stat().st_mtime
             data = parse_json_strict(path.read_text(encoding="utf-8"))
             items = data.get("items", [])
             if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
@@ -486,7 +485,7 @@ def load_jobs(log_dir: str | Path, *, errors: list[str] | None = None) -> list[P
             validate_photo_job(job)
             if job.job_id != path.parent.name:
                 raise ValueError("Photo job identity neodpovídá adresáři.")
-            jobs.append(job)
+            jobs.append((modified, job))
         except (OSError, ContractError, ValueError, TypeError) as exc:
             if errors is None:
                 raise ValueError(f"Photo job evidence je poškozená: {path}") from exc
@@ -494,7 +493,7 @@ def load_jobs(log_dir: str | Path, *, errors: list[str] | None = None) -> list[P
                 f"Dávku {path.parent.name} se nepodařilo načíst. "
                 "Její podklady jsou poškozené nebo nečitelné a zůstaly zachovány."
             )
-    return jobs
+    return [job for _, job in sorted(jobs, key=lambda item: item[0], reverse=True)]
 
 
 def deleted_job_markers(log_dir: str | Path) -> list[dict]:
