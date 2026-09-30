@@ -302,10 +302,17 @@ class PhotosPage(QWidget):
             return
         self.busy = True
         self.start_button.setEnabled(False)
+        key = self.context.api_key
+        log_dir = self.context.settings.log_dir
+
+        def accept(value):
+            if receive and key == self.context.api_key and log_dir == self.context.settings.log_dir:
+                receive(value)
+
         record = self.context.operations.start(
             title,
             lambda task: function(client, task),
-            receive,
+            accept if receive else None,
             output_dir=output_dir,
             popup=popup,
             identifier=identifier,
@@ -334,6 +341,7 @@ class PhotosPage(QWidget):
 
         request_prompt = prompt
         revision = self._revision
+        log_dir = self.context.settings.log_dir
 
         def receive(value):
             # Asynchronní výsledek smí změnit editor pouze tehdy, pokud
@@ -357,7 +365,7 @@ class PhotosPage(QWidget):
                 client,
                 model,
                 request_prompt,
-                self.context.settings.log_dir,
+                log_dir,
                 task.logline.emit,
             ),
             receive,
@@ -427,12 +435,14 @@ class PhotosPage(QWidget):
             ),
         )
 
+        log_dir = self.context.settings.log_dir
+
         def submit(client, task):
             job = photo_batch.new_job(**options)
             return photo_batch.prepare_and_submit(
                 client,
                 job,
-                self.context.settings.log_dir,
+                log_dir,
                 reporter=task.logline.emit,
                 progress=task.progress_event.emit,
             )
@@ -473,8 +483,7 @@ class PhotosPage(QWidget):
                 job = deepcopy(original)
                 try:
                     if job.batch_id and job.batch_id in remote:
-                        photo_batch.apply_batch_status(job, remote[job.batch_id])
-                        photo_batch.save_job(job, log_dir)
+                        photo_batch.refresh_job(client, job, log_dir, batch=remote[job.batch_id])
                     elif not job.batch_id and job.input_file_id and job.status == "submission_unknown":
                         photo_batch.refresh_job(client, job, log_dir, progress=task.progress_event.emit)
                 except Exception as error:
@@ -543,11 +552,13 @@ class PhotosPage(QWidget):
             self.notice.setText("Uložení bylo zrušeno. Výsledky zůstaly připravené ke stažení.")
             return
 
+        log_dir = self.context.settings.log_dir
+
         def save(client, task):
             return photo_batch.download_results(
                 client,
                 job,
-                self.context.settings.log_dir,
+                log_dir,
                 reporter=task.logline.emit,
                 progress=task.progress_event.emit,
                 output_dir=directory,
@@ -561,6 +572,8 @@ class PhotosPage(QWidget):
         )
 
     def delete_job(self, job):
+        if self.busy:
+            return
         if not confirm(
             self,
             "Smazat fotografickou dávku",
@@ -568,17 +581,25 @@ class PhotosPage(QWidget):
         ):
             return
 
+        log_dir = self.context.settings.log_dir
+        key = self.context.api_key
+        client = self.context.client() if key else None
+
         def remove(client, task):
             cancel_error = None
             if job.batch_id and job.status in {"validating", "in_progress", "finalizing"}:
                 try:
-                    self.context.client().cancel_batch(job.batch_id)
+                    if client is None:
+                        raise ValueError("Zrušení vzdálené dávky vyžaduje přístupový klíč.")
+                    client.cancel_batch(job.batch_id)
                 except Exception as error:
                     cancel_error = error
-            photo_batch.delete_job(job, self.context.settings.log_dir)
+            photo_batch.delete_job(job, log_dir)
             return cancel_error
 
         def receive(cancel_error):
+            if key != self.context.api_key or log_dir != self.context.settings.log_dir:
+                return
             self.load_jobs()
             self.notice.setText(
                 friendly_error(cancel_error, "Zrušení vzdálené dávky")
@@ -591,7 +612,7 @@ class PhotosPage(QWidget):
         self.start_button.setEnabled(False)
         record = self.context.operations.start(
             "Smazání fotografické dávky",
-            lambda task: remove(None, task),
+            lambda task: remove(client, task),
             receive,
             popup=False,
         )

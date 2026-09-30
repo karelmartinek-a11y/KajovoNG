@@ -12,7 +12,7 @@ import pytest
 from PIL import Image
 
 from kajovo.core.photo_batch import (
-    apply_batch_status, download_results, inspect_photo_bytes, refresh_job, save_job, _photo_job_lock,
+    apply_batch_status, download_results, inspect_photo_bytes, mark_content_acceptance, refresh_job, save_job, _photo_job_lock,
 )
 from kajovo.core.orchestration.errors import OrchestrationError
 from kajovo.core.orchestration.publish import TargetPublishLock
@@ -179,7 +179,7 @@ def test_a2_025_colliding_names_and_repeated_import_preserve_both_results(tmp_pa
     paths = [Path(job.items[0].output_path) for job in [first, second]]
     assert paths[0] != paths[1]
     for job, client, path, binary in zip([first, second], clients, paths, binaries, strict=True):
-        job.items[0].content_acceptance = "accepted"
+        mark_content_acceptance(job, job.items[0].item_id, "accepted", log_dir)
         download_results(client, job, log_dir)
         assert Path(job.items[0].output_path) == path
         assert path.read_bytes() == binary

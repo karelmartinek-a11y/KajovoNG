@@ -457,7 +457,7 @@ def test_invalid_jsonl_is_not_silently_ignored(tmp_path):
     _prepare_import_job(job, tmp_path / "log")
     job.output_file_id = "file_bad"
     client = Mock()
-    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_bad", "request_counts": {"total": 1}}
+    client.retrieve_batch.return_value = {"status": "completed", "output_file_id": "file_bad", "request_counts": {"total": 1, "completed": 1, "failed": 0}}
     client.file_content.return_value = b"not-json\n"
     _complete_identity(job, client)
     with pytest.raises(ValueError, match="neplatný JSON"):

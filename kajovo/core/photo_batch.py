@@ -26,7 +26,7 @@ from .orchestration.image_slots import image_policy
 from .orchestration.repository import OrchestrationRepository
 from .orchestration.publish import TargetPublishLock
 from .orchestration.run_config import build_run_config_v2
-from .orchestration.work_order import freeze_order
+from .orchestration.work_order import freeze_order, work_order_from_mapping
 from .model_registry import model_spec, models_for_usage
 from .openai_client import image_batch_submit_payload
 from .photo_prompt import manual_photo_plan
@@ -97,6 +97,10 @@ class PhotoBatchJob:
     # Skutečné místo převzetí lze zvolit až po odeslání dávky. Toto pole není
     # součástí zmrazeného požadavku ani WorkOrder.
     saved_output_dir: str = ""
+    # Poslední potvrzený provider stav je oddělený od výsledku místního importu.
+    # Prázdné hodnoty znamenají, že historická evidence tento údaj nedokládá.
+    provider_status: str = ""
+    provider_request_counts: dict = field(default_factory=dict)
 
 
 def _now() -> str:
@@ -458,6 +462,38 @@ def save_job(job: PhotoBatchJob, log_dir: str | Path) -> Path:
     return root
 
 
+def _read_photo_job(path: Path) -> PhotoBatchJob:
+    data = parse_json_strict(path.read_text(encoding="utf-8"))
+    items = data.get("items", [])
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        raise ValueError("Photo job items musí být seznam objektů.")
+    for item in items:
+        item.setdefault("provider_result_sha256", "")
+    data["items"] = [PhotoBatchItem(**item) for item in items]
+    data.setdefault("schema_version", 1)
+    job = PhotoBatchJob(**data)
+    validate_photo_job(job)
+    if job.job_id != path.parent.name:
+        raise ValueError("Photo job identity neodpovídá adresáři.")
+    return job
+
+
+def _reload_photo_job(job: PhotoBatchJob, log_dir) -> None:
+    path = Path(log_dir) / "PHOTO" / job.job_id / "photo_job.json"
+    if not path.exists():
+        if any(row["job_id"] == job.job_id for row in deleted_job_markers(log_dir)):
+            raise ValueError("Odstraněná fotografická dávka nesmí být obnovena.")
+        if job.schema_version == 1:
+            return
+        _photo_operation_present(job, log_dir)
+    try:
+        current = _read_photo_job(path)
+    except (OSError, ContractError, ValueError, TypeError) as exc:
+        raise ValueError(f"Photo job evidence není dostupná nebo platná: {path}") from exc
+    for spec in fields(job):
+        setattr(job, spec.name, copy.deepcopy(getattr(current, spec.name)))
+
+
 def load_jobs(log_dir: str | Path, *, errors: list[str] | None = None) -> list[PhotoBatchJob]:
     """Striktní čtení; přehled může výslovně převzít chyby jednotlivých úloh.
 
@@ -473,18 +509,7 @@ def load_jobs(log_dir: str | Path, *, errors: list[str] | None = None) -> list[P
             # Metadata mohou selhat stejně jako čtení evidence. Obojí patří
             # do hranice jedné úlohy, nikoli do společného řazení přehledu.
             modified = path.stat().st_mtime
-            data = parse_json_strict(path.read_text(encoding="utf-8"))
-            items = data.get("items", [])
-            if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
-                raise ValueError("Photo job items musí být seznam objektů.")
-            for item in items:
-                item.setdefault("provider_result_sha256", "")
-            data["items"] = [PhotoBatchItem(**item) for item in items]
-            data.setdefault("schema_version", 1)
-            job = PhotoBatchJob(**data)
-            validate_photo_job(job)
-            if job.job_id != path.parent.name:
-                raise ValueError("Photo job identity neodpovídá adresáři.")
+            job = _read_photo_job(path)
             jobs.append((modified, job))
         except (OSError, ContractError, ValueError, TypeError) as exc:
             if errors is None:
@@ -525,6 +550,14 @@ def deleted_job_markers(log_dir: str | Path) -> list[dict]:
 def delete_job(job: PhotoBatchJob, log_dir: str | Path) -> None:
     """Odstraní místní PHOTO soubory a zachová značku pro skrytí vzdálené dávky."""
     validate_photo_job(job)
+    with _photo_job_lock(Path(log_dir) / "PHOTO" / job.job_id):
+        _reload_photo_job(job, log_dir)
+        # Značky více různých úloh jsou jeden sdílený read-modify-write soubor.
+        with _photo_job_lock(Path(log_dir) / "PHOTO" / "deleted_jobs"):
+            _delete_job_locked(job, log_dir)
+
+
+def _delete_job_locked(job, log_dir):
     photo_root = (Path(log_dir) / "PHOTO").resolve()
     target = photo_root / job.job_id
     resolved = target.resolve()
@@ -574,6 +607,12 @@ def validate_photo_job(job: PhotoBatchJob) -> None:
         raise ValueError("PHOTO: neplatná identita úlohy.")
     if job.status not in {"preparing", "submission_unknown", "validating", "in_progress", "finalizing", "completed", "failed", "expired", "cancelling", "cancelled", "downloaded", "partial", "submitted"}:
         raise ValueError("PHOTO: neplatný stav úlohy.")
+    if job.provider_status and job.provider_status not in {
+        "validating", "in_progress", "finalizing", "cancelling", "completed", "failed", "expired", "cancelled"
+    }:
+        raise ValueError("PHOTO: neplatný provider stav.")
+    if job.provider_request_counts:
+        _validate_photo_counts(job.provider_request_counts, len(job.items), job.provider_status)
     digest(job.final_prompt_sha256)
     if not job.final_prompt.strip() or hashlib.sha256(job.final_prompt.encode("utf-8")).hexdigest() != job.final_prompt_sha256:
         raise ValueError("PHOTO: změněný finální prompt.")
@@ -738,50 +777,13 @@ def _verify_photo_operation_binding(job, rows, log_dir) -> None:
     if not _photo_operation_present(job, log_dir):
         return
     _cfg, order, _projection = _photo_work_order(job, rows)
-    repo = _photo_repo(log_dir)
-    expected_request_hash = canonical_sha256(
-        image_edit_batch_submit_payload(job.input_file_id)
-    )
-    with repo.connect() as db:
-        row = db.execute(
-            """
-            SELECT w.work_order_hash,w.provider_endpoint,p.endpoint,p.request_hash,
-                   p.remote_input_file_id,p.provider_id,p.state
-            FROM work_orders w
-            JOIN provider_operations p ON p.work_order_hash=w.work_order_hash
-            WHERE p.attempt_id=?
-            """,
-            (order.attempt_id,),
-        ).fetchone()
-    if not row:
-        raise ValueError("Photo Batch nemá centrální provider-operation kontrakt.")
-    (
-        work_hash,
-        work_endpoint,
-        operation_endpoint,
-        request_hash,
-        remote_file,
-        provider_id,
-        state,
-    ) = row
-    if (
-        work_hash != order.order_hash
-        or work_endpoint != "/v1/batches"
-        or operation_endpoint != "/v1/batches"
-        or request_hash != expected_request_hash
-        or remote_file != job.input_file_id
-    ):
-        raise ValueError("Photo Batch fyzický provider kontrakt neodpovídá jobu.")
-    if job.batch_id and provider_id and provider_id != job.batch_id:
-        raise ValueError("Photo Batch centrální a lokální provider ID se liší.")
-    if state in {"submitted", "completed"} and not (provider_id or job.batch_id):
-        raise ValueError("Photo Batch potvrzený submit nemá provider ID.")
-
-
-def _verify_photo_operation_binding(job, rows, log_dir) -> None:
-    if not _photo_operation_present(job, log_dir):
-        return
-    _cfg, order, _projection = _photo_work_order(job, rows)
+    path = Path(log_dir) / "PHOTO" / job.job_id / "work_order_v2.json"
+    try:
+        persisted = work_order_from_mapping(parse_json_strict(path.read_text(encoding="utf-8")))
+    except (OSError, ContractError, ValueError, TypeError, KeyError) as exc:
+        raise ValueError("Photo Batch WorkOrder není čitelný nebo platný.") from exc
+    if persisted.to_dict() != order.to_dict():
+        raise ValueError("Photo Batch WorkOrder neodpovídá zmrazenému jobu.")
     repo = _photo_repo(log_dir)
     expected_request_hash = canonical_sha256(
         image_edit_batch_submit_payload(job.input_file_id)
@@ -878,6 +880,19 @@ def _record_photo_usage(job, custom_id, usage, log_dir):
 
 
 def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
+    validate_photo_job(job)
+    root = Path(log_dir) / "PHOTO" / job.job_id
+    with _photo_job_lock(root):
+        if (root / "photo_job.json").exists():
+            _reload_photo_job(job, log_dir)
+        if any(row["job_id"] == job.job_id for row in deleted_job_markers(log_dir)):
+            raise ValueError("Odstraněná fotografická dávka nesmí být znovu odeslána.")
+        if job.batch_id or job.status != "preparing":
+            raise ValueError("Photo job již má odeslaný nebo neurčitý submit; použijte obnovu.")
+        return _prepare_and_submit_locked(client, job, log_dir, reporter, progress)
+
+
+def _prepare_and_submit_locked(client, job, log_dir, reporter=None, progress=None):
     _photo_progress(
         progress,
         ProgressEvent(
@@ -1162,6 +1177,21 @@ def prepare_and_submit(client, job, log_dir, reporter=None, progress=None):
         reporter(f"BATCH vytvořen: {job.batch_id}")
     return job
 
+def _validate_photo_counts(counts, total, status):
+    if (not isinstance(counts, dict) or set(counts) != {"total", "completed", "failed"}
+            or any(type(value) is not int or value < 0 for value in counts.values())
+            or counts["completed"] + counts["failed"] > counts["total"]
+            or (counts["total"] != total and not (status == "validating" and not any(counts.values())))):
+        raise ValueError("Image Edit BATCH request_counts jsou neplatné nebo nekonzistentní.")
+
+
+def _photo_local_status(job):
+    if not all(item.status in {"downloaded", "failed"} for item in job.items):
+        return None
+    done = sum(item.status == "downloaded" for item in job.items)
+    return "downloaded" if done == len(job.items) else "partial" if done else "failed"
+
+
 def apply_batch_status(job: PhotoBatchJob, payload: dict) -> PhotoBatchJob:
     try:
         validate_batch_identity(payload, input_file_id=job.input_file_id,
@@ -1177,24 +1207,28 @@ def apply_batch_status(job: PhotoBatchJob, payload: dict) -> PhotoBatchJob:
     }
     if not isinstance(status, str) or status not in allowed:
         raise ValueError("Image Edit BATCH vrátil neznámý stav.")
-    counts = payload.get("request_counts") or {}
-    if not isinstance(counts, dict):
+    counts = payload.get("request_counts")
+    if counts is not None and not isinstance(counts, dict):
         raise ValueError("Image Edit BATCH request_counts musí být objekt.")
-    total = int(counts.get("total") or job.request_total or len(job.items))
-    if total != len(job.items):
-        raise ValueError("Image Edit BATCH počet provider položek neodpovídá jobu.")
-    completed = int(counts.get("completed") or 0)
-    failed = int(counts.get("failed") or 0)
-    if min(completed, failed) < 0 or completed + failed > total:
-        raise ValueError("Image Edit BATCH request_counts jsou nekonzistentní.")
-    job.status = status
+    if counts is not None:
+        _validate_photo_counts(counts, len(job.items), status)
+    for name in ("output_file_id", "error_file_id"):
+        value = payload.get(name)
+        if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", value)):
+            raise ValueError(f"Image Edit BATCH {name} není platný Files identifikátor.")
+        if value and getattr(job, name) and value != getattr(job, name):
+            raise ValueError(f"Image Edit BATCH změnil potvrzený {name}.")
+    local_status = _photo_local_status(job)
+    job.status = local_status or status
+    job.provider_status = status
+    job.provider_request_counts = copy.deepcopy(counts) if counts is not None else {}
     if provider_id:
         job.batch_id = provider_id
     job.output_file_id = str(payload.get("output_file_id") or job.output_file_id)
     job.error_file_id = str(payload.get("error_file_id") or job.error_file_id)
-    job.request_total = total
-    job.request_completed = completed
-    job.request_failed = failed
+    if counts is not None and local_status is None:
+        job.request_completed = counts["completed"]
+        job.request_failed = counts["failed"]
     return job
 
 
@@ -1203,7 +1237,16 @@ def refresh_job(
     job: PhotoBatchJob,
     log_dir: str | Path,
     progress=None,
+    *,
+    batch=None,
 ) -> PhotoBatchJob:
+    validate_photo_job(job)
+    with _photo_job_lock(Path(log_dir) / "PHOTO" / job.job_id):
+        _reload_photo_job(job, log_dir)
+        return _refresh_job_locked(client, job, log_dir, progress, batch=batch)
+
+
+def _refresh_job_locked(client, job, log_dir, progress=None, *, batch=None):
     _photo_progress(
         progress,
         ProgressEvent(
@@ -1212,6 +1255,11 @@ def refresh_job(
         ),
     )
     _photo_operation_present(job, log_dir)
+    if job.schema_version >= 2:
+        rows = [image_edit_row(item, model=job.image_model, prompt=job.final_prompt,
+                              quality=job.quality, size=job.size, output_format=job.output_format)
+                for item in job.items]
+        _verify_photo_operation_binding(job, rows, log_dir)
     if not job.batch_id:
         if job.status != "submission_unknown" or not job.input_file_id:
             raise ValueError("Photo Job nemá batch_id.")
@@ -1304,19 +1352,19 @@ def refresh_job(
             detail="Ověřuji stav známé dávky fotografií.",
         ),
     )
-    apply_batch_status(job, client.retrieve_batch(job.batch_id))
-    remote_terminal = job.status in {"completed", "failed", "expired", "cancelled"}
+    apply_batch_status(job, batch if batch is not None else client.retrieve_batch(job.batch_id))
+    remote_terminal = job.provider_status in {"completed", "failed", "expired", "cancelled"}
     _photo_progress(
         progress,
         ProgressEvent(
             "PHOTO_STATUS",
             "completed" if remote_terminal else "batch_pending",
-            completed=job.request_completed + job.request_failed,
-            total=job.request_total,
+            completed=sum(job.provider_request_counts.get(key, 0) for key in ("completed", "failed")),
+            total=job.provider_request_counts.get("total"),
             unit="fotografií",
             source="batch_api",
             batch_id=job.batch_id,
-            provider_state=job.status,
+            provider_state=job.provider_status,
         ),
     )
     if job.schema_version >= 2 and _photo_operation_present(job, log_dir):
@@ -1398,6 +1446,13 @@ def mark_content_acceptance(
     log_dir: str | Path,
     note: str = "",
 ) -> PhotoBatchJob:
+    validate_photo_job(job)
+    with _photo_job_lock(Path(log_dir) / "PHOTO" / job.job_id):
+        _reload_photo_job(job, log_dir)
+        return _mark_content_acceptance_locked(job, item_id, acceptance, log_dir, note)
+
+
+def _mark_content_acceptance_locked(job, item_id, acceptance, log_dir, note):
     """Explicit human/model acceptance; never inferred from valid image bytes."""
     if acceptance not in {"accepted", "rejected", "unverified"}:
         raise ValueError("Content acceptance musí být accepted, rejected nebo unverified.")
@@ -1451,8 +1506,11 @@ def _photo_job_lock(root: Path) -> ExecutionLock:
 
 def download_results(client, job, log_dir, reporter=None, progress=None, output_dir=None):
     validate_photo_job(job)
+    if not (output_dir or job.output_dir or job.saved_output_dir):
+        raise ValueError("Před uložením výsledků vyberte cílovou složku.")
     root = Path(log_dir) / "PHOTO" / job.job_id
     with _photo_job_lock(root):
+        _reload_photo_job(job, log_dir)
         return _download_results_locked(client, job, log_dir, reporter, progress, output_dir)
 
 
@@ -1473,9 +1531,9 @@ def _download_results_locked(client, job, log_dir, reporter=None, progress=None,
             ),
         ),
     )
-    refresh_job(client, job, log_dir, progress=progress)
+    _refresh_job_locked(client, job, log_dir, progress=progress)
     terminal = {"completed", "failed", "expired", "cancelled"}
-    if job.status not in terminal:
+    if job.provider_status not in terminal:
         raise ValueError(f"BATCH není v konečném stavu (stav: {job.status}).")
     if not (job.output_file_id or job.error_file_id):
         raise ValueError(

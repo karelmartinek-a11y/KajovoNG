@@ -19,6 +19,16 @@ import json
 from pathlib import Path
 
 
+def _drain_finished_workers(qtbot, context):
+    """Zpracuje Qt deferred delete ještě za života vlastního testovacího okna."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    qtbot.waitUntil(lambda: not context.operations.active, timeout=10000)
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    for record in context.operations.records.values():
+        qtbot.addWidget(record.dialog)
+
+
+
 @pytest.mark.parametrize("fault", ["interrupted", "unknown", "corrupt", "array", "null"])
 def test_completed_photo_card_remains_downloadable(qtbot, tmp_path, monkeypatch, fault):
     log_dir, source, good, client, state = _setup(tmp_path)
@@ -41,6 +51,7 @@ def test_completed_photo_card_remains_downloadable(qtbot, tmp_path, monkeypatch,
         Operations(None), api_key="offline-test", client_factory=lambda *args, **kwargs: client,
     )
     page = PhotosPage(context)
+    context.operations.setParent(page)
     qtbot.addWidget(page)
 
     def execute(title, function, receive, **kwargs):
@@ -80,6 +91,7 @@ def test_photo_refresh_worker_and_download_worker_reach_disk(qtbot, tmp_path):
         Operations(None), api_key="offline-test", client_factory=lambda *args, **kwargs: client,
     )
     page = PhotosPage(context)
+    context.operations.setParent(page)
     qtbot.addWidget(page)
     page.show()
     page.refresh_jobs()
@@ -97,3 +109,74 @@ def test_photo_refresh_worker_and_download_worker_reach_disk(qtbot, tmp_path):
     assert source.read_bytes() == png and evidence.read_bytes() == original
     client.create_image_batch.assert_not_called()
     client.upload_file.assert_not_called()
+    _drain_finished_workers(qtbot, context)
+
+
+def test_photo_real_buttons_download_refresh_preserve_terminal_state(qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+    from test_photo_state_boundaries import result_client
+
+    log_dir, source, good, client = result_client(tmp_path)
+    context = StudioContext(AppSettings(log_dir=str(log_dir), cache_dir=str(tmp_path / "cache")),
+                            Operations(None), api_key="offline-test", client_factory=lambda *args, **kwargs: client)
+    page = PhotosPage(context)
+    context.operations.setParent(page)
+    qtbot.addWidget(page)
+    page.show()
+    refresh = page.findChild(QPushButton, "photos.jobs.refresh")
+    qtbot.mouseClick(refresh, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not page.busy and bool(page.jobs), timeout=10000)
+    card = page.findChild(QFrame, f"photos.job.{good.job_id}")
+    save = card.findChild(QPushButton, "photos.jobs.save")
+    assert save.isEnabled()
+    qtbot.mouseClick(save, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not page.busy and page.jobs[0].status == "downloaded", timeout=10000)
+    qtbot.mouseClick(refresh, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not page.busy, timeout=10000)
+    stored = photo_batch.load_jobs(log_dir)[0]
+    assert stored.status == page.jobs[0].status == "downloaded"
+    assert Path(stored.items[0].output_path).read_bytes() == source.read_bytes()
+    client.create_image_batch.assert_not_called()
+    client.upload_file.assert_not_called()
+    assert not context.operations.active
+    _drain_finished_workers(qtbot, context)
+
+
+@pytest.mark.parametrize("change", ["account", "log_dir"])
+def test_photo_late_qthread_result_does_not_replace_changed_context(qtbot, tmp_path, change):
+    import threading
+    from PySide6.QtCore import Qt
+
+    log_dir, _source, good, client, _state = _setup(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    batches = client.list_batches.return_value
+
+    def retrieve():
+        entered.set()
+        assert release.wait(10)
+        return batches
+
+    client.list_batches.side_effect = retrieve
+    context = StudioContext(AppSettings(log_dir=str(log_dir), cache_dir=str(tmp_path / "cache")),
+                            Operations(None), api_key="offline-test", client_factory=lambda *args, **kwargs: client)
+    page = PhotosPage(context)
+    context.operations.setParent(page)
+    qtbot.addWidget(page)
+    page.show()
+    button = page.findChild(QPushButton, "photos.jobs.refresh")
+    qtbot.mouseClick(button, Qt.LeftButton)
+    qtbot.waitUntil(entered.is_set, timeout=10000)
+    if change == "account":
+        context.api_key = "another-offline-account"
+    else:
+        context.settings.log_dir = str(tmp_path / "other-log")
+    try:
+        qtbot.mouseClick(button, Qt.LeftButton)
+        assert client.list_batches.call_count == 1
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not page.busy, timeout=10000)
+    assert not page.jobs
+    assert photo_batch.load_jobs(log_dir)[0].job_id == good.job_id
+    assert not context.operations.active
+    _drain_finished_workers(qtbot, context)
