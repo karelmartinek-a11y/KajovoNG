@@ -32,7 +32,10 @@ def runtime_sanity() -> None:
         if not path.is_file() or not path.stat().st_size:
             raise ValueError(f"Chybí runtime prostředek: {name}.")
     for directory, anchor in (("local", "WORK_ORDER_V3"), ("wire", "FILE_CONTENT_V1")):
-        root = resource_path(f"orchestration/contracts/{directory}/{anchor}.schema.json").parent
+        required = resource_path(f"orchestration/contracts/{directory}/{anchor}.schema.json")
+        if not required.is_file():
+            raise ValueError(f"Chybí povinný runtime kontrakt: {anchor}.")
+        root = required.parent
         schemas = list(root.glob("*.schema.json"))
         if not schemas:
             raise ValueError(f"Chybí runtime kontrakty: {directory}.")

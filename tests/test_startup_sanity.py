@@ -101,3 +101,19 @@ def test_check_only_checks_the_runtime_path_without_home_expansion(launcher, mon
     monkeypatch.setattr(launcher, "run", lambda *args: 0)
     assert launcher.prepare() == 1
     assert (launcher.ROOT / "~").read_text(encoding="utf-8") == "zachovaný soubor"
+
+
+@pytest.mark.parametrize("directory,anchor", [("local", "WORK_ORDER_V3"), ("wire", "FILE_CONTENT_V1")])
+def test_check_only_rejects_missing_required_schema_among_other_resources(launcher, monkeypatch, directory, anchor):
+    from kajovo.core.resources import resource_path
+    contracts = launcher.ROOT / "incomplete-contracts"
+    contracts.mkdir()
+    # Jiná čitelná maska nedokazuje přítomnost potřebného WorkOrderu či
+    # souborového výstupu. Simuluje neúplný zdrojový nebo distribuční balíček.
+    (contracts / "OTHER.schema.json").write_text('{}', encoding="utf-8")
+    missing = f"orchestration/contracts/{directory}/{anchor}.schema.json"
+    monkeypatch.setattr("kajovo.core.resources.resource_path", lambda name: (
+        contracts / f"{anchor}.schema.json" if name == missing else resource_path(name)))
+    monkeypatch.setattr(launcher, "missing_requirements", lambda _: [])
+    monkeypatch.setattr(launcher, "run", lambda *args: 0)
+    assert launcher.prepare() == 1

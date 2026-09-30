@@ -467,7 +467,7 @@ def load_jobs(log_dir: str | Path, *, errors: list[str] | None = None) -> list[P
     jobs: list[tuple[float, PhotoBatchJob]] = []
     root = Path(log_dir) / "PHOTO"
     if not root.exists():
-        return jobs
+        return []
     for path in root.glob("photojob_*/photo_job.json"):
         try:
             # Metadata mohou selhat stejně jako čtení evidence. Obojí patří
