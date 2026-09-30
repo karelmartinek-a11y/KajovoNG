@@ -88,15 +88,15 @@ signál,StudioWindow.self.history.activate_comic,self.open_comic_operation,Expli
 signál,StudioWindow.self.history.activate_batch,self.open_history_batch,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:237
 signál,StudioWindow.self.shortcut.activated,self.start_current,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:239
 signál,StudioWindow.dialog.finished,restore,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:304
-ovladač,BatchesPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:83
-ovladač,BatchesPage.self.refresh_button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:84
-ovladač,BatchesPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:85
-ovladač,BatchesPage.self.cards_container,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:86
-ovladač,BatchesPage.self.notice,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:93
-ovladač,BatchesPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:365
-signál,BatchesPage.self.timer.timeout,lambda: self.refresh(automatic=True),Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:97
-signál,BatchesPage.context.key_changed,self.reset,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:98
-signál,BatchesPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:140
+ovladač,BatchesPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:92
+ovladač,BatchesPage.self.refresh_button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:93
+ovladač,BatchesPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:94
+ovladač,BatchesPage.self.cards_container,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:95
+ovladač,BatchesPage.self.notice,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:102
+ovladač,BatchesPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:378
+signál,BatchesPage.self.timer.timeout,lambda: self.refresh(automatic=True),Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:106
+signál,BatchesPage.context.key_changed,self.reset,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:107
+signál,BatchesPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:149
 ovladač,CascadeItemDialog.page,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/cascade_items.py:21
 ovladač,CascadeItemDialog.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/cascade_items.py:24
 ovladač,CascadeItemDialog.value,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/cascade_items.py:27

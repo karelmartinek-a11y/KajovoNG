@@ -12,6 +12,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QScrollArea, QWidget
 
 from kajovo.core import photo_batch
+from kajovo.core.contracts import ContractError
 from kajovo.core.batch_completion import (
     CANCELLABLE,
     batch_ids,
@@ -67,6 +68,14 @@ def _timestamp_value(value):
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
     except (OSError, OverflowError, TypeError, ValueError):
         return 0.0
+
+
+def _read_overview_state(directory, errors):
+    try:
+        return read_state(directory)
+    except (ContractError, OSError, ValueError) as error:
+        errors.append(f"Běh {directory.name} se nepodařilo načíst: {friendly_error(error, 'Načtení evidence')}")
+        return None
 
 
 class BatchesPage(QWidget):
@@ -154,11 +163,14 @@ class BatchesPage(QWidget):
         root = Path(self.context.settings.log_dir)
         hidden = _hidden_batches(root)
         records = []
+        errors = []
         if root.exists():
             for directory in root.iterdir():
                 if not directory.is_dir() or not directory.name.startswith("RUN_"):
                     continue
-                state = read_state(directory)
+                state = _read_overview_state(directory, errors)
+                if state is None:
+                    continue
                 for identifier in batch_ids(state):
                     if identifier in hidden:
                         continue
@@ -174,7 +186,6 @@ class BatchesPage(QWidget):
         markers = photo_batch.deleted_job_markers(root)
         hidden_photo_ids = {item["batch_id"] for item in markers if item["batch_id"]}
         hidden_photo_files = {item["input_file_id"] for item in markers if item["input_file_id"]}
-        errors = []
         for job in photo_batch.load_jobs(root, errors=errors):
             if job.batch_id in hidden or job.batch_id in hidden_photo_ids or job.input_file_id in hidden_photo_files:
                 continue
@@ -212,7 +223,9 @@ class BatchesPage(QWidget):
                 for directory in root.iterdir():
                     if not directory.is_dir() or not directory.name.startswith("RUN_"):
                         continue
-                    state = read_state(directory)
+                    state = _read_overview_state(directory, errors)
+                    if state is None:
+                        continue
                     for identifier in batch_ids(state):
                         if identifier in hidden:
                             remote.pop(identifier, None)

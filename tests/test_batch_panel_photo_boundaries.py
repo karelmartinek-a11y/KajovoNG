@@ -135,3 +135,22 @@ def test_batch_panel_late_worker_does_not_replace_new_context(qtbot, tmp_path, c
     assert page.refresh_button.isEnabled()
     assert client.list_batches.call_count == 1
     client.create_image_batch.assert_not_called()
+
+
+@pytest.mark.parametrize("remote", [False, True])
+@pytest.mark.parametrize("raw", [b"{invalid", b'{"generate_batches":[]}'])
+def test_broken_run_evidence_cannot_hide_healthy_photo(qtbot, tmp_path, remote, raw):
+    job, _client, page, context, root = setup(qtbot, tmp_path)
+    damaged = root / "RUN_damaged" / "run_state.json"
+    damaged.parent.mkdir()
+    damaged.write_bytes(raw)
+    if remote:
+        qtbot.mouseClick(page.refresh_button, Qt.LeftButton)
+        finish(qtbot, context)
+    else:
+        context.set_key("")
+        page.page_activated()
+    assert any(record["photo"] and record["photo"].job_id == job.job_id for record in page.records)
+    assert damaged.read_bytes() == raw
+    assert "RUN_damaged" in page.notice.text()
+    assert "nepodařilo" in page.notice.text()
