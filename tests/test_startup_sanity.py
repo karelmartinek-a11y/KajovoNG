@@ -85,3 +85,19 @@ def test_config_load_and_save_follow_explicit_local_settings(tmp_path, monkeypat
     config.save_settings(settings)
     assert json.loads(local.read_text())["default_model"] == "updated"
     assert archive.read_bytes() == original
+
+
+@pytest.mark.parametrize("field", ["log_dir", "cache_dir"])
+def test_check_only_checks_the_runtime_path_without_home_expansion(launcher, monkeypatch, field):
+    home = launcher.ROOT / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    # LOG i katalog modelů používají přímo Path(value). Vlnovka je zde
+    # součástí relativní cesty; dostupný domovský adresář ji nenahrazuje.
+    (launcher.ROOT / "~").write_text("zachovaný soubor", encoding="utf-8")
+    (launcher.ROOT / "kajovo_settings.json").write_text(json.dumps({field: "~/runtime"}), encoding="utf-8")
+    monkeypatch.setattr(launcher, "missing_requirements", lambda _: [])
+    monkeypatch.setattr(launcher, "run", lambda *args: 0)
+    assert launcher.prepare() == 1
+    assert (launcher.ROOT / "~").read_text(encoding="utf-8") == "zachovaný soubor"

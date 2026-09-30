@@ -43,7 +43,11 @@ def runtime_sanity() -> None:
         value = getattr(settings, field)
         if not value.strip() or (sys.platform != "win32" and PureWindowsPath(value).drive):
             raise ValueError(f"Nastavení {field} nemá platnou cestu pro tento systém.")
-        path = Path(value).expanduser()
+        path = Path(value)
+        if field == "comic_library_dir":
+            # Stejná interpretace jako ComicStore; LOG a cache vlnovku
+            # nerozbalují a musí se kontrolovat jejich skutečná cesta.
+            path = path.expanduser()
         if not path.is_absolute():
             path = ROOT / path
         path.mkdir(parents=True, exist_ok=True)
