@@ -13,8 +13,8 @@ class SafeJoinUnderRootTests(unittest.TestCase):
 
     def test_allows_regular_relative_path(self):
         out = safe_join_under_root('/tmp/root', 'nested/file.txt')
-        expected_root = os.path.abspath('/tmp/root')
-        expected_file = os.path.abspath(os.path.join('/tmp/root', 'nested/file.txt'))
+        expected_root = os.path.realpath('/tmp/root')
+        expected_file = os.path.realpath(os.path.join('/tmp/root', 'nested/file.txt'))
         self.assertTrue(os.path.commonpath([expected_root, out]) == expected_root)
         self.assertEqual(out, expected_file)
 
