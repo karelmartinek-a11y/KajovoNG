@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt
@@ -439,8 +440,11 @@ class PhotosPage(QWidget):
         self.execute("Dávkové úpravy fotografií", submit, lambda job: self.page_activated())
 
     def load_jobs(self):
-        self.jobs = photo_batch.load_jobs(self.context.settings.log_dir)
+        errors = []
+        self.jobs = photo_batch.load_jobs(self.context.settings.log_dir, errors=errors)
         self._render_jobs()
+        if errors:
+            self.notice.setText("\n".join(errors))
 
     def page_activated(self):
         try:
@@ -460,24 +464,40 @@ class PhotosPage(QWidget):
             markers = photo_batch.deleted_job_markers(log_dir)
             hidden_ids = {row["batch_id"] for row in markers if row["batch_id"]}
             hidden_files = {row["input_file_id"] for row in markers if row["input_file_id"]}
-            for job in photo_batch.load_jobs(log_dir):
-                if job.batch_id and job.batch_id in remote:
-                    photo_batch.apply_batch_status(job, remote[job.batch_id])
-                    photo_batch.save_job(job, log_dir)
-                elif not job.batch_id and job.input_file_id and job.input_file_id not in hidden_files:
-                    photo_batch.refresh_job(client, job, log_dir, progress=task.progress_event.emit)
-            return photo_batch.load_jobs(log_dir), hidden_ids, hidden_files
+            errors = []
+            for original in photo_batch.load_jobs(log_dir, errors=errors):
+                if original.batch_id in hidden_ids or original.input_file_id in hidden_files:
+                    continue
+                # Neúplná příprava není neurčitý submit. Ani jedna vadná úloha
+                # nesmí zabránit převzetí stavů ostatních nezávislých dávek.
+                job = deepcopy(original)
+                try:
+                    if job.batch_id and job.batch_id in remote:
+                        photo_batch.apply_batch_status(job, remote[job.batch_id])
+                        photo_batch.save_job(job, log_dir)
+                    elif not job.batch_id and job.input_file_id and job.status == "submission_unknown":
+                        photo_batch.refresh_job(client, job, log_dir, progress=task.progress_event.emit)
+                except Exception as error:
+                    message = f"Dávka {job.job_id}: {friendly_error(error, 'Obnovení stavu')}"
+                    errors.append(message)
+                    task.logline.emit(message)
+            jobs = photo_batch.load_jobs(log_dir, errors=errors)
+            return jobs, hidden_ids, hidden_files, list(dict.fromkeys(errors))
 
         def receive(result):
             if key != self.context.api_key:
                 return
-            jobs, hidden_ids, hidden_files = result
+            jobs, hidden_ids, hidden_files, errors = result
             self.jobs = [
                 job for job in jobs
                 if job.batch_id not in hidden_ids and job.input_file_id not in hidden_files
             ]
             self._render_jobs()
-            self.notice.setText("Stavy fotografických dávek jsou aktualizované.")
+            self.notice.setText(
+                "Část dávek se nepodařilo obnovit. Ostatní výsledky zůstávají dostupné.\n"
+                + "\n".join(errors)
+                if errors else "Přehled fotografických dávek je aktualizovaný."
+            )
 
         self.execute(
             "Obnovení přehledu fotografických dávek",

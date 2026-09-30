@@ -458,7 +458,12 @@ def save_job(job: PhotoBatchJob, log_dir: str | Path) -> Path:
     return root
 
 
-def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
+def load_jobs(log_dir: str | Path, *, errors: list[str] | None = None) -> list[PhotoBatchJob]:
+    """Striktní čtení; přehled může výslovně převzít chyby jednotlivých úloh.
+
+    Poškozené podklady se neopravují ani nemažou. Volající tolerantního čtení
+    musí zobrazit předané chyby, aby neúplný přehled nevydával za úplný.
+    """
     jobs: list[PhotoBatchJob] = []
     root = Path(log_dir) / "PHOTO"
     if not root.exists():
@@ -483,7 +488,12 @@ def load_jobs(log_dir: str | Path) -> list[PhotoBatchJob]:
                 raise ValueError("Photo job identity neodpovídá adresáři.")
             jobs.append(job)
         except (OSError, ContractError, ValueError, TypeError) as exc:
-            raise ValueError(f"Photo job evidence je poškozená: {path}") from exc
+            if errors is None:
+                raise ValueError(f"Photo job evidence je poškozená: {path}") from exc
+            errors.append(
+                f"Dávku {path.parent.name} se nepodařilo načíst. "
+                "Její podklady jsou poškozené nebo nečitelné a zůstaly zachovány."
+            )
     return jobs
 
 
