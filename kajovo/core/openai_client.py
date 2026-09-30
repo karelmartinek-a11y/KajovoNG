@@ -316,7 +316,6 @@ class OpenAIClient:
                 raise ValueError(f"Model {model} není povolen v capability registru.")
             caps = typed.to_dict()
             caps.update({
-                "supports_previous_response_id": bool(payload.get("previous_response_id")),
                 "supports_temperature": not uses_reasoning_defaults(model),
             })
             caps_by_model[model] = caps
