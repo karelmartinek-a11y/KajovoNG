@@ -1445,7 +1445,16 @@ class CascadeRunExecutor:
                     raise ContractError(
                         f"Krok {idx}: model vrátil jiný název souboru než „{output.file_name}“."
                     )
-                self._decode_file_content(raw)
+                binary = self._decode_file_content(raw)
+                if output.file_type in {"png", "jpg", "jpeg"}:
+                    from .image_runtime import inspect_image
+
+                    actual = inspect_image(binary)["format"]
+                    expected = "PNG" if output.file_type == "png" else "JPEG"
+                    if actual != expected:
+                        raise ContractError(
+                            f"Krok {idx}: obrazový formát {actual} neodpovídá {output.file_name}."
+                        )
                 file_rows.append((output, raw))
             else:
                 raise ContractError(f"Krok {idx}: neznámý typ výstupu.")
