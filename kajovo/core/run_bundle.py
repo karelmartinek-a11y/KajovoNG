@@ -20,12 +20,26 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .contracts import ContractError, parse_json_value_strict
+from .filesystem_metadata import is_appledouble_metadata
 from .orchestration.contracts import canonical_bytes
 
 BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_COMPATIBILITY_VERSION = 1
 INDEX_SCHEMA_VERSION = 5
 OUTPUT_ARTIFACT_ROLES = frozenset({"generated_file", "modified_file", "batch_output", "log_export", "output"})
+
+
+def _control_metadata(path: Path, controls: set[Path]) -> bool:
+    """Rozpozná AppleDouble v2 pouze u již vyloučených řídicích souborů.
+
+    Jméno samo nestačí. Hlavička a rozsahy metadat musí být platné a nesmějí
+    obsahovat datový fork. Existující manifesty ani ostatní artefakty se nemění.
+    """
+    if not path.name.startswith("._"):
+        return False
+    if path.with_name(path.name[2:]).resolve() not in controls:
+        return False
+    return is_appledouble_metadata(path)
 
 RUN_STATUSES = {
     "needs_clarification",
@@ -1185,6 +1199,8 @@ class RunBundle:
                 continue
             if resolved in ignored:
                 continue
+            if _control_metadata(path, ignored):
+                continue
             files.append(path)
         return sorted(files, key=lambda item: item.relative_to(self.root).as_posix())
 
@@ -1327,6 +1343,8 @@ class LegacyRunAdapter:
         records = []
         pattern = "*.json" if self.legacy else "_record_*.json"
         for path in sorted(directory.glob(pattern)):
+            if is_appledouble_metadata(path):
+                continue
             value = (_read_json_legacy if self.legacy else _read_json)(path, None)
             if not self.legacy and (not isinstance(value, dict) or not value.get(key)):
                 raise ValueError(f"Neplatný záznam {key}: {path}")
@@ -1358,6 +1376,8 @@ class LegacyRunAdapter:
             return []
         values = []
         for path in sorted((self.root / "validations").glob("*.json")):
+            if is_appledouble_metadata(path):
+                continue
             value = _read_json(path, {})
             if isinstance(value, dict):
                 values.append(value)
@@ -1373,6 +1393,8 @@ class LegacyRunAdapter:
                 continue
             for path in sorted(directory.iterdir()):
                 if not path.is_file():
+                    continue
+                if is_appledouble_metadata(path):
                     continue
                 records.append(
                     asdict(

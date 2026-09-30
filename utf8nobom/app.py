@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, List, Sequence
 
+from kajovo.core.filesystem_metadata import is_appledouble_metadata
+
 
 TEXT_EXTENSIONS = {
     ".bat",
@@ -297,6 +299,8 @@ def build_scan_plan(targets: Sequence[TargetSpec]) -> ScanPlan:
             for name in files:
                 path = Path(root) / name
                 if path.is_symlink():
+                    continue
+                if is_appledouble_metadata(path):
                     continue
                 try:
                     size = path.stat().st_size

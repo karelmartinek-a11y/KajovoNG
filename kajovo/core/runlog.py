@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .orchestration.contracts import canonical_bytes, parse_json_strict
+from .filesystem_metadata import is_appledouble_metadata
 from .orchestration.errors import OrchestrationError
 from .run_bundle import RunBundle, TERMINAL_STATUSES
 from .safe_config import persist_evidence, redact_evidence
@@ -135,6 +136,8 @@ def load_output_evidence(run_dir: str | Path) -> list[Dict[str, Any]]:
     exact = {path.resolve() for path in candidates}
     if manifests.is_dir():
         for path in manifests.glob("*.json"):
+            if is_appledouble_metadata(path):
+                continue
             try:
                 resolved = path.resolve()
             except OSError:

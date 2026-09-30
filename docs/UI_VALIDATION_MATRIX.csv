@@ -527,55 +527,55 @@ signál,Operations.failure,"lambda error: setattr(record, 'error', error if isin
 signál,Operations.worker.finished_err,"lambda error: setattr(record, 'error', record.error or describe_error(RuntimeError(str(error)), operation=title))",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:371
 signál,Operations.worker.finished,"lambda: self._finished(record, receive)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:376
 signál,Operations.self.listing.itemDoubleClicked,self.open_selected,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:486
-ovladač,PhotosPage.self.tabs,QTabWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:50
-ovladač,PhotosPage.gallery,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:52
-ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:54
+ovladač,PhotosPage.self.tabs,QTabWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:51
+ovladač,PhotosPage.gallery,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:53
 ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:55
-ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:60
-ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:60
+ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:56
+ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:61
 ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:61
 ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:62
-ovladač,PhotosPage.prompt_page,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:64
-ovladač,PhotosPage.self.prompt,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:70
-ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:74
-ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:74
+ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:63
+ovladač,PhotosPage.prompt_page,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:65
+ovladač,PhotosPage.self.prompt,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:71
+ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:75
 ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:75
-ovladač,PhotosPage.self.pending_preview,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:76
-ovladač,PhotosPage.self.pending_use,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:80
-ovladač,PhotosPage.self.pending_discard,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:81
-ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:82
-ovladač,PhotosPage.self.template_save,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:84
-ovladač,PhotosPage.self.template_update,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:85
-ovladač,PhotosPage.self.template_copy,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:86
-ovladač,PhotosPage.self.template_delete,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:87
-ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:88
-ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:89
-ovladač,PhotosPage.parameters,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:90
-ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:100
-ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:102
-ovladač,PhotosPage.jobs,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:103
-ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:105
-ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:106
-ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:106
-ovladač,PhotosPage.cards,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:107
-ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:110
+ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:76
+ovladač,PhotosPage.self.pending_preview,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:77
+ovladač,PhotosPage.self.pending_use,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:81
+ovladač,PhotosPage.self.pending_discard,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:82
+ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:83
+ovladač,PhotosPage.self.template_save,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:85
+ovladač,PhotosPage.self.template_update,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:86
+ovladač,PhotosPage.self.template_copy,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:87
+ovladač,PhotosPage.self.template_delete,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:88
+ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:89
+ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:90
+ovladač,PhotosPage.parameters,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:91
+ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:101
+ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:103
+ovladač,PhotosPage.jobs,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:104
+ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:106
+ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:107
+ovladač,PhotosPage.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:107
+ovladač,PhotosPage.cards,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:108
 ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:111
-ovladač,PhotosPage.self.notice,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:112
-ovladač,PhotosPage.self.start_button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:114
-ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:115
-ovladač,PhotosPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:165
-ovladač,PhotosPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:407
-ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:545
-ovladač,PhotosPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:548
-signál,PhotosPage.self.image_model.currentIndexChanged,self.refresh_image_options,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:97
-signál,PhotosPage.context.models_changed,self.refresh_models,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:116
-signál,PhotosPage.self.prompt.textChanged,self._edited,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:117
-signál,PhotosPage.self.prompt.textChanged,self._update_template_actions,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:118
-signál,PhotosPage.self.template.currentIndexChanged,self.template_changed,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:119
-signál,PhotosPage.self.form.changed,self._edited,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:120
-signál,PhotosPage.self.options.changed,self._edited,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:121
-signál,PhotosPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:325
-signál,PhotosPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:624
+ovladač,PhotosPage.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:112
+ovladač,PhotosPage.self.notice,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:113
+ovladač,PhotosPage.self.start_button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:115
+ovladač,PhotosPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:116
+ovladač,PhotosPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:167
+ovladač,PhotosPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:409
+ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:547
+ovladač,PhotosPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:550
+signál,PhotosPage.self.image_model.currentIndexChanged,self.refresh_image_options,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:98
+signál,PhotosPage.context.models_changed,self.refresh_models,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:117
+signál,PhotosPage.self.prompt.textChanged,self._edited,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:118
+signál,PhotosPage.self.prompt.textChanged,self._update_template_actions,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:119
+signál,PhotosPage.self.template.currentIndexChanged,self.template_changed,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:120
+signál,PhotosPage.self.form.changed,self._edited,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:121
+signál,PhotosPage.self.options.changed,self._edited,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:122
+signál,PhotosPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:327
+signál,PhotosPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:626
 ovladač,MultiProgressDialog.self.lifecycle_hint,label,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:31
 ovladač,MultiProgressDialog.self.notification,QCheckBox,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:33
 ovladač,MultiProgressDialog.button,QPushButton,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:46

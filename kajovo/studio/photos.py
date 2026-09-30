@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from kajovo.core import photo_batch
+from kajovo.core.filesystem_metadata import is_appledouble_metadata
 from kajovo.core.photo_prompt import manual_photo_plan, professionalize_prompt
 from kajovo.core.photo_templates import PhotoTemplateStore
 from .components import Form, PathInput, action, actions, caption, confirm, friendly_error, scroll, vertical
@@ -154,6 +155,7 @@ class PhotosPage(QWidget):
                 if not candidate.is_symlink()
                 and candidate.is_file()
                 and candidate.suffix.lower() in photo_batch.SUPPORTED_IMAGE_EXTENSIONS
+                and not is_appledouble_metadata(candidate)
             )
             self.add_paths([str(candidate) for candidate in candidates])
 
