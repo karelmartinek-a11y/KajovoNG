@@ -17,6 +17,7 @@ def is_appledouble_metadata(path: Path) -> bool:
         if magic != 0x00051607 or version != 0x00020000 or not count or end > size:
             return False
         ids = set()
+        ranges = []
         for _ in range(count):
             descriptor = stream.read(12)
             if len(descriptor) != 12:
@@ -25,4 +26,25 @@ def is_appledouble_metadata(path: Path) -> bool:
             if identifier in ids or identifier in {0, 1} or offset < end or offset + length > size:
                 return False
             ids.add(identifier)
+            if length:
+                ranges.append((offset, offset + length))
+        cursor = end
+        for start, stop in sorted(ranges):
+            if start < cursor:
+                return False
+            stream.seek(cursor)
+            remaining = start - cursor
+            while remaining:
+                chunk = stream.read(min(remaining, 65536))
+                if not chunk or any(chunk):
+                    return False
+                remaining -= len(chunk)
+            cursor = stop
+        stream.seek(cursor)
+        remaining = size - cursor
+        while remaining:
+            chunk = stream.read(min(remaining, 65536))
+            if not chunk or any(chunk):
+                return False
+            remaining -= len(chunk)
     return True
