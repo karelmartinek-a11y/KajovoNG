@@ -3,9 +3,9 @@
 import argparse
 import importlib
 from importlib import metadata
-import json
 from pathlib import Path, PureWindowsPath
 import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
@@ -27,20 +27,39 @@ def runtime_sanity() -> None:
     from kajovo.core.config import default_settings_path, load_settings
     from kajovo.core.resources import resource_path
 
-    for name in ("studio-symbol.png", "Kajovo_new.png", "montserrat_regular.ttf", "montserrat_bold.ttf"):
+    from PIL import Image
+    from jsonschema import Draft202012Validator
+    from kajovo.core.orchestration.contracts import parse_json_strict
+    from kajovo.core.orchestration.resource_contracts import physical_contract_schemas
+    from kajovo.core.orchestration.image_slots import normalization_policy_hash
+
+    normalization_policy_hash()
+
+    for name in ("studio-symbol.png", "Kajovo_new.png"):
         path = resource_path(name)
-        if not path.is_file() or not path.stat().st_size:
-            raise ValueError(f"Chybí runtime prostředek: {name}.")
-    for directory, anchor in (("local", "WORK_ORDER_V3"), ("wire", "FILE_CONTENT_V1")):
-        required = resource_path(f"orchestration/contracts/{directory}/{anchor}.schema.json")
-        if not required.is_file():
-            raise ValueError(f"Chybí povinný runtime kontrakt: {anchor}.")
-        root = required.parent
-        schemas = list(root.glob("*.schema.json"))
-        if not schemas:
-            raise ValueError(f"Chybí runtime kontrakty: {directory}.")
-        for path in schemas:
-            json.loads(path.read_text(encoding="utf-8"))
+        try:
+            with Image.open(path) as image:
+                if image.format != "PNG":
+                    raise ValueError("Požadovaný prostředek není PNG.")
+                image.verify()
+            with Image.open(path) as image:
+                image.load()
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Neplatný runtime prostředek: {name}.") from exc
+    for name in ("montserrat_regular.ttf", "montserrat_bold.ttf"):
+        _validate_font(resource_path(name))
+    for name, expected in physical_contract_schemas().items():
+        path = resource_path(f"orchestration/contracts/{name}.schema.json")
+        try:
+            actual = parse_json_strict(path.read_text(encoding="utf-8"))
+            Draft202012Validator.check_schema(actual)
+            # Deklarace dialektu nemění masku runtime, která je již 2020-12.
+            if actual.get("$schema", "https://json-schema.org/draft/2020-12/schema") != "https://json-schema.org/draft/2020-12/schema":
+                raise ValueError("Nepodporovaný dialekt masky.")
+            if {key: value for key, value in actual.items() if key != "$schema"} != {key: value for key, value in expected.items() if key != "$schema"}:
+                raise ValueError("Maska neodpovídá runtime kontraktu.")
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Neplatný nebo chybějící runtime kontrakt: {name}.") from exc
     settings = load_settings(str(ROOT / default_settings_path()), resolve_secrets=False)
     for field in ("log_dir", "cache_dir", "comic_library_dir"):
         value = getattr(settings, field)
@@ -67,6 +86,24 @@ def runtime_sanity() -> None:
                 connection.commit()
                 if connection.execute("SELECT value FROM sanity").fetchone() != ("ok",):
                     raise OSError(f"SQLite není použitelné v {field}.")
+
+
+def _validate_font(path: Path) -> None:
+    """Ověří sfnt hlavičku a hranice tabulek bez načítání GUI či dalších balíčků."""
+    raw = path.read_bytes()
+    if len(raw) < 12 or raw[:4] not in (b"\x00\x01\x00\x00", b"OTTO"):
+        raise ValueError(f"Neplatný runtime font: {path.name}.")
+    count = struct.unpack_from(">H", raw, 4)[0]
+    if not count or len(raw) < 12 + 16 * count:
+        raise ValueError(f"Neúplný runtime font: {path.name}.")
+    tags = set()
+    for index in range(count):
+        tag, _checksum, offset, length = struct.unpack_from(">4sIII", raw, 12 + 16 * index)
+        if tag in tags or offset < 12 + 16 * count or offset + length > len(raw):
+            raise ValueError(f"Neplatná tabulka runtime fontu: {path.name}.")
+        tags.add(tag)
+    if not {b"cmap", b"head", b"hhea", b"hmtx", b"maxp", b"name"}.issubset(tags):
+        raise ValueError(f"Chybí tabulka runtime fontu: {path.name}.")
 
 
 def run(*arguments: str) -> int:
