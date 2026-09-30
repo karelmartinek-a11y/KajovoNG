@@ -51,3 +51,37 @@ def test_runtime_sanity_does_not_migrate_or_read_credentials(launcher, monkeypat
     assert launcher.prepare() == 0
     assert path.read_text(encoding="utf-8") == raw
     assert get_secret.call_count == set_secret.call_count == 0
+
+
+def test_explicit_local_settings_override_preserves_archived_settings(launcher, monkeypatch):
+    archive = launcher.ROOT / "kajovo_settings.json"
+    archive.write_text('{"retry":{"max_attempts":0}}', encoding="utf-8")
+    original = archive.read_bytes()
+    local = launcher.ROOT / "local-settings.json"
+    local.write_text('{"log_dir":"local-log","cache_dir":"local-cache","comic_library_dir":"local-comics"}',
+                     encoding="utf-8")
+    monkeypatch.setenv("KAJOVO_SETTINGS_FILE", str(local))
+    monkeypatch.setattr(launcher, "missing_requirements", lambda _: [])
+    monkeypatch.setattr(launcher, "run", lambda *args: 0)
+    assert launcher.prepare() == 0
+    assert archive.read_bytes() == original
+    assert all((launcher.ROOT / name).is_dir() for name in ["local-log", "local-cache", "local-comics"])
+
+
+def test_config_load_and_save_follow_explicit_local_settings(tmp_path, monkeypatch):
+    from kajovo.core import config
+    monkeypatch.chdir(tmp_path)
+    archive = tmp_path / "kajovo_settings.json"
+    archive.write_text('{"default_model":"archived"}', encoding="utf-8")
+    original = archive.read_bytes()
+    local = tmp_path / "local-settings.json"
+    local.write_text('{"default_model":"local"}', encoding="utf-8")
+    monkeypatch.setenv("KAJOVO_SETTINGS_FILE", str(local))
+    monkeypatch.setattr(config, "get_secret", lambda key: None)
+    monkeypatch.setattr(config, "set_secret", lambda key, value: True)
+    settings = config.load_settings()
+    assert settings.default_model == "local"
+    settings.default_model = "updated"
+    config.save_settings(settings)
+    assert json.loads(local.read_text())["default_model"] == "updated"
+    assert archive.read_bytes() == original

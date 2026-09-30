@@ -20,6 +20,8 @@ Před každým spuštěním ověří pip (chybějící doplní přes `ensurepip`
 
 Předstartovní kontrola navíc skutečně importuje provozní balíčky a sestavu Studia, ověřuje přítomnost prostředků a čitelnost JSON masek. Nastavení validuje bez čtení hesel a bez migrace či přepisu původního souboru. Adresáře LOG, cache a knihovny komiksů ověřuje dočasným zápisem, přejmenováním a SQLite transakcí v novém kontrolním podadresáři; existující databáze neotevírá. Relativní cesty vyhodnocuje vůči kořeni repozitáře. Prázdné cesty a Windows disky v ne-Windows prostředí odmítá. CheckOnly neprokazuje vytvoření hlavního Qt okna ani funkčnost vzdáleného účtu.
 
+Proměnná `KAJOVO_SETTINGS_FILE` výslovně vybírá lokální soubor nastavení pro předstartovní kontrolu, spuštění aplikace i uložení změn z UI. Bez ní platí `kajovo_settings.json`. Prázdná hodnota je chyba. Relativní cesta se při startu spouštěčem vztahuje ke kořeni repozitáře. Volba lokální konfigurace nepřepisuje archivované nastavení jiné instalace; chybné cesty se automaticky nehádají ani nepřevádějí na nové adresáře.
+
 ## Architektura
 
 | Oblast | Zdrojové moduly | Odpovědnost |

@@ -19,6 +19,8 @@ git lfs pull
 
 Pro běžné spuštění stačí dvojklik na kořenový `start.bat`. Vytvoří chybějící projektové `.venv`, zkontroluje potřebné balíčky a jejich verze, podle potřeby je doinstaluje a otevře aplikaci. Doplnění závislostí může vyžadovat internet; vyhovující prostředí se kontroluje bez sítě. Python 3.12+ musí být již nainstalovaný. Při chybě se program nespustí a okno zobrazí důvod. Samotnou přípravu bez otevření aplikace lze spustit příkazem `.\start.bat -CheckOnly`.
 
+Obsahuje-li pracovní kopie archivované nastavení jiné instalace, vyberte vlastní JSON konfiguraci proměnnou prostředí `KAJOVO_SETTINGS_FILE`. Stejný soubor používá kontrola spouštěče i načítání a ukládání nastavení ve Studiu. Na macOS lze například použít `KAJOVO_SETTINGS_FILE=.venv/runtime-settings.json .venv/bin/python scripts/start_app.py`; vybraný soubor může obsahovat vlastní `log_dir`, `cache_dir` a `comic_library_dir`. Archivované nastavení zůstane zachované. Bez proměnné se používá kořenový `kajovo_settings.json`.
+
 API klíč nastavte v aplikaci v sekci Nastavení → Přístup nebo v proměnné prostředí `OPENAI_API_KEY`. Klíč se nevkládá do repozitáře.
 
 Volba „Uložit“ zachová API klíč v OS credential storage přes `keyring`; uložený credential má přednost před proměnnou prostředí terminálu a restart Windows není nutný. Starší Windows uložení v `HKCU\Environment\OPENAI_API_KEY` se při prvním načtení bezpečně migruje až po ověřeném readbacku. Volba smazání zabrání i opětovnému načtení stale klíče z prostředí.

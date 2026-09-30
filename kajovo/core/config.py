@@ -8,6 +8,15 @@ from .utils import ensure_dir, atomic_write_text
 from .secret_store import get_secret, set_secret
 
 DEFAULT_SETTINGS_FILE = "kajovo_settings.json"
+
+
+def default_settings_path() -> str:
+    """Výslovná lokální konfigurace umožňuje zachovat archiv jiné instalace."""
+    path = os.environ.get("KAJOVO_SETTINGS_FILE", DEFAULT_SETTINGS_FILE)
+    if not path.strip():
+        raise ValueError("KAJOVO_SETTINGS_FILE musí obsahovat cestu k nastavení.")
+    return os.path.expanduser(path)
+
 DEFAULT_DENY_EXTENSIONS = [
     ".exe",
     ".dll",
@@ -103,7 +112,8 @@ class AppSettings:
     dry_run_modify: bool = False
     ui_reduced_motion: bool = False
 
-def load_settings(path: str = DEFAULT_SETTINGS_FILE, *, resolve_secrets: bool = True) -> AppSettings:
+def load_settings(path: str | None = None, *, resolve_secrets: bool = True) -> AppSettings:
+    path = default_settings_path() if path is None else path
     raw = {}
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -158,7 +168,8 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE, *, resolve_secrets: bool = 
         save_settings(s, path)
     return s
 
-def save_settings(s: AppSettings, path: str = DEFAULT_SETTINGS_FILE) -> None:
+def save_settings(s: AppSettings, path: str | None = None) -> None:
+    path = default_settings_path() if path is None else path
     ensure_dir(os.path.dirname(os.path.abspath(path)) or ".")
     payload = asdict(s)
     # Hesla se do JSON neukládají.

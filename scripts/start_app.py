@@ -24,7 +24,7 @@ def runtime_sanity() -> None:
         "jsonschema", "PIL.Image", "paramiko", "keyring", "kajovo.studio.application",
     ):
         importlib.import_module(name)
-    from kajovo.core.config import load_settings
+    from kajovo.core.config import default_settings_path, load_settings
     from kajovo.core.resources import resource_path
 
     for name in ("studio-symbol.png", "Kajovo_new.png", "montserrat_regular.ttf", "montserrat_bold.ttf"):
@@ -38,7 +38,7 @@ def runtime_sanity() -> None:
             raise ValueError(f"Chybí runtime kontrakty: {directory}.")
         for path in schemas:
             json.loads(path.read_text(encoding="utf-8"))
-    settings = load_settings(str(ROOT / "kajovo_settings.json"), resolve_secrets=False)
+    settings = load_settings(str(ROOT / default_settings_path()), resolve_secrets=False)
     for field in ("log_dir", "cache_dir", "comic_library_dir"):
         value = getattr(settings, field)
         if not value.strip() or (sys.platform != "win32" and PureWindowsPath(value).drive):
