@@ -22,6 +22,8 @@ class StudioContext(QObject):
         self.settings = settings
         self.operations = operations
         self.api_key = api_key
+        self.account_generation = 0
+        self._catalog_generation = 0
         self.client_factory = client_factory or OpenAIClient
         self.models = []
         self.model_records = {}
@@ -32,6 +34,16 @@ class StudioContext(QObject):
         self.files = []
         self.stores = []
         self._load_cached_models()
+        self.settings_changed.connect(self._settings_changed)
+
+    def _settings_changed(self):
+        path = Path(self.settings.cache_dir) / "model_catalog.json"
+        if path != self._model_cache.path:
+            self._catalog_generation += 1
+            self._model_refresh_record = None
+            self._model_cache = ModelCatalogCache(path)
+            self._load_cached_models()
+            self.models_changed.emit()
 
     def client(self):
         if not self.api_key:
@@ -49,6 +61,8 @@ class StudioContext(QObject):
         self._apply_model_snapshot(snapshot, "cache")
 
     def set_key(self, key):
+        self.account_generation += 1
+        self._catalog_generation += 1
         self.api_key = key
         self._model_refresh_record = None
         self._load_cached_models()
@@ -63,9 +77,10 @@ class StudioContext(QObject):
             return self._model_refresh_record
         client = self.client()
         key = self.api_key
+        generation = self._catalog_generation
 
         def receive(records):
-            if self.api_key == key:
+            if self.api_key == key and generation == self._catalog_generation:
                 snapshot = self._model_cache.save(key, list(records))
                 self._apply_model_snapshot(snapshot, "live")
                 self.models_changed.emit()

@@ -63,7 +63,7 @@ class ValueDialog(QDialog):
 
 
 class ResourcesPage(QWidget):
-    resource_deleted = Signal(str, str, str)
+    resource_deleted = Signal(str, int, str, str)
 
     def __init__(self, context, parent=None):
         super().__init__(parent)
@@ -147,12 +147,15 @@ class ResourcesPage(QWidget):
             self.notice.setText(friendly_error(error))
             return
         key = self.context.api_key
+        generation = getattr(self.context, "account_generation", 0)
         self.busy = True
         for widget in self.controls:
             widget.setEnabled(False)
 
         def complete(value):
-            if key == self.context.api_key and receive:
+            if (key == self.context.api_key
+                    and generation == getattr(self.context, "account_generation", 0)
+                    and receive):
                 receive(value)
 
         record = self.context.operations.start(title, lambda task: operation(client, task), complete)
@@ -211,11 +214,12 @@ class ResourcesPage(QWidget):
             return
 
         key = self.context.api_key
+        generation = getattr(self.context, "account_generation", 0)
 
         def remove(client, task):
             for identifier in identifiers:
                 (client.delete_file if kind == "files" else client.delete_vector_store)(identifier)
-                self.resource_deleted.emit(key, kind, identifier)
+                self.resource_deleted.emit(key, generation, kind, identifier)
             return client.list_files() if kind == "files" else client.list_vector_stores()
 
         def receive(records):
@@ -225,9 +229,10 @@ class ResourcesPage(QWidget):
 
         self.execute("Odstranění prostředků", remove, receive)
 
-    @Slot(str, str, str)
-    def _prune_deleted(self, key, kind, identifier):
-        if key != self.context.api_key:
+    @Slot(str, int, str, str)
+    def _prune_deleted(self, key, generation, kind, identifier):
+        if (key != self.context.api_key
+                or generation != getattr(self.context, "account_generation", 0)):
             return
         setattr(self.context, kind, [value for value in getattr(self.context, kind) if value != identifier])
         listing = self.lists[kind]
