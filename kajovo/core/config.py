@@ -103,7 +103,7 @@ class AppSettings:
     dry_run_modify: bool = False
     ui_reduced_motion: bool = False
 
-def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
+def load_settings(path: str = DEFAULT_SETTINGS_FILE, *, resolve_secrets: bool = True) -> AppSettings:
     raw = {}
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -142,6 +142,10 @@ def load_settings(path: str = DEFAULT_SETTINGS_FILE) -> AppSettings:
         not math.isfinite(v) or v < 0 for v in numeric_nonnegative
     ) or not 0 <= s.default_temperature <= 2 or s.smtp.port > 65535:
         raise ValueError("Číselné nastavení je mimo povolený rozsah.")
+    if not resolve_secrets:
+        # Předstartovní kontrola nečte úložiště hesel ani nemigruje nastavení.
+        s.smtp.password = s.ssh.password = ""
+        return s
     # Hesla načtená z JSON se přesouvají do keyringu nebo prostředí.
     migration_results = []
     if s.smtp.password:

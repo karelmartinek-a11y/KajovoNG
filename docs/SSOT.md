@@ -18,6 +18,8 @@ Kanonickým uživatelským spouštěčem Windows je kořenový `start.bat`, kter
 
 Před každým spuštěním ověří pip (chybějící doplní přes `ensurepip`), přítomnost a povolené verze všech provozních závislostí podle aktuálního `pyproject.toml` a tranzitivní konzistenci pomocí `pip check`. Při nesplnění instaluje provozní požadavky přes pip a kontrolu zopakuje. Neinstaluje extra `dev` a bez potřeby neaktualizuje balíčky. Vyhovující prostředí ověří bez sítě; doplnění balíčků může potřebovat internet. Nevyřešený konflikt, nedostupné balíčky nebo jiná chyba zabrání spuštění aplikace a vrátí nenulový kód; `start.bat` ponechá chybovou zprávu viditelnou do stisku klávesy. Úspěšná kontrola spustí `kajovo.app.main` ze zdrojového stromu. `start.bat -CheckOnly` provede přípravu a ověření bez otevření UI.
 
+Předstartovní kontrola navíc skutečně importuje provozní balíčky a sestavu Studia, ověřuje přítomnost prostředků a čitelnost JSON masek. Nastavení validuje bez čtení hesel a bez migrace či přepisu původního souboru. Adresáře LOG, cache a knihovny komiksů ověřuje dočasným zápisem, přejmenováním a SQLite transakcí v novém kontrolním podadresáři; existující databáze neotevírá. Relativní cesty vyhodnocuje vůči kořeni repozitáře. Prázdné cesty a Windows disky v ne-Windows prostředí odmítá. CheckOnly neprokazuje vytvoření hlavního Qt okna ani funkčnost vzdáleného účtu.
+
 ## Architektura
 
 | Oblast | Zdrojové moduly | Odpovědnost |
