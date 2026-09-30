@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import shutil
+import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -75,6 +77,20 @@ class HistoryBranchLauncher:
         pending = state.get("response_pending") or {}
         if state.get("status") == "submission_unknown" or (pending.get("status") == "submitting" and not pending.get("id")):
             raise ValueError("Výsledek původního odeslání není potvrzen; nový submit je zablokován.")
+        database = adapter.root.parent / "orchestration.sqlite3"
+        if database.exists():
+            try:
+                with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+                    uncertain = connection.execute(
+                        "SELECT 1 FROM provider_operations p JOIN work_orders w "
+                        "ON p.work_order_hash=w.work_order_hash "
+                        "WHERE w.run_id=? AND p.state='submission_unknown' LIMIT 1",
+                        (adapter.run_id,),
+                    ).fetchone()
+            except sqlite3.Error as error:
+                raise ValueError("Provider evidenci původního běhu nelze ověřit; nový submit je zablokován.") from error
+            if uncertain:
+                raise ValueError("Výsledek původního odeslání není potvrzen; nový submit je zablokován.")
         return state
 
     def preview(self, adapter, checkpoint_id: str, relation: str, selected_stage: str = "") -> BranchPreview:

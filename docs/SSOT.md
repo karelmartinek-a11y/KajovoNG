@@ -222,6 +222,8 @@ Vstupní galerie fotografií obsahuje všechny přidané soubory; adresář se p
 
 Známé chyby poskytovatele, sítě, souborů, kontraktů a interních operací se překládají do stručné češtiny s návrhem dalšího kroku. HTTP 429 bez podrobnějšího kódu nerozlišuje rychlost požadavků od limitu účtu. Neznámá chyba dostane bezpečné obecné vysvětlení; technické podrobnosti jsou odděleny a citlivé údaje se maskují. Dialogy výběru souborů a složek jsou vlastní Qt dialogy s pojmenovanými akcemi Zpět, O úroveň výš a Nová složka.
 
+Historie před Continue, Rerun i Repair ověřuje také provider operace původního Run ID v SQLite. Neurčité přijetí requestu blokuje nový submit i tehdy, když pád procesu ponechal JSON stav `running` a starší checkpoint `input_ready`. Kontrola je pouze pro čtení; nečitelná provider evidence se nepovažuje za potvrzení bezpečného opakování.
+
 ## Vlastní kaskády
 
 `CascadeDefinition` obsahuje název, verzi, časy, `default_out_dir` a kroky. Prázdnou kaskádu worker odmítne. Každý `CascadeStep` má model, volitelnou teplotu, instrukce, vstupní text nebo strukturovaný `input_content_json`, existující ID a lokální cesty příloh, výraz návaznosti, typ výstupu, schéma a `expected_out_files`.
