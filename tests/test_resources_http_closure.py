@@ -144,6 +144,11 @@ def test_resources_upload_store_indexing_delete_ui_and_new_process(qtbot, monkey
     page.lists["files"].item(0).setSelected(True)
     click(page, "resources.files.attach")
     assert context.files == ["file_1"]
+    before_detach = len(transport.calls)
+    click(page, "resources.files.detach")
+    assert context.files == [] and len(transport.calls) == before_detach
+    click(page, "resources.files.attach")
+    assert context.files == ["file_1"]
 
     def accept(dialog):
         dialog.value = "Testovací úložiště"
@@ -264,3 +269,21 @@ def test_uncertain_resource_create_is_one_submit_then_safe_refresh(qtbot, monkey
     finish(qtbot, page)
     assert page.lists[kind].count() == 1
     assert sum(r["method"] == "POST" and r["path"] == path for r in transport.calls) == 1
+
+
+def test_resources_double_click_upload_is_single_worker_and_exact_bytes(qtbot, monkeypatch, tmp_path):
+    transport = ResourcesHttp(tmp_path)
+    transport.block = '/files'
+    page, _ = page_fixture(qtbot, tmp_path, transport)
+    source = tmp_path / 'input.txt'
+    source.write_bytes(b'Exact input\n')
+    monkeypatch.setattr('kajovo.studio.resources.get_open_file_names', lambda *a: ([str(source)], ''))
+    click(page, 'resources.files.create')
+    qtbot.waitUntil(transport.entered.is_set)
+    click(page, 'resources.files.create')
+    assert len(page.context.operations.records) == 1
+    transport.release.set()
+    assert finish(qtbot, page).terminal == 'completed'
+    posts = [row for row in transport.calls if row['method'] == 'POST']
+    assert len(posts) == 1 and bytes(posts[0]['multipart_bytes']) == source.read_bytes()
+    assert page.lists['files'].count() == 1

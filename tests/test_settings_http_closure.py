@@ -133,3 +133,28 @@ def test_catalog_cache_path_change_rejects_pending_old_result(qtbot, monkeypatch
         record.dialog.close()
     assert context.models == []
     assert not list(tmp_path.glob("*-cache/model_catalog.json"))
+
+
+@pytest.mark.parametrize('fault', ['validation', 'write'])
+def test_settings_invalid_or_failed_write_keeps_config_and_consumer(qtbot, monkeypatch, tmp_path, fault):
+    import os
+    page, context, _, _ = fixture(qtbot, monkeypatch, tmp_path)
+    page.findChild(QPushButton, 'settings.save').click()
+    path = tmp_path / 'settings.json'
+    before = path.read_bytes()
+    timeout = context.client().timeout_s
+    if fault == 'validation':
+        page.editors['response_timeout_s'].setValue(0)
+    else:
+        page.editors['response_timeout_s'].setValue(42)
+        original = os.replace
+        def replace(source, destination):
+            if str(destination) == str(path):
+                raise OSError('syntetická chyba zápisu konfigurace')
+            return original(source, destination)
+        monkeypatch.setattr(os, 'replace', replace)
+    page.findChild(QPushButton, 'settings.save').click()
+    assert path.read_bytes() == before
+    assert context.client().timeout_s == timeout
+    assert page.notice.text() != 'Nastavení bylo uloženo.'
+    assert 'synthetic-' not in page.notice.text()
