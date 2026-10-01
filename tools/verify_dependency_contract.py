@@ -6,6 +6,11 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from kajovo.core.filesystem_metadata import is_appledouble_metadata
+
 PYPROJECT = ROOT / "pyproject.toml"
 CONSTRAINTS = ROOT / "requirements" / "constraints.txt"
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+")
@@ -51,6 +56,13 @@ def ad_hoc_install_lines() -> list[str]:
             continue
         for path in base.rglob("*"):
             if not path.is_file() or path.suffix.lower() not in {".ps1", ".sh", ".yml", ".yaml"}:
+                continue
+            relative = path.relative_to(ROOT)
+            if relative.parts[0] == "Build" and len(relative.parts) > 1 and (
+                relative.parts[1] in {"lib", "Kajovo"} or relative.parts[1].startswith("bdist.")
+            ):
+                continue
+            if is_appledouble_metadata(path):
                 continue
             for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 line = raw.strip()
