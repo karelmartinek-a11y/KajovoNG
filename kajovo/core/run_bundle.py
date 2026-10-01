@@ -37,7 +37,7 @@ def _control_metadata(path: Path, controls: set[Path]) -> bool:
     """
     if not path.name.startswith("._"):
         return False
-    if path.with_name(path.name[2:]).resolve() not in controls:
+    if path.with_name(path.name[2:]).absolute() not in controls:
         return False
     return is_appledouble_metadata(path)
 
@@ -1187,17 +1187,13 @@ class RunBundle:
         return [item for item in (records or []) if isinstance(item, dict)]
 
     def _checksum_files(self) -> list[Path]:
-        ignored = {self.bundle_path.resolve(), self.checksums_path.resolve(),
-                   (self.root / "execution.lock").resolve()}
+        ignored = {self.bundle_path.absolute(), self.checksums_path.absolute(),
+                   (self.root / "execution.lock").absolute()}
         files: list[Path] = []
         for path in self.root.rglob("*"):
             if not path.is_file():
                 continue
-            try:
-                resolved = path.resolve()
-            except OSError:
-                continue
-            if resolved in ignored:
+            if path.absolute() in ignored:
                 continue
             if _control_metadata(path, ignored):
                 continue
@@ -1231,7 +1227,18 @@ class RunBundle:
     def verify_integrity(self) -> dict[str, Any]:
         expected = _read_json(self.checksums_path, {})
         if not isinstance(expected, dict) or not isinstance(expected.get("files"), dict):
-            return {"status": "unsealed", "valid": False, "errors": ["Run Bundle ještě nemá integritní manifest."]}
+            metadata = _read_json(self.bundle_path, {})
+            previously_sealed = (
+                isinstance(metadata, dict)
+                and (metadata.get("integrity_status") == "sealed" or bool(metadata.get("bundle_hash")))
+            )
+            damaged = self.checksums_path.exists() or previously_sealed
+            return {
+                "status": "changed" if damaged else "unsealed",
+                "valid": False,
+                "errors": ["Run Bundle ztratil platný integritní manifest." if damaged
+                           else "Run Bundle ještě nemá integritní manifest."],
+            }
         errors: list[str] = []
         files = expected["files"]
         actual_paths = {path.relative_to(self.root).as_posix() for path in self._checksum_files()}
@@ -1253,6 +1260,37 @@ class RunBundle:
         actual_bundle_hash = _sha256_bytes(_json_bytes(current))
         if actual_bundle_hash != expected.get("bundle_hash"):
             errors.append("Nesouhlasí hash Run Bundle.")
+        errors.extend(self._control_binding_errors(expected))
+        return {
+            "status": "verified" if not errors else "changed",
+            "valid": not errors,
+            "bundle_hash": expected.get("bundle_hash", ""),
+            "errors": errors,
+        }
+
+    def verify_control_bindings(self) -> list[str]:
+        """Ověří neměnné identity i při obnově rozpracované publikace.
+
+        Publikační journal a potvrzený zápis mění soubory před finálním seal.
+        Tato kontrola nenahrazuje jejich vlastní transakční validaci.
+        """
+        expected = _read_json(self.checksums_path, {})
+        if not isinstance(expected, dict) or not isinstance(expected.get("files"), dict):
+            metadata = _read_json(self.bundle_path, {})
+            if (not self.checksums_path.exists() and isinstance(metadata, dict)
+                    and metadata.get("integrity_status") == "unsealed"
+                    and not metadata.get("bundle_hash")):
+                run = self.run_record()
+                return [f"Nesouhlasí vazba metadat Run Bundle: {name}."
+                        for name, value in {"run_id": run.get("run_id"),
+                                            "bundle_id": run.get("artifact_bundle_id")}.items()
+                        if not isinstance(value, str) or not value or metadata.get(name) != value]
+            return ["Run Bundle nemá platný integritní manifest."]
+        return self._control_binding_errors(expected)
+
+    def _control_binding_errors(self, expected: dict[str, Any]) -> list[str]:
+        errors: list[str] = []
+        files = expected["files"]
         metadata = _read_json(self.bundle_path, {})
         run = self.run_record()
         if not isinstance(metadata, dict):
@@ -1269,12 +1307,7 @@ class RunBundle:
             for name, value in bindings.items():
                 if not isinstance(value, str) or not value or metadata.get(name) != value:
                     errors.append(f"Nesouhlasí vazba metadat Run Bundle: {name}.")
-        return {
-            "status": "verified" if not errors else "changed",
-            "valid": not errors,
-            "bundle_hash": expected.get("bundle_hash", ""),
-            "errors": errors,
-        }
+        return errors
 
 
 class LegacyRunAdapter:
