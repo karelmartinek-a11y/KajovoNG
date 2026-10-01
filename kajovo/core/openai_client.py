@@ -13,6 +13,7 @@ from .openai_transport import (
     OpenAIError,
     OpenAITransport,
     operation_spec,
+    SubmissionOutcomeUnknown,
 )
 
 
@@ -43,6 +44,22 @@ class OpenAIClient:
     def _validate_resource_id(identifier: str) -> None:
         if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", identifier):
             raise ValueError("Identifikátor API nesmí obsahovat cestu, dotaz ani jiné oddělovače URL.")
+
+    def _resource_ack(self, method, path, value, *, identifier=None, store_id=None, deleted=False):
+        """HTTP úspěch s cizí či chybějící identitou nepotvrzuje mutaci."""
+        try:
+            if not isinstance(value, dict):
+                raise ValueError("Chybí objekt potvrzení prostředku.")
+            self._validate_resource_id(value.get("id"))
+            if identifier is not None and value["id"] != identifier:
+                raise ValueError("Potvrzení patří jinému prostředku.")
+            if store_id is not None and value.get("vector_store_id") != store_id:
+                raise ValueError("Potvrzení patří jinému úložišti.")
+            if deleted and value.get("deleted") is not True:
+                raise ValueError("Smazání nebylo potvrzeno.")
+        except ValueError as error:
+            raise SubmissionOutcomeUnknown(operation_spec(method, path).name, method, path, cause=error) from error
+        return value
 
     def __init__(self, api_key: str, base_url: str = "https://api.openai.com/v1", timeout_s: float = 300.0):
         self.api_key = api_key
@@ -159,11 +176,13 @@ class OpenAIClient:
         with open(path, "rb") as stream:
             files = {"file": (os.path.basename(path), stream)}
             data = {"purpose": purpose}
-            return self._req("POST", "/files", json_body=data, files=files)
+            value = self._req("POST", "/files", json_body=data, files=files)
+            return self._resource_ack("POST", "/files", value)
 
     def delete_file(self, file_id: str) -> Dict[str, Any]:
         self._validate_resource_id(file_id)
-        return self._req("DELETE", f"/files/{file_id}")
+        path = f"/files/{file_id}"
+        return self._resource_ack("DELETE", path, self._req("DELETE", path), identifier=file_id, deleted=True)
 
     def file_content(self, file_id: str) -> bytes:
         self._validate_resource_id(file_id)
@@ -426,7 +445,7 @@ class OpenAIClient:
         body: Dict[str, Any] = {"name": name}
         if expires_after_days is not None:
             body["expires_after"] = {"anchor": "last_active_at", "days": int(expires_after_days)}
-        return self._req("POST", "/vector_stores", json_body=body)
+        return self._resource_ack("POST", "/vector_stores", self._req("POST", "/vector_stores", json_body=body))
 
     def add_file_to_vector_store(self, vs_id: str, file_id: str, attributes: Optional[Dict[str, Any]]=None) -> Dict[str, Any]:
         self._validate_resource_id(vs_id)
@@ -439,7 +458,8 @@ class OpenAIClient:
         body: Dict[str, Any] = {"file_id": file_id}
         if attributes:
             body["attributes"] = attributes
-        return self._req("POST", f"/vector_stores/{vs_id}/files", json_body=body, timeout=120.0)
+        path = f"/vector_stores/{vs_id}/files"
+        return self._resource_ack("POST", path, self._req("POST", path, json_body=body, timeout=120.0), identifier=file_id, store_id=vs_id)
 
     def retrieve_vector_store(self, vs_id: str) -> Dict[str, Any]:
         self._validate_resource_id(vs_id)
@@ -447,7 +467,8 @@ class OpenAIClient:
 
     def delete_vector_store(self, vs_id: str) -> Dict[str, Any]:
         self._validate_resource_id(vs_id)
-        return self._req("DELETE", f"/vector_stores/{vs_id}")
+        path = f"/vector_stores/{vs_id}"
+        return self._resource_ack("DELETE", path, self._req("DELETE", path), identifier=vs_id, deleted=True)
 
     def list_vector_store_files(self, vs_id: str) -> List[Dict[str, Any]]:
         self._validate_resource_id(vs_id)
@@ -461,7 +482,8 @@ class OpenAIClient:
     def delete_vector_store_file(self, vs_id: str, vector_store_file_id: str) -> Dict[str, Any]:
         self._validate_resource_id(vs_id)
         self._validate_resource_id(vector_store_file_id)
-        return self._req("DELETE", f"/vector_stores/{vs_id}/files/{vector_store_file_id}")
+        path = f"/vector_stores/{vs_id}/files/{vector_store_file_id}"
+        return self._resource_ack("DELETE", path, self._req("DELETE", path), identifier=vector_store_file_id, deleted=True)
 
     def update_vector_store_file_attributes(self, vs_id: str, vector_store_file_id: str, attributes: Dict[str, Any]) -> Dict[str, Any]:
         self._validate_resource_id(vs_id)

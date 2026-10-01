@@ -510,3 +510,5 @@ QA nerozšiřuje dostupné podklady samotnou souborovou anotací odpovědi. Nov�
 History náhled první nové placené operace zohledňuje `stop_after_plan`. Nad dokončenou přípravou v plánovacím režimu nevydává nulový počet nových requestů za zahájení A3/B3; výroba vyžaduje potvrzení z `plan_ready`.
 
 Workbench odmítá druhé totožné zadání během aktivní operace. Výsledky a nabídka opravy patří ke generaci formuláře, účtu a nastavení při spuštění; pozdější změna nepřevezme starý callback. Dokončený výsledek zůstává u původní operace. Export History obdobně nemění oznámení nově vybraného běhu.
+
+Mutace Files a Vector Stores ověřují identitu potvrzení. Připojený soubor musí patřit požadovanému store; smazání vyžaduje stejné ID a `deleted=true`. Chybějící nebo cizí potvrzení po HTTP úspěchu má neurčitý výsledek, nikoli potvrzené dokončení. Nezpůsobí automatický další submit ani odstranění nepotvrzené identity z místního výběru.
