@@ -324,6 +324,9 @@ def _create_response(self: RunContext, client, payload, *, attempt=0, measuremen
         f"received_{response.get('id', 'NOID')}",
         response,
     )
+    # Stop během HTTP čekání zachová potvrzené ID i raw výsledek, ale
+    # nepovolí další parsování, výrobu ani úspěšné dokončení workflow.
+    self._check_stop()
     if response.get("error"):
         from ..contracts import RemoteResponseError
         raise RemoteResponseError(response)
