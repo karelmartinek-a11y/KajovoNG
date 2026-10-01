@@ -59,9 +59,9 @@ class PhotosPage(QWidget):
         self.photos.setObjectName("photos.sources")
         self.photos.setAccessibleName("Vstupní fotografie")
         body.addWidget(self.photos, 1)
-        body.addWidget(actions(action("photos.folder", "Vložit adresář", self.pick_folder),
-                               action("photos.add", "Vložit soubory", self.pick_files),
-                               action("photos.remove", "Odebrat soubory", self.remove, "danger")))
+        body.addWidget(actions(action("photos.folder", "Přidat fotografie ze složky", self.pick_folder),
+                               action("photos.add", "Přidat fotografie", self.pick_files),
+                               action("photos.remove", "Odebrat fotografie ze seznamu", self.remove, "danger")))
         self.tabs.addTab(gallery, "Fotografie")
         prompt_page = QWidget()
         body = vertical(prompt_page)
@@ -85,7 +85,7 @@ class PhotosPage(QWidget):
         self._show_pending()
         self.template_save = action("photos.template.save", "Uložit šablonu", self.save_template)
         self.template_update = action("photos.template.update", "Upravit vybranou šablonu", self.update_template)
-        self.template_copy = action("photos.template.copy", "Duplikovat šablonu", self.duplicate_template)
+        self.template_copy = action("photos.template.copy", "Vytvořit kopii šablony", self.duplicate_template)
         self.template_delete = action("photos.template.delete", "Odstranit šablonu", self.delete_template, "danger")
         body.addWidget(actions(self.template_save, self.template_update, self.template_copy, self.template_delete))
         self.tabs.addTab(scroll(prompt_page), "Zadání a šablony")
@@ -94,12 +94,12 @@ class PhotosPage(QWidget):
         self.options = Form()
         self.image_model = self.options.choice("photos.image_model", "Model pro fotografie", [])
         self.quality = self.options.choice("photos.quality", "Kvalita", [("Automatická", "auto"), ("Základní", "low"), ("Střední", "medium"), ("Vysoká", "high")], "high")
-        self.size = self.options.choice("photos.size", "Rozměry", ["auto", "1024x1024", "1536x1024", "1024x1536"])
-        self.format = self.options.choice("photos.format", "Formát souboru", ["png", "jpeg", "webp"])
+        self.size = self.options.choice("photos.size", "Velikost obrázku", [("Automaticky", "auto"), ("Čtverec · 1024 × 1024 bodů", "1024x1024"), ("Na šířku · 1536 × 1024 bodů", "1536x1024"), ("Na výšku · 1024 × 1536 bodů", "1024x1536")])
+        self.format = self.options.choice("photos.format", "Druh souboru", [("Obrázek PNG (.png)", "png"), ("Fotografie JPEG (.jpeg)", "jpeg"), ("Obrázek WebP (.webp)", "webp")])
         self.image_model.currentIndexChanged.connect(self.refresh_image_options)
-        self.output = self.options.add("photos.output", "Výstupní adresář", PathInput(directories=True))
+        self.output = self.options.add("photos.output", "Složka pro upravené fotografie", PathInput(directories=True))
         body.addWidget(self.options)
-        body.addWidget(action("photos.output.browse", "Vybrat výstupní adresář", self.pick_output))
+        body.addWidget(action("photos.output.browse", "Vybrat složku pro fotografie", self.pick_output))
         body.addStretch()
         self.tabs.addTab(scroll(parameters), "Výstup")
         jobs = QWidget()
@@ -188,7 +188,7 @@ class PhotosPage(QWidget):
             refill_models(widget, values, recommended)
         self.refresh_image_options()
         if self.context.models and not self.image_model.currentData():
-            self.notice.setText("Účet nemá model povolený pro Image Edit BATCH podle pevné matice.")
+            self.notice.setText("Pro tento účet není dostupný model pro dávkovou úpravu fotografií. Obnovte seznam modelů nebo ověřte přístup ke službě.")
 
     def refresh_image_options(self):
         model = self.image_model.currentData()
@@ -204,7 +204,8 @@ class PhotosPage(QWidget):
             widget.blockSignals(True)
             widget.clear()
             for value in values:
-                widget.addItem(labels.get(value, value) if widget is self.quality else value, value)
+                from .presentation import image_size_name
+                widget.addItem(labels.get(value, value) if widget is self.quality else image_size_name(value), value)
             if selected and widget.findData(selected) < 0:
                 widget.addItem(str(selected) + " · nepodporované", selected)
             widget.setCurrentIndex(max(0, widget.findData(selected)))
@@ -281,7 +282,7 @@ class PhotosPage(QWidget):
         identifier = self.template.currentData()
         if not identifier:
             return
-        dialog = ValueDialog("Duplikovat šablonu", "Povinný název nové šablony", parent=self)
+        dialog = ValueDialog("Vytvořit kopii šablony", "Povinný název nové šablony", parent=self)
         if dialog.exec() != QDialog.Accepted:
             return
         try:
@@ -547,7 +548,7 @@ class PhotosPage(QWidget):
                 "Úpravy fotografií", status, format_started(job.created_at), summary,
                 [
                     ("photos.jobs.save", "Uložit výsledné fotografie do adresáře", lambda _=False, current=job: self.download_job(current), "primary", can_save),
-                    ("photos.jobs.delete", "Smazat", lambda _=False, current=job: self.delete_job(current), "danger", True),
+                    ("photos.jobs.delete", "Odebrat z přehledu", lambda _=False, current=job: self.delete_job(current), "danger", True),
                 ],
                 f"photos.job.{job.job_id}",
             )
@@ -588,7 +589,7 @@ class PhotosPage(QWidget):
             return
         if not confirm(
             self,
-            "Smazat fotografickou dávku",
+            "Odebrat fotografickou dávku z přehledu",
             "Odstranit místní evidenci této dávky? Již uložené fotografie zůstanou zachovány.",
         ):
             return

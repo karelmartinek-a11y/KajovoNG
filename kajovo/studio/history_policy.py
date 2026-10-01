@@ -73,15 +73,15 @@ class ActionAvailabilityPolicy:
         )
 
         if mode not in DIRECT_MODES:
-            direct_reason = "Tento typ běhu používá vlastní doménovou akci a nemá přímý Run Studio launcher."
+            direct_reason = "Tento druh práce se spouští v příslušné sekci aplikace."
         elif legacy:
-            direct_reason = "Legacy běh nemá doložený bezpečný checkpoint."
+            direct_reason = "Starší záznam nemá ověřený bod, ze kterého lze pokračovat."
         elif status == "submission_unknown":
             direct_reason = "Výsledek odeslání není potvrzen. Nový požadavek by mohl zdvojit placené zpracování."
         elif pending or (submitted and status == "waiting_manual_resource"):
-            direct_reason = "Běh má nedokončený místní import BATCH; použijte původní dávku a nevytvářejte druhý submit."
+            direct_reason = "Výsledky původní dávky ještě nebyly převzaté. Dokončete převzetí místo opětovného odeslání."
         elif not safe:
-            direct_reason = "Běh nemá neporušený explicitní bezpečný checkpoint."
+            direct_reason = "Běh nemá ověřený a neporušený bod obnovy."
         else:
             direct_reason = ""
         direct_ok = not direct_reason
@@ -101,51 +101,51 @@ class ActionAvailabilityPolicy:
             "rerun": ActionDecision(direct_ok, direct_reason or "Vytvoří nový běh od bezpečného bodu.", mode in DIRECT_MODES),
             "repair": ActionDecision(
                 direct_ok and has_error and (state.get("response_pending") or {}).get("status") not in {"queued", "in_progress", "submitting"},
-                direct_reason or ("Oprava je dostupná pouze pro doloženou chybu nebo částečný výsledek." if not has_error else "Vytvoří opravnou větev."), mode in DIRECT_MODES and has_error,
+                direct_reason or ("Oprava je dostupná pouze pro doloženou chybu nebo částečný výsledek." if not has_error else "Spustí opravu v novém navazujícím běhu."), mode in DIRECT_MODES and has_error,
             ),
             "continue": ActionDecision(
                 direct_ok and nonterminal and not live_missing,
-                direct_reason or ("Chybí identita rozpracované LIVE odpovědi; nový submit je zakázán." if live_missing else
-                    "Převezme původní LIVE odpověď přes GET v nové větvi; neopakuje POST." if live else (
+                direct_reason or ("Chybí číslo rozpracované odpovědi. Nové odeslání by mohlo zdvojit zpracování." if live_missing else
+                    "Převezme původní rozpracovanou odpověď do navazujícího běhu. Zadání znovu neodesílá." if live else (
                     "Dokončený běh nemá smysluplné pokračování."
                     if not nonterminal
                     else "Pokračuje z ověřeného plánu bez opakování přípravy."
                     if plan_ready
-                    else "Pokračuje v nové větvi."
+                    else "Pokračuje v novém navazujícím běhu."
                 )),
                 mode in DIRECT_MODES and nonterminal,
             ),
             "edit_branch": ActionDecision(
                 direct_ok and mode == "QA" and any(row.get("checkpoint_type") == "input_ready" for row in safe),
-                direct_reason or ("Upravené zadání vyžaduje ověřený bod před prvním QA požadavkem."
+                direct_reason or ("Upravený dotaz lze spustit z ověřeného bodu před první odpovědí."
                                   if not any(row.get("checkpoint_type") == "input_ready" for row in safe)
-                                  else "Upraví pouze nově prováděný QA request v nové větvi."), mode == "QA",
+                                  else "Odešle upravený dotaz v novém běhu a zachová původní zpracování."), mode == "QA",
             ),
-            "clone": ActionDecision(exact_ui, "Běh nemá přesně uložený ui_state." if not exact_ui else "Otevře upravitelné nové Zadání."),
+            "clone": ActionDecision(exact_ui, "Původní zadání nebylo úplně uložené, proto jeho kopii nelze připravit." if not exact_ui else "Otevře upravitelné nové Zadání."),
             "clone_artifact": ActionDecision(
                 exact_ui and any(row.get("reusable") for row in artifacts or []),
-                ("Běh nemá přesně uložený ui_state." if not exact_ui
-                 else "Běh nemá reusable ArtifactRecord." if not any(row.get("reusable") for row in artifacts or [])
-                 else "Ověří hash a otevře explicitní clone variantu."),
+                ("Původní zadání nebylo úplně uložené, proto jeho kopii nelze připravit." if not exact_ui
+                 else "Běh nemá uložený soubor vhodný pro další zadání." if not any(row.get("reusable") for row in artifacts or [])
+                 else "Zkontroluje neporušenost souboru a připojí jej ke kopii zadání."),
             ),
             "publish_staged": ActionDecision(
                 publishable_staged,
                 (
-                    "Dry-run nesmí publikovat OUT."
+                    "Návrh bez zápisu nesmí měnit soubory projektu."
                     if state.get("dry_run")
-                    else "Běh nemá nepřevzaté staged artefakty."
+                    else "Běh nemá připravené soubory čekající na převzetí."
                     if not staged or state.get("published_files")
                     else "Výstup není ve stavu, který lze explicitně převzít."
                     if status not in {"files_complete_unverified", "partial"}
-                    else "Výslovně převezme neověřené staged artefakty po nové kontrole target hashů."
+                    else "Zkontroluje změny cílových souborů a převezme připravené výsledky. Funkčnost výsledků tím nepotvrzuje."
                 ),
                 bool(staged) and not state.get("dry_run"),
             ),
             "complete_batch": ActionDecision(
                 bool(remote_completed),
                 ("Žádná již odeslaná dávka nečeká na místní převzetí." if not pending
-                 else "Poslední doložený vzdálený stav ještě není completed." if not remote_completed
-                 else "Převezme existující dávku bez nového submitu."), bool(submitted),
+                 else "Služba zatím nepotvrdila dokončení dávky." if not remote_completed
+                 else "Stáhne výsledky původní dávky. Zadání znovu neodesílá."), bool(submitted),
             ),
             "open_batch": ActionDecision(bool(submitted), "Otevře související dávku.", bool(submitted)),
             "comic": ActionDecision(mode == "COMIC" and bool(state.get("comic_operation_id")),

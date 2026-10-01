@@ -11,7 +11,7 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
-    QDialog, QPlainTextEdit, QSplitter, QTabWidget, QTableWidget,
+    QDialog, QLayout, QPlainTextEdit, QSplitter, QTabWidget, QTableWidget,
     QTableWidgetItem, QTextEdit, QWidget,
 )
 
@@ -19,6 +19,7 @@ from .components import action, actions, caption, friendly_error, scroll, vertic
 from .evidence import EvidenceView
 from .history_artifacts import ArtifactBrowser, ArtifactGuard, TEXT_DIFF_LIMIT
 from .history_models import RunView, format_duration
+from .presentation import mode_name
 from kajovo.core.run_bundle import OUTPUT_ARTIFACT_ROLES
 
 
@@ -54,12 +55,12 @@ def classify_modify_files(payload: dict[str, Any], state: dict[str, Any]) -> lis
         if path in failed:
             kind = "chybové"
         elif path in skipped:
-            kind = "přeskočené · hash ověřen"
+            kind = "přeskočené · obsah souboru ověřen"
         elif record:
             metadata = record.get("metadata") or {}
             kind = "nové" if spec.get("action") == "add" else "změněné" if spec.get("action") == "modify" or metadata.get("before_sha256") else "klasifikace nezapsána"
         elif state.get("dry_run"):
-            kind = "návrh nového · dry-run" if spec.get("action") == "add" else "návrh změny · dry-run"
+            kind = "návrh nového souboru bez zápisu" if spec.get("action") == "add" else "návrh změny bez zápisu"
         else:
             kind = "výsledek nezapsán"
         rows.append(FileChange(path, kind, record))
@@ -92,9 +93,9 @@ class ModifyMap(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(change.classification))
         self.table.resizeColumnsToContents()
         splitter.addWidget(self.table)
-        self.diff = QPlainTextEdit("Vyberte textový změněný soubor a zvolte Zobrazit diff.")
+        self.diff = QPlainTextEdit("Vyberte změněný textový soubor. Zobrazí se původní a nová verze.")
         self.diff.setReadOnly(True)
-        self.diff.setAccessibleName("Side-by-side diff původní a nové verze")
+        self.diff.setAccessibleName("Původní a nová verze vedle sebe")
         versions = QSplitter(Qt.Horizontal)
         self.before = QPlainTextEdit()
         self.before.setReadOnly(True)
@@ -121,7 +122,7 @@ class ModifyMap(QWidget):
             root.addWidget(caption(f"{failure.get('stage') or failure.get('operation', '')}: {failure.get('message', '')}", "error"))
             root.addWidget(caption(str(failure.get("next_step") or "")))
         elif state.get("error"):
-            root.addWidget(caption(str(state["error"]), "error"))
+            root.addWidget(caption(friendly_error(RuntimeError(str(state["error"])), "Zpracování"), "error"))
         self.generation = 0
         self.table.currentCellChanged.connect(lambda *_: self.load_diff())
         if self.changes:
@@ -138,13 +139,13 @@ class ModifyMap(QWidget):
             return
         change = self.changes[row]
         if not change.artifact:
-            self.diff.setPlainText("Pro tuto položku není evidován nový místní textový artefakt.")
+            self.diff.setPlainText("Pro tento soubor není uložená nová textová verze.")
             return
         inputs = [record for record in self.payload.get("artifacts") or [] if record.get("role") == "in_project_file"
                   and str((record.get("metadata") or {}).get("relative_path") or record.get("reconstruction_role") or "") == change.path]
         is_new = change.classification == "nové"
         if not inputs and not is_new:
-            self.diff.setPlainText("Původní verze není v Run Bundle evidována; falešný diff se nevytváří.")
+            self.diff.setPlainText("Původní verze souboru nebyla uložená. Změny proto nelze porovnat.")
             return
         before, after = inputs[-1] if inputs else None, change.artifact
 
@@ -152,15 +153,15 @@ class ModifyMap(QWidget):
             guard = ArtifactGuard(self.bundle_root)
             paths = [guard.resolve(after)] + ([guard.resolve(before)] if before else [])
             if any(path.stat().st_size > TEXT_DIFF_LIMIT for path in paths):
-                return "Soubor je větší než 5 MiB; zobrazuji pouze metadata a SHA-256.\n\n" + json.dumps(
+                return "Soubor je pro textové porovnání příliš velký. Limit je přibližně 5 milionů bajtů. Níže jsou kontrolní otisky jeho obsahu; úplné soubory si můžete uložit.\n\n" + json.dumps(
                     {"původní": (before or {}).get("sha256"), "nový": after.get("sha256")}, ensure_ascii=False, indent=2)
             try:
                 old = paths[1].read_text(encoding="utf-8") if before else ""
                 new = paths[0].read_text(encoding="utf-8")
             except UnicodeError:
-                return "Binární soubor · textové porovnání není dostupné.\n" + json.dumps({"původní": before, "nový": after}, ensure_ascii=False, indent=2)
+                return "Soubor neobsahuje čitelný text. Textové porovnání není dostupné. Níže jsou technické údaje o původním a novém souboru.\n" + json.dumps({"původní": before, "nový": after}, ensure_ascii=False, indent=2)
             if "\x00" in old or "\x00" in new:
-                return "Binární obsah · SHA-256 původní: " + str((before or {}).get("sha256")) + "\nNový: " + str(after.get("sha256"))
+                return "Soubor neobsahuje čitelný text. Kontrolní otisk původního obsahu: " + str((before or {}).get("sha256")) + "\nNový: " + str(after.get("sha256"))
             left, right = old.splitlines(), new.splitlines()
             if len(left) + len(right) > 30000:
                 return "Porovnání přesahuje 30 000 řádků. Použijte export obou souborů."
@@ -248,15 +249,16 @@ class RunDetailView(QWidget):
         self.context, self.adapter, self.payload, self.state, self.run = context, adapter, payload, state, run
         self.phase_text = None
         root = vertical(self)
-        root.addWidget(caption(f"{run.mode} · {run.project}", "heading"))
+        root.setSizeConstraint(QLayout.SetMinimumSize)
+        root.addWidget(caption(f"{mode_name(run.mode)} · {run.project}", "heading"))
         duration = format_duration(run.duration) if run.duration is not None else "Celkový čas nebyl uložen"
-        root.addWidget(caption(f"{run.run_id}  ·  {run.status.symbol} {run.status.label}  ·  {run.transport}  ·  {duration}", "muted"))
+        root.addWidget(caption(f"Číslo záznamu: {run.run_id}  ·  {run.status.symbol} {run.status.label}  ·  {mode_name(run.transport)}  ·  {duration}", "muted"))
         failure = state.get("failure_detail") or {}
         if failure:
             root.addWidget(caption(f"{failure.get('stage') or failure.get('operation', '')}: {failure.get('message', '')}", "error"))
             root.addWidget(caption(str(failure.get("next_step") or "")))
         elif state.get("error"):
-            root.addWidget(caption(str(state["error"]), "error"))
+            root.addWidget(caption(friendly_error(RuntimeError(str(state["error"])), "Zpracování"), "error"))
         if state.get("batch_imports"):
             failures = [detail for result in state["batch_imports"].values()
                         for detail in result.get("error_details", {}).values()]
@@ -265,7 +267,7 @@ class RunDetailView(QWidget):
         if run.legacy:
             root.addWidget(caption("Starší záznam · pouze pro čtení. Podrobný průběh nebyl uložen.", "muted"))
         if state.get("dry_run") or run.status.key == "dry_run":
-            root.addWidget(caption("Dry-run · návrh změn. Do projektové složky nebyly zapsány soubory.", "error"))
+            root.addWidget(caption("Návrh změn bez zápisu. Soubory projektu se nezměnily.", "error"))
         self.timeline = RunTrackView()
         self.timeline_model = RunTableModel(self)
         self.timeline_model.set_runs([run])
@@ -280,6 +282,7 @@ class RunDetailView(QWidget):
         root.addWidget(self.phase_label)
 
         self.tabs = QTabWidget()
+        self.tabs.setMinimumHeight(340)
         self.tabs.setAccessibleName("Výsledky a soubory běhu")
         overview = QWidget()
         from PySide6.QtWidgets import QSizePolicy
@@ -317,7 +320,7 @@ class RunDetailView(QWidget):
                 columns.addWidget(output)
                 passed = any(row.get("status") == "passed" and row.get("target_type") in
                              {"file", "file_contract", "output", "batch_import"} for row in payload.get("validations") or [])
-                body.addWidget(caption(("✓ Souborový kontrakt platný" if passed else "Souborový kontrakt: neověřeno")
+                body.addWidget(caption(("✓ Formát souboru prošel kontrolou" if passed else "Formát souboru nebyl ověřen")
                                        + "  ·  " + ("Obsah ověřen" if state.get("human_verified") is True else "Obsah nebyl člověkem ověřen"), "muted"))
             columns.setSizes([480, 760])
         elif run.mode == "KASKADA":
@@ -373,7 +376,7 @@ class RunDetailView(QWidget):
             for key, label in (("input_tokens", "Vstup"), ("output_tokens", "Výstup"), ("reasoning_tokens", "Uvažování")):
                 values = [row[key] for row in responses if isinstance(row.get(key), int)]
                 if values:
-                    tokens.append(f"{label}: {sum(values)} tokenů")
+                    tokens.append(f"{label}: {sum(values)} textových jednotek služby")
             ids = [row.get("response_id") for row in responses if row.get("response_id")]
             if tokens or ids:
                 root.addWidget(caption(" · ".join(tokens) + ("\nOdpověď: " + ", ".join(ids) if ids else ""), "muted"))
@@ -382,9 +385,9 @@ class RunDetailView(QWidget):
         if self.selected_stage:
             self.timeline.select_stage(run.run_id, self.selected_stage.step_id)
             self.select_stage(run, self.selected_stage)
-        root.addWidget(actions(action("history.detail.evidence", "Technická evidence", self.open_evidence)))
+        root.addWidget(actions(action("history.detail.evidence", "Technické podrobnosti", self.open_evidence)))
         if run.mode in {"GENERATE", "MODIFY", "QFILE"}:
-            artifacts.layout().insertWidget(0, actions(action("history.detail.current_outputs", "Ověřit současné soubory OUT", self.check_outputs)))
+            artifacts.layout().insertWidget(0, actions(action("history.detail.current_outputs", "Zkontrolovat soubory ve výstupní složce", self.check_outputs)))
             self.output_status = QPlainTextEdit("Historie dokládá tehdejší zápis. Aktuální soubory zatím nebyly zkontrolovány.")
             self.output_status.setReadOnly(True)
             self.output_status.setMaximumHeight(110)
@@ -418,16 +421,16 @@ class RunDetailView(QWidget):
                 if stage.status.key == "ready_to_import" else "Text této fáze nebyl uložen."))
             self.phase_text.copy_button.setEnabled(bool(text))
             self.phase_text.save_button.setEnabled(bool(text))
-        self.phase_label.setText(f"Vybraná fáze: {stage.title} · {stage.stage} · {stage.status.label}"
+        self.phase_label.setText(f"Vybraný krok: {stage.title} · {stage.status.label}"
                                 + (f" · {stage.model}" if stage.model else ""))
 
     def open_evidence(self):
         dialog = QDialog(self)
-        dialog.setWindowTitle("Technická evidence běhu")
+        dialog.setWindowTitle("Technické podrobnosti běhu")
         dialog.resize(1000, 700)
         tabs = QTabWidget()
         for key, title in (("steps", "Záznamy kroků"), ("responses", "Odpovědi"),
-                           ("requests", "Požadavky"), ("validations", "Validace"),
+                           ("requests", "Požadavky"), ("validations", "Kontroly"),
                            ("events", "Události"), ("lineage", "Návaznosti"),
                            ("checkpoints", "Body obnovy")):
             view = EvidenceView(title)
@@ -443,7 +446,7 @@ class RunDetailView(QWidget):
 class RunDetailDialog(QDialog):
     def __init__(self, context, adapter, payload, state, run, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Run Studio · {run.run_id}")
+        self.setWindowTitle(f"Historie · {run.project}")
         self.resize(1360, 960)
         self.setMinimumSize(640, 360)
         from .history_data import checked_checkpoints
@@ -456,7 +459,7 @@ class RunDetailDialog(QDialog):
         self.checkpoints = payload.get("checkpoints") or []
         root = vertical(self, 0)
         self.view = RunDetailView(context, adapter, payload, state, run)
-        root.addWidget(self.view, 1)
+        root.addWidget(scroll(self.view), 1)
         if self.page:
             lineage = payload.get("lineage") or []
             children = self.page.reverse_lineage.get(run.run_id, [])
@@ -478,7 +481,7 @@ class RunDetailDialog(QDialog):
             "repair": action("history.detail.repair", "Opravit", lambda: self.branch("repair"), "primary"),
             "continue": action("history.detail.continue", "Pokračovat", lambda: self.branch("continue")),
             "edit_branch": action("history.detail.edit", "Upravit zadání nové větve", lambda: self.branch("rerun", True)),
-            "clone": action("history.detail.clone", "Klonovat jako nové zadání", self.clone),
+            "clone": action("history.detail.clone", "Kopírovat jako nové zadání", self.clone),
             "complete_batch": action("history.detail.batch", "Převzít soubory", self.complete_batch, "primary"),
             "publish_staged": action(
                 "history.detail.publish",

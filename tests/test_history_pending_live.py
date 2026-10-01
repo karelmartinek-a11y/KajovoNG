@@ -213,12 +213,12 @@ def test_history_continue_requires_evidence_but_explicit_rerun_is_distinct(tmp_p
     launcher = HistoryBranchLauncher(SimpleNamespace(settings=worker.settings))
     checkpoint = next(row for row in adapter.checkpoints() if row["safe_to_continue"])
     preview = launcher.preview(adapter, checkpoint["checkpoint_id"], "continue")
-    assert preview.first_paid_operation.startswith("GET")
+    assert preview.first_paid_operation == "Převzetí již odeslané odpovědi bez nového zadání"
     worker.log.save_json("manifests", "response_journal", {"version": 1, "entries": {}})
     with pytest.raises(ContractError, match="journal"):
         launcher.preview(adapter, checkpoint["checkpoint_id"], "continue")
     rerun = launcher.preview(adapter, checkpoint["checkpoint_id"], "rerun")
-    assert not rerun.first_paid_operation.startswith("GET")
+    assert rerun.first_paid_operation != preview.first_paid_operation
 
 
 def test_real_client_get_observer_uses_child_step_and_preserves_original_identity(tmp_path):

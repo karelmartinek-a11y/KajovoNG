@@ -213,13 +213,14 @@ def run_phase(root, url, mode, batch, phase):
                 wait(lambda: not manager.active)
             adapter = select(run)
             if batch:
-                from kajovo.studio.resources import ValueDialog
                 picker_timer = QTimer()
                 def choose_existing_batch():
-                    dialogs = history.findChildren(ValueDialog)
+                    dialogs = [dialog for dialog in history.findChildren(QInputDialog) if dialog.isVisible()]
                     if dialogs:
-                        dialogs[-1].editor.setPlainText(history._state['batch_id'])
-                        dialogs[-1].submit()
+                        selected = next(label for label in dialogs[-1].comboBoxItems()
+                                        if label.endswith(history._state['batch_id']))
+                        dialogs[-1].setTextValue(selected)
+                        dialogs[-1].accept()
                         picker_timer.stop()
                 picker_timer.timeout.connect(choose_existing_batch)
                 picker_timer.start(10)

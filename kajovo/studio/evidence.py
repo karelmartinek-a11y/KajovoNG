@@ -8,39 +8,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QListWidget, QListWidgetItem, QPlainTextEdit, QWidget
 
 from .components import vertical
+from .presentation import FIELDS, VALUES, human_readable
 
 
-NAMES = {
-    "last_error": "Poslední chyba", "validations": "Kontroly kontraktů",
-    "batch_errors": "Chyby dávek", "recovery_events": "Zotavení",
-    "project": "Projekt", "run_id": "Identifikátor běhu", "status": "Stav",
-    "mode": "Způsob práce", "created_at": "Vytvořeno", "finished_at": "Ukončeno",
-    "input_summary": "Zadání", "output_summary": "Výsledek", "model_summary": "Modely",
-    "title": "Krok", "stage": "Etapa", "human_summary": "Shrnutí",
-    "human_message": "Událost", "output_text": "Odpověď", "display_name": "Soubor",
-    "size_bytes": "Velikost v bajtech", "mime_type": "Druh souboru",
-    "path_in_bundle": "Umístění v evidenci", "source_run_id": "Zdrojový běh",
-    "target_run_id": "Navazující běh", "relation_type": "Druh návaznosti",
-    "timestamp": "Čas", "severity": "Závažnost", "notes": "Poznámka",
-    "text": "Výsledný text", "saved": "Uložené soubory", "response_id": "Identifikátor odpovědi",
-}
-
-VALUES = {
-    "queued": "Čeká ve frontě", "in_progress": "Probíhá zpracování", "validating": "Ověřování podkladů",
-    "finalizing": "Příprava výsledků", "cancelling": "Probíhá rušení", "expired": "Vypršel čas služby",
-    "pending": "Čeká na zpracování", "submitted": "Odesláno službě", "downloaded": "Výsledky byly převzaty",
-    "info": "Informace", "warning": "Upozornění", "error": "Chyba",
-    "completed": "Dokončeno", "failed": "Chyba", "partial": "Částečný výsledek",
-    "cancelled": "Zastaveno", "active": "Probíhá", "running": "Probíhá",
-    "waiting": "Čeká", "batch_pending": "Předáno do dávky", "submission_unknown": "Výsledek odeslání není znám",
-    "response_pending": "Čeká na odpověď", "dry_run": "Návrh bez zápisu",
-    "plan_ready": "Ověřený plán je připraven; výrobní krok nebyl spuštěn",
-    "files_complete_unverified": "Soubory převzaté, funkčnost neověřena",
-    "clone": "Klonování zadání", "continue": "Pokračování", "repair": "Oprava",
-    "rerun": "Opakované spuštění", "reuse_artifacts": "Opětovné použití souborů",
-    "GENERATE": "Vytvoření projektu", "MODIFY": "Úprava projektu", "QA": "Odpověď na dotaz",
-    "QFILE": "Vytvoření souboru", "KASKADA": "Posloupnost kroků",
-}
+NAMES = FIELDS
 
 
 class EvidenceView(QWidget):
@@ -82,9 +53,9 @@ class EvidenceView(QWidget):
         if isinstance(value, list):
             for index, record in enumerate(value, 1):
                 if isinstance(record, dict):
-                    title = next((str(record[key]) for key in ("title", "display_name", "human_message", "response_id", "artifact_id", "step_id", "event_type") if record.get(key)), f"Záznam {index}")
+                    title = next((str(record[key]) for key in ("title", "display_name", "human_message") if record.get(key)), f"Záznam {index}")
                     status = record.get("status", "")
-                    item = QListWidgetItem(title + (" · " + VALUES.get(status, status) if status else ""))
+                    item = QListWidgetItem(title + (" · " + VALUES.get(status, "Stav není znám") if status else ""))
                 else:
                     item = QListWidgetItem(str(record))
                 item.setData(Qt.UserRole, record)
@@ -102,17 +73,7 @@ class EvidenceView(QWidget):
         if self.technical.isChecked():
             text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
         elif isinstance(value, dict):
-            parts = []
-            for key, name in NAMES.items():
-                content = value.get(key)
-                if content in (None, "", []):
-                    continue
-                if isinstance(content, (list, dict)):
-                    content = json.dumps(content, ensure_ascii=False, indent=2)
-                elif isinstance(content, str):
-                    content = VALUES.get(content, content)
-                parts.append(f"{name}\n{content}")
-            text = "\n\n".join(parts) or "Tento záznam nemá lidské shrnutí; úplné údaje jsou dostupné v technických podkladech."
+            text = human_readable(value)
         elif value:
             text = str(value)
         else:

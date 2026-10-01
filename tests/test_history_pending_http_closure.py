@@ -114,7 +114,8 @@ def continued(root, mode):
     with patch('kajovo.core.runs.executor.OpenAIClient',lambda *a,**k:http_client(transport)):
         history.buttons['continue'].click()
         wait(lambda: any(r.result and isinstance(r.result,dict) and r.result.get('status') == 'plan_ready' for r in manager.records.values()) and not manager.active)
-    assert len(previews) == 1 and previews[0].first_paid_operation.startswith('GET')
+    assert len(previews) == 1
+    assert previews[0].first_paid_operation == 'Převzetí již odeslané odpovědi bez nového zadání'
     child_record = next(r for r in manager.records.values() if r.identifier.startswith('RUN_'))
     target = LegacyRunAdapter(root/'LOG'/child_record.identifier)
     assert target.run_record()['parent_run_id'] == adapter.run_id

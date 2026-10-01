@@ -31,6 +31,25 @@ class CzechTranslator(QTranslator):
                         "Files of type:": "Typ souborů:", "Files of &type:": "Typ souborů:"}
             if source_text in override:
                 return override[source_text]
+        if context == "QFileSystemModel":
+            override = {"Folder": "Složka", "Directory": "Složka", "File": "Soubor", "%1 File": "Soubor %1"}
+            if source_text in override:
+                return override[source_text]
+        if context == "QAbstractFileIconProvider" and source_text in {"Drive", "Folder"}:
+            return {"Drive": "Disk", "Folder": "Složka"}[source_text]
+        if context == "QMimeType":
+            override = {"YAML source code": "Text s nastavením (YAML)",
+                        "Markdown document": "Text s formátováním (Markdown)",
+                        "Compressed Archive File": "Zabalené soubory (archiv)",
+                        "Portable Document Format": "Dokument PDF",
+                        "Extensible Markup Language": "Strukturovaný text (XML)",
+                        "Windows Batch / Command File": "Příkazový soubor Windows",
+                        "Portable Network Graphics": "Obrázek PNG",
+                        "Python script": "Program v jazyce Python"}
+            if source_text in override:
+                return override[source_text]
+        if context == "QPlatformTheme" and source_text == "OK":
+            return "Potvrdit"
         return super().translate(context, source_text, disambiguation, n) or None
 
 
@@ -38,8 +57,8 @@ def install_theme(app: QApplication) -> None:
     QLocale.setDefault(QLocale("cs_CZ"))
     if not hasattr(app, "_studio_translator"):
         translator = CzechTranslator(app)
-        if translator.load("qtbase_cs", QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
-            app.installTranslator(translator)
+        translator.load("qtbase_cs", QLibraryInfo.path(QLibraryInfo.TranslationsPath))
+        app.installTranslator(translator)
         app._studio_translator = translator
     app.setStyle("Fusion")
     palette = app.palette()

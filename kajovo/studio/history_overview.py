@@ -106,7 +106,7 @@ class PhaseInspector(QWidget):
     def select(self, stage):
         responses = unique_responses([row for row in self.payload.get("responses") or []
                                       if row.get("step_id") == stage.step_id])
-        self.title.setText(f"{stage.title} · {stage.stage}")
+        self.title.setText(stage.title)
         duration = format_duration(stage.duration) if stage.duration is not None else "Konec fáze nebyl zapsán"
         status = stage.status.label
         if stage.status.key in {"running", "preparing", "created"} and self.run.status.terminal:
@@ -115,8 +115,9 @@ class PhaseInspector(QWidget):
         if stage.model:
             lines.append(f"Model: {stage.model}")
         if stage.reasoning:
-            lines.append(f"Hloubka uvažování: {stage.reasoning}")
-        for key, label in (("input_tokens", "Vstupní tokeny"), ("output_tokens", "Výstupní tokeny")):
+            from .presentation import REASONING
+            lines.append("Hloubka uvažování: " + REASONING.get(stage.reasoning, "Jiná; viz technické podrobnosti"))
+        for key, label in (("input_tokens", "Množství vstupního textu (jednotky služby)"), ("output_tokens", "Množství výsledného textu (jednotky služby)")):
             values = [row[key] for row in responses if isinstance(row.get(key), int)]
             if values:
                 lines.append(f"{label}: {sum(values):,}".replace(",", " "))
@@ -126,7 +127,7 @@ class PhaseInspector(QWidget):
         self.info.setText("\n".join(lines))
         validations = [row for row in self.payload.get("validations") or [] if row.get("step_id") == stage.step_id]
         self.validation.setText("\n".join(str(row.get("human_message") or row.get("summary") or row.get("status") or "")
-                                           for row in validations) or "Validace nebyla uložena.")
+                                           for row in validations) or "Výsledek kontroly nebyl uložen.")
         self.validation.setVisible(bool(validations))
         from kajovo.core.user_errors import describe_recorded_error
 

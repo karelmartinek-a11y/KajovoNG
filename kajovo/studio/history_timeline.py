@@ -84,7 +84,7 @@ class TrackDelegate(QStyledItemDelegate):
             painter.setFont(font)
             painter.setPen(QColor(COLORS["muted"]))
             duration = "čas nezapsán" if stage.duration is None else format_duration(stage.duration)
-            painter.drawText(rect.adjusted(9, 31, -8, -7), Qt.AlignLeft | Qt.AlignTop, f"{stage.stage} · {duration}")
+            painter.drawText(rect.adjusted(9, 31, -8, -7), Qt.AlignLeft | Qt.AlignTop, duration)
             label = stage.status.label
             if stage.status.key in {"running", "created", "preparing"} and run.status.terminal:
                 label = "Konec fáze nezapsán"
@@ -95,7 +95,7 @@ class TrackDelegate(QStyledItemDelegate):
             painter.setPen(QPen(QColor(COLORS["focus"]), 2))
             x = option.rect.right() - 14
             painter.drawEllipse(x - 5, option.rect.center().y() - 5, 10, 10)
-            label = f"↳ {run.child_count} větví" if run.child_count else "↰ navazující běh"
+            label = f"↳ navazující běhy: {run.child_count}" if run.child_count else "↰ navazující běh"
             painter.drawText(option.rect.adjusted(0, 2, -24, 0), Qt.AlignRight | Qt.AlignTop, label)
         painter.restore()
 
@@ -256,7 +256,7 @@ class RunTrackView(QTableView):
                 stage = self.delegate.segment_at(run, self.visualRect(index), event.pos())
                 if stage:
                     duration = format_duration(stage.duration) if stage.duration is not None else "Trvání nebylo uloženo"
-                    QToolTip.showText(event.globalPos(), f"{stage.title} · {stage.stage}\n{stage.status.label} · {duration}\n"
+                    QToolTip.showText(event.globalPos(), f"{stage.title}\n{stage.status.label} · {duration}\n"
                                       f"{stage.model}\n{stage.artifact_count} souborů · {stage.response_count} záznamů odpovědi", self)
                     return True
         return super().viewportEvent(event)

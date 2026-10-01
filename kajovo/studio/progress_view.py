@@ -298,7 +298,7 @@ class MultiProgressView(QWidget):
                 self.unit_progress.hide()
                 note += f" Potvrzený údaj procesu: {completed} z {total} {measurement.unit}."
         self.progress_note.setText(note)
-        following = event.next_step
+        following = step_name(event.next_step) if event.next_step else ""
         if not following:
             following = next((step_name(key) for key, s in rows if s == "pending"), "")
         self.next_label.setText("Další plánovaný krok: " + following if following and not model.terminal

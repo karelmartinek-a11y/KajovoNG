@@ -139,13 +139,13 @@ class HistoryBranchLauncher:
         first_paid = first_paid_operation(mode, checkpoint, selected_stage)
         if (mode in {"GENERATE", "MODIFY"} and output_ui.get("stop_after_plan")
                 and first_paid in {"A3", "B3"}):
-            first_paid = "Bez nového requestu; výrobu potvrďte z checkpointu plan_ready."
+            first_paid = "Bez odeslání nového zadání. Vytvoření souborů potvrďte až z bodu obnovy s dokončeným plánem."
         return BranchPreview(
             relation, adapter.run_id, checkpoint_id, checkpoint_type,
             selected_stage, tuple(inherited), skipped,
-            ("GET existující odpovědi; bez nového POST" if preview_live
+            ("Převzetí již odeslané odpovědi bez nového zadání" if preview_live
              else first_paid), error, technical_error,
-            "Zdrojový běh zůstane neměnný; vznikne nový Run ID a nová lineage větev.",
+            "Zdrojový záznam se zachová. Vznikne nový záznam se samostatným číslem a odkazem na předchozí práci.",
             str(self._output_dir(mode, state, output_ui) or ""),
         )
 
@@ -209,8 +209,9 @@ class HistoryBranchLauncher:
             raise
 
     def _adopt(self, preview, run_id, worker, output_dir, project):
+        from .presentation import VALUES
         record = self.context.operations.adopt(
-            f"{preview.relation.upper()} · {project}", worker,
+            f"{VALUES.get(preview.relation, 'Navazující práce')} · {project}", worker,
             receive=lambda value: self.refreshed(), identifier=run_id, output_dir=output_dir)
         self.context.operations.on_finished(record, self.refreshed)
         return record

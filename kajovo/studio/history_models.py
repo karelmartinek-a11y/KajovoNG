@@ -9,6 +9,7 @@ from typing import Any
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
 from .history_state import PresentedState, present_state
+from .presentation import mode_name
 from kajovo.core.run_bundle import OUTPUT_ARTIFACT_ROLES
 
 
@@ -17,7 +18,7 @@ STAGE_TITLES = {
     "A2Q": "Kontrola návrhu", "A3": "Výsledné soubory", "B0R": "Upřesnění změn",
     "B1": "Plán změn", "B2": "Struktura změn", "B2Q": "Kontrola změn",
     "B3": "Výsledné soubory", "QA": "Odpověď", "QFILE": "Výsledný soubor",
-    "BATCH": "BATCH", "Upload": "Nahrání podkladů", "RUN": "Běh",
+    "BATCH": "Dávkové zpracování", "Upload": "Nahrání podkladů", "RUN": "Běh",
 }
 
 
@@ -214,22 +215,22 @@ class RunTableModel(QAbstractTableModel):
             if index.column() == self.MetaColumn:
                 duration = "Není evidováno" if run.duration is None else format_duration(run.duration)
                 models = " / ".join(run.models) or "Není evidováno"
-                legacy = " · LEGACY" if run.legacy else ""
+                legacy = " · starší záznam" if run.legacy else ""
                 return (
-                    f"{run.mode}  ·  {run.project}\n{run.run_id}  ·  {format_datetime(run.created_at)}  ·  {duration}\n"
-                    f"{run.status.symbol} {run.status.label}  ·  {run.transport}  ·  {models}{legacy}\n"
+                    f"{mode_name(run.mode)}  ·  {run.project}\n{run.run_id}  ·  {format_datetime(run.created_at)}  ·  {duration}\n"
+                    f"{run.status.symbol} {run.status.label}  ·  {mode_name(run.transport)}  ·  {models}{legacy}\n"
                     f"{run.input_count} vstupů · {run.output_count} výstupů · {run.error_count} chyb"
                 )
             return run.run_id
         if role == Qt.AccessibleTextRole:
-            return f"{run.mode}, {run.project}, {run.status.label}, {run.run_id}"
+            return f"{mode_name(run.mode)}, {run.project}, {run.status.label}, {run.run_id}"
         if role == Qt.ToolTipRole and run.legacy:
-            return "Legacy běh je pouze ke čtení; chybějící kroky ani checkpointy se nedopočítávají."
+            return "Starší záznam lze pouze prohlížet. Chybějící kroky ani body obnovy se nedoplňují."
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
-            return ("Běh / stopa", "Časová osa · relativní čas")[section] if section in (0, 1) else None
+            return ("Běh a jeho kroky", "Časová osa · relativní čas")[section] if section in (0, 1) else None
         return super().headerData(section, orientation, role)
 
     def set_runs(self, runs: list[RunView]):

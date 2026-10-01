@@ -44,10 +44,10 @@ LABELS = {
     "PHOTO_SUMMARY": "Souhrn výsledku fotografií",
     "COMIC_CHECK": "Kontrola komiksové operace",
     "COMIC_RESPONSES": "Sestavení textových pravidel komiksu",
-    "COMIC_REFERENCE": "Vytvoření obrazové reference",
-    "COMIC_PREPARING": "Příprava panelů",
-    "COMIC_SUBMITTING": "Odeslání panelů",
-    "COMIC_RETRIEVING": "Převzetí výsledků panelů",
+    "COMIC_REFERENCE": "Vytvoření vzorového obrázku",
+    "COMIC_PREPARING": "Příprava obrázků příběhu",
+    "COMIC_SUBMITTING": "Odeslání obrázků příběhu",
+    "COMIC_RETRIEVING": "Převzetí výsledných obrázků příběhu",
     "COMIC_SAVE": "Uložení stavu komiksu",
     "OPERATION": "Provedení operace",
     "BATCH_SUBMIT": "Příprava a odeslání hromadné úlohy",
@@ -66,6 +66,8 @@ LABELS = {
     "BATCH": "Zpracování hromadné úlohy", "Upload": "Nahrávání podkladů",
     "Download": "Stahování výsledků", "Ukládání": "Bezpečné uložení souborů",
     "Validace kontraktů": "Kontrola vytvořených souborů",
+    "Backup": "Uložení záložní kopie", "ZIP": "Kontrola archivu souborů",
+    "Kontext BATCH": "Příprava podkladů dávkového zpracování",
 }
 STATES = {
     "active": "Práce probíhá", "preparing": "Připravuje se", "running": "Práce probíhá",

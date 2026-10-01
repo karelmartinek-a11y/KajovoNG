@@ -39,9 +39,9 @@ def _source(tmp_path, *, mode="QA", status="failed", batch=False):
 @pytest.mark.parametrize("key,label", [
     ("completed", "Dokončeno"), ("partial", "Částečně dokončeno"),
     ("failed", "Chyba"), ("cancelled", "Zrušeno"), ("running", "Běží"),
-    ("response_pending", "Čeká na odpověď"), ("batch_pending", "BATCH běží"),
-    ("files_complete_unverified", "Soubory připravené, funkčnost neověřena"), ("dry_run", "Dry-run"),
-    ("submission_unknown", "Neznámý výsledek"), ("blocked", "Blokováno"),
+    ("response_pending", "Čeká na odpověď"), ("batch_pending", "Dávka se zpracovává"),
+    ("files_complete_unverified", "Soubory připravené, funkčnost neověřena"), ("dry_run", "Návrh bez změny souborů"),
+    ("submission_unknown", "Neznámý výsledek"), ("blocked", "Nelze pokračovat"),
 ])
 def test_central_state_mapping_has_text_icon_and_color(key, label):
     value = present_state(key)
@@ -272,7 +272,7 @@ def test_modify_classification_uses_manifest_hash_and_explicit_events():
     assert values == {"changed.py": "změněné", "new.py": "výsledek nezapsán", "skip.py": "výsledek nezapsán",
                       "failed.py": "chybové", "same.py": "zachované", "old.py": "odstraněné"}
     state["_verified_skip_paths"] = ["skip.py"]
-    assert next(row for row in classify_modify_files(payload, state) if row.path == "skip.py").classification == "přeskočené · hash ověřen"
+    assert next(row for row in classify_modify_files(payload, state) if row.path == "skip.py").classification == "přeskočené · obsah souboru ověřen"
 
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY", "QA", "QFILE"])

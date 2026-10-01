@@ -125,7 +125,7 @@ def test_history_clone_actual_worker_source_preserved_and_revision_guard(qtbot,m
     assert workbench.widgets['response_id'].text() == ('' if not change else 'resp_qa_answer_v2')
     if change:
         assert workbench.prompt.toPlainText() == 'Nové zadání nesmí klon přepsat.'
-        assert 'klon nebyl použit' in history.notice.text()
+        assert 'kopie nebyla použitá' in history.notice.text()
     else:
         assert workbench.pending_lineage == {'source_run_id':adapter.run_id,'relation_type':'clone'}
         assert workbench.prompt.toPlainText() == 'Odpověz z tohoto zadání.'

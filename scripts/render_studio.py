@@ -24,8 +24,8 @@ def main():
     os.environ["QT_SCALE_FACTOR"] = args.scale
     os.environ.pop("OPENAI_API_KEY", None)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, Qt
-    from PySide6.QtWidgets import QApplication, QAbstractButton, QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListWidgetItem, QScrollArea, QTabWidget, QWidget
+    from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QModelIndex, QTimer, Qt
+    from PySide6.QtWidgets import QApplication, QAbstractButton, QAbstractItemView, QComboBox, QDialog, QFileDialog, QInputDialog, QLabel, QLineEdit, QListView, QMenu, QMessageBox, QPlainTextEdit, QScrollArea, QTabWidget, QTextEdit, QWidget
     from kajovo.core.config import AppSettings
     from kajovo.core import secret_store
     from kajovo.core.runlog import RunLogger
@@ -44,6 +44,22 @@ def main():
     from kajovo.studio.history_composer import BranchComposer
     from kajovo.studio.history_details import CascadeStepsView, ModifyMap, RunDetailDialog
     from kajovo.studio.history_models import build_run
+    from kajovo.studio.file_dialogs import FileDialog
+    from kajovo.core.progress_model import STATES
+    from kajovo.studio.components import CzechTranslator
+
+    qt_texts = {}
+    translate = CzechTranslator.translate
+
+    def record_translation(translator, context, source_text, disambiguation=None, n=-1):
+        result = translate(translator, context, source_text, disambiguation, n)
+        qt_texts[(context, source_text, disambiguation or "")] = {
+            "context": context, "source": source_text, "translation": result or source_text,
+            "disambiguation": disambiguation or "", "plural": n,
+        }
+        return result
+
+    CzechTranslator.translate = record_translation
 
     def create_run_fixtures(workspace, settings):
         log_dir = settings.log_dir
@@ -86,7 +102,7 @@ def main():
 
         logger, ui, _ = base("RUN_150920261001_GENERATE", "Rezervační portál", "GENERATE")
         for seq, token, title in ((0, "A0R", "Upřesnění požadavků"), (1, "A1", "Plán řešení"),
-                                  (2, "A2", "Struktura projektu"), (3, "A3", "BATCH soubory")):
+                                  (2, "A2", "Struktura projektu"), (3, "A3", "Tvorba souborů v dávce")):
             stage(logger, token, title, seq, "batch_pending" if token == "A3" else "completed")
         logger.update_state({"batch_id": "batch_generate_demo", "status": "batch_pending",
                              "batch_records": {"batch_generate_demo": {"id": "batch_generate_demo", "status": "completed",
@@ -218,11 +234,12 @@ def main():
     _load_fonts()
     snapshots = []
     old_cwd = Path.cwd()
-    with tempfile.TemporaryDirectory(prefix="kajovo-studio-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="kajovo-studio-", ignore_cleanup_errors=True) as temporary:
         workspace = Path(temporary)
         os.chdir(workspace)
         try:
             with patch("socket.create_connection", side_effect=AssertionError("Síť je při snímkování zakázaná.")), \
+                 patch("socket.socket.connect", side_effect=AssertionError("Síť je při snímkování zakázaná.")), \
                  patch("requests.sessions.Session.request", side_effect=AssertionError("Síť je při snímkování zakázaná.")), \
                  patch("kajovo.core.secret_store._read_persisted_api_key", return_value=None), \
                  patch("kajovo.core.secret_store._read_keyring_api_key_record", return_value=secret_store._MISSING), \
@@ -241,7 +258,7 @@ def main():
                 window.cascades.title.setText("Připravit návrh řešení")
                 window.cascades.model.setCurrentText("gpt-4.1")
                 window.cascades.commit_step()
-                window.batches.records = [{"id": "batch_ukazka", "remote": {"status": "in_progress", "request_counts": {"completed": 8, "failed": 1, "total": 12}}, "state": {"project": "Rezervace", "status": "batch_pending"}, "run_dir": str(workspace / "LOG" / "RUN_ukazka")}]
+                window.batches.records = [{"id": "batch_ukazka", "remote": {"status": "in_progress", "request_counts": {"completed": 8, "failed": 1, "total": 12}}, "state": {"project": "Rezervace", "status": "batch_pending"}, "run_dir": str(workspace / "LOG" / "RUN_ukazka"), "kind": "GENERATE", "photo": None, "started_at": "2026-09-15T10:00:00+00:00"}]
                 window.batches.render()
                 window.workbench.result.set_value({"status": "completed", "text": "Projekt je připravený k místnímu ověření.", "saved": ["rezervace.py", "README.md"]})
                 from PySide6.QtGui import QColor, QImage
@@ -262,16 +279,14 @@ def main():
                 job.items[0].output_path = str(edited_path)
                 job.status = "completed"
                 job.request_completed = 1
-                item = QListWidgetItem("Ukázková úloha · dokončeno")
-                item.setData(Qt.UserRole, job)
-                window.photos.job_list.addItem(item)
-                window.photos.job_list.setCurrentItem(item)
+                window.photos.jobs = [job]
+                window.photos._render_jobs()
 
                 comic = window.comics
                 comic.timer.stop()
                 project = comic.service.store.project("Ukázka rozhraní – Večer v kanceláři")
-                karel = comic.service.store.entity(project, "character", "Karel", "Ukázková entita bez generované reference")
-                room = comic.service.store.entity(project, "environment", "Kancelář", "Ukázkové prostředí bez generované reference")
+                karel = comic.service.store.entity(project, "character", "Karel", "Ukázková postava bez vzorového obrázku")
+                room = comic.service.store.entity(project, "environment", "Kancelář", "Ukázkové prostředí bez vzorového obrázku")
                 panel = comic.service.store.panel(project, "Příchod do kanceláře")
                 record = comic.service.store.get("panels", panel)
                 comic.service.store.save_panel(panel, record["revision"], record["name"], {"version": 1, "nodes": [
@@ -280,8 +295,13 @@ def main():
                 ]}, record["format"], [])
                 comic.project_id = project
                 comic.refresh_projects()
+                comic.entity_lists["character"].setCurrentRow(0)
+                comic.overlays.kind.setCurrentIndex(comic.overlays.kind.findData("dialog"))
+                comic.overlays.add_layer()
+                comic.overlays.text.setPlainText("Ahoj! Začneme pracovat.")
 
                 def capture(widget, name, include_scroll=True):
+                    print("Snímek:", name, flush=True)
                     if isinstance(widget, QDialog):
                         width, height = map(int, args.size.split(","))
                         widget.resize(min(widget.width(), width), min(widget.height(), height))
@@ -294,20 +314,38 @@ def main():
                     controls = []
                     defects = []
                     for child in widget.findChildren(QWidget):
-                        if not isinstance(child, (QAbstractButton, QComboBox, QLabel, QLineEdit)):
+                        if not isinstance(child, (QAbstractButton, QComboBox, QLabel, QLineEdit, QPlainTextEdit, QTextEdit, QAbstractItemView)):
                             continue
                         if not child.isVisibleTo(widget):
                             continue
-                        text = child.text() if hasattr(child, "text") else child.currentText()
+                        if isinstance(child, (QPlainTextEdit, QTextEdit)):
+                            text = child.toPlainText()
+                        elif isinstance(child, QAbstractItemView):
+                            model = child.model()
+                            columns = 1 if isinstance(child, QListView) else model.columnCount(QModelIndex()) if model is not None else 0
+                            text = "\n".join(" · ".join(str(model.index(row, column).data() or "")
+                                              for column in range(columns))
+                                             for row in range(model.rowCount(QModelIndex()))) if model is not None else ""
+                        else:
+                            text = child.text() if hasattr(child, "text") else child.currentText()
+                        if isinstance(child, QLineEdit) and child.echoMode() != QLineEdit.Normal:
+                            text = "[skrytý přístupový údaj]" if text else ""
                         origin = child.mapTo(widget, child.rect().topLeft())
                         controls.append({"id": child.objectName(), "type": type(child).__name__, "text": text,
                                          "x": origin.x(), "y": origin.y(), "width": child.width(), "height": child.height(),
-                                         "enabled": child.isEnabled(), "accessible_name": child.accessibleName()})
+                                         "enabled": child.isEnabled(), "accessible_name": child.accessibleName(),
+                                         "tooltip": child.toolTip(), "placeholder": child.placeholderText() if hasattr(child, "placeholderText") else "",
+                                         "choices": [child.itemText(index) for index in range(child.count())] if isinstance(child, QComboBox) else []})
                         if isinstance(child, QLabel) and text and child.wordWrap():
                             required = child.heightForWidth(child.width())
                             if required > child.height() + 2:
                                 defects.append({"text": text, "required_height": required, "actual_height": child.height()})
-                    snapshots.append({"name": name, "file": image_path.name, "width": widget.width(), "height": widget.height(), "scale": args.scale, "controls": controls, "label_clipping": defects})
+                    snapshots.append({"name": name, "file": image_path.name, "width": widget.width(), "height": widget.height(), "scale": args.scale,
+                                      "class": type(widget).__name__, "title": widget.windowTitle(), "controls": controls, "label_clipping": defects,
+                                      "visible_classes": sorted({type(child).__name__ for child in widget.findChildren(QWidget) if child.isVisibleTo(widget)}),
+                                      "tabs": [tabs.tabText(index) for tabs in widget.findChildren(QTabWidget) if tabs.isVisibleTo(widget) for index in range(tabs.count())],
+                                      "current_tabs": [tabs.tabText(tabs.currentIndex()) for tabs in widget.findChildren(QTabWidget) if tabs.isVisibleTo(widget)],
+                                      "menu_actions": [item.text() for item in widget.actions()] if isinstance(widget, QMenu) else []})
                     if include_scroll and isinstance(widget, QDialog):
                         for index, area in enumerate(widget.findChildren(QScrollArea)):
                             if area.isVisible():
@@ -337,6 +375,48 @@ def main():
                             horizontal.setValue(horizontal.maximum())
                             capture(window, f"{name}_horizontal{number}")
                             horizontal.setValue(previous)
+
+                def capture_evidence_dialog(view, name):
+                    capture(view, name)
+                    for number, tabs in enumerate(view.findChildren(QTabWidget)):
+                        for index in range(tabs.count()):
+                            tabs.setCurrentIndex(index)
+                            capture(view, f"{name}_tabs{number}_{index}")
+                            page = tabs.widget(index)
+                            from kajovo.studio.evidence import EvidenceView
+                            if isinstance(page, EvidenceView):
+                                page.technical.setChecked(True)
+                                capture(view, f"{name}_tabs{number}_{index}_expanded")
+                                page.technical.setChecked(False)
+                    view.hide()
+                    return QDialog.Rejected
+
+                def capture_popup(view, name):
+                    capture(view, name)
+                    view.hide()
+                    return QDialog.Rejected
+
+                for name, callback in (
+                    ("resource_new_library", window.resources.create_store),
+                    ("resource_file_codes", window.resources.add_store_files),
+                    ("photo_save_template", window.photos.save_template),
+                    ("cascade_contract", window.cascades.edit_contract),
+                    ("cascade_options", window.cascades.definition_options),
+                ):
+                    with patch.object(QDialog, "exec", lambda view, n=name: capture_popup(view, n)):
+                        callback()
+                entity_record = comic.service.store.get("entities", karel)
+                original_get = comic.service.store.get
+                def reference_record(table, identifier):
+                    if table == "entities" and identifier == karel:
+                        return {**entity_record, "active_revision": "render-reference"}
+                    if table == "entity_revisions" and identifier == "render-reference":
+                        return {"asset_id": "render-asset", "descriptor": "Karel, tmavé vlasy, modrá košile. Zachovejte vzhled postavy i v dalších obrázcích."}
+                    return original_get(table, identifier)
+                with patch.object(comic.service.store, "get", reference_record), \
+                     patch.object(comic.service.store, "asset_path", return_value=sample_path), \
+                     patch.object(QDialog, "exec", lambda view: capture_popup(view, "comic_reference")):
+                    comic.show_entity("character")
 
                 window.show()
                 window.select_page("history")
@@ -394,6 +474,12 @@ def main():
                         view = dialog.findChild(CascadeStepsView)
                         view.table.setCurrentCell(view.table.rowCount() - 1, 0)
                     capture(dialog, "run_studio_" + key, include_scroll=False)
+                    for number, tabs in enumerate(dialog.findChildren(QTabWidget)):
+                        for index in range(tabs.count()):
+                            tabs.setCurrentIndex(index)
+                            capture(dialog, f"run_studio_{key}_tabs{number}_{index}")
+                    with patch.object(QDialog, "exec", lambda view: capture_evidence_dialog(view, "run_studio_" + key + "_technical")):
+                        dialog.view.open_evidence()
                     dialog.hide()
 
                 run_detail("generate", "Přehled")
@@ -401,6 +487,16 @@ def main():
                 run_detail("qa", "Přehled")
                 run_detail("qfile", "Přehled")
                 run_detail("cascade", "Přehled")
+                run_detail("comic", "Přehled")
+                def capture_menu():
+                    menu = app.activePopupWidget()
+                    if isinstance(menu, QMenu):
+                        capture(menu, "history_actions")
+                        menu.close()
+                QTimer.singleShot(0, capture_menu)
+                window.history.show_more()
+                capture(window.history.filter_dialog, "history_filters")
+                window.history.filter_dialog.hide()
                 cascade_adapter = LegacyRunAdapter(fixtures["cascade"])
                 repair = BranchComposer(window.history.launcher, cascade_adapter, cascade_adapter.checkpoints(),
                                         "repair", "validation", window)
@@ -412,6 +508,10 @@ def main():
                     QTest.qWait(10)
                 capture(repair, "run_studio_repair", include_scroll=False)
                 repair.hide()
+                for relation, edit in (("continue", False), ("rerun", False), ("rerun", True)):
+                    composer = BranchComposer(window.history.launcher, cascade_adapter, cascade_adapter.checkpoints(), relation, "validation", window, edit_input=edit)
+                    capture(composer, "history_branch_" + relation + ("_edit" if edit else ""))
+                    composer.hide()
                 for key, page in window.pages.items():
                     window.select_page(key)
                     capture(window, key)
@@ -423,18 +523,26 @@ def main():
                             capture(window, f"{key}_tabs{number}_{index}")
                             capture_scrolls(f"{key}_tabs{number}_{index}")
                         tabs.setCurrentIndex(original)
+                    for number, combo in enumerate(page.findChildren(QComboBox)):
+                        if combo.isVisibleTo(window) and combo.count():
+                            combo.showPopup()
+                            capture(combo.view().window(), f"{key}_choice{number}", include_scroll=False)
+                            combo.hidePopup()
+                    if key != "settings":
+                        window.detach_page()
+                        detached = window.detached[key]
+                        capture(detached, "detached_" + key)
+                        detached.accept()
                 window.select_page("run")
+                for mode in ("GENERATE", "MODIFY", "QA", "QFILE"):
+                    window.workbench.widgets["mode"].setCurrentIndex(window.workbench.widgets["mode"].findData(mode))
+                    capture(window, "run_mode_" + mode)
+                    capture_scrolls("run_mode_" + mode)
                 window.context.api_key = "render-only"
                 window.workbench.widgets["model"].setCurrentIndex(window.workbench.widgets["model"].findData("gpt-4.1"))
                 window.workbench.widgets["out_dir"].setText(str(workspace / "output"))
                 window.workbench.validate()
                 capture(window, "run_ready")
-                def capture_comparison(dialog):
-                    capture(dialog, "photos_comparison")
-                    dialog.hide()
-                    return QDialog.Rejected
-                with patch.object(QDialog, "exec", capture_comparison):
-                    window.photos.compare()
                 window.select_page("settings")
                 window.detach_page()
                 detached = window.detached["settings"]
@@ -443,20 +551,40 @@ def main():
                 for key, record in (("input", CascadeInput(name="Zdrojový soubor")), ("output", CascadeOutput(name="Výsledný soubor"))):
                     dialog = CascadeItemDialog(record, window.cascades.definition.steps, window)
                     capture(dialog, "cascade_" + key + "_editor")
+                    selector = dialog.form.fields["source" if key == "input" else "kind"]
+                    for index in range(selector.count()):
+                        selector.setCurrentIndex(index)
+                        capture(dialog, "cascade_" + key + "_" + str(selector.currentData()))
                     dialog.hide()
-                dialog = QFileDialog(window, "Vybrat vstupní soubory", str(workspace))
-                dialog.setFileMode(QFileDialog.ExistingFiles)
-                capture(dialog, "file_picker")
-                dialog.hide()
-                for state in ("active", "waiting", "completed", "failed", "partial", "cancelled", "batch_pending", "response_pending", "submission_unknown", "dry_run"):
+                for key, mode, accept in (("files", QFileDialog.ExistingFiles, QFileDialog.AcceptOpen),
+                                          ("file", QFileDialog.ExistingFile, QFileDialog.AcceptOpen),
+                                          ("directory", QFileDialog.Directory, QFileDialog.AcceptOpen),
+                                          ("save", QFileDialog.AnyFile, QFileDialog.AcceptSave)):
+                    dialog = FileDialog(window, "Uložit soubor" if key == "save" else "Vybrat složku" if key == "directory" else "Vybrat soubory", str(workspace))
+                    dialog.setFileMode(mode)
+                    dialog.setAcceptMode(accept)
+                    capture(dialog, "file_picker_" + key)
+                    dialog.hide()
+                for state in STATES:
                     dialog = OperationDialog("Připravuji soubory projektu", window)
                     dialog.notification.show()
+                    dialog.on_event(ProgressEvent("PLAN", planned_steps=("QA_INPUT", "QA_RESPONSE", "QA_VALIDATION")))
+                    dialog.on_event(ProgressEvent("QA_INPUT", "completed"))
                     dialog.on_event(ProgressEvent("Ověřování souborů", state, 8 if state == "completed" else 3, 8, "souborů", "Kontroluji obsah souborů před uložením."))
                     if state not in ("active", "waiting"):
                         dialog.finish(state)
                     capture(dialog, "operation_" + state)
                     dialog.timer.stop()
                     dialog.hide()
+                dialog = OperationDialog("Čekání na bezpečné zastavení", window)
+                dialog.stop_callback = lambda: None
+                dialog.stop.setEnabled(True)
+                dialog.request_stop()
+                capture(dialog, "operation_stopping")
+                dialog.inspector.tech_toggle.setChecked(True)
+                capture(dialog, "operation_technical")
+                dialog.timer.stop()
+                dialog.hide()
                 dialog = DetailDialog("Kontrola vstupu", "Vybraný soubor se nepodařilo otevřít.", window, {"soubor": "ukazka.txt"})
                 capture(dialog, "detail")
                 dialog.findChild(QAbstractButton, "dialog.details").click()
@@ -465,9 +593,27 @@ def main():
                 dialog = DetailDialog("Odstranit vybrané soubory", "Operace trvale odstraní vybrané soubory ze služby.", window, confirm=True)
                 capture(dialog, "confirmation")
                 dialog.hide()
-                dialog = ValueDialog("Vstupy a výstupy kroku", "Úplný kontrakt kroku", '{"name": "Ukázka"}', window, structured=True)
+                dialog = ValueDialog("Vstupy a výstupy kroku", "Technický zápis vstupů a výstupů kroku (JSON)", '{"name": "Ukázka"}', window, structured=True)
                 capture(dialog, "value_editor")
                 dialog.hide()
+                for kind in ("text", "multiline", "item"):
+                    dialog = QInputDialog(window)
+                    dialog.setWindowTitle("Pojmenovat práci" if kind != "item" else "Vybrat uložený soubor")
+                    dialog.setLabelText("Název" if kind != "item" else "Soubor")
+                    if kind == "multiline":
+                        dialog.setOption(QInputDialog.UsePlainTextEditForTextInput)
+                    if kind == "item":
+                        dialog.setComboBoxItems(["1. navrh.txt", "2. obrazek.png"])
+                        dialog.setComboBoxEditable(False)
+                    capture(dialog, "input_dialog_" + kind)
+                    dialog.hide()
+                dialog = QMessageBox(QMessageBox.Warning, "Upozornění", "Vyberte uložený soubor.", QMessageBox.Ok, window)
+                capture(dialog, "message_box")
+                dialog.hide()
+                for kind, editor in (("single", window.workbench.widgets["project"]), ("multiline", window.workbench.prompt)):
+                    menu = editor.createStandardContextMenu()
+                    capture(menu, "edit_menu_" + kind)
+                    menu.hide()
                 converter = ConverterWindow()
                 converter.resize(*map(int, args.size.split(",")))
                 capture(converter, "converter")
@@ -483,6 +629,7 @@ def main():
         finally:
             os.chdir(old_cwd)
     (output / "manifest.json").write_text(json.dumps(snapshots, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (output / "qt-texts.json").write_text(json.dumps(list(qt_texts.values()), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"screenshots": len(snapshots), "output": str(output), "label_clipping": sum(len(row["label_clipping"]) for row in snapshots)}, ensure_ascii=False))
 
 

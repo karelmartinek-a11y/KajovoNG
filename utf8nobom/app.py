@@ -469,7 +469,7 @@ def run_job(
 
     try:
         logger.write("run_started", directories=[str(item.path) for item in targets], backup_dir=str(backup_dir))
-        emit({"type": "log", "message": f"Run {run_id} zahájen."})
+        emit({"type": "log", "message": f"Zpracování {run_id} zahájeno."})
         emit({"type": "status", "message": "Připravuji plán práce..."})
 
         plan = build_scan_plan(targets)
@@ -499,7 +499,7 @@ def run_job(
             copied_size = sum(max(task.size, 1) for task in plan.file_tasks if task.path.is_relative_to(target.path))
             tracker.advance(max(copied_size, 1), "Backup", str(target.path))
             logger.write("backup_created", source=str(target.path), copy=str(backup_copy), zip=str(backup_zip))
-            emit({"type": "log", "message": f"Backup hotov: {backup_zip}"})
+            emit({"type": "log", "message": f"Záloha je uložená: {backup_zip}"})
 
         fixed_files = 0
         fixed_zips = 0
@@ -526,7 +526,7 @@ def run_job(
                 "type": "done",
                 "message": (
                     f"Hotovo. Opravené soubory: {fixed_files}, upravené ZIPy: {fixed_zips}. "
-                    f"Backup a log: {logger.run_dir}"
+                    f"Záloha a záznam průběhu: {logger.run_dir}"
                 ),
             }
         )

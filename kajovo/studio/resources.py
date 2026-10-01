@@ -25,7 +25,7 @@ def fill_records(widget, records):
     for record in records:
         identifier = record.get("id", "")
         title = record.get("filename") or record.get("name") or identifier
-        item = QListWidgetItem(f"{title}\n{identifier}")
+        item = QListWidgetItem(f"{title}\nČíslo podkladu: {identifier}")
         item.setData(Qt.UserRole, identifier)
         item.setData(Qt.UserRole + 1, record)
         widget.addItem(item)
@@ -39,6 +39,8 @@ class ValueDialog(QDialog):
         self.resize(540, 400)
         root = vertical(self)
         root.addWidget(caption(label))
+        if structured:
+            root.addWidget(caption("Pokročilé nastavení: mění přesná pravidla zpracování. Zápis JSON vyžaduje znalost názvů polí. Před uložením se kontroluje jeho platnost.", "muted"))
         self.editor = QPlainTextEdit(initial)
         self.editor.setAccessibleName(label)
         root.addWidget(self.editor, 1)
@@ -76,7 +78,7 @@ class ResourcesPage(QWidget):
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
         self.lists = {}
-        for kind, title in (("files", "Soubory"), ("stores", "Vyhledávací úložiště")):
+        for kind, title in (("files", "Soubory"), ("stores", "Knihovny pro hledání v dokumentech")):
             page = QWidget()
             layout = vertical(page)
             layout.addWidget(caption(title, "section"))
@@ -91,23 +93,23 @@ class ResourcesPage(QWidget):
                        self.button(f"resources.{kind}.detach", "Odpojit od zadání", lambda checked=False, target=kind: self.detach(target))]
             layout.addWidget(actions(*buttons))
             layout.addWidget(actions(
-                self.button(f"resources.{kind}.create", "Nahrát soubory" if kind == "files" else "Vytvořit úložiště", self.upload if kind == "files" else self.create_store),
+                self.button(f"resources.{kind}.create", "Nahrát soubory" if kind == "files" else "Vytvořit knihovnu dokumentů", self.upload if kind == "files" else self.create_store),
                 self.button(f"resources.{kind}.delete", "Odstranit vybrané", lambda checked=False, target=kind: self.delete(target), "danger"),
                 self.button(f"resources.{kind}.delete_all", "Odstranit všechny", lambda checked=False, target=kind: self.delete(target, all_items=True), "danger")))
             if kind == "stores":
                 listing.currentItemChanged.connect(self.clear_store_files)
-                layout.addWidget(actions(self.button("resources.store.files", "Načíst soubory úložiště", self.refresh_store_files),
-                                         self.button("resources.store.add", "Přidat soubory podle identifikátoru", self.add_store_files),
+                layout.addWidget(actions(self.button("resources.store.files", "Načíst soubory knihovny", self.refresh_store_files),
+                                         self.button("resources.store.add", "Přidat soubory zadáním kódů (pokročilé)", self.add_store_files),
                                          self.button("resources.store.add_selected", "Přidat vybrané soubory", self.add_selected_files)))
                 self.store_files = QListWidget()
                 self.store_files.setSelectionMode(QAbstractItemView.ExtendedSelection)
                 self.store_files.setWordWrap(True)
                 layout.addWidget(self.store_files, 1)
-                layout.addWidget(actions(self.button("resources.store.remove", "Odebrat z úložiště", self.remove_store_files, "danger"),
-                                         self.button("resources.store.attributes", "Upravit atributy", self.attributes),
+                layout.addWidget(actions(self.button("resources.store.remove", "Odebrat z knihovny", self.remove_store_files, "danger"),
+                                         self.button("resources.store.attributes", "Upravit doplňující údaje (pokročilé)", self.attributes),
                                          self.button("resources.store.detail", "Podrobnosti souboru", self.details)))
             self.tabs.addTab(page, title)
-        self.notice = caption("Vyberte soubory nebo úložiště a načtěte jejich stav.", "muted")
+        self.notice = caption("Vyberte soubory nebo knihovnu dokumentů a načtěte jejich stav.", "muted")
         root.addWidget(self.notice)
         context.key_changed.connect(self.clear)
         context.attachments_changed.connect(self.update_summary)
@@ -118,7 +120,7 @@ class ResourcesPage(QWidget):
         return widget
 
     def update_summary(self):
-        self.notice.setText(f"Připojeno k zadání: {len(self.context.files)} souborů a {len(self.context.stores)} úložišť.")
+        self.notice.setText(f"Připojeno k zadání: {len(self.context.files)} souborů a {len(self.context.stores)} knihoven dokumentů.")
 
     def clear(self):
         self.store_selection_generation += 1
@@ -169,7 +171,7 @@ class ResourcesPage(QWidget):
         return record
 
     def refresh(self, kind):
-        return self.execute("Načtení zdrojů", lambda client, task: client.list_files() if kind == "files" else client.list_vector_stores(),
+        return self.execute("Načtení podkladů", lambda client, task: client.list_files() if kind == "files" else client.list_vector_stores(),
                             lambda records: fill_records(self.lists[kind], records))
 
     def attach(self, kind):
@@ -197,7 +199,7 @@ class ResourcesPage(QWidget):
         self.execute("Nahrávání souborů", upload, lambda records: fill_records(self.lists["files"], records))
 
     def create_store(self):
-        dialog = ValueDialog("Nové úložiště", "Název vyhledávacího úložiště", parent=self)
+        dialog = ValueDialog("Nová knihovna dokumentů", "Název knihovny pro hledání v dokumentech", parent=self)
         if dialog.exec() == QDialog.Accepted:
             name = dialog.value
 
@@ -205,12 +207,12 @@ class ResourcesPage(QWidget):
                 client.create_vector_store(name)
                 return client.list_vector_stores()
 
-            self.execute("Vytvoření úložiště", create, lambda rows: fill_records(self.lists["stores"], rows))
+            self.execute("Vytvoření knihovny dokumentů", create, lambda rows: fill_records(self.lists["stores"], rows))
 
     def delete(self, kind, all_items=False):
         listing = self.lists[kind]
         identifiers = [listing.item(i).data(Qt.UserRole) for i in range(listing.count())] if all_items else selected_ids(listing)
-        if not identifiers or not confirm(self, "Odstranit vzdálené prostředky", f"Trvale odstranit {len(identifiers)} položek ze služby?"):
+        if not identifiers or not confirm(self, "Odstranit podklady ze služby", f"Trvale odstranit {len(identifiers)} položek ze služby?"):
             return
 
         key = self.context.api_key
@@ -227,7 +229,7 @@ class ResourcesPage(QWidget):
             setattr(self.context, kind, [value for value in getattr(self.context, kind) if value not in identifiers])
             self.context.attachments_changed.emit()
 
-        self.execute("Odstranění prostředků", remove, receive)
+        self.execute("Odstranění podkladů ze služby", remove, receive)
 
     @Slot(str, int, str, str)
     def _prune_deleted(self, key, generation, kind, identifier):
@@ -248,11 +250,11 @@ class ResourcesPage(QWidget):
     def refresh_store_files(self):
         identifier = self.current_store()
         if identifier:
-            self.execute("Načtení souborů úložiště", lambda client, task: client.list_vector_store_files(identifier),
+            self.execute("Načtení souborů knihovny", lambda client, task: client.list_vector_store_files(identifier),
                          self.store_receiver(identifier))
 
     def add_store_files(self):
-        dialog = ValueDialog("Přidání souborů", "Identifikátory souborů, každý na samostatném řádku", parent=self)
+        dialog = ValueDialog("Přidání souborů", "Zkopírujte kódy file_… z přehledu Soubory. Každý vložte na samostatný řádek.", parent=self)
         if dialog.exec() == QDialog.Accepted:
             self.add_files(dialog.value.splitlines())
 
@@ -263,7 +265,7 @@ class ResourcesPage(QWidget):
         store = self.current_store()
         identifiers = list(dict.fromkeys(value.strip() for value in identifiers if value.strip()))
         if not store or not identifiers:
-            self.notice.setText("Vyberte úložiště i soubory k přidání.")
+            self.notice.setText("Vyberte knihovnu dokumentů i soubory k přidání.")
             return
 
         def add(client, task):
@@ -271,18 +273,18 @@ class ResourcesPage(QWidget):
                 client.add_file_to_vector_store(store, identifier)
             return client.list_vector_store_files(store)
 
-        self.execute("Přidání souborů do úložiště", add, self.store_receiver(store))
+        self.execute("Přidání souborů do knihovny", add, self.store_receiver(store))
 
     def remove_store_files(self):
         store = self.current_store()
         identifiers = selected_ids(self.store_files)
-        if store and identifiers and confirm(self, "Odebrat z úložiště", "Odebrat vybrané soubory z úložiště? Samotné nahrané soubory zůstanou ve službě."):
+        if store and identifiers and confirm(self, "Odebrat z knihovny", "Odebrat vybrané soubory z knihovny? Samotné nahrané soubory zůstanou ve službě."):
             def remove(client, task):
                 for identifier in identifiers:
                     client.delete_vector_store_file(store, identifier)
                 return client.list_vector_store_files(store)
 
-            self.execute("Odebrání z úložiště", remove, self.store_receiver(store))
+            self.execute("Odebrání z knihovny", remove, self.store_receiver(store))
 
     def attributes(self):
         store = self.current_store()
@@ -291,10 +293,10 @@ class ResourcesPage(QWidget):
             return
         identifier = item.data(Qt.UserRole)
         attrs = item.data(Qt.UserRole + 1).get("attributes", {})
-        dialog = ValueDialog("Atributy souboru", "Atributy ve formátu JSON", json.dumps(attrs, ensure_ascii=False, indent=2), self, structured=True)
+        dialog = ValueDialog("Doplňující údaje souboru", "Doplňující údaje pro hledání (technický zápis JSON)", json.dumps(attrs, ensure_ascii=False, indent=2), self, structured=True)
         if dialog.exec() == QDialog.Accepted:
             if not isinstance(dialog.value, dict):
-                self.notice.setText("Atributy musí být JSON objekt.")
+                self.notice.setText("Doplňující údaje musí být zapsané jako objekt ve formátu JSON.")
                 return
             generation = self.store_selection_generation
             def receive(value):
@@ -304,7 +306,7 @@ class ResourcesPage(QWidget):
                     current = self.store_files.item(index)
                     if current.data(Qt.UserRole) == identifier:
                         current.setData(Qt.UserRole + 1, value)
-            self.execute("Uložení atributů", lambda client, task: client.update_vector_store_file_attributes(store, identifier, dialog.value),
+            self.execute("Uložení doplňujících údajů", lambda client, task: client.update_vector_store_file_attributes(store, identifier, dialog.value),
                          receive)
 
     def details(self):
@@ -313,4 +315,4 @@ class ResourcesPage(QWidget):
         if store and item:
             identifier = item.data(Qt.UserRole)
             self.execute("Načtení podrobností souboru", lambda client, task: client.retrieve_vector_store_file(store, identifier),
-                         lambda value: DetailDialog("Soubor v úložišti", identifier, self, value).exec())
+                         lambda value: DetailDialog("Soubor v knihovně dokumentů", identifier, self, value).exec())

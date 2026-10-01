@@ -26,16 +26,10 @@ from .components import action, actions, caption, confirm, friendly_error, verti
 from .evidence import VALUES
 from .file_dialogs import get_existing_directory
 from .job_cards import build_job_card, clear_cards, format_started, photo_failure_summary
+from .presentation import MODES
 
 
-MODE_LABELS = {
-    "GENERATE": "Tvorba souborů",
-    "MODIFY": "Úprava souborů",
-    "QA": "Kontrola souborů",
-    "QFILE": "Dotaz k souboru",
-    "COMIC": "Komiks",
-    "PHOTO": "Úpravy fotografií",
-}
+MODE_LABELS = MODES
 
 
 def _hidden_path(log_dir):
@@ -320,6 +314,8 @@ class BatchesPage(QWidget):
             return VALUES.get(record["photo"].status, "Stav není rozpoznán")
         remote = record["remote"]
         if remote.get("status"):
+            if remote["status"] == "completed":
+                return "Dokončeno ve službě"
             return VALUES.get(remote["status"], "Stav není rozpoznán")
         state = record["state"]
         return VALUES.get(state.get("status"), "Stav není dostupný")

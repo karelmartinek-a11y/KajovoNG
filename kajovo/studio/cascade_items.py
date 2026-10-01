@@ -26,7 +26,7 @@ class CascadeItemDialog(QDialog):
             self.form.choice("source", "Zdroj vstupu", [("Nový text", "text"), ("Místní soubor", "local_file"), ("Nahraný soubor", "file_id"), ("Výstup předchozího kroku", "output")], record.source)
             value = QPlainTextEdit(record.value)
             value.setMinimumHeight(140)
-            self.form.add("value", "Text, cesta nebo identifikátor souboru", value)
+            self.form.add("value", "Text, cesta nebo kód souboru podle zvoleného typu", value)
             step_choices = [("Vyberte předchozí krok", ""), *[(step.title or step.id, step.id) for step in previous_steps]]
             self.form.choice("source_step_id", "Zdrojový krok", step_choices, record.source_step_id)
             self.form.choice("source_output_id", "Zdrojový výstup", [("Vyberte výstup", "")])
@@ -42,7 +42,7 @@ class CascadeItemDialog(QDialog):
         else:
             self.form.choice("kind", "Druh výstupu", [("Text", "text"), ("Strukturovaná data", "json"), ("Soubor", "file"), ("Rozhodnutí", "decision")], record.kind)
             self.form.choice("file_type", "Typ souboru", [("Bez souboru", ""), *sorted(CASCADE_FILE_TYPES)], record.file_type)
-            self.form.text("file_name", "Relativní cesta výstupního souboru", record.file_name)
+            self.form.text("file_name", "Název a podsložka výsledného souboru", record.file_name)
             self.form.choice("file_mode", "Způsob zápisu", [("Vytvořit soubor", "create"), ("Upravit vstupní soubor", "modify")], record.file_mode)
             self.form.choice("modify_input_id", "Upravovaný vstup", [("Vyberte vstup", ""), *[(item.name or item.id, item.id) for item in inputs]], record.modify_input_id)
             json_mask = QPlainTextEdit(
@@ -53,22 +53,46 @@ class CascadeItemDialog(QDialog):
             json_mask.setMinimumHeight(180)
             self.form.add(
                 "json_schema",
-                "JSON Schema maska strukturovaného výstupu",
+                "Pravidla pro požadovaná pole odpovědi (technický zápis JSON)",
                 json_mask,
             )
-            body.addWidget(caption(
-                "Pro druh „Strukturovaná data“ je maska povinná: kořen object, všechny vlastnosti required a additionalProperties=false.",
+            self.schema_hint = caption(
+                "Výsledek musí být sada pojmenovaných údajů. Každý popsaný údaj je povinný a další údaje se nepřidávají. Toto pokročilé nastavení se zapisuje ve formátu JSON Schema.",
                 "muted",
-            ))
+            )
+            body.addWidget(self.schema_hint)
             options = QPlainTextEdit(json.dumps([item.to_dict() for item in record.decision_options], ensure_ascii=False, indent=2))
             options.setMinimumHeight(160)
-            self.form.add("decision_options", "Rozhodovací větve ve formátu JSON", options)
-            body.addWidget(caption("Každá rozhodovací větev obsahuje hodnotu value a cíl target_step_id; prázdný cíl ukončí kaskádu.", "muted"))
+            self.form.add("decision_options", "Možné odpovědi a navazující kroky (technický zápis JSON)", options)
+            self.branch_hint = caption("Pro každou možnou odpověď určete následující krok. V technickém zápisu je odpověď v poli value a číslo následujícího kroku v target_step_id. Prázdný cíl ukončí úlohu.", "muted")
+            body.addWidget(self.branch_hint)
         body.addWidget(self.form)
         self.notice = caption("", "error")
         body.addWidget(self.notice)
         root.addWidget(scroll(page), 1)
         root.addWidget(actions(action("cascade.item.cancel", "Zrušit", self.reject), action("cascade.item.save", "Použít", self.submit, "primary")))
+        self.form.changed.connect(self.update_fields)
+        self.update_fields()
+
+    def update_fields(self):
+        fields = self.form.fields
+        if isinstance(self.record, CascadeInput):
+            source = fields["source"].currentData()
+            fields["value"].setEnabled(source != "output")
+            for name in ("source_step_id", "source_output_id"):
+                fields[name].setEnabled(source == "output")
+            title = {"text": "Text předaný kroku", "local_file": "Úplná cesta k souboru v počítači", "file_id": "Číslo souboru nahraného do služby", "output": "Obsah se převezme z vybraného předchozího kroku"}.get(source, "Obsah vstupu")
+            self.form.body.labelForField(fields["value"]).setText(title)
+            fields["value"].setAccessibleName(title)
+        else:
+            kind = fields["kind"].currentData()
+            for name in ("file_type", "file_name", "file_mode"):
+                fields[name].setEnabled(kind == "file")
+            fields["modify_input_id"].setEnabled(kind == "file" and fields["file_mode"].currentData() == "modify")
+            fields["json_schema"].setEnabled(kind == "json")
+            fields["decision_options"].setEnabled(kind == "decision")
+            self.schema_hint.setVisible(kind == "json")
+            self.branch_hint.setVisible(kind == "decision")
 
     def refresh_outputs(self):
         source = self.form.fields["source_step_id"].currentData()

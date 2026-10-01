@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +17,7 @@ from kajovo.core.run_bundle import HistoryIndex
 from kajovo.core.orchestration.publish import publish_staged_run
 from kajovo.core.utils import safe_join_under_root
 
-from .components import action, actions, caption, friendly_error, panel, vertical
+from .components import action, actions, caption, friendly_error, panel, scroll, vertical
 from .file_dialogs import get_open_file_name, get_save_file_name
 from .history_artifacts import ArtifactGuard
 from .history_composer import BranchComposer
@@ -28,7 +27,7 @@ from .history_launcher import HistoryBranchLauncher
 from .history_models import RunTableModel, RunView, build_run
 from .history_policy import ActionAvailabilityPolicy, apply_decision
 from .history_timeline import RunTrackView
-from .resources import ValueDialog
+from .presentation import mode_name, integrity_summary
 
 
 def _payload(adapter):
@@ -55,7 +54,7 @@ class HistoryPage(QWidget):
         self._clone_generation = 0
 
         root = vertical(self, 0)
-        root.addWidget(caption("Run Studio · průběh, výsledky a nové větve", "muted"))
+        root.addWidget(caption("Předchozí práce · průběh, výsledky a navazující zpracování", "muted"))
         root.addWidget(self._filter_bar())
         root.addWidget(self._timeline_bar())
         self.tracks = RunTrackView()
@@ -78,20 +77,20 @@ class HistoryPage(QWidget):
             "continue": action("history.continue", "Pokračovat", lambda: self.branch("continue")),
             "rerun": action("history.rerun", "Znovu spustit", lambda: self.branch("rerun")),
             "repair": action("history.repair", "Opravit", lambda: self.branch("repair")),
-            "edit_branch": action("history.qa.edit_branch", "Upravit QA a spustit novou větev",
+            "edit_branch": action("history.qa.edit_branch", "Upravit dotaz a spustit znovu",
                                   lambda: self.branch("rerun", edit_input=True)),
-            "clone": action("history.clone", "Klonovat jako nové zadání", self.clone),
+            "clone": action("history.clone", "Vytvořit kopii zadání", self.clone),
             "complete_batch": action("history.batch.complete", "Převzít soubory", self.complete_batch, "primary"),
             "publish_staged": action(
                 "history.publish.staged",
-                "Převzít neověřené",
+                "Převzít soubory bez ověření funkčnosti",
                 self.publish_staged,
                 "primary",
             ),
             "open_batch": action("history.batch.open", "Otevřít v Dávkách", self.open_batch),
             "clone_artifact": action("history.clone.artifact", "Nové zadání s vybraným souborem", self.choose_reusable_clone),
             "detail": action("history.detail", "Detail běhu", self.open_detail),
-            "integrity": action("history.integrity", "Ověřit integritu", self.verify),
+            "integrity": action("history.integrity", "Zkontrolovat neporušenost záznamu", self.verify),
             "bundle_open": action("history.bundle.open", "Otevřít složku běhu", self.open_bundle),
             "bundle_export": action("history.bundle.export", "Exportovat záznam běhu", self.export_bundle),
             "comic": action("history.comic", "Otevřít komiks", self.open_comic),
@@ -141,8 +140,8 @@ class HistoryPage(QWidget):
         box.setLayout(layout)
         layout.setContentsMargins(0, 0, 0, 0)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Hledat projekt, Run ID, Response ID, soubor…")
-        self.search.setAccessibleName("Fulltext historie")
+        self.search.setPlaceholderText("Hledat projekt, číslo běhu, odpověď nebo soubor…")
+        self.search.setAccessibleName("Hledat v celé historii")
         self.project_filter = QLineEdit()
         self.project_filter.setPlaceholderText("Projekt")
         self.mode_filter, self.status_filter, self.transport_filter = QComboBox(), QComboBox(), QComboBox()
@@ -151,13 +150,13 @@ class HistoryPage(QWidget):
         for combo, label, values in (
             (self.mode_filter, "Druh běhu", ["GENERATE", "MODIFY", "QA", "QFILE", "KASKADA", "COMIC"]),
             (self.status_filter, "Stav", ["completed", "completed_unverified", "files_complete_unverified", "partial", "failed", "running", "batch_pending", "ready_to_import", "dry_run", "unknown"]),
-            (self.transport_filter, "LIVE/BATCH", ["LIVE", "BATCH"]),
+            (self.transport_filter, "Způsob zpracování", ["LIVE", "BATCH"]),
         ):
             combo.setAccessibleName(label)
             combo.addItem(label, "")
             for value in values:
                 from .history_state import present_state
-                combo.addItem(present_state(value).label if combo is self.status_filter else value, value)
+                combo.addItem(present_state(value).label if combo is self.status_filter else mode_name(value), value)
         for widget, stretch in ((self.search, 3), (self.project_filter, 1), (self.mode_filter, 1),
                                 (self.status_filter, 1)):
             layout.addWidget(widget, stretch)
@@ -175,21 +174,24 @@ class HistoryPage(QWidget):
         self.date_from, self.date_to = QLineEdit(), QLineEdit()
         self.date_from.setPlaceholderText("Od DD.MM.RRRR")
         self.date_to.setPlaceholderText("Do DD.MM.RRRR")
-        self.only_errors = QCheckBox("Jen chybové")
-        self.flag_batch = QCheckBox("BATCH")
+        self.only_errors = QCheckBox("Pouze s chybami")
+        self.flag_batch = QCheckBox("Dávkové zpracování")
         self.flag_checkpoint = QCheckBox("Bod obnovy")
         self.flag_output = QCheckBox("Výstup")
-        self.flag_lineage = QCheckBox("Větve")
+        self.flag_lineage = QCheckBox("Navazující běhy")
         self.filter_dialog = QDialog(self)
         self.filter_dialog.setWindowTitle("Filtry historie")
         self.filter_dialog.resize(480, 460)
-        fields = QFormLayout(self.filter_dialog)
+        content = QWidget()
+        fields = QFormLayout(content)
         for label, widget in (("Od data", self.date_from), ("Do data", self.date_to),
                               ("Zpracování", self.transport_filter), ("Model", self.model_filter),
                               ("", self.flag_batch), ("", self.flag_checkpoint),
                               ("", self.flag_output), ("", self.flag_lineage)):
             fields.addRow(label, widget)
-        fields.addRow(action("history.filters.close", "Hotovo", self.filter_dialog.hide))
+        dialog_layout = vertical(self.filter_dialog, 8)
+        dialog_layout.addWidget(scroll(content), 1)
+        dialog_layout.addWidget(actions(action("history.filters.close", "Hotovo", self.filter_dialog.hide)))
         for widget in (self.date_from, self.date_to, self.only_errors, self.flag_batch,
                        self.flag_checkpoint, self.flag_output, self.flag_lineage):
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.toggled
@@ -198,10 +200,14 @@ class HistoryPage(QWidget):
         layout.addWidget(action("history.filters.advanced", "Další filtry…", self.filter_dialog.show))
         layout.addWidget(action("history.filters.reset", "Zrušit filtry", self.reset_filters))
         layout.addStretch()
-        self.zoom_label = caption("Zoom 100 %", "muted")
+        self.zoom_label = caption("Zvětšení 100 %", "muted")
         layout.addWidget(self.zoom_label)
-        layout.addWidget(action("history.zoom.out", "−", lambda: self.set_zoom(self.zoom / 1.2)))
-        layout.addWidget(action("history.zoom.in", "+", lambda: self.set_zoom(self.zoom * 1.2)))
+        for identifier, text, factor, name in (("history.zoom.out", "−", 1 / 1.2, "Zmenšit časovou osu"),
+                                                ("history.zoom.in", "+", 1.2, "Zvětšit časovou osu")):
+            button = action(identifier, text, lambda _checked=False, amount=factor: self.set_zoom(self.zoom * amount))
+            button.setToolTip(name)
+            button.setAccessibleName(name)
+            layout.addWidget(button)
         layout.addWidget(action("history.zoom.fit", "Přizpůsobit", self.fit_tracks))
         return box
 
@@ -222,7 +228,7 @@ class HistoryPage(QWidget):
     def set_zoom(self, value):
         self.zoom = max(0.55, min(3.0, float(value)))
         self.tracks.set_zoom(self.zoom)
-        self.zoom_label.setText(f"Zoom {self.zoom * 100:.0f} %")
+        self.zoom_label.setText(f"Zvětšení {self.zoom * 100:.0f} %")
 
     @staticmethod
     def _date_value(text: str, *, end=False):
@@ -288,11 +294,11 @@ class HistoryPage(QWidget):
             self.model.set_runs(views)
             for mode in sorted({run.mode for run in views}):
                 if self.mode_filter.findData(mode) < 0:
-                    self.mode_filter.addItem(mode, mode)
+                    self.mode_filter.addItem(mode_name(mode), mode)
             self.apply_filters()
             self.fit_tracks()
 
-        self.context.operations.start_read("Obnovení Run Studia", scan, receive, popup=False, identifier="history.index")
+        self.context.operations.start_read("Obnovení historie", scan, receive, popup=False, identifier="history.index")
 
     def _row_selected(self, current, _previous):
         run = self.model.run_at(current.row()) if current.isValid() else None
@@ -313,7 +319,7 @@ class HistoryPage(QWidget):
         self.generation += 1
         generation = self.generation
         self.run, self.adapter, self.payload, self.selected_step = run, None, {}, None
-        self.phase.setText(f"Vybraný běh: {run.mode} · {run.run_id} · načítám kanonickou evidenci…")
+        self.phase.setText(f"Vybraný běh: {mode_name(run.mode)} · načítám uložené záznamy…")
         self.more.setEnabled(False)
         for button in self.buttons.values():
             button.setEnabled(False)
@@ -330,9 +336,10 @@ class HistoryPage(QWidget):
                 return
             self.adapter, self.payload, self._state, self.run = value
             if self.selected_step:
-                self.phase.setText(f"Vybraná fáze: {self.selected_step.get('stage')} · {self.run.project}")
+                from kajovo.core.progress_model import step_name
+                self.phase.setText(f"Vybraný krok: {step_name(str(self.selected_step.get('stage') or ''))} · {self.run.project}")
             else:
-                self.phase.setText(f"{self.run.mode} · {self.run.project} · {self.run.status.label}")
+                self.phase.setText(f"{mode_name(self.run.mode)} · {self.run.project} · {self.run.status.label}")
             self.notice.setText("Legacy evidence je pouze ke čtení; chybějící údaje jsou Není evidováno."
                                 if self.adapter.legacy else "Vyberte Detail běhu pro zadání, výsledky a vysvětlení průběhu.")
             self.update_actions()
@@ -356,7 +363,7 @@ class HistoryPage(QWidget):
             self.load_run(run)
         self.selected_step = stage.technical
         self.tracks.select_stage(run.run_id, stage.step_id)
-        self.phase.setText(f"Vybraná fáze: {stage.stage or 'Není evidováno'} · {stage.title}")
+        self.phase.setText(f"Vybraný krok: {stage.title}")
         self.update_actions()
         self.describe_selection()
 
@@ -367,7 +374,7 @@ class HistoryPage(QWidget):
         stage = next((row for row in self.run.stages if row.step_id == identifier), None)
         if stage:
             from .history_models import format_duration
-            self.phase.setText(f"Vybraná fáze: {stage.title} · {stage.stage} · {stage.status.label}")
+            self.phase.setText(f"Vybraný krok: {stage.title} · {stage.status.label}")
             parts = [value for value in (stage.model, stage.reasoning,
                 format_duration(stage.duration) if stage.duration is not None else "Trvání fáze nebylo uloženo") if value]
             self.notice.setText(" · ".join(parts))
@@ -450,14 +457,14 @@ class HistoryPage(QWidget):
                     lineage["inherited_artifact_ids"] = [artifact.get("artifact_id")]
                 return cloned, lineage, ""
             except (OSError, ValueError, TypeError) as error:
-                return None, None, friendly_error(error, "Klonování běhu")
+                return None, None, friendly_error(error, "Kopírování zadání")
 
         def receive(value):
             if clone_generation != self._clone_generation:
                 return
             if (selection_generation != self.generation or revision != self.workbench._revision
                     or request_state != self.workbench.state(secrets=True) or key != self.context.api_key):
-                self.notice.setText("Zadání, účet nebo výběr se mezitím změnily; klon nebyl použit.")
+                self.notice.setText("Zadání, účet nebo výběr se mezitím změnily; kopie nebyla použitá.")
                 return
             cloned, lineage, error = value
             if error:
@@ -469,7 +476,7 @@ class HistoryPage(QWidget):
             self.workbench.pending_lineage = lineage
             self.activate_workbench.emit()
 
-        return self.context.operations.start_read("Načtení kanonického zadání pro klon", read, receive, popup=False)
+        return self.context.operations.start_read("Načtení uloženého zadání pro kopii", read, receive, popup=False)
 
     def publish_staged(self):
         if not self.adapter:
@@ -497,7 +504,7 @@ class HistoryPage(QWidget):
             return {"status": "completed", "publish_report": report}
 
         self.context.operations.start(
-            "Převzetí neověřených staged artefaktů",
+            "Převzetí připravených souborů bez ověření jejich funkčnosti",
             publish,
             received,
             output_dir=output,
@@ -545,10 +552,11 @@ class HistoryPage(QWidget):
             return
         identifier = pending[0]
         if len(pending) > 1:
-            picker = ValueDialog("Převzít existující dávku", "Batch ID", identifier, self)
-            if picker.exec() != QDialog.Accepted or picker.value not in pending:
+            labels = [f"Dávka {index} · {value}" for index, value in enumerate(pending, 1)]
+            selected, accepted = QInputDialog.getItem(self, "Převzít existující dávku", "Vyberte dokončenou dávku", labels, 0, False)
+            if not accepted or selected not in labels:
                 return
-            identifier = picker.value
+            identifier = pending[labels.index(selected)]
         root = str(adapter.root)
         try:
             client = self.context.client()
@@ -591,9 +599,9 @@ class HistoryPage(QWidget):
 
         def receive(value):
             if generation == self.generation:
-                self.notice.setText("Integrita: " + json.dumps(value, ensure_ascii=False))
+                self.notice.setText(integrity_summary(value))
 
-        self.context.operations.start("Ověření integrity Run Bundle", lambda task: adapter.integrity(), receive)
+        self.context.operations.start("Kontrola neporušenosti záznamu práce", lambda task: adapter.integrity(), receive)
 
     def open_bundle(self):
         if self.adapter:
@@ -602,12 +610,12 @@ class HistoryPage(QWidget):
     def export_bundle(self):
         if not self.adapter:
             return
-        destination, _ = get_save_file_name(self, "Exportovat Run Bundle", self.adapter.run_id + ".zip", "ZIP (*.zip)")
+        destination, _ = get_save_file_name(self, "Uložit kopii záznamu práce", self.adapter.run_id + ".zip", "Archiv souborů (*.zip)")
         if not destination:
             return
         source, target = self.adapter.root.resolve(), Path(destination).resolve()
         if target == source or source in target.parents:
-            self.notice.setText("Export nesmí přepsat zdrojový Run Bundle.")
+            self.notice.setText("Kopii uložte mimo složku původního záznamu práce.")
             return
 
         def write(task):
@@ -618,8 +626,8 @@ class HistoryPage(QWidget):
         generation = self.generation
         def received(value):
             if generation == self.generation and self.adapter is adapter:
-                self.notice.setText("Run Bundle exportován: " + value)
-        self.context.operations.start("Export Run Bundle", write,
+                self.notice.setText("Kopie záznamu práce je uložená: " + value)
+        self.context.operations.start("Uložení kopie záznamu práce", write,
                                       received)
 
     def open_comic(self):
@@ -664,14 +672,16 @@ class HistoryPage(QWidget):
     def choose_reusable_clone(self):
         records = [row for row in self.payload.get("artifacts") or [] if row.get("reusable")]
         if not records:
-            self.notice.setText("Běh nemá hashově ověřitelný reusable artefakt.")
+            self.notice.setText("Záznam nemá ověřitelný soubor, který lze použít v novém zadání.")
             return
-        picker = ValueDialog("Klonovat s artefaktem", "Artifact ID", str(records[0].get("artifact_id") or ""), self)
-        if picker.exec() != QDialog.Accepted:
+        labels = [f"{index}. {record.get('display_name') or record.get('reconstruction_role') or 'Uložený soubor'}"
+                  for index, record in enumerate(records, 1)]
+        selected, accepted = QInputDialog.getItem(self, "Kopírovat zadání s uloženým souborem", "Vyberte soubor", labels, 0, False)
+        if not accepted:
             return
-        record = next((row for row in records if row.get("artifact_id") == picker.value), None)
+        record = records[labels.index(selected)] if selected in labels else None
         if not record:
-            self.notice.setText("Zvolený artefakt není součástí běhu.")
+            self.notice.setText("Vybraný soubor není součástí záznamu práce.")
             return
         try:
             self.clone_with_artifact(record)

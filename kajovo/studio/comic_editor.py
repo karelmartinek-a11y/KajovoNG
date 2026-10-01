@@ -22,7 +22,7 @@ class EntityPromptEdit(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptRichText(False)
-        self.setAccessibleName("Zadání panelu s atomickými odkazy")
+        self.setAccessibleName("Zadání obrázku s odkazy na postavy a prostředí")
         self.entities = {}
 
     def insert_entity(self, entity):
@@ -91,7 +91,7 @@ class EntityPromptEdit(QTextEdit):
             if node["type"] == "text":
                 self.insertPlainText(node["text"])
             else:
-                entity = self.entities.get(node["entity_id"], {"id": node["entity_id"], "kind": node["type"].removesuffix("_ref"), "name": "Nedostupná entita"})
+                entity = self.entities.get(node["entity_id"], {"id": node["entity_id"], "kind": node["type"].removesuffix("_ref"), "name": "Nedostupná postava nebo prostředí"})
                 self.insert_entity(entity)
         cursor.endEditBlock()
 
@@ -100,7 +100,7 @@ class EntityPromptEdit(QTextEdit):
         data = QMimeData()
         document = self.prompt_document(cursor.selectionStart(), cursor.selectionEnd())
         data.setData(MIME, QByteArray(json.dumps(document, ensure_ascii=False).encode("utf-8")))
-        data.setText("".join(n.get("text", "[" + self.entities.get(n.get("entity_id"), {}).get("name", "Entita") + "]") for n in document["nodes"]))
+        data.setText("".join(n.get("text", "[" + self.entities.get(n.get("entity_id"), {}).get("name", "Postava nebo prostředí") + "]") for n in document["nodes"]))
         return data
 
     def canInsertFromMimeData(self, source):
@@ -224,7 +224,7 @@ class OverlayEditor(QWidget):
         self.scene = QGraphicsScene(self)
         self.view = QGraphicsView(self.scene)
         self.view.setMinimumHeight(260)
-        self.view.setAccessibleName("Náhled panelu a posun bublin")
+        self.view.setAccessibleName("Náhled obrázku a posun textových bublin")
         root.addWidget(self.view, 1)
         row = QHBoxLayout()
         self.listing = QListWidget()
@@ -233,7 +233,7 @@ class OverlayEditor(QWidget):
         row.addWidget(self.listing)
         controls = QVBoxLayout()
         self.kind = QComboBox()
-        for label, kind in (("Dialog", "dialog"), ("Myšlenka", "thought"), ("Titulek", "caption"), ("SFX", "sfx")):
+        for label, kind in (("Dialog", "dialog"), ("Myšlenka", "thought"), ("Titulek", "caption"), ("Zvukový nápis (například BUM)", "sfx")):
             self.kind.addItem(label, kind)
         controls.addWidget(self.kind)
         for text, callback in (("Přidat text", self.add_layer), ("Odstranit text", self.remove_layer)):
@@ -248,7 +248,7 @@ class OverlayEditor(QWidget):
         root.addWidget(self.text)
         form = QFormLayout()
         self.spins = {}
-        for key, label in (("w", "Šířka %"), ("h", "Výška %"), ("font_size", "Písmo % výšky"), ("tail_x", "Hrot X %"), ("tail_y", "Hrot Y %")):
+        for key, label in (("w", "Šířka %"), ("h", "Výška %"), ("font_size", "Velikost písma (% výšky obrázku)"), ("tail_x", "Hrot bubliny zleva (%)"), ("tail_y", "Hrot bubliny shora (%)")):
             spin = QDoubleSpinBox()
             spin.setRange(.1 if key in ("w", "h", "font_size") else 0, 100)
             spin.setDecimals(1)

@@ -34,24 +34,24 @@ class ModelsPage(QWidget):
         root = vertical(self)
         form = Form()
         self.search = form.text("models.search", "Vyhledat model")
-        self.compatible = form.check("models.compatible", "Pouze modely vhodné pro práci s projektem", True)
+        self.compatible = form.check("models.compatible", "Pouze modely pro text a soubory projektu", True)
         self.batch = form.check("models.batch", "Podpora dávkového zpracování")
-        self.batch_endpoint = form.choice("models.batch_endpoint", "Endpoint dávky", [
-            ("Responses", "/v1/responses"), ("Obrazová editace", "/v1/images/edits"),
-            ("Generování obrazů", "/v1/images/generations"),
+        self.batch_endpoint = form.choice("models.batch_endpoint", "Druh dávkového zpracování", [
+            ("Textové odpovědi", "/v1/responses"), ("Úprava obrázků", "/v1/images/edits"),
+            ("Vytvoření obrázků", "/v1/images/generations"),
         ])
-        self.images = form.check("models.images", "Podpora obrazového vstupu")
+        self.images = form.check("models.images", "Model dokáže pracovat s obrázky")
         root.addWidget(form)
         self.listing = QListWidget()
         self.listing.setWordWrap(True)
         self.listing.setAccessibleName("Katalog modelů")
         root.addWidget(self.listing, 1)
-        self.notice = caption("Katalog účtu se načte až po ověření přístupu.", "muted")
+        self.notice = caption("Seznam dostupných modelů se načte po uložení přístupového klíče.", "muted")
         root.addWidget(self.notice)
         root.addWidget(actions(action("models.refresh", "Obnovit katalog", self.refresh),
                                action("models.select", "Použít v zadání", self.select),
                                action("models.default", "Nastavit jako výchozí", self.set_default),
-                               action("models.details", "Schopnosti a pravidla", self.details)))
+                               action("models.details", "Co vybraný model umí", self.details)))
         form.changed.connect(self.render)
         context.models_changed.connect(self.render)
 
@@ -99,7 +99,7 @@ class ModelsPage(QWidget):
     def set_default(self):
         model = self.selected()
         if not model or not selectable(model):
-            self.notice.setText("Vyberte model kompatibilní s pracovními požadavky.")
+            self.notice.setText("Vyberte model vhodný pro text a soubory projektu.")
             return
         from kajovo.core.config import save_settings
         import copy
@@ -120,9 +120,23 @@ class ModelsPage(QWidget):
         if not model:
             self.notice.setText("Vyberte model.")
             return
+        try:
+            spec = model_spec(model)
+        except ValueError:
+            spec = {}
+        features = set(spec.get("features") or [])
+        summary = ["Vybraný model: " + model]
+        for title, enabled in (
+            ("Odpovědi na textová zadání", spec.get("responses")),
+            ("Dávkové zpracování", spec.get("batch")),
+            ("Práce s obrázky ve vstupu", "image_input" in features),
+            ("Hledání v připojených dokumentech", "file_search" in features),
+        ):
+            summary.append(title + ": " + ("Ano" if enabled else "Podpora není doložena"))
+        summary.append("Jde o schopnosti uvedené v katalogu aplikace. Dostupnost konkrétní práce se kontroluje také podle vašeho účtu.")
         DetailDialog(
             "Pravidla vybraného modelu",
-            model,
+            "\n\n".join(summary),
             self,
             self.context.model_details(model),
         ).exec()
@@ -180,7 +194,7 @@ class StudioWindow(QMainWindow):
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.addWidget(self.mark)
         footer_layout.addWidget(self.activity, 1)
-        footer_layout.addWidget(action("operations.open", "Přehled operací", self.operations.show_all))
+        footer_layout.addWidget(action("operations.open", "Přehled probíhající práce", self.operations.show_all))
         body.addWidget(footer)
         outer.addWidget(content, 1)
         self.setCentralWidget(root)
@@ -198,17 +212,23 @@ class StudioWindow(QMainWindow):
         help_page.setReadOnly(True)
         help_page.setAccessibleName("Nápověda")
         help_page.setPlainText(
-            "ZAČÍNÁME\n\nV Nastavení uložte přístupový klíč. V Modelech obnovte katalog a vyberte model. "
-            "V Zadání připravte projekt, požadovaný výsledek a případné adresáře. Spustit práci odešle placenou pracovní operaci.\n\n"
-            "ZDROJE\n\nNahraný soubor připojte k zadání. Odpojení nemění vzdálený soubor; odstranění ze služby je samostatná potvrzovaná akce.\n\n"
-            "DÁVKY\n\nDávkové zpracování souborů navazuje na živou přípravu projektu. Po dokončení služby je nutné převzít a ověřit výsledky. "
-            "Vypršení místního sledování neruší vzdálenou dávku.\n\n"
-            "HISTORIE\n\nZadání lze klonovat do nového běhu. Pokračování vyžaduje ověřený bezpečný checkpoint. "
-            "Zdrojová evidence se nepřepisuje a starším záznamům se nedoplňují neznámá fakta.\n\n"
-            "PRŮBĚH\n\nDialog lze skrýt a znovu otevřít v Přehledu operací. Animace značí čekající práci, ne potvrzení aktivity serveru. "
-            "Čísla postupu pocházejí z dokončených jednotek. Zastavení čeká na bezpečné ukončení pracovníka.\n\n"
+            "ZAČÍNÁME\n\nV Nastavení uložte přístupový klíč ke službě OpenAI. V sekci Výběr modelu obnovte seznam "
+            "a vyberte model, který zadání zpracuje. V Zadání pojmenujte práci, popište požadovaný výsledek a vyberte potřebné složky. "
+            "Tlačítko Spustit práci odešle zadání službě; její použití je placené.\n\n"
+            "DRUHY PRÁCE\n\nVytvoření projektu připraví soubory nového projektu. Úprava projektu mění existující soubory. "
+            "Odpověď na dotaz vrátí textovou odpověď. Vytvoření jednoho souboru uloží jeden výsledek pod zadaným názvem. "
+            "Příprava bez zápisu zobrazí návrh změn; samotné soubory projektu při ní neměníte.\n\n"
+            "PODKLADY\n\nNahrajte soubor a připojte jej k zadání. Odpojením jej odeberete jen ze zadání. "
+            "Odstranění ze služby je samostatná akce, kterou musíte potvrdit.\n\n"
+            "DÁVKY\n\nSlužba může zpracovat více úloh najednou na pozadí. Po dokončení převezměte výsledky a ověřte je. "
+            "Konec místního sledování nezastaví práci služby; nový stav zjistíte tlačítkem Obnovit.\n\n"
+            "HISTORIE\n\nUložené zadání lze zkopírovat a znovu spustit. Pro pokračování od rozpracované části potřebujete "
+            "ověřený bod obnovy: uložený stav, od kterého aplikace umí bezpečně navázat. Původní záznam se zachová. "
+            "Převzetí souborů samo o sobě nepotvrzuje, že vytvořený program správně funguje.\n\n"
+            "PRŮBĚH\n\nOkno průběhu lze skrýt a znovu otevřít v přehledu práce. Kruhový ukazatel počítá potvrzené kroky. "
+            "Pohyb ukazatele při čekání neudává procento hotové práce. Po žádosti o zastavení aplikace čeká na bezpečné ukončení.\n\n"
             "OVLÁDÁNÍ\n\nKlávesou Tab procházejte ovladače, mezerníkem přepínejte volby. Přetažení souborů je dostupné ve Fotografiích; "
-            "adresáře lze přetahovat do příslušných polí. Pořadí kroků kaskády lze změnit tažením i tlačítky. "
+            "složky lze přetahovat do příslušných polí. Pořadí kroků v Posloupnostech úloh lze změnit tažením i tlačítky. "
             "Animace lze omezit v Nastavení."
         )
         self.navigation_group = QButtonGroup(self)
@@ -216,9 +236,9 @@ class StudioWindow(QMainWindow):
         for key, title, page in (
             ("run", "Zadání", self.workbench), ("photos", "Fotografie", self.photos),
             ("comics", "Komiks", self.comics),
-            ("cascade", "Kaskády", self.cascades), ("resources", "Zdroje", self.resources),
+            ("cascade", "Posloupnosti úloh", self.cascades), ("resources", "Podklady", self.resources),
             ("batch", "Dávky", self.batches), ("history", "Historie", self.history),
-            ("versions", "Verze projektu", self.versions), ("models", "Modely", self.models),
+            ("versions", "Verze projektu", self.versions), ("models", "Výběr modelu", self.models),
             ("settings", "Nastavení", self.settings_page), ("help", "Nápověda", help_page),
         ):
             self.pages[key] = page
@@ -321,7 +341,7 @@ class StudioWindow(QMainWindow):
 
     def update_activity(self):
         count = len(self.operations.active)
-        self.activity.setText(f"Pracující operace: {count}" if count else "Všechny místní operace skončily")
+        self.activity.setText(f"Právě spuštěné úlohy: {count}" if count else "V tomto okně nyní neprobíhá práce")
         self.mark.set_running(bool(count), self.context.settings.ui_reduced_motion)
 
     def open_converter(self):

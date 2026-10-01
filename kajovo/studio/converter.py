@@ -51,21 +51,21 @@ class ConverterWindow(QMainWindow):
         contents = QWidget()
         area = vertical(contents)
         area.addWidget(BranchMark())
-        area.addWidget(caption("Čitelné texty. Bez ztráty originálu.", "heading"))
-        area.addWidget(caption("Záloha původních dat předchází každému převodu souborů a archivů.", "muted"))
-        box, fields = panel("Adresáře ke kontrole")
+        area.addWidget(caption("Převést textové soubory do jednotného kódování", "heading"))
+        area.addWidget(caption("Před úpravou se uloží záloha. Převod sjednotí ukládání znaků do UTF-8 bez úvodní značky; neopravuje obsah textu.", "muted"))
+        box, fields = panel("Složky s textovými soubory")
         self.form = Form()
         self.paths = []
         for index in range(5):
             path = self.form.add(f"converter.path.{index}", f"Adresář {index + 1}", PathInput(directories=True))
             self.paths.append(path)
-            self.form.body.addRow("", action(f"converter.browse.{index}", "Vybrat adresář", lambda checked=False, target=path: self.browse(target)))
+            self.form.body.addRow("", action(f"converter.browse.{index}", "Vybrat složku", lambda checked=False, target=path: self.browse(target)))
         fields.addWidget(self.form)
         area.addWidget(box)
         backup, fields = panel("Bezpečná záloha")
         self.backup = PathInput(directories=True)
         self.backup.setObjectName("converter.backup")
-        self.backup.setAccessibleName("Adresář pro zálohu")
+        self.backup.setAccessibleName("Složka pro záložní kopii")
         fields.addWidget(self.backup)
         fields.addWidget(action("converter.backup.browse", "Vybrat umístění zálohy", lambda: self.browse(self.backup)))
         area.addWidget(backup)
@@ -86,7 +86,7 @@ class ConverterWindow(QMainWindow):
         self.operations.changed.connect(self.validate)
 
     def browse(self, target):
-        path = get_existing_directory(self, "Vybrat adresář", target.text())
+        path = get_existing_directory(self, "Vybrat složku", target.text())
         if path:
             target.setText(path)
 

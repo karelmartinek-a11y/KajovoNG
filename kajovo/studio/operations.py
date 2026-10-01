@@ -124,7 +124,7 @@ STATES = {
     "submission_unknown": "Výsledek odeslání není znám",
     "dry_run": "Návrh je připraven bez zápisu",
     "plan_ready": "Ověřený plán je připraven; výroba nebyla spuštěna",
-    "qfile_plan_ready": "Návrh cesty QFILE čeká na potvrzení uživatele",
+    "qfile_plan_ready": "Návrh názvu souboru čeká na vaše potvrzení",
     "waiting_manual_resource": "Čeká se na dodání ručního podkladu",
     "files_complete_unverified": "Soubory jsou převzaté, funkčnost nebyla ověřena",
     "ready_to_import": "Výsledek je připraven k převzetí",
@@ -484,10 +484,10 @@ class Operations(QObject):
     def show_all(self):
         if self.overview is None:
             self.overview = QDialog(self.parent())
-            self.overview.setWindowTitle("Přehled operací")
+            self.overview.setWindowTitle("Přehled práce")
             self.overview.resize(620, 460)
             root = vertical(self.overview)
-            root.addWidget(caption("Místní operace této relace", "section"))
+            root.addWidget(caption("Práce spuštěná v tomto okně", "section"))
             self.listing = QListWidget()
             self.listing.setWordWrap(True)
             self.listing.setAccessibleName("Běžící a dokončené operace")
@@ -512,7 +512,7 @@ class Operations(QObject):
         self.listing.clear()
         for record in reversed(list(self.records.values())):
             item = QListWidgetItem(
-                record.title + "\n" + STATES.get(record.terminal or "active", record.terminal)
+                record.title + "\n" + STATES.get(record.terminal or "active", "Stav zatím není znám")
             )
             item.setData(Qt.UserRole, record.identifier)
             self.listing.addItem(item)

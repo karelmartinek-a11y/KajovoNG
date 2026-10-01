@@ -14,13 +14,13 @@ from .components import Form, action, actions, caption, confirm, friendly_error,
 
 
 LABELS = {
-    "comic_library_dir": "Adresář knihovny komiksů",
-    "log_dir": "Adresář evidence", "cache_dir": "Adresář pracovní paměti",
+    "comic_library_dir": "Složka knihovny komiksů",
+    "log_dir": "Složka záznamů o práci", "cache_dir": "Složka dočasných pracovních dat",
     "batch_poll_interval_s": "Interval kontroly dávky v sekundách",
     "batch_timeout_s": "Místní limit sledování dávky v sekundách",
     "response_timeout_s": "Limit síťového požadavku v sekundách",
     "response_poll_timeout_s": "Limit sledování odpovědi v sekundách",
-    "default_model": "Výchozí model", "default_temperature": "Výchozí teplota",
+    "default_model": "Výchozí model umělé inteligence", "default_temperature": "Výchozí různorodost odpovědí (0–2)",
     "dry_run_modify": "Připravovat úpravy bez zápisu", "ui_reduced_motion": "Omezit animace",
     "max_attempts": "Nejvyšší počet pokusů", "base_delay_s": "Počáteční prodleva v sekundách",
     "max_delay_s": "Nejvyšší prodleva v sekundách", "jitter_s": "Rozptyl prodlevy v sekundách",
@@ -28,10 +28,10 @@ LABELS = {
     "circuit_breaker_cooldown_s": "Délka pozastavení v sekundách",
     "allow_upload_sensitive": "Povolit odesílání citlivých vstupních souborů",
     "deny_extensions_in": "Zakázané vstupní přípony, každá na samostatném řádku",
-    "allow_extensions_in": "Povolené vstupní přípony, prázdné znamená bez omezení",
-    "deny_globs_in": "Zakázané vzory cest, každý na samostatném řádku",
-    "allow_globs_in": "Povolené vzory cest, prázdné znamená bez omezení",
-    "host": "Server", "port": "Port", "username": "Přihlašovací jméno",
+    "allow_extensions_in": "Povolené přípony, každá na řádek; prázdné = všechny kromě zakázaných",
+    "deny_globs_in": "Vynechané názvy a cesty; každý vzor na řádek, * zastupuje libovolný text",
+    "allow_globs_in": "Povolené názvy a cesty; každý vzor na řádek, * zastupuje libovolný text",
+    "host": "Server", "port": "Číslo portu serveru", "username": "Přihlašovací jméno",
     "password": "Heslo", "use_tls": "Zabezpečit spojení po připojení",
     "use_ssl": "Zabezpečit spojení od začátku", "from_email": "Adresa odesílatele",
     "to_email": "Adresa příjemce", "user": "Uživatel", "key": "Soubor přihlašovacího klíče",
@@ -56,10 +56,10 @@ class SettingsPage(QWidget):
         body.addWidget(actions(action("settings.key.show", "Zobrazit nebo skrýt klíč", self.toggle_key),
                                action("settings.key.save", "Uložit klíč", self.save_key, "primary"),
                                action("settings.key.delete", "Odstranit klíč", self.remove_key, "danger")))
-        body.addWidget(caption("Klíč se aktivuje až po ověření trvalého uložení; do souboru zadání se nezapisuje.", "muted"))
+        body.addWidget(caption("Klíč umožňuje přístup k vašemu účtu služby OpenAI. Aktivuje se po bezpečném uložení. Do uloženého zadání se nevkládá.", "muted"))
         body.addStretch()
         self.tabs.addTab(scroll(access), "Přístup")
-        groups = [("", "Provoz"), ("retry", "Opakování"), ("security", "Vstupní soubory"), ("smtp", "Elektronická pošta"), ("ssh", "Vzdálený počítač")]
+        groups = [("", "Běžná nastavení"), ("retry", "Opakování při potížích"), ("security", "Vstupní soubory"), ("smtp", "Elektronická pošta"), ("ssh", "Vzdálený počítač")]
         for group, title in groups:
             obj = getattr(context.settings, group) if group else context.settings
             form = Form()
@@ -89,6 +89,10 @@ class SettingsPage(QWidget):
                 self.editors[identifier] = widget
             container = QWidget()
             body = vertical(container)
+            if group == "smtp":
+                body.addWidget(caption("Zadejte údaje od poskytovatele své poštovní schránky. Zkušební zpráva se odešle uvedenému příjemci až po stisknutí příslušného tlačítka.", "muted"))
+            elif group == "ssh":
+                body.addWidget(caption("Tyto údaje slouží k připojení a diagnostice vzdáleného počítače. Adresu, přihlašovací údaje a ověřený otisk vám poskytne jeho správce.", "muted"))
             body.addWidget(form)
             if group == "smtp":
                 body.addWidget(action("settings.smtp.test", "Odeslat zkušební zprávu", self.test_mail))

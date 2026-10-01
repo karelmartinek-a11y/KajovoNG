@@ -24,6 +24,7 @@ from .components import Form, PathInput, action, actions, caption, friendly_erro
 from .evidence import EvidenceView
 from .components import DetailDialog
 from .file_dialogs import get_existing_directory, get_open_file_name, get_save_file_name
+from .presentation import FORMATS
 
 
 MODES = [("Vytvořit projekt", "GENERATE"), ("Upravit projekt", "MODIFY"),
@@ -71,11 +72,11 @@ class Workbench(QWidget):
         root.addWidget(self.tabs, 1)
         page = QWidget()
         body = vertical(page)
-        box, layout = panel("Co chcete vytvořit?")
+        box, layout = panel("Co chcete udělat?")
         self.form = Form()
-        self.form.text("project", "Projekt")
+        self.form.text("project", "Název projektu")
         self.form.choice("mode", "Cíl práce", MODES)
-        self.form.choice("model", "Model", [])
+        self.form.choice("model", "Model umělé inteligence", [])
         layout.addWidget(self.form)
         self.prompt = QPlainTextEdit()
         self.prompt.setObjectName("run.prompt")
@@ -93,40 +94,44 @@ class Workbench(QWidget):
         parameters = QWidget()
         layout = vertical(parameters)
         self.options = Form()
-        for key, title in (("in_dir", "Vstupní adresář"), ("out_dir", "Výstupní adresář")):
+        for key, title in (("in_dir", "Složka se vstupními soubory"), ("out_dir", "Složka pro výsledné soubory")):
             field = self.options.add(key, title, PathInput(directories=True))
-            self.options.body.addRow("", action("run.browse." + key, "Vybrat adresář", lambda checked=False, target=field: self.browse(target)))
-        for key, title in (("in_equals_out", "Zapisovat do vstupního adresáře"),
-                           ("versing", "Pořídit snímek souborů"),
+            self.options.body.addRow("", action("run.browse." + key, "Vybrat složku", lambda checked=False, target=field: self.browse(target)))
+        for key, title in (("in_equals_out", "Ukládat změny přímo do vstupní složky"),
+                           ("versing", "Před prací uložit záložní kopii souborů"),
                            ("send_as_c", "Souborové úlohy zpracovat dávkově"),
-                           ("maximum_quality", "Maximální propracovanost"),
-                           ("stop_after_plan", "Zastavit po ověřené přípravě plánu"),
-                           ("dry_run", "MODIFY bez publikace do projektu (dry-run)")):
+                           ("maximum_quality", "Provést navíc nezávislou kontrolu návrhu"),
+                           ("stop_after_plan", "Připravit pouze plán; soubory zatím nevytvářet"),
+                           ("dry_run", "Navrhnout úpravy bez změny souborů")):
             self.options.check(key, title)
         temperature = QDoubleSpinBox()
         temperature.setRange(0, 2)
         temperature.setSingleStep(0.1)
-        self.options.add("temperature", "Teplota modelu", temperature)
-        self.options.text("response_id", "Identifikátor předchozí odpovědi")
-        self.options.text("qfile_output_path", "QFILE · Výstupní cesta")
-        self.options.choice("qfile_output_format", "QFILE · Výstupní formát", [
-            (value.upper(), value) for value in (
+        self.options.add("temperature", "Různorodost odpovědí (0–2)", temperature)
+        self.options.text("response_id", "Kód předchozí odpovědi (pokročilé)")
+        self.options.text("qfile_output_path", "Jeden soubor · název a umístění ve výstupní složce")
+        self.options.choice("qfile_output_format", "Jeden soubor · druh souboru", [
+            (FORMATS[value], value) for value in (
                 "txt", "md", "json", "toml", "yaml", "csv", "html",
                 "css", "js", "ts", "py", "svg", "xml"
             )
         ])
-        self.options.check("qfile_suggest_path", "QFILE · Navrhnout název samostatným plánovacím krokem")
-        self.options.check("qa_continue_conversation", "QA · Pokračovat v rozhovoru přes previous_response_id")
-        for key, title in (("model_a1", "Model plánování"), ("model_a2", "Model struktury"), ("model_a3", "Model souborů")):
+        self.options.check("qfile_suggest_path", "Jeden soubor · nechat službu navrhnout název (placený krok)")
+        self.options.check("qa_continue_conversation", "Dotaz · navázat na odpověď s uvedeným kódem ze služby")
+        self.options.fields["response_id"].setToolTip("Číslo odpovědi najdete v historii. Použije se jen při zapnutém navázání na předchozí odpověď.")
+        self.options.fields["temperature"].setToolTip("Nižší číslo omezuje různorodost odpovědí, vyšší ji zvyšuje. Dostupné jen pro modely podporující tuto volbu.")
+        self.options.fields["maximum_quality"].setToolTip("Přidá kontrolu návrhu dalším modelem před vytvořením souborů. Používá další placené zpracování.")
+        self.options.fields["qfile_output_path"].setPlaceholderText("Například zprava.txt nebo dokumenty/zprava.txt")
+        for key, title in (("model_a1", "Model pro návrh řešení"), ("model_a2", "Model pro rozvržení souborů"), ("model_a3", "Model pro obsah souborů")):
             self.options.choice(key, title, [("Použít hlavní model", "")])
         layout.addWidget(self.options)
         layout.addStretch()
-        self.tabs.addTab(scroll(parameters), "Parametry a adresáře")
+        self.tabs.addTab(scroll(parameters), "Nastavení práce a složky")
         diagnostics = QWidget()
         layout = vertical(diagnostics)
         self.diagnostics = Form()
-        for key, title in (("diag_windows_in", "Diagnostika Windows na vstupu"), ("diag_windows_out", "Diagnostika Windows na výstupu"),
-                           ("diag_ssh_in", "Vzdálená diagnostika na vstupu"), ("diag_ssh_out", "Vzdálená diagnostika na výstupu")):
+        for key, title in (("diag_windows_in", "Prověřit tento počítač Windows před prací"), ("diag_windows_out", "Prověřit tento počítač Windows po práci"),
+                           ("diag_ssh_in", "Prověřit vzdálený počítač před prací"), ("diag_ssh_out", "Prověřit vzdálený počítač po práci")):
             self.diagnostics.check(key, title)
         for key, title in (("ssh_user", "Vzdálený uživatel"), ("ssh_host", "Vzdálený počítač"), ("ssh_key", "Soubor přihlašovacího klíče"),
                            ("ssh_password", "Heslo"), ("ssh_pin", "Očekávaný otisk klíče počítače")):
@@ -134,7 +139,7 @@ class Workbench(QWidget):
         self.diagnostics.check("ssh_pin_required", "Vyžadovat ověření otisku")
         layout.addWidget(self.diagnostics)
         layout.addStretch()
-        self.tabs.addTab(scroll(diagnostics), "Diagnostika")
+        self.tabs.addTab(scroll(diagnostics), "Kontrola počítače")
         self.result = EvidenceView("Výsledek práce")
         self.tabs.addTab(self.result, "Výsledek")
         self.start_button = action("run.start", "Spustit práci", self.start, "primary")
@@ -160,7 +165,7 @@ class Workbench(QWidget):
         self.refresh_models()
 
     def browse(self, field):
-        value = get_existing_directory(self, "Vybrat adresář", field.text())
+        value = get_existing_directory(self, "Vybrat složku", field.text())
         if value:
             field.setText(value)
 
@@ -174,10 +179,10 @@ class Workbench(QWidget):
 
     def _validate_state(self, state):
         if not isinstance(state, dict):
-            raise ValueError("Zadání musí být objekt.")
+            raise ValueError("Soubor zadání nemá očekávanou strukturu.")
         temperature = float(state.get("temperature", self.context.settings.default_temperature) or 0)
         if not math.isfinite(temperature) or not 0 <= temperature <= 2:
-            raise ValueError("Teplota musí být konečné číslo od 0 do 2.")
+            raise ValueError("Různorodost odpovědí musí být číslo od 0 do 2.")
         from kajovo.core.openai_client import OpenAIClient
         for field in ("attached_file_ids", "input_file_ids", "attached_vector_store_ids"):
             identifiers = state.get(field) or []
@@ -283,7 +288,7 @@ class Workbench(QWidget):
         self.validate()
 
     def update_attachments(self):
-        self.attachments.setText(f"Připojené soubory: {len(self.context.files)} · vyhledávací úložiště: {len(self.context.stores)}")
+        self.attachments.setText(f"Připojené soubory: {len(self.context.files)} · knihovny dokumentů: {len(self.context.stores)}")
         self.validate()
 
     def validate(self):
@@ -352,11 +357,11 @@ class Workbench(QWidget):
                     suffix = Path(relative).suffix.lower().lstrip(".")
                     if suffix != cfg.qfile_output_format:
                         raise ValueError(
-                            "QFILE: přípona výstupní cesty musí odpovídat zvolenému formátu."
+                            "Přípona výsledného souboru musí odpovídat zvolenému druhu souboru."
                         )
                 elif not cfg.qfile_suggest_path:
                     raise ValueError(
-                        "QFILE: vyplňte výstupní cestu, nebo zvolte Navrhnout název."
+                        "Vyplňte název výsledného souboru, nebo zapněte návrh názvu službou."
                     )
             if not self.context.api_key:
                 raise ValueError("Uložte přístupový klíč v Nastavení.")
@@ -365,7 +370,7 @@ class Workbench(QWidget):
             self.validation.setText(friendly_error(error))
             self.start_button.setEnabled(False)
             return False
-        self.validation.setText("Zadání splňuje místní technickou a kontraktní kontrolu.")
+        self.validation.setText("Zadání je připravené ke spuštění. Výsledek se ověří při zpracování.")
         self.start_button.setEnabled(True)
         return True
 
@@ -378,7 +383,7 @@ class Workbench(QWidget):
         active_ids = {record.identifier for record in self.context.operations.active}
         if any(run_id in active_ids and request == identity
                for run_id, request in self._active_requests.items()):
-            self.validation.setText("Stejné zadání již zpracovává aktivní operace; druhý submit nebyl spuštěn.")
+            self.validation.setText("Stejné zadání se již zpracovává. Další zpracování nebylo spuštěno.")
             return
         if len(self.context.operations.active) >= 4:
             self.validation.setText("Počkejte na dokončení některé ze čtyř aktivních operací.")
@@ -408,7 +413,7 @@ class Workbench(QWidget):
                 "UI_VALIDATE",
                 "completed",
                 source="validation",
-                detail="Zadání prošlo místní technickou a kontraktní kontrolou před spuštěním workeru.",
+                detail="Nastavení a povinné vstupy prošly místní kontrolou. Samotná práce ještě nebyla spuštěna.",
             ),
         )
         if target:
@@ -467,7 +472,7 @@ class Workbench(QWidget):
                     self.widgets["qfile_output_format"].setCurrentIndex(index)
             self.widgets["qfile_suggest_path"].setChecked(False)
             self.validation.setText(
-                "QFILE: návrh cesty je připraven. Zkontrolujte jej a znovu klikněte "
+                "Návrh názvu souboru je připraven. Zkontrolujte jej a znovu klikněte "
                 "Spustit práci; tím cestu výslovně potvrdíte před výrobou souboru."
             )
 
@@ -485,9 +490,9 @@ class Workbench(QWidget):
             )
             self.widgets["response_id"].setText("")
             self.saved_extras.pop("preparation_snapshot", None)
-            self.validation.setText("Upřesnění je v zadání. Tlačítkem Spustit práci zahájíte novou iteraci bez řetězení historie.")
+            self.validation.setText("Odpověď je doplněná do zadání. Tlačítkem Spustit práci odešlete doplněné zadání znovu.")
         else:
-            self.validation.setText("Otázky zůstávají ve výsledku. Doplňte zadání před další iterací.")
+            self.validation.setText("Otázky najdete ve výsledku. Doplňte zadání před dalším spuštěním.")
 
     def offer_repair_from_publish(self, run_dir, state, cfg=None):
         from kajovo.core.repair_execution import claim_published_repair_offer

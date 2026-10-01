@@ -9,6 +9,7 @@ from kajovo.core.project_git import ProjectGit
 from .components import Form, PathInput, action, actions, caption, confirm, friendly_error, vertical
 from .file_dialogs import get_existing_directory
 from .resources import ValueDialog
+from .presentation import git_status_readable
 
 
 class VersionsPage(QWidget):
@@ -20,7 +21,7 @@ class VersionsPage(QWidget):
         self.generation = 0
         root = vertical(self)
         form = Form()
-        self.path = form.add("git.root", "Adresář projektu", PathInput(directories=True))
+        self.path = form.add("git.root", "Složka projektu", PathInput(directories=True))
         self.path.setText(str(Path.cwd()))
         self.path.textChanged.connect(self.invalidate)
         root.addWidget(form)
@@ -29,9 +30,9 @@ class VersionsPage(QWidget):
         page = QWidget()
         body = vertical(page)
         form = Form()
-        self.remote = form.text("git.remote", "Vzdálený repozitář")
+        self.remote = form.text("git.remote", "Vzdálená adresa pro sdílení verzí projektu")
         body.addWidget(form)
-        body.addWidget(actions(action("git.init", "Založit repozitář", lambda: self.execute("Založení repozitáře", lambda service: service.init())),
+        body.addWidget(actions(action("git.init", "Začít ukládat verze projektu", lambda: self.execute("Založení repozitáře", lambda service: service.init())),
                                action("git.remote.save", "Uložit vzdálenou adresu", self.set_remote),
                                action("git.pull", "Stáhnout změny", lambda: self.synchronize(False)),
                                action("git.push", "Odeslat změny", lambda: self.synchronize(True))))
@@ -39,6 +40,8 @@ class VersionsPage(QWidget):
         self.status.setReadOnly(True)
         self.status.setAccessibleName("Stav repozitáře")
         body.addWidget(self.status)
+        self.technical_status = None
+        body.addWidget(action("git.status.technical", "Technický záznam verzovacího systému", self.show_technical_status))
         self.tags = QListWidget()
         self.tags.setAccessibleName("Milníky projektu")
         body.addWidget(self.tags)
@@ -73,7 +76,7 @@ class VersionsPage(QWidget):
             self.editor.setReadOnly(True)
 
     def browse(self):
-        path = get_existing_directory(self, "Adresář projektu", self.path.text())
+        path = get_existing_directory(self, "Složka projektu", self.path.text())
         if path:
             self.path.setText(path)
             self.refresh()
@@ -103,14 +106,15 @@ class VersionsPage(QWidget):
 
     def render(self, result):
         self.path.setText(result["root"])
-        self.status.setPlainText(result["status"])
+        self.technical_status = result["status"]
+        self.status.setPlainText(git_status_readable(result["status"]))
         self.remote.setText(result["remote"])
         self.tags.clear()
         types = result.get("milestone_types") or {}
         for name in result["tags"]:
             legacy = types.get(name) == "legacy_commit_only"
             item = QListWidgetItem(
-                name + (" · legacy: jen commit" if legacy else " · snapshot")
+                name + (" · starší milník, pouze uložené změny" if legacy else " · úplná kopie souborů")
             )
             item.setData(Qt.UserRole, name)
             self.tags.addItem(item)
@@ -122,6 +126,11 @@ class VersionsPage(QWidget):
 
     def refresh(self):
         self.execute("Načtení projektu", lambda service: service.snapshot(), reserve=False)
+
+    def show_technical_status(self):
+        from .components import DetailDialog
+
+        DetailDialog("Technický záznam verzovacího systému", "Úplný výstup kontroly verzí projektu.", self, self.technical_status).exec()
 
     def set_remote(self):
         remote = self.remote.text().strip()
@@ -141,7 +150,7 @@ class VersionsPage(QWidget):
 
     def restore_tag(self):
         name = self.tag()
-        if name and confirm(self, "Obnovit milník", "Obnovit sledované soubory ze zvoleného milníku? Pracovní strom musí být čistý."):
+        if name and confirm(self, "Obnovit milník", "Vrátit soubory spravované verzovacím systémem do zvoleného milníku? Nejprve uložte všechny současné změny do milníku."):
             self.execute("Obnova milníku", lambda service: service.restore(name))
 
     def delete_tag(self):

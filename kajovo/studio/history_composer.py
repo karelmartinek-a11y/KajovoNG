@@ -17,12 +17,12 @@ class BranchComposer(QDialog):
     def __init__(self, launcher, adapter, checkpoints, relation, selected_stage="", parent=None, *, edit_input=False):
         super().__init__(parent)
         self.launcher, self.adapter, self.relation, self.selected_stage = launcher, adapter, relation, selected_stage
-        self.setWindowTitle("Run Studio · příprava nové větve")
+        self.setWindowTitle("Historie · příprava navazujícího běhu")
         self.resize(1120, 900)
         self.setMinimumSize(640, 360)
         content = QWidget()
         body = vertical(content)
-        body.addWidget(caption("Chyba a příprava nové větve" if relation == "repair" else "Příprava nové větve", "heading"))
+        body.addWidget(caption("Chyba a příprava opravného běhu" if relation == "repair" else "Příprava navazujícího běhu", "heading"))
         body.addWidget(caption(f"Zdrojový běh: {adapter.run_id}", "muted"))
         from .history_models import RunTableModel
         from .history_timeline import RunTrackView
@@ -41,15 +41,17 @@ class BranchComposer(QDialog):
         self.technical.setReadOnly(True)
         self.technical.setAccessibleName("Technický detail zdrojové chyby")
         self.technical.setMaximumHeight(180)
+        self.technical.hide()
         source_body.addWidget(self.error)
+        source_body.addWidget(action("history.branch.technical", "Zobrazit nebo skrýt technické podrobnosti", lambda: self.technical.setVisible(not self.technical.isVisible())))
         source_body.addWidget(self.technical, 1)
         self.preserved = caption("", "muted")
         source_body.addWidget(self.preserved)
         source_body.addStretch()
         columns.addWidget(source)
-        destination, destination_body = panel("Nová větev")
+        destination, destination_body = panel("Navazující běh")
         self.checkpoint = QComboBox()
-        self.checkpoint.setAccessibleName("Bezpečný checkpoint")
+        self.checkpoint.setAccessibleName("Ověřený bod obnovy")
         self.titles = {}
         for row in checkpoints:
             if edit_input and row.get("checkpoint_type") != "input_ready":
@@ -72,7 +74,7 @@ class BranchComposer(QDialog):
             self.checkpoint.setCurrentIndex(self.checkpoint.count() - 1)
         destination_body.addWidget(caption("Odkud navázat"))
         destination_body.addWidget(self.checkpoint)
-        self.summary_box, summary_layout = panel("Lokální náhled dopadu")
+        self.summary_box, summary_layout = panel("Co se po spuštění provede")
         self.summary = caption("")
         summary_layout.addWidget(self.summary)
         destination_body.addWidget(self.summary_box)
@@ -80,14 +82,15 @@ class BranchComposer(QDialog):
         self.instruction.setAccessibleName("Pokyn pro nově prováděnou část")
         self.instruction.setMaximumHeight(180)
         self.instruction.setPlaceholderText(
-            "Upravte zadání nové QA větve. Původní běh ani jeho vstupy se nezmění."
-            if edit_input else "Popište opravu. Pokyn se použije pouze za bezpečným checkpointem."
+            "Upravte dotaz pro nové zpracování. Původní běh i jeho vstupy zůstanou zachovány."
+            if edit_input else "Popište opravu. Pokyn se použije na práci následující po ověřeném bodu obnovy."
         )
         self.instruction.setVisible(relation == "repair" or edit_input)
         destination_body.addWidget(self.instruction, 1)
         destination_body.addStretch()
         columns.addWidget(destination)
         columns.setSizes([440, 560])
+        columns.setMinimumHeight(340)
         body.addWidget(columns, 1)
         root = vertical(self, 0)
         root.addWidget(scroll(content), 1)
@@ -130,6 +133,10 @@ class BranchComposer(QDialog):
             from .history_models import STAGE_TITLES
             titles = {**STAGE_TITLES, **self.titles}
             first = titles.get(value['first_paid_operation'], value['first_paid_operation'])
+            if first.startswith("GET "):
+                first = "Načtení již odeslané odpovědi; nové zadání se neodesílá"
+            elif first.startswith("Bez nového requestu"):
+                first = "Žádná. Nejprve potvrďte výrobu z uloženého plánu"
             inherited = [titles.get(stage, stage) for stage in value['inherited_stages']]
             self.error.setText(friendly_error(ValueError(value['source_error']), "Obnovu běhu"))
             self.technical.setPlainText(value['technical_error'])

@@ -85,6 +85,44 @@ def _safe_detail(value: str) -> str:
     return value
 
 
+COMIC_ERRORS = {
+    "missing_project": ("Není otevřený žádný komiks.", "Vyberte uložený komiks nebo vytvořte nový."),
+    "missing_entity": ("Není vybraná postava nebo prostředí.", "Vyberte položku v příslušném seznamu."),
+    "missing_panel": ("Není vybraný obrázek příběhu.", "Vyberte obrázek v seznamu nebo přidejte nový."),
+    "missing_operation": ("Není vybraná úloha komiksu.", "Vyberte úlohu v Historii komiksu."),
+    "missing_version": ("Obrázek zatím nemá vytvořenou kresbu.", "Nejprve vytvořte obrázek, potom upravujte nebo ukládejte jeho výsledek."),
+    "missing_reference": ("Chybí vzorový obrázek postavy nebo prostředí.", "Přidejte podklad a vytvořte vzorový obrázek v příslušném oddílu."),
+    "bible_missing": ("Chybí sestavená pravidla komiksu.", "V oddílu Vzhled a pravidla komiksu použijte Sestavit pravidla komiksu."),
+    "bible_stale": ("Pravidla komiksu už neodpovídají současnému nastavení.", "Po změně vzhledu nebo podkladů znovu sestavte pravidla komiksu."),
+    "story_missing": ("Chybí vytvořený příběh.", "V oddílu Příběh a rozpis obrázků nejprve vytvořte příběh."),
+    "script_missing": ("Chybí vytvořený scénář.", "Nejprve vytvořte scénář z příběhu."),
+    "storyboard_missing": ("Chybí rozpis obrázků příběhu.", "Nejprve vytvořte rozpis obrázků ze scénáře."),
+    "continuity_missing": ("Tato verze rozpisu ještě nemá úspěšně zkontrolovanou návaznost.", "Spusťte kontrolu návaznosti a vyřešte nalezené problémy."),
+    "continuity_stale": ("Kontrola návaznosti už neodpovídá současnému rozpisu obrázků.", "Znovu spusťte kontrolu návaznosti aktuálního rozpisu."),
+    "document_stale": ("Příběh, scénář nebo rozpis používá starší pravidla komiksu.", "Vytvořte navazující část podle současných pravidel."),
+    "entity_style_stale": ("Vzorový obrázek položky používá starší pravidla vzhledu.", "Vytvořte nový vzorový obrázek postavy nebo prostředí."),
+    "inactive_version": ("Vybraná kresba ještě není použitá jako současná verze obrázku.", "Nejprve použijte vybranou verzi, potom upravujte její texty."),
+    "sfx_disabled": ("Pravidla komiksu nepovolují zvukové nápisy.", "Povolte zvukové nápisy v nastavení vzhledu nebo zvolte jiný druh textu."),
+    "too_many_references": ("Je připojených příliš mnoho vzorových obrázků.", "Odeberte nadbytečné podklady. Postava nebo prostředí spolu se stylem může použít nejvýše 16 obrázků."),
+    "revision_conflict": ("Uloženou položku mezitím změnila jiná práce.", "Obnovte její zobrazení a zkontrolujte poslední uložený obsah."),
+    "operation_active": ("Pro vybranou položku už probíhá jiná práce.", "Nejprve ji dokončete nebo bezpečně zastavte v přehledu práce."),
+    "project_deleted": ("Komiks je v koši.", "Nejprve jej obnovte z koše."),
+    "protected_path": ("Výsledek nelze uložit do vnitřní knihovny komiksů.", "Vyberte jinou složku pro výsledný soubor."),
+    "invalid_overlay": ("Nastavení textové bubliny nebo nápisu není platné.", "Zkontrolujte text, velikost a umístění uvnitř obrázku."),
+    "invalid_format": ("Nastavení rozměrů nebo jemnosti tisku není platné.", "Zvolte platný přednastavený formát nebo upravte rozměry a jemnost tisku v povoleném rozsahu."),
+    "invalid_document": ("Zadání obrázku obsahuje neplatnou část nebo překračuje povolenou velikost.", "Upravte zadání. Postavy a prostředí vkládejte z nabídky uložených položek."),
+    "broken_reference": ("Zadání odkazuje na chybějící, neaktivní nebo cizí položku.", "Znovu vyberte postavu, prostředí nebo vzorový obrázek ze současného komiksu."),
+    "missing_asset": ("Uložený obrázkový soubor v knihovně chybí.", "Obnovte jeho nepoškozenou zálohu nebo znovu připojte původní obrázek."),
+    "corrupt_asset": ("Uložený obrázkový soubor má změněný obsah.", "Použijte původní obrázek nebo obnovte jeho nepoškozenou zálohu."),
+    "missing_record": ("Požadovaná položka v knihovně už není dostupná.", "Obnovte přehled a vyberte existující položku."),
+    "nothing_to_retry": ("Vybraná úloha nemá žádné neúspěšné obrázky k opakování.", "Zkontrolujte výsledky v přehledu práce."),
+    "retry_limit": ("Úloha vyčerpala nejvýše tři povolené pokusy.", "Zkontrolujte příčinu chyby. Další práci připravte jako nové zadání."),
+    "submission_unknown": ("Odeslání úlohy se nepodařilo potvrdit.", "Neodesílejte ji znovu, dokud se nepodaří dohledat původní požadavek."),
+    "cancel_unavailable": ("U této úlohy lze zastavit jen místní čekání.", "Ověřte vzdálený stav v přehledu práce. Zastavení místního čekání nepotvrzuje zrušení ve službě."),
+    "stopped": ("Místní zpracování bylo zastaveno.", "Uloženou úlohu lze obnovit z přehledu práce."),
+}
+
+
 class RecordedError(Exception):
     """Bezpečný obal strukturované chyby uložené ve výsledku dávky."""
 
@@ -220,8 +258,11 @@ def describe_error(error: BaseException, *, operation: str = "Operaci") -> UserE
     from .comic_types import ComicError
     for item in chain:
         if isinstance(item, ComicError):
-            return UserError("comic", item.code, "Operaci v Komiksu se nepodařilo dokončit.", True, _safe_detail(str(item)),
-                             "Zkontrolujte zadání nebo obnovte uloženou operaci.", item.retryable)
+            message, next_step = COMIC_ERRORS.get(item.code, (
+                "Operaci v Komiksu se nepodařilo dokončit.",
+                "Zkontrolujte zadání nebo obnovte uloženou operaci.",
+            ))
+            return UserError("comic", item.code, message, True, _safe_detail(str(item)), next_step, item.retryable)
     detail = _safe_detail("\n\n".join(f"{type(item).__name__}: {item}" for item in chain))
     for item in chain:
         if isinstance(item, subprocess.CalledProcessError):

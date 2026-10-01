@@ -34,7 +34,7 @@ class CascadesPage(QWidget):
     def __init__(self, context, parent=None):
         super().__init__(parent)
         self.context = context
-        self.definition = CascadeDefinition("Nová kaskáda")
+        self.definition = CascadeDefinition("Nová posloupnost úloh")
         self.current_id = None
         self.location = None
         self.loading = False
@@ -44,45 +44,45 @@ class CascadesPage(QWidget):
         overview = QWidget()
         body = vertical(overview)
         self.form = Form()
-        self.name = self.form.text("cascade.name", "Název kaskády", self.definition.name)
+        self.name = self.form.text("cascade.name", "Název posloupnosti úloh", self.definition.name)
         self.project = self.form.text("cascade.project", "Projekt")
-        self.input = self.form.add("cascade.input", "Vstupní adresář", PathInput(directories=True))
-        self.output = self.form.add("cascade.output", "Výstupní adresář", PathInput(directories=True))
+        self.input = self.form.add("cascade.input", "Složka se vstupními soubory", PathInput(directories=True))
+        self.output = self.form.add("cascade.output", "Složka pro výsledky", PathInput(directories=True))
         body.addWidget(self.form)
         self.steps = QListWidget()
         self.steps.setWordWrap(True)
         self.steps.setDragDropMode(QAbstractItemView.InternalMove)
-        self.steps.setAccessibleName("Kroky kaskády v pořadí zpracování")
+        self.steps.setAccessibleName("Kroky úlohy v pořadí zpracování")
         self.steps.currentItemChanged.connect(self.select_step)
         self.steps.model().rowsMoved.connect(self.reorder)
         body.addWidget(self.steps, 1)
         body.addWidget(actions(action("cascade.step.add", "Přidat krok", self.add_step),
-                               action("cascade.step.copy", "Duplikovat krok", self.duplicate_step),
+                               action("cascade.step.copy", "Vytvořit kopii kroku", self.duplicate_step),
                                action("cascade.step.remove", "Odstranit krok", self.remove_step, "danger")))
         body.addWidget(actions(action("cascade.step.up", "Posunout výše", lambda: self.move_step(-1)),
                                action("cascade.step.down", "Posunout níže", lambda: self.move_step(1)),
                                action("cascade.step.edit", "Upravit vybraný krok", lambda: self.tabs.setCurrentIndex(1)),
-                               action("cascade.outputs", "Finální výstupy a spuštění od kroku", self.definition_options)))
+                               action("cascade.outputs", "Výsledky a první prováděný krok", self.definition_options)))
         self.tabs.addTab(scroll(overview), "Posloupnost")
         detail = QWidget()
         body = vertical(detail)
         self.step_form = Form()
         self.title = self.step_form.text("cascade.step.title", "Název kroku")
         self.model = self.step_form.choice("cascade.step.model", "Model kroku", [])
-        self.context_id = self.step_form.text("cascade.step.context", "Sdílený kontext")
+        self.context_id = self.step_form.text("cascade.step.context", "Název skupiny navazujících kroků")
         self.use_conversation_context = self.step_form.check(
             "cascade.step.conversation",
-            "Navázat konverzačně na předchozí Response stejného kontextu",
+            "Navázat na předchozí odpověď ze stejné skupiny kroků",
         )
-        self.deterministic = self.step_form.check("cascade.step.deterministic", "Deterministický krok")
-        self.inherit_temperature = self.step_form.check("cascade.step.default_temperature", "Použít výchozí teplotu modelu", True)
+        self.deterministic = self.step_form.check("cascade.step.deterministic", "Přesně určit vstupy a výstupy kroku")
+        self.inherit_temperature = self.step_form.check("cascade.step.default_temperature", "Použít výchozí různorodost odpovědí", True)
         self.temperature = QDoubleSpinBox()
         self.temperature.setRange(0, 2)
-        self.step_form.add("cascade.step.temperature", "Teplota", self.temperature)
+        self.step_form.add("cascade.step.temperature", "Různorodost odpovědí (0–2)", self.temperature)
         body.addWidget(self.step_form)
-        body.addWidget(caption("Instrukce kroku"))
+        body.addWidget(caption("Pravidla pro tento krok"))
         self.instructions = QPlainTextEdit()
-        self.instructions.setAccessibleName("Instrukce kroku")
+        self.instructions.setAccessibleName("Pravidla pro tento krok")
         self.instructions.setMinimumHeight(130)
         body.addWidget(self.instructions)
         body.addWidget(caption("Textový vstup"))
@@ -91,7 +91,7 @@ class CascadesPage(QWidget):
         self.text.setMinimumHeight(130)
         body.addWidget(self.text)
         body.addWidget(actions(action("cascade.step.apply", "Použít změny kroku", self.commit_step, "primary"),
-                               action("cascade.step.contract", "Vstupy, výstupy a pokročilé vlastnosti", self.edit_contract)))
+                               action("cascade.step.contract", "Pokročilé nastavení kroku (technický zápis)", self.edit_contract)))
         self.tabs.addTab(scroll(detail), "Detail kroku")
         self.item_lists = {}
         for kind, title in (("inputs", "Vstupy kroku"), ("outputs", "Výstupy kroku")):
@@ -107,13 +107,13 @@ class CascadesPage(QWidget):
                 action("cascade." + kind + ".edit", "Upravit", lambda checked=False, target=kind: self.edit_item(target)),
                 action("cascade." + kind + ".remove", "Odebrat", lambda checked=False, target=kind: self.remove_item(target), "danger")))
             self.tabs.addTab(page, title)
-        self.validation = caption("Přidejte kroky kaskády.", "muted")
+        self.validation = caption("Přidejte jednotlivé kroky úlohy.", "muted")
         root.addWidget(self.validation)
-        root.addWidget(actions(action("cascade.new", "Nová kaskáda", self.reset),
+        root.addWidget(actions(action("cascade.new", "Nová posloupnost úloh", self.reset),
                                action("cascade.load", "Načíst", self.load),
                                action("cascade.save", "Uložit", self.save),
                                action("cascade.save_as", "Uložit jako", lambda: self.save(force_path=True)),
-                               action("cascade.start", "Spustit kaskádu", self.start, "primary")))
+                               action("cascade.start", "Spustit posloupnost úloh", self.start, "primary")))
         context.models_changed.connect(self.refresh_models)
         self.refresh_models()
 
@@ -181,10 +181,10 @@ class CascadesPage(QWidget):
     def edit_item(self, kind, new=False):
         step = self.selected()
         if not step:
-            self.validation.setText("Nejdříve vyberte krok kaskády.")
+            self.validation.setText("Nejdříve vyberte krok úlohy.")
             return
         if not step.deterministic:
-            self.validation.setText("Legacy krok upravujte přes úplný kontrakt; typované položky vyžadují deterministický režim.")
+            self.validation.setText("U staršího kroku zapněte přesně určené vstupy a výstupy. Původní nastavení lze upravit v technickém zápisu.")
             return
         rows = getattr(step, kind)
         listing = self.item_lists[kind]
@@ -281,7 +281,7 @@ class CascadesPage(QWidget):
         step = self.selected()
         if not step:
             return
-        dialog = ValueDialog("Úplný kontrakt kroku", "Vstupy, výstupy, rozhodnutí, návaznosti, schéma a soubory kroku", json.dumps(step.to_dict(), ensure_ascii=False, indent=2), self, structured=True)
+        dialog = ValueDialog("Pokročilé nastavení kroku", "Technický zápis vstupů, výstupů a návazností kroku ve formátu JSON", json.dumps(step.to_dict(), ensure_ascii=False, indent=2), self, structured=True)
         if dialog.exec() == QDialog.Accepted:
             try:
                 updated = CascadeStep.from_dict(dialog.value)
@@ -294,7 +294,7 @@ class CascadesPage(QWidget):
 
     def definition_options(self):
         self.commit_step(redraw=False)
-        dialog = ValueDialog("Kontrakt kaskády", "Úplná definice včetně finálních výstupů a vstupního kroku", json.dumps(self.definition.to_dict(), ensure_ascii=False, indent=2), self, structured=True)
+        dialog = ValueDialog("Pokročilé nastavení posloupnosti úloh", "Technický zápis celé posloupnosti ve formátu JSON, včetně výsledků a prvního kroku", json.dumps(self.definition.to_dict(), ensure_ascii=False, indent=2), self, structured=True)
         if dialog.exec() == QDialog.Accepted:
             try:
                 self.definition = CascadeDefinition.from_dict(dialog.value)
@@ -314,16 +314,16 @@ class CascadesPage(QWidget):
         try:
             available = self.context.models_for_usage("cascade")
             if any(step.model not in available for step in self.definition.steps):
-                raise ValueError("Zvolený model není dostupný pro kaskádu; vyberte jiný model.")
+                raise ValueError("Zvolený model není dostupný pro tuto posloupnost úloh. Vyberte jiný model.")
             validate_cascade_definition(self.definition)
         except ValueError as error:
             self.validation.setText(friendly_error(error))
             return False
-        self.validation.setText("Definice kaskády splňuje místní pravidla návazností.")
+        self.validation.setText("Kroky na sebe správně navazují. Výsledky se ověří při zpracování.")
         return True
 
     def reset(self):
-        self.definition = CascadeDefinition("Nová kaskáda")
+        self.definition = CascadeDefinition("Nová posloupnost úloh")
         self.name.setText(self.definition.name)
         self.location = None
         self.current_id = None

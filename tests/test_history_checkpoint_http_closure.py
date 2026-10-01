@@ -127,7 +127,7 @@ def branch_process(root, mode, suffix, relation="continue", partial=False, crash
             assert names[0] == first[suffix], names
         elif suffix == '2Q':
             assert posts == []
-            assert confirmed[0].first_paid_operation.startswith('Bez nového requestu'), confirmed[0]
+            assert confirmed[0].first_paid_operation.startswith('Bez odeslání nového zadání'), confirmed[0]
     assert before == {str(p.relative_to(adapter.root)):p.read_bytes() for p in adapter.root.rglob('*') if p.is_file()}
     for r in manager.records.values():
         if r.dialog:

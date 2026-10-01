@@ -74,7 +74,7 @@ def test_clone_read_failure_is_visible_without_changing_workbench(tmp_path, clon
     receive(read(None))
     clone_page.notice.setText.assert_called_once()
     message = clone_page.notice.setText.call_args.args[0]
-    assert message.startswith("Klonov") or message.startswith(str(error))
+    assert message.startswith("Kopírování zadání") or message.startswith(str(error))
     assert message != str(error)
     clone_page.workbench.reset.assert_not_called()
 

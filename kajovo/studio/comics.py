@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import time
 from dataclasses import asdict
 
@@ -18,6 +17,7 @@ from kajovo.core.image_runtime import image_capability
 from .comic_editor import EntityPromptEdit, OverlayEditor, render_panel
 from .components import DetailDialog, action, actions, caption, confirm, friendly_error, scroll, vertical
 from .file_dialogs import get_open_file_names, get_save_file_name
+from .presentation import COMIC_FIELDS, COMIC_KINDS, COMIC_PRESETS, COMIC_STATES, comic_readable
 
 
 class ComicsPage(QWidget):
@@ -39,7 +39,7 @@ class ComicsPage(QWidget):
         root = vertical(self, 0)
         top = actions(action("comic.new", "Nový komiks", self.create_project, "primary"),
                       action("comic.refresh", "Obnovit knihovnu", self.refresh_projects),
-                      action("comic.duplicate", "Duplikovat komiks", self.duplicate_project),
+                      action("comic.duplicate", "Vytvořit kopii komiksu", self.duplicate_project),
                       action("comic.trash", "Do koše / Obnovit", self.trash_project))
         root.addWidget(top)
         self.trash = QCheckBox("Zobrazit koš")
@@ -64,11 +64,11 @@ class ComicsPage(QWidget):
             self.entity_lists[kind] = listing
             body.addWidget(actions(
                 action("comic." + kind + ".new", "Přidat", lambda checked=False, k=kind: self.add_entity(k)),
-                action("comic." + kind + ".generate", "Vytvořit / obnovit referenci", lambda checked=False, k=kind: self.generate_entity(k)),
-                action("comic." + kind + ".refs", "Přidat fotografie", lambda checked=False, k=kind: self.add_entity_refs(k)),
+                action("comic." + kind + ".generate", "Vytvořit vzorový obrázek", lambda checked=False, k=kind: self.generate_entity(k)),
+                action("comic." + kind + ".refs", "Přidat vzorové fotografie", lambda checked=False, k=kind: self.add_entity_refs(k)),
                 action("comic." + kind + ".edit", "Upravit popis", lambda checked=False, k=kind: self.edit_entity(k)),
-                action("comic." + kind + ".remove_refs", "Odebrat fotografie", lambda checked=False, k=kind: self.remove_entity_refs(k)),
-                action("comic." + kind + ".show", "Zobrazit referenci", lambda checked=False, k=kind: self.show_entity(k)),
+                action("comic." + kind + ".remove_refs", "Odebrat vzorové fotografie", lambda checked=False, k=kind: self.remove_entity_refs(k)),
+                action("comic." + kind + ".show", "Zobrazit vzorový obrázek", lambda checked=False, k=kind: self.show_entity(k)),
                 action("comic." + kind + ".archive", "Archivovat / obnovit", lambda checked=False, k=kind: self.archive_entity(k)),
             ))
             self.tabs.addTab(page, label)
@@ -83,7 +83,7 @@ class ComicsPage(QWidget):
         body.addWidget(actions(action("comic.job.resume", "Obnovit / převzít", self.resume_selected),
                                action("comic.job.retry", "Opakovat chybné panely", self.retry_selected),
                                action("comic.job.cancel", "Zrušit dávku", self.cancel_selected),
-                               action("comic.job.details", "Evidence operace", self.job_details)))
+                               action("comic.job.details", "Podrobnosti zpracování", self.job_details)))
         self.tabs.addTab(history, "Historie")
         self.timer = QTimer(self)
         self.timer.setInterval(max(1000, int(context.settings.batch_poll_interval_s * 1000)))
@@ -99,7 +99,7 @@ class ComicsPage(QWidget):
         split = QSplitter()
         self.panels = QListWidget()
         self.panels.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.panels.setAccessibleName("Panely komiksu")
+        self.panels.setAccessibleName("Obrázky komiksu v pořadí příběhu")
         self.panels.currentItemChanged.connect(self.select_panel)
         split.addWidget(self.panels)
         editor = QWidget()
@@ -107,7 +107,7 @@ class ComicsPage(QWidget):
         editor.setEnabled(False)
         form = vertical(editor)
         self.panel_name = QLineEdit()
-        self.panel_name.setPlaceholderText("Název panelu")
+        self.panel_name.setPlaceholderText("Název obrázku příběhu")
         self.prompt = EntityPromptEdit()
         self.prompt.setMinimumHeight(120)
         self.prompt.setPlaceholderText("Popište scénu. Postavy a prostředí vložte kliknutím níže.")
@@ -120,9 +120,12 @@ class ComicsPage(QWidget):
         form.addWidget(actions(action("comic.token.insert", "Vložit postavu / prostředí", self.insert_token)))
         sizing = QFormLayout()
         self.preset = QComboBox()
-        self.preset.addItems(["Vlastní pixely", "1:1", "4:3", "3:4", "16:9", "9:16", "A4", "A5", "A6", "DL"])
-        sizing.addRow("Formát panelu", self.preset)
+        self.preset.addItem("Vlastní velikost v obrazových bodech", "custom")
+        for value, title in COMIC_PRESETS.items():
+            self.preset.addItem(title, value)
+        sizing.addRow("Tvar a velikost obrázku", self.preset)
         self.landscape = QCheckBox("Papír na šířku")
+        self.landscape.setEnabled(False)
         sizing.addRow(self.landscape)
         self.width_px, self.height_px, self.dpi = QSpinBox(), QSpinBox(), QSpinBox()
         for spin in (self.width_px, self.height_px):
@@ -130,40 +133,40 @@ class ComicsPage(QWidget):
             spin.setValue(2048)
         self.dpi.setRange(150, 600)
         self.dpi.setValue(300)
-        sizing.addRow("Cílová šířka px", self.width_px)
-        sizing.addRow("Cílová výška px", self.height_px)
-        sizing.addRow("DPI papíru", self.dpi)
+        sizing.addRow("Šířka výsledku v obrazových bodech", self.width_px)
+        sizing.addRow("Výška výsledku v obrazových bodech", self.height_px)
+        sizing.addRow("Jemnost tisku (bodů na palec)", self.dpi)
         self.fit = QComboBox()
         self.fit.addItem("Celý obraz s okraji", "pad")
         self.fit.addItem("Vyplnit ořezem", "crop")
-        sizing.addRow("Přizpůsobení cíli", self.fit)
-        self.experimental = QCheckBox("Experimentální generování nad 2560 × 1440")
+        sizing.addRow("Přizpůsobit obrázek velikosti výsledku", self.fit)
+        self.experimental = QCheckBox("Zkusit větší rozlišení než 2560 × 1440 bodů")
         sizing.addRow(self.experimental)
         form.addLayout(sizing)
         self.format_info = caption("", "muted")
         form.addWidget(self.format_info)
-        form.addWidget(actions(action("comic.panel.save", "Uložit panel", self.save_panel, "primary"),
+        form.addWidget(actions(action("comic.panel.save", "Uložit obrázek příběhu", self.save_panel, "primary"),
                                action("comic.panel.validate", "Ověřit zadání", self.validate_panel)))
         split.addWidget(editor)
         split.setMinimumHeight(editor.sizeHint().height())
         split.setSizes([200, 550])
         body.addWidget(split)
-        body.addWidget(actions(action("comic.panel.new", "Přidat panel", self.add_panel),
-                               action("comic.panel.duplicate", "Duplikovat", lambda: self.panel_action("duplicate")),
+        body.addWidget(actions(action("comic.panel.new", "Přidat obrázek příběhu", self.add_panel),
+                               action("comic.panel.duplicate", "Vytvořit kopii", lambda: self.panel_action("duplicate")),
                                action("comic.panel.up", "Nahoru", lambda: self.panel_action("up")),
                                action("comic.panel.down", "Dolů", lambda: self.panel_action("down")),
                                action("comic.panel.delete", "Odstranit", lambda: self.panel_action("delete"))))
-        body.addWidget(actions(action("comic.panel.generate", "Vygenerovat vybrané panely", self.generate_panels, "primary"),
+        body.addWidget(actions(action("comic.panel.generate", "Vytvořit vybrané obrázky", self.generate_panels, "primary"),
                                action("comic.panel.edit", "Upravit kresbu", self.edit_panel),
-                               action("comic.panel.export", "Exportovat panel", self.export_panel)))
+                               action("comic.panel.export", "Uložit obrázek do souboru", self.export_panel)))
         self.versions = QComboBox()
-        self.versions.setAccessibleName("Verze panelu")
+        self.versions.setAccessibleName("Uložené verze obrázku")
         self.versions.currentIndexChanged.connect(self.preview_version)
         body.addWidget(self.versions)
         body.addWidget(actions(action("comic.version.accept", "Použít vybranou verzi", self.restore_version)))
         self.overlays = OverlayEditor()
         body.addWidget(self.overlays)
-        self.tabs.addTab(scroll(page), "Panely")
+        self.tabs.addTab(scroll(page), "Obrázky příběhu")
         self.preset.currentTextChanged.connect(self.apply_preset)
         self.landscape.toggled.connect(self.apply_preset)
         self.dpi.valueChanged.connect(self.apply_preset)
@@ -181,33 +184,35 @@ class ComicsPage(QWidget):
         form.addRow("Popis komiksu", self.project_description)
         self.style_fields = {}
         for field, title, choices in (
-            ("description", "Popis vizuálního stylu", None), ("line", "Linka", ["jemná", "standardní", "silná"]),
+            ("description", "Popis vzhledu kresby", None), ("line", "Síla kreslených čar", ["jemná", "standardní", "silná"]),
             ("color", "Barevnost", ["barevná", "černobílá", "vlastní paleta"]),
-            ("palette", "Barvy #RRGGBB oddělené čárkou", None), ("palette_description", "Popis palety", None),
-            ("balloon", "Bubliny", ["dialogová", "myšlenková", "narativní"]),
+            ("palette", "Kódy barev oddělené čárkou, například #FF0000 pro červenou", None), ("palette_description", "Popis palety", None),
+            ("balloon", "Bubliny", [("Mluvený dialog", "dialogová"), ("Myšlenky postavy", "myšlenková"), ("Vyprávění", "narativní")]),
             ("typography", "Charakter písma", [DEFAULT_STYLE["typography"], "Výrazné tučné komiksové písmo"]), ("extra", "Další požadavek", None),
         ):
             widget = QComboBox() if choices else QLineEdit()
             if choices:
-                widget.addItems(choices)
+                for choice in choices:
+                    label, data = choice if isinstance(choice, tuple) else (choice, choice)
+                    widget.addItem(label, data)
             self.style_fields[field] = widget
             form.addRow(title, widget)
-        self.sfx = QCheckBox("Povolit SFX")
+        self.sfx = QCheckBox("Povolit zvukové nápisy, například BUM")
         form.addRow(self.sfx)
         body.addLayout(form)
-        self.style_count = caption("Stylové reference: 0 / 16", "muted")
+        self.style_count = caption("Vzorové obrázky stylu: 0 / 16", "muted")
         body.addWidget(self.style_count)
-        body.addWidget(actions(action("comic.style.refs", "Přidat reference stylu", self.add_style_refs),
-                               action("comic.style.remove_refs", "Odebrat reference stylu", self.remove_style_refs),
+        body.addWidget(actions(action("comic.style.refs", "Přidat vzorové obrázky stylu", self.add_style_refs),
+                               action("comic.style.remove_refs", "Odebrat vzorové obrázky stylu", self.remove_style_refs),
                                action("comic.style.save", "Uložit nastavení", self.save_style),
-                               action("comic.bible.generate", "Sestavit bibli", self.generate_bible, "primary")))
+                               action("comic.bible.generate", "Sestavit pravidla komiksu", self.generate_bible, "primary")))
         self.bible_versions = QComboBox()
         self.bible_versions.currentIndexChanged.connect(self.show_bible)
         body.addWidget(self.bible_versions)
         self.bible_text = QPlainTextEdit()
         self.bible_text.setReadOnly(True)
         body.addWidget(self.bible_text, 1)
-        self.tabs.addTab(scroll(page), "Styl / Bible")
+        self.tabs.addTab(scroll(page), "Vzhled a pravidla komiksu")
         for widget in (self.project_name, self.project_description, *self.style_fields.values()):
             (widget.currentTextChanged if isinstance(widget, QComboBox) else widget.textChanged).connect(self.mark_style_dirty)
         self.sfx.toggled.connect(self.mark_style_dirty)
@@ -217,8 +222,7 @@ class ComicsPage(QWidget):
         body = vertical(page)
         body.addWidget(
             caption(
-                "Textová výrobní osa komiksu: Story → Script → Storyboard → "
-                "Continuity. Panely lze vytvořit až z continuity PASS.",
+                "Postup přípravy: příběh → scénář → rozpis obrázků → kontrola návaznosti. Obrázky lze vytvořit po úspěšné kontrole návaznosti.",
                 "muted",
             )
         )
@@ -226,28 +230,28 @@ class ComicsPage(QWidget):
             actions(
                 action(
                     "comic.story.generate",
-                    "Vytvořit Story",
+                    "Vytvořit příběh",
                     self.generate_story,
                     "primary",
                 ),
                 action(
                     "comic.script.generate",
-                    "Vytvořit Script",
+                    "Vytvořit scénář",
                     self.generate_script,
                 ),
                 action(
                     "comic.storyboard.generate",
-                    "Vytvořit Storyboard",
+                    "Rozdělit příběh na obrázky",
                     self.generate_storyboard,
                 ),
                 action(
                     "comic.continuity.generate",
-                    "Zkontrolovat Continuity",
+                    "Zkontrolovat návaznost příběhu",
                     self.generate_continuity,
                 ),
                 action(
                     "comic.storyboard.materialize",
-                    "Převést schválený storyboard na panely",
+                    "Připravit obrázky podle schváleného rozpisu",
                     self.materialize_storyboard,
                 ),
             )
@@ -255,10 +259,10 @@ class ComicsPage(QWidget):
         self.story_pipeline_text = QPlainTextEdit()
         self.story_pipeline_text.setReadOnly(True)
         self.story_pipeline_text.setPlaceholderText(
-            "Nejprve sestavte bibli, potom vytvořte Story."
+            "Nejprve sestavte pravidla komiksu, potom vytvořte příběh."
         )
         body.addWidget(self.story_pipeline_text, 1)
-        self.tabs.addTab(scroll(page), "Příběh / Storyboard")
+        self.tabs.addTab(scroll(page), "Příběh a rozpis obrázků")
 
     def _start_story_stage(self, stage):
         try:
@@ -289,7 +293,7 @@ class ComicsPage(QWidget):
         try:
             project = self.require_project()
             self.launch(
-                "Převod storyboardu na panely",
+                "Příprava obrázků podle rozpisu",
                 lambda service: service.materialize_storyboard(project),
                 lambda _value: self.refresh_project(),
                 network=False,
@@ -303,10 +307,10 @@ class ComicsPage(QWidget):
             return
         sections = []
         labels = (
-            ("story", "STORY"),
-            ("script", "SCRIPT"),
-            ("storyboard", "STORYBOARD"),
-            ("continuity", "CONTINUITY"),
+            ("story", "PŘÍBĚH"),
+            ("script", "SCÉNÁŘ"),
+            ("storyboard", "ROZPIS OBRÁZKŮ"),
+            ("continuity", "KONTROLA NÁVAZNOSTI"),
         )
         for kind, label in labels:
             document = self.service.latest_document(self.project_id, kind)
@@ -315,11 +319,7 @@ class ComicsPage(QWidget):
                 continue
             sections.append(
                 f"## {label} · {document['created_at']}\n"
-                + json.dumps(
-                    document["result"],
-                    ensure_ascii=False,
-                    indent=2,
-                )
+                + comic_readable(document["result"])
             )
         self.story_pipeline_text.setPlainText("\n\n".join(sections))
 
@@ -411,18 +411,18 @@ class ComicsPage(QWidget):
             for field, widget in self.style_fields.items():
                 value = ", ".join(style[field]) if field == "palette" else style[field]
                 if isinstance(widget, QComboBox):
-                    widget.setCurrentText(value)
+                    widget.setCurrentIndex(widget.findData(value))
                 else:
                     widget.setText(value)
             self.sfx.setChecked(style["sfx"])
             self.overlays.default_bold = "tučné" in style["typography"]
             self.overlays.kind.setCurrentIndex(self.overlays.kind.findData({"dialogová": "dialog", "myšlenková": "thought", "narativní": "caption"}[style["balloon"]]))
-            self.overlays.kind.setToolTip("SFX lze uložit pouze při povolení SFX ve stylu komiksu.")
-            self.style_count.setText(f"Stylové reference: {len(self.service.store.references(self.project_id))} / {image_capability()['max_references']}")
+            self.overlays.kind.setToolTip("Zvukové nápisy lze uložit po jejich povolení v nastavení vzhledu komiksu.")
+            self.style_count.setText(f"Vzorové obrázky stylu: {len(self.service.store.references(self.project_id))} / {image_capability()['max_references']}")
             self.loading = True
             self.bible_versions.clear()
             for i, bible in enumerate(self.service.store.rows("bibles", "project_id=?", (self.project_id,)), 1):
-                self.bible_versions.addItem(f"Bible {i} · {bible['created_at']}" + (" · aktivní" if bible["id"] == self.project_record["bible_id"] else ""), bible["id"])
+                self.bible_versions.addItem(f"Pravidla {i} · {bible['created_at']}" + (" · aktivní" if bible["id"] == self.project_record["bible_id"] else ""), bible["id"])
             self.bible_versions.setCurrentIndex(self.bible_versions.findData(self.project_record["bible_id"]))
             self.loading = False
             self.show_bible()
@@ -430,7 +430,7 @@ class ComicsPage(QWidget):
             self.refresh_entities()
             self.refresh_panels()
             self.refresh_jobs()
-            self.notice.setText("Uloženo. Konzistence je řízena referencemi; generativní model nezaručuje totožnost každého detailu.")
+            self.notice.setText("Uloženo. Stejný vzhled se řídí vzorovými obrázky a pravidly komiksu. Služba může některé detaily přesto nakreslit jinak.")
         except Exception as exc:
             self.loading = False
             self.fail(exc)
@@ -446,14 +446,14 @@ class ComicsPage(QWidget):
             self.trash.setChecked(False)
             self.refresh_projects()
             self.tabs.setCurrentIndex(3)
-            self.notice.setText("Doplňte volitelný styl a reference, potom zvolte Sestavit bibli.")
+            self.notice.setText("Doplňte vzhled a případné vzorové obrázky, potom zvolte Sestavit pravidla komiksu.")
         except Exception as exc:
             self.fail(exc)
 
     def save_style(self):
         try:
             self.require_project()
-            style = {key: widget.currentText() if isinstance(widget, QComboBox) else widget.text() for key, widget in self.style_fields.items()}
+            style = {key: widget.currentData() if isinstance(widget, QComboBox) else widget.text() for key, widget in self.style_fields.items()}
             style["palette"] = [s.strip() for s in style["palette"].split(",") if s.strip()]
             style["sfx"] = self.sfx.isChecked()
             current = self.project_record
@@ -461,7 +461,7 @@ class ComicsPage(QWidget):
             self.project_record = self.service.store.get("projects", self.project_id)
             self.style_dirty = False
             self.projects.setItemText(self.projects.findData(self.project_id), self.project_name.text())
-            self.notice.setText("Nastavení uloženo. Po změně stylu sestavte novou bibli.")
+            self.notice.setText("Nastavení je uložené. Po změně vzhledu znovu sestavte pravidla komiksu.")
             return True
         except Exception as exc:
             self.fail(exc)
@@ -478,10 +478,10 @@ class ComicsPage(QWidget):
         paths = self.files()
         project = self.project_id
         if paths:
-            self.launch("Import stylových referencí", lambda s: s.import_references(project, paths), lambda _: self.refresh_project(), network=False)
+            self.launch("Přidání vzorových obrázků stylu", lambda s: s.import_references(project, paths), lambda _: self.refresh_project(), network=False)
 
     def remove_style_refs(self):
-        if not self.project_id or not confirm(self, "Odebrat reference", "Odebrat všechny aktivní reference stylu? Historické podklady zůstanou zachované."):
+        if not self.project_id or not confirm(self, "Odebrat vzorové obrázky", "Odebrat všechny nyní používané vzorové obrázky stylu? Starší podklady zůstanou zachované."):
             return
         try:
             if self.style_dirty and not self.save_style():
@@ -503,10 +503,10 @@ class ComicsPage(QWidget):
             return
         identifier = self.bible_versions.currentData()
         if not identifier:
-            self.bible_text.setPlainText("Bible ještě nebyla sestavena.")
+            self.bible_text.setPlainText("Pravidla komiksu ještě nebyla sestavena.")
             return
         bible = self.service.store.get("bibles", identifier)
-        self.bible_text.setPlainText("\n\n".join(f"{name.replace('_', ' ').upper()}\n{text}" for name, text in bible["result"]["rules"].items()))
+        self.bible_text.setPlainText("\n\n".join(f"{COMIC_FIELDS.get(name, 'Další pravidlo')}\n{text}" for name, text in bible["result"]["rules"].items()))
 
     def refresh_entities(self):
         self.entity_records = self.service.store.rows("entities", "project_id=?", (self.project_id,))
@@ -514,7 +514,7 @@ class ComicsPage(QWidget):
         for listing in self.entity_lists.values():
             listing.clear()
         for entity in self.entity_records:
-            state = "archivováno" if entity["archived"] else "připraveno" if entity["active_revision"] else "čeká na referenci"
+            state = "archivováno" if entity["archived"] else "připraveno" if entity["active_revision"] else "čeká na vzorový obrázek"
             refs = self.service.store.references(self.project_id, entity["id"])
             count = sum(ref["role"] == "working" for ref in refs)
             item = QListWidgetItem(f"{entity['name']} · {state}\nFotografie: {count} / {image_capability()['max_references']}")
@@ -535,7 +535,7 @@ class ComicsPage(QWidget):
         name, ok = QInputDialog.getText(self, "Nová postava" if kind == "character" else "Nové prostředí", "Název")
         if not ok:
             return
-        description, ok = QInputDialog.getMultiLineText(self, "Popis reference", "Vzhled, oblečení, dispozice, co zachovat (volitelné)")
+        description, ok = QInputDialog.getMultiLineText(self, "Popis vzorového obrázku", "Vzhled, oblečení, dispozice, co zachovat (volitelné)")
         if not ok:
             return
         try:
@@ -544,7 +544,7 @@ class ComicsPage(QWidget):
             paths = self.files()
             project = self.project_id
             if paths:
-                self.launch("Import referencí", lambda s: s.import_references(project, paths, entity), lambda _: self.refresh_entities(), network=False)
+                self.launch("Přidání fotografií postavy nebo prostředí", lambda s: s.import_references(project, paths, entity), lambda _: self.refresh_entities(), network=False)
         except Exception as exc:
             self.fail(exc)
 
@@ -554,17 +554,17 @@ class ComicsPage(QWidget):
             paths = self.files()
             project = self.project_id
             if paths:
-                self.launch("Import referencí", lambda s: s.import_references(project, paths, entity), lambda _: self.refresh_entities(), network=False)
+                self.launch("Přidání fotografií postavy nebo prostředí", lambda s: s.import_references(project, paths, entity), lambda _: self.refresh_entities(), network=False)
         except Exception as exc:
             self.fail(exc)
 
     def edit_entity(self, kind):
         try:
             entity = self.service.store.get("entities", self.selected_entity(kind))
-            name, ok = QInputDialog.getText(self, "Upravit entitu", "Název", text=entity["name"])
+            name, ok = QInputDialog.getText(self, "Upravit postavu nebo prostředí", "Název", text=entity["name"])
             if not ok:
                 return
-            description, ok = QInputDialog.getMultiLineText(self, "Upravit entitu", "Popis; po uložení znovu vytvořte referenci", entity["description"])
+            description, ok = QInputDialog.getMultiLineText(self, "Upravit postavu nebo prostředí", "Popis; po uložení znovu vytvořte vzorový obrázek", entity["description"])
             if ok:
                 self.service.store.update_entity(entity["id"], entity["revision"], name, description)
                 self.refresh_entities()
@@ -574,7 +574,7 @@ class ComicsPage(QWidget):
     def remove_entity_refs(self, kind):
         try:
             entity = self.selected_entity(kind)
-            if confirm(self, "Odebrat fotografie", "Odebrat aktivní podklady? Historické soubory zůstanou zachované; přidejte nové a vytvořte referenci."):
+            if confirm(self, "Odebrat vzorové fotografie", "Odebrat nynější vzorové fotografie? Starší soubory zůstanou zachované. Přidejte nové a vytvořte vzorový obrázek."):
                 self.service.store.remove_references(self.project_id, entity)
                 self.refresh_entities()
         except Exception as exc:
@@ -590,17 +590,22 @@ class ComicsPage(QWidget):
         try:
             entity = self.service.store.get("entities", self.selected_entity(kind))
             if not entity["active_revision"]:
-                raise ComicError("missing_reference", "Entita nemá vygenerovanou referenci.")
+                raise ComicError("missing_reference", "Postava nebo prostředí zatím nemá vytvořený vzorový obrázek.")
             revision = self.service.store.get("entity_revisions", entity["active_revision"])
             from PySide6.QtWidgets import QDialog, QLabel
             from PySide6.QtGui import QPixmap
             dialog = QDialog(self)
             dialog.setWindowTitle(entity["name"])
+            dialog.resize(900, 720)
             body = vertical(dialog)
+            content = QWidget()
+            layout = vertical(content, 0)
             label = QLabel()
             label.setPixmap(QPixmap(str(self.service.store.asset_path(revision["asset_id"]))).scaled(850, 600, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            body.addWidget(label)
-            body.addWidget(caption(revision["descriptor"]))
+            layout.addWidget(label)
+            layout.addWidget(caption(revision["descriptor"]))
+            body.addWidget(scroll(content))
+            body.addWidget(action("comic.reference.close", "Zavřít", dialog.accept))
             dialog.exec()
         except Exception as exc:
             self.fail(exc)
@@ -624,7 +629,7 @@ class ComicsPage(QWidget):
         self.panels.clear()
         for panel in self.service.store.rows("panels", "project_id=? AND deleted=0", (self.project_id,), order="position,created_at"):
             jobs = self.service.store.rows("batch_items", "panel_id=?", (panel["id"],), order="rowid DESC")
-            state = {"prepared": "připraveno k odeslání", "submitted": "odesláno", "received": "čeká na místní zpracování", "completed": "výsledek uložen", "failed": "chyba"}.get(jobs[0]["status"], jobs[0]["status"]) if jobs else "zadání"
+            state = COMIC_STATES.get(jobs[0]["status"], "Stav není znám; viz podrobnosti zpracování") if jobs else "zadání"
             item = QListWidgetItem(panel["name"] + " · " + state)
             if jobs and jobs[0]["error"]:
                 detail = jobs[0]["error"]
@@ -688,20 +693,21 @@ class ComicsPage(QWidget):
     def update_format_info(self):
         try:
             fmt = self.format()
-            self.format_info.setText(f"Generování: {fmt.native_size(image_capability())} px → výsledný panel: {fmt.width} × {fmt.height} px. Bez deformace.")
+            self.format_info.setText(f"Velikost při vytváření: {fmt.native_size(image_capability())} obrazových bodů. Výsledek: {fmt.width} × {fmt.height} bodů. Obrázek se nedeformuje.")
         except Exception as exc:
             self.format_info.setText(friendly_error(exc))
 
     def apply_preset(self, *_):
+        name = self.preset.currentData()
+        self.landscape.setEnabled(name in {"A4", "A5", "A6", "DL"})
         if self.loading:
             return
-        name = self.preset.currentText()
         if ":" in name:
             w, h = map(int, name.split(":"))
             factor = 2048 / max(w, h)
             self.width_px.setValue(round(w * factor))
             self.height_px.setValue(round(h * factor))
-        elif name != "Vlastní pixely":
+        elif name != "custom":
             fmt = PanelFormat.paper(name, self.landscape.isChecked(), self.dpi.value())
             self.width_px.setValue(fmt.width)
             self.height_px.setValue(fmt.height)
@@ -736,7 +742,7 @@ class ComicsPage(QWidget):
             self.require_project()
             if self.dirty and not self.save_panel():
                 return
-            self.panel_id = self.service.store.panel(self.project_id, f"Panel {self.panels.count() + 1}")
+            self.panel_id = self.service.store.panel(self.project_id, f"Obrázek {self.panels.count() + 1}")
             self.refresh_panels()
         except Exception as exc:
             self.fail(exc)
@@ -760,7 +766,7 @@ class ComicsPage(QWidget):
         if self.save_panel():
             try:
                 snap = self.service.compile_panel(self.panel_id)
-                self.notice.setText(f"Zadání ověřeno: {len(snap['assets'])} / 16 obrazových referencí, {snap['body']['size']} px. Žádné API volání.")
+                self.notice.setText(f"Zadání je připravené: vzorové obrázky {len(snap['assets'])} z 16, velikost {snap['body']['size']} bodů. Službě se zatím nic neodeslalo.")
             except Exception as exc:
                 self.fail(exc)
 
@@ -877,7 +883,9 @@ class ComicsPage(QWidget):
             done = sum(c.get("completed", 0) for c in counts)
             failed = sum(c.get("failed", 0) for c in counts)
             total = sum(c.get("total", 0) for c in counts)
-            text = f"{op['kind']} · {op['status']} · {op['created_at']}"
+            kind = COMIC_KINDS.get(op['kind'], "Zpracování komiksu")
+            state = COMIC_STATES.get(op['status'], "Stav není znám; viz podrobnosti")
+            text = f"{kind} · {state} · {op['created_at']}"
             if batches:
                 text += f"\nDávek: {len(batches)} · hotovo {done}/{total} · chyb {failed}"
             if op["error"]:
@@ -922,7 +930,7 @@ class ComicsPage(QWidget):
             batches = self.service.store.rows("batches", "operation_id=?", (op["id"],))
             items = self.service.store.rows("batch_items", "batch_id IN (SELECT id FROM batches WHERE operation_id=?)", (op["id"],))
             evidence = {"operation": op, "batches": batches, "items": items}
-            DetailDialog("Evidence komiksu", "Uložené snapshoty, výsledky, usage a chyby jednotlivých panelů.", self, evidence).exec()
+            DetailDialog("Evidence komiksu", "Uložené kopie vstupů, výsledky, údaje o zpracování a chyby jednotlivých obrázků.", self, evidence).exec()
         except Exception as exc:
             self.fail(exc)
 
