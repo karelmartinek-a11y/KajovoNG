@@ -193,5 +193,12 @@ class SettingsPage(QWidget):
                 raise RuntimeError(message)
             return message
 
-        self.context.operations.start("Odeslání zkušební zprávy", execute,
-                                      lambda value: self.notice.setText("Zkušební zpráva byla odeslána."))
+        def received(_value):
+            try:
+                current = self.snapshot().smtp
+            except ValueError:
+                return
+            if current == settings.smtp:
+                self.notice.setText("Zkušební zpráva byla odeslána.")
+
+        self.context.operations.start("Odeslání zkušební zprávy", execute, received)
