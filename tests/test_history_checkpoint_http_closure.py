@@ -31,7 +31,7 @@ def source_process(root, mode, complete=False):
     (root / 'history-source.json').write_text(json.dumps({'run':str(adapter.root),'out':worker.cfg.out_dir}))
 
 
-def branch_process(root, mode, suffix, relation="continue", partial=False):
+def branch_process(root, mode, suffix, relation="continue", partial=False, crashed=False):
     from PySide6.QtCore import QEventLoop, QTimer, QCoreApplication, QEvent
     from PySide6.QtWidgets import QApplication
     from kajovo.core.config import AppSettings
@@ -69,7 +69,7 @@ def branch_process(root, mode, suffix, relation="continue", partial=False):
         assert predicate(), [(r.terminal,r.error) for r in manager.records.values()]
     history.load_run(build_run(adapter.run_record(),steps=adapter.steps()))
     wait(lambda: history.adapter is not None and not manager.active)
-    if relation == 'continue' and (partial or suffix == 'files_downloaded_validated'):
+    if relation == 'continue' and ((partial and not crashed) or suffix == 'files_downloaded_validated'):
         assert not history.buttons['continue'].isEnabled()
         assert transport.calls == []
         assert before == {str(p.relative_to(adapter.root)):p.read_bytes() for p in adapter.root.rglob('*') if p.is_file()}
@@ -112,7 +112,7 @@ def branch_process(root, mode, suffix, relation="continue", partial=False):
     names = [p['text']['format']['name'] for p in posts]
     if partial or suffix in {'plan_ready','files_downloaded_validated'}:
         assert child_record.terminal == 'files_complete_unverified', child_record.error
-        assert names == (['FILE_CONTENT_V1'] if partial else ['FILE_CONTENT_V1'] * 3 if relation == 'rerun' or suffix == 'plan_ready' else [])
+        assert names == (['FILE_CONTENT_V1'] * (2 if crashed else 1) if partial else ['FILE_CONTENT_V1'] * 3 if relation == 'rerun' or suffix == 'plan_ready' else []), names
         from kajovo.core.orchestration.publish import publish_staged_run
         publish_staged_run(target.root)
         for path in ['seed.txt','middle.txt','final.txt']:

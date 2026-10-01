@@ -539,18 +539,26 @@ def _stage_resource(worker, path: str, data: bytes, producer: str, *, action: st
         _atomic_write_bytes(destination, data)
     if sha256_file(str(destination)) != digest:
         raise ContractError(f"{path}: staged resource změnil hash.")
+    from ..recoverable_artifacts import load_run_state
+    previous_state = load_run_state(run_root)
+    text_binding = {}
+    if producer == "validated_text":
+        graph = (previous_state.get("preparation_snapshot") or {}).get("graph")
+        text_binding = {"implementation_graph_hash": canonical_sha256(graph)}
     artifact = worker.log.bundle.archive_artifact(
         destination,
         role="staged_output",
         kind="output_file",
         reconstruction_role=path,
         reusable=True,
+        source_response_id=str(previous_state.get("last_response_id") or "") if producer == "validated_text" else "",
         metadata={
             "relative_path": path,
             "sha256": digest,
             "expected_target_hash": expected[path],
             "publication": "not_published",
             "resource_producer": producer,
+            **text_binding,
         },
     )
     row = {
@@ -571,8 +579,7 @@ def _stage_resource(worker, path: str, data: bytes, producer: str, *, action: st
         **dict(getattr(worker, "_resource_states", {}) or {}),
         path: {"status": "completed_unverified", "producer": producer, "sha256": digest},
     }
-    from ..recoverable_artifacts import load_run_state
-    previous = load_run_state(run_root).get("staged_files") or []
+    previous = previous_state.get("staged_files") or []
     durable = {row["path"]: row for row in previous}
     durable.update(current)
     worker.log.update_state(

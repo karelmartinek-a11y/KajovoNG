@@ -345,8 +345,8 @@ class HistoryBranchLauncher:
             inherit_pending(adapter, logger, live, ui_state=safe_ui_state(config))
         if preview.relation in {"continue", "repair"} and config.mode in {"GENERATE", "MODIFY"}:
             current = read_state(adapter.root)
-            if current.get("manual_resource_bindings") or current.get("staged_files"):
-                from kajovo.core.orchestration.manual_resources import inherit_resources
+            from kajovo.core.orchestration.manual_resources import inherit_resources, recoverable_staged_files
+            if current.get("manual_resource_bindings") or recoverable_staged_files(adapter.root, current):
                 inherit_resources(adapter.root, logger)
         logger.record_lineage(
             preview.source_run_id, preview.relation,
