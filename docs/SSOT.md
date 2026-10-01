@@ -212,7 +212,7 @@ Obnova přehledu fotografických dávek odděluje chyby jednotlivých úloh vče
 
 Photo submit, refresh, recovery, import, přijetí obsahu a odstranění sdílejí procesový zámek konkrétního jobu. Po jeho získání načtou aktuální evidenci; starý snímek nesmí přepsat novější převzetí ani obnovit odstraněný job. Odstraňovací značky mají navíc společný zámek přehledu. Před převzetím provider stavu do moderního jobu se ověřuje obsah uloženého WorkOrderu proti zmrazenému jobu a centrální evidenci, nikoli jen existence souboru. Historická schema_version=1 zůstává explicitním čtecím adaptérem.
 
-Panely Fotografie i Dávky používají tutéž backendovou PHOTO transakci. Vadná evidence nebo provider vazba konkrétního jobu zůstává zachovaná a zobrazuje se jako chyba obnovy; neblokuje zdravé položky. Pracovník používá konfiguraci zachycenou při spuštění a jeho výsledek nesmí nahradit přehled po změně účtu nebo adresáře evidence.
+Panely Fotografie i Dávky používají tutéž backendovou PHOTO transakci. Vadná evidence nebo provider vazba konkrétního jobu zůstává zachovaná a zobrazuje se jako chyba obnovy; neblokuje zdravé položky. Pracovník používá konfiguraci zachycenou při spuštění a jeho výsledek nesmí nahradit přehled po změně účtu nebo adresáře evidence. Oba přehledy rozlišují generaci kontextu, takže odmítají i opožděný výsledek po návratu A → B → A. Změna nastavení nebo účtu vyprázdní přehled a zachová evidence původní operace.
 
 Panel Dávky izoluje také nečitelný nebo kontraktně vadný `run_state.json` jednotlivého běhu. Striktní čtečka jej nadále odmítá; přehled uvede identitu a chybu běhu, zachová jeho bytes a pokračuje načtením ostatních běhů a fotografických dávek.
 

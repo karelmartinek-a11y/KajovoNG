@@ -44,6 +44,7 @@ class PhotosPage(QWidget):
         self.pending_professional = None
         self._revision = 0
         self.busy = False
+        self._context_generation = 0
         self.jobs = []
         self._jobs_layout = None
         self._job_buttons = []
@@ -115,6 +116,8 @@ class PhotosPage(QWidget):
         self.start_button = action("photos.start", "Odeslat úpravy fotografií", self.start, "primary")
         root.addWidget(actions(self.start_button))
         context.models_changed.connect(self.refresh_models)
+        context.key_changed.connect(self._reset_context)
+        context.settings_changed.connect(self._reset_context)
         self.prompt.textChanged.connect(self._edited)
         self.prompt.textChanged.connect(self._update_template_actions)
         self.template.currentIndexChanged.connect(self.template_changed)
@@ -122,6 +125,11 @@ class PhotosPage(QWidget):
         self.options.changed.connect(self._edited)
         self.refresh_templates()
         self.refresh_models()
+
+    def _reset_context(self):
+        self._context_generation += 1
+        self.jobs = []
+        self._render_jobs()
 
     def add_paths(self, paths):
         existing = {self.photos.item(i).data(Qt.UserRole) for i in range(self.photos.count())}
@@ -306,9 +314,11 @@ class PhotosPage(QWidget):
         self.start_button.setEnabled(False)
         key = self.context.api_key
         log_dir = self.context.settings.log_dir
+        generation = self._context_generation
 
         def accept(value):
-            if receive and key == self.context.api_key and log_dir == self.context.settings.log_dir:
+            if (receive and generation == self._context_generation
+                    and key == self.context.api_key and log_dir == self.context.settings.log_dir):
                 receive(value)
 
         record = self.context.operations.start(

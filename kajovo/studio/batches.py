@@ -84,6 +84,7 @@ class BatchesPage(QWidget):
         self.context = context
         self.records = []
         self.busy = False
+        self._context_generation = 0
         self.poll_started = 0
         self.focus_batch_id = ""
         self.card_widgets = {}
@@ -105,8 +106,10 @@ class BatchesPage(QWidget):
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(lambda: self.refresh(automatic=True))
         context.key_changed.connect(self.reset)
+        context.settings_changed.connect(self.reset)
 
     def reset(self):
+        self._context_generation += 1
         self.timer.stop()
         self.records = []
         self.render()
@@ -124,12 +127,14 @@ class BatchesPage(QWidget):
         self.busy = True
         key = self.context.api_key
         log_dir = self.context.settings.log_dir
+        generation = self._context_generation
         self.refresh_button.setEnabled(False)
         for widget in self.action_buttons:
             widget.setEnabled(False)
 
         def accept(value):
-            if receive and key == self.context.api_key and log_dir == self.context.settings.log_dir:
+            if (receive and generation == self._context_generation
+                    and key == self.context.api_key and log_dir == self.context.settings.log_dir):
                 receive(value)
 
         record = self.context.operations.start(
