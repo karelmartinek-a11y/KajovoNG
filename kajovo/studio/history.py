@@ -609,8 +609,12 @@ class HistoryPage(QWidget):
             return export_run_bundle(adapter, target)
 
         adapter = self.adapter
+        generation = self.generation
+        def received(value):
+            if generation == self.generation and self.adapter is adapter:
+                self.notice.setText("Run Bundle exportován: " + value)
         self.context.operations.start("Export Run Bundle", write,
-                                      lambda value: self.notice.setText("Run Bundle exportován: " + value))
+                                      received)
 
     def open_comic(self):
         if not self.adapter:
