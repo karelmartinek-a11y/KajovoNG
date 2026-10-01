@@ -344,7 +344,7 @@ Zrušení zpracování je dostupné pro `validating`, `in_progress` a `finalizin
 
 ## Převodník UTF-8
 
-`python -m utf8nobom.py` spouští samostatné Qt rozhraní. Převodník vytváří kopie a ZIP zálohy mimo vstupní adresáře. Překrývající se vstupy deduplikuje, stejně pojmenované adresáře rozlišuje v názvech záloh a existující zálohu nepřepisuje. Git metadata a odkazy nekonvertuje. ZIP s traversal položkou odmítne beze změny; při přepisu zachovává komentář archivu a metadata položek. Oprava kódování je heuristická a výsledek je třeba posoudit podle konkrétních dat; originál zůstává v záloze.
+`python -m utf8nobom.py` spouští samostatné Qt rozhraní. Převodník vytváří kopie a ZIP zálohy mimo vstupní adresáře. Překrývající se vstupy deduplikuje, stejně pojmenované adresáře rozlišuje v názvech záloh a existující zálohu nepřepisuje. Git metadata a odkazy nekonvertuje. ZIP s traversal položkou odmítne beze změny; při přepisu zachovává komentář archivu a metadata položek. Převod používá jednoznačná Unicode kódování: BOM určuje UTF-8/16/32, bez BOM se přijímá pouze platné UTF-8. Nejednoznačné legacy kódování, například CP1250 bez BOM, se nehádá; soubor zůstává beze změny a důvod přeskočení je v logu. Obsah, konce řádků a originální bytes v záloze se zachovávají.
 
 ## Distribuce a ověření
 
