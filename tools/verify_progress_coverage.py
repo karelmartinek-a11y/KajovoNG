@@ -15,6 +15,7 @@ from kajovo.core.progress_catalog import (  # noqa: E402
     coverage_for_variant,
     covered_variant_ids,
 )
+from kajovo.core.filesystem_metadata import is_appledouble_metadata
 
 
 def main() -> int:
@@ -129,7 +130,7 @@ def main() -> int:
 
     studio_root = ROOT / "kajovo" / "studio"
     for path in studio_root.rglob("*.py"):
-        if path.name.startswith("._"):
+        if is_appledouble_metadata(path):
             continue
         source = path.read_text(encoding="utf-8")
         if "QProgressDialog" in source:

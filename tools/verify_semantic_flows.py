@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from semantic_runtime_inventory import RUNTIME_VARIANTS, validate_runtime_inventory
+from kajovo.core.filesystem_metadata import is_appledouble_metadata
 
 
 @dataclass(frozen=True)
@@ -249,7 +250,7 @@ def _response_format_sites() -> dict:
     dynamic: list[dict] = []
     errors: list[dict] = []
     for path in sorted((ROOT / "kajovo").rglob("*.py")):
-        if path.name.startswith("._"):
+        if is_appledouble_metadata(path):
             continue
         rel = path.relative_to(ROOT).as_posix()
         try:
