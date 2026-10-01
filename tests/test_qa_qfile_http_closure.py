@@ -278,3 +278,74 @@ def test_qfile_real_plan_survives_new_process_without_automatic_manufacture(qtbo
     child("from pathlib import Path; import sys; from test_qa_qfile_http_closure import qfile_approved_restart; qfile_approved_restart(Path(sys.argv[1]))", tmp_path)
     posts = [json.loads(line) for line in (tmp_path / "workflow-http.jsonl").read_text().splitlines() if json.loads(line)["path"] == "/responses"]
     assert [row["body"]["text"]["format"]["name"] for row in posts] == ["QFILE_PLAN_V1", "FILE_CONTENT_V1"]
+
+
+def test_qa_foreign_annotation_cannot_create_source_identity(qtbot, monkeypatch, tmp_path):
+    class CitationHttp(WorkflowHttp):
+        def request(self, method, url, **kwargs):
+            response = super().request(method, url, **kwargs)
+            if url.endswith('/responses'):
+                value = response.json()
+                value['output'][0]['content'][0]['annotations'] = [{
+                    'type':'file_citation', 'file_id':'foreign_file', 'filename':'foreign.txt', 'index':0}]
+                response._content = json.dumps(value).encode()
+            return response
+    transport = CitationHttp(tmp_path, answer=qa_value('foreign_file'))
+    page, operations = page_fixture(qtbot, monkeypatch, tmp_path, 'QA', transport)
+    page.start_button.click()
+    settle(qtbot, operations, page)
+    record = list(operations.records.values())[-1]
+    assert record.terminal == 'failed' and record.error
+    assert not record.result
+    assert sum(row['path'] == '/responses' for row in transport.calls) == 1
+
+
+@pytest.mark.parametrize('member_state,identity,valid', [
+    ('completed', 'vs_qa', True), ('failed','vs_qa',False),
+    ('in_progress','vs_qa',False), ('completed','foreign_store',False), ('missing','vs_qa',False),
+])
+def test_qa_search_evidence_requires_selected_store_completed_membership(qtbot, monkeypatch, tmp_path, member_state, identity, valid):
+    class SearchHttp(WorkflowHttp):
+        def request(self, method, url, **kwargs):
+            path = url.split('/v1',1)[1]
+            if path.startswith('/vector_stores') or path.startswith('/files/file_other'):
+                self.calls.append({'method':method,'path':path,'body':kwargs.get('json')})
+                response = requests.Response()
+                response.status_code = 200
+                response.headers['Content-Type'] = 'application/json'
+                if path == '/vector_stores/vs_qa':
+                    value = {'id':'vs_qa','status':'completed','file_counts':{'completed':1,'in_progress':0,'failed':0,'cancelled':0,'total':1}}
+                elif path.startswith('/vector_stores/vs_qa/files?'):
+                    value = {'data':[{'id':'file_other','vector_store_id':'vs_qa','status':'completed'}], 'has_more':False}
+                elif path == '/files/file_other':
+                    value = {'id':'file_other','filename':'legitimate.txt','purpose':'user_data','bytes':12}
+                elif path == '/files/file_other/content':
+                    response.headers['Content-Type'] = 'application/octet-stream'
+                    response._content = b'Legitimate.\n'
+                    return response
+                elif path == '/vector_stores/vs_qa/files/file_qa':
+                    response.status_code = 404 if member_state == 'missing' else 200
+                    value = {'error':{'message':'syntetická chybějící vazba'}} if member_state == 'missing' else {'id':'file_qa','vector_store_id':identity,'status':member_state}
+                else:
+                    raise AssertionError(path)
+                response._content = json.dumps(value).encode()
+                return response
+            response = super().request(method,url,**kwargs)
+            if path == '/responses':
+                value = response.json()
+                value['output'].insert(0, {'type':'file_search_call','status':'completed','results':[{'file_id':'file_qa','filename':'podklad.txt','text':'Původ podkladu'}]})
+                response._content = json.dumps(value).encode()
+            return response
+    transport = SearchHttp(tmp_path, answer=qa_value('file_qa'))
+    page, operations = page_fixture(qtbot, monkeypatch, tmp_path, 'QA', transport)
+    page.context.stores = ['vs_qa']
+    page.start_button.click()
+    settle(qtbot, operations, page)
+    record = list(operations.records.values())[-1]
+    assert record.terminal == ('completed' if valid else 'failed'), record.error
+    assert bool(record.result) is valid
+    assert sum(c['path'] == '/responses' for c in transport.calls) == 1
+    payload = next(c['body'] for c in transport.calls if c['path'] == '/responses')
+    assert payload['include'] == ['file_search_call.results']
+    assert payload['tools'] == [{'type':'file_search','vector_store_ids':['vs_qa']}]
+    assert sum(c['path'] == '/vector_stores/vs_qa/files/file_qa' for c in transport.calls) == 1

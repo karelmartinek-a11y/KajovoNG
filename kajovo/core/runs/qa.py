@@ -4,7 +4,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from ..contracts import ContractError, extract_text_from_response
-from ..openai_client import OpenAIClient
+from ..openai_client import OpenAIClient, OpenAIError
 from ..orchestration.contracts import parse_json_strict
 from ..orchestration.preparation import PreparationBlocked
 from ..progress import ProgressEvent
@@ -149,15 +149,29 @@ def _run_qa(
         raise ContractError("QA_ANSWER_V2: neplatná datová část.")
     for output in resp.get("output", []):
         if output.get("type") == "file_search_call":
-            evidence_ids.update(
-                row["file_id"] for row in output.get("results") or [] if row.get("file_id")
-            )
-        if output.get("type") == "message":
-            for part in output.get("content", []):
-                evidence_ids.update(
-                    row["file_id"] for row in part.get("annotations", [])
-                    if row.get("type") == "file_citation" and row.get("file_id")
-                )
+            if not self._fs_tools:
+                raise ContractError("QA_ANSWER_V2: odpověď obsahuje nevyžádané vyhledávání souborů.")
+            for row in output.get("results") or []:
+                identifier = row.get("file_id")
+                if not isinstance(identifier, str) or not identifier:
+                    raise ContractError("QA_ANSWER_V2: výsledek vyhledávání nemá identitu souboru.")
+                if identifier not in evidence_ids:
+                    bound = False
+                    for store_id in self._vector_store_ids:
+                        try:
+                            member = client.retrieve_vector_store_file(store_id, identifier)
+                        except OpenAIError as error:
+                            if error.status_code != 404:
+                                raise
+                            continue
+                        if (member.get("id") == identifier
+                                and member.get("vector_store_id") == store_id
+                                and member.get("status") == "completed"):
+                            bound = True
+                            break
+                    if not bound:
+                        raise ContractError("QA_ANSWER_V2: nalezený soubor nepatří použitým podkladům.")
+                    evidence_ids.add(identifier)
     for claim in claims:
         if claim.get("certainty") == "supported" and not claim.get("evidence_ids"):
             raise ContractError("QA_ANSWER_V2: podložené tvrzení nemá žádné podklady.")

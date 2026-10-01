@@ -504,3 +504,5 @@ Pokračování rozpracované LIVE odpovědi vytváří potomka s uzavřenou obá
 Zkušební SMTP operace používá konfiguraci zmrazenou při spuštění. Úspěšný výsledek neoznačí mezitím změněné poštovní nastavení za ověřené; podrobnosti původní operace zůstávají dostupné v přehledu operací.
 
 Lokální Git vrací svůj textový stav uvnitř výsledku operace; stav workeru zůstává typovaný `completed` nebo `failed`. Změna kořene projektu má vlastní generaci a odmítá starší callback i při návratu do původního adresáře.
+
+QA nerozšiřuje dostupné podklady samotnou souborovou anotací odpovědi. Nový soubor z vyžádaného File Search musí mít doloženou dokončenou vazbu na některé použité úložiště; cizí, chybějící nebo dosud indexovaný soubor nelze použít jako podklad tvrzení.
