@@ -130,3 +130,85 @@ def test_utf8_native_action_backup_bytes_symlink_and_failure(qtbot, monkeypatch,
             assert archive.read('český soubor.txt') == raw
         assert 'Hotovo.' in page.result.toPlainText()
         assert any(event.total and event.completed == event.total for event in record.events)
+
+
+def test_git_milestone_restore_and_local_remote_real_ui(qtbot, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QDialog
+    from kajovo.studio.resources import ValueDialog
+    settings_page, context, _, _ = fixture(qtbot,monkeypatch,tmp_path)
+    page = VersionsPage(context,settings_page)
+    qtbot.addWidget(page)
+    root = tmp_path/'project'
+    root.mkdir()
+    target = root/'obsah.txt'
+    target.write_bytes('Původní český obsah\n'.encode())
+    page.path.setText(str(root))
+    click(page,'git.init')
+    finished(qtbot,context.operations)
+    service = ProjectGit(root)
+    service.command('config','user.name','Offline test')
+    service.command('config','user.email','test@example.invalid')
+    service.command('add','.')
+    service.command('commit','-m','base')
+    def accept(dialog):
+        dialog.value = 'milnik'
+        return QDialog.Accepted
+    monkeypatch.setattr(ValueDialog,'exec',accept)
+    monkeypatch.setattr('kajovo.studio.versions.confirm',lambda *a:True)
+    click(page,'git.tag.create')
+    assert finished(qtbot,context.operations).terminal == 'completed'
+    assert page.tags.count() == 1
+    target.write_bytes(b'changed\n')
+    service.command('add','obsah.txt')
+    service.command('commit','-m','change')
+    page.tags.setCurrentRow(0)
+    click(page,'git.tag.restore')
+    assert finished(qtbot,context.operations).terminal == 'completed'
+    assert target.read_bytes() == 'Původní český obsah\n'.encode()
+    service.command('add','obsah.txt')
+    service.command('commit','-m','restore')
+    remote = tmp_path/'remote.git'
+    service.command('init','--bare',str(remote))
+    page.remote.setText(str(remote))
+    click(page,'git.remote.save')
+    finished(qtbot,context.operations)
+    for operation in ['git.push','git.pull']:
+        click(page,operation)
+        assert finished(qtbot,context.operations).terminal == 'completed'
+    assert ProjectGit(remote).command('show','HEAD:obsah.txt').stdout.encode() == target.read_bytes()
+    page.tags.setCurrentRow(0)
+    click(page,'git.tag.delete')
+    assert finished(qtbot,context.operations).terminal == 'completed'
+    assert page.tags.count() == 0 and target.read_bytes() == 'Původní český obsah\n'.encode()
+
+
+def test_converter_close_during_backup_waits_for_safe_finish(qtbot, monkeypatch, tmp_path):
+    import utf8nobom.app as app
+    page = ConverterWindow()
+    qtbot.addWidget(page)
+    page.show()
+    source,backup = tmp_path/'source',tmp_path/'backup'
+    source.mkdir()
+    backup.mkdir()
+    raw = b'\xef\xbb\xbfOriginal\n'
+    target = source/'original.txt'
+    target.write_bytes(raw)
+    page.paths[0].setText(str(source))
+    page.backup.setText(str(backup))
+    entered, release = threading.Event(),threading.Event()
+    original = app.copy_directory_for_backup
+    def boundary(*args,**kwargs):
+        entered.set()
+        assert release.wait(20), 'Backup bariéra nebyla uvolněna'
+        return original(*args,**kwargs)
+    monkeypatch.setattr(app,'copy_directory_for_backup',boundary)
+    page.start_button.click()
+    qtbot.waitUntil(entered.is_set)
+    page.close()
+    visible = page.isVisible()
+    release.set()
+    assert visible and target.read_bytes() == raw
+    assert finished(qtbot,page.operations).terminal == 'completed'
+    assert target.read_bytes() == raw[3:]
+    page.close()
+    assert not page.isVisible()

@@ -349,3 +349,46 @@ def test_qa_search_evidence_requires_selected_store_completed_membership(qtbot, 
     assert payload['include'] == ['file_search_call.results']
     assert payload['tools'] == [{'type':'file_search','vector_store_ids':['vs_qa']}]
     assert sum(c['path'] == '/vector_stores/vs_qa/files/file_qa' for c in transport.calls) == 1
+
+
+@pytest.mark.parametrize('fault',['write','symlink'])
+def test_qfile_filesystem_failure_keeps_original_and_truthful_ui(qtbot,monkeypatch,tmp_path,fault):
+    transport = WorkflowHttp(tmp_path)
+    page,operations = page_fixture(qtbot,monkeypatch,tmp_path,'QFILE',transport)
+    out = tmp_path/'OUT'
+    out.mkdir()
+    target = out/'navrh.md'
+    original = b'Original output\n'
+    outside = tmp_path/'outside.md'
+    outside.write_bytes(original)
+    if fault == 'symlink':
+        target.symlink_to(outside)
+    else:
+        target.write_bytes(original)
+        import os
+        replace = os.replace
+        def fail(source,destination,*args,**kwargs):
+            if 'staging' in str(destination) and str(destination).endswith('navrh.md'):
+                raise OSError('syntetický diskový zápis QFILE')
+            return replace(source,destination,*args,**kwargs)
+        monkeypatch.setattr(os,'replace',fail)
+    page.widgets['qfile_output_path'].setText('navrh.md')
+    page.widgets['qfile_suggest_path'].setChecked(False)
+    page.start_button.click()
+    settle(qtbot,operations,page)
+    record = list(operations.records.values())[-1]
+    assert record.terminal == 'failed' and record.error
+    assert page.result.value is None
+    assert target.read_bytes() == original and outside.read_bytes() == original
+    assert sum(r['path']=='/responses' for r in transport.calls) == (1 if fault == 'write' else 0)
+
+
+@pytest.mark.parametrize('model',['gpt-image-2','unknown-offline-model'])
+def test_account_available_ineligible_qa_model_rejected_before_submit(qtbot,monkeypatch,tmp_path,model):
+    transport = WorkflowHttp(tmp_path)
+    page,operations = page_fixture(qtbot,monkeypatch,tmp_path,'QA',transport)
+    page.context.models.append(model)
+    page.apply_state({**page.state(),'model':model})
+    page.start_button.click()
+    assert not page.start_button.isEnabled()
+    assert operations.records == {} and transport.calls == []

@@ -56,3 +56,28 @@ def test_workbench_late_http_result_remains_in_its_operation(qtbot, monkeypatch,
     assert page.result.value == current
     assert page.state() == before
     assert sum(c['path'] == '/responses' for c in transport.calls) == 1
+
+
+def test_main_window_close_during_http_keeps_worker_alive(qtbot,monkeypatch,tmp_path):
+    from kajovo.core.config import AppSettings
+    from kajovo.studio.application import create_window
+    from test_qa_qfile_http_closure import http_client
+    transport = BarrierHttp(tmp_path)
+    window = create_window(AppSettings(log_dir=str(tmp_path/'LOG'),cache_dir=str(tmp_path/'cache')),api_key='synthetic-offline',client_factory=lambda *a,**k:http_client(transport))
+    qtbot.addWidget(window)
+    window.show()
+    window.context.models = ['gpt-4o-mini']
+    page = window.workbench
+    page.apply_state({'project':'Close test','prompt':'Odpověz','mode':'QA','model':'gpt-4o-mini'})
+    monkeypatch.setattr('kajovo.core.runs.executor.OpenAIClient',lambda *a,**k:http_client(transport))
+    page.start_button.click()
+    qtbot.waitUntil(transport.entered.is_set)
+    window.close()
+    visible = window.isVisible()
+    transport.release.set()
+    assert visible and window.operations.active
+    settle(qtbot,window.operations,page)
+    assert page.result.value['status'] == 'completed'
+    assert sum(r['path']=='/responses' for r in transport.calls) == 1
+    window.close()
+    assert not window.isVisible()

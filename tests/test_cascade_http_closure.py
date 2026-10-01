@@ -215,7 +215,9 @@ def test_cascade_stop_during_http_retains_paid_result_without_next_submit(qtbot,
     assert transport.submits == 1
     state = json.loads(Path(record.worker.logger.state_path).read_text()) if isValid(record.worker) else json.loads((tmp_path/'LOG'/record.identifier/'run_state.json').read_text())
     assert state['status'] == 'cancelled'
-    assert state['cascade_runtime']['primary_responses']
+    assert state['cascade_runtime']['executed_step_ids'] == [value.steps[0].id]
+    key = value.steps[0].id + '|' + value.steps[0].outputs[0].id
+    assert state['cascade_runtime']['values'][key]['value'] == 'PŮVOD: přesná česká hodnota'
     # Návrat stránky nepřipojí dokončení zrušené operace k novému zadání.
     record.dialog.close()
     QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
