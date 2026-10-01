@@ -421,7 +421,18 @@ class BatchesPage(QWidget):
         identifier = record["id"]
 
         def receive(value):
-            self.notice.setText("Výsledky dávky byly staženy a bezpečně ověřeny.")
+            status = value.get("status") if isinstance(value, dict) else None
+            if status in {"batch_pending", "response_pending"}:
+                message = "Dávka se ještě zpracovává. Místní převzetí výsledků není dokončené."
+            elif status == "partial":
+                message = "Výsledky dávky jsou neúplné. Úspěšné položky zůstaly zachované; zkontrolujte chyby."
+            elif status == "files_complete_unverified":
+                message = "Soubory dávky byly převzaty; funkčnost ani publikace nejsou tímto stavem potvrzené."
+            elif status in {"completed", "completed_unverified", "downloaded"}:
+                message = "Výsledky dávky byly převzaty do místní evidence."
+            else:
+                message = "Převzetí výsledků dávky není potvrzené. Zkontrolujte stav operace a chyby."
+            self.notice.setText(message)
             self.refresh()
 
         self.execute(
