@@ -94,7 +94,7 @@ ovladač,BatchesPage.self.refresh_button,action,Statická konstrukce; nedokazuje
 ovladač,BatchesPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:95
 ovladač,BatchesPage.self.cards_container,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:96
 ovladač,BatchesPage.self.notice,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:103
-ovladač,BatchesPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:383
+ovladač,BatchesPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:388
 signál,BatchesPage.self.timer.timeout,lambda: self.refresh(automatic=True),Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:107
 signál,BatchesPage.context.key_changed,self.reset,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:108
 signál,BatchesPage.context.settings_changed,self.reset,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:109
