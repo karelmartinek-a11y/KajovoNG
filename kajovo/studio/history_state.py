@@ -37,7 +37,7 @@ _STATES = {
     "plan_ready": ("Plán připraven", "◆", "success", True),
     "qfile_plan_ready": ("Návrh QFILE připraven", "◆", "warning", True),
     "submission_unknown": ("Neznámý výsledek", "?", "warning", False),
-    "files_complete_unverified": ("Soubory převzaté, funkčnost neověřena", "◇", "warning", True),
+    "files_complete_unverified": ("Soubory připravené, funkčnost neověřena", "◇", "warning", True),
     "waiting_manual_resource": ("Čeká na ruční podklad", "▣", "warning", True),
     "needs_clarification": ("Čeká na upřesnění zadání", "?", "warning", True),
     "completed_unverified": ("Převzato bez úplného ověření", "◇", "warning", True),
