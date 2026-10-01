@@ -136,11 +136,15 @@ class HistoryBranchLauncher:
         technical_error = str(source_state.get("technical_error") or source_state.get("error") or "Technický detail nebyl uložen.")
         checkpoint_type = str(checkpoint.get("checkpoint_type") or "")
         output_ui = self._branch_ui(ui, mode, relation, checkpoint_type)
+        first_paid = first_paid_operation(mode, checkpoint, selected_stage)
+        if (mode in {"GENERATE", "MODIFY"} and output_ui.get("stop_after_plan")
+                and first_paid in {"A3", "B3"}):
+            first_paid = "Bez nového requestu; výrobu potvrďte z checkpointu plan_ready."
         return BranchPreview(
             relation, adapter.run_id, checkpoint_id, checkpoint_type,
             selected_stage, tuple(inherited), skipped,
             ("GET existující odpovědi; bez nového POST" if preview_live
-             else first_paid_operation(mode, checkpoint, selected_stage)), error, technical_error,
+             else first_paid), error, technical_error,
             "Zdrojový běh zůstane neměnný; vznikne nový Run ID a nová lineage větev.",
             str(self._output_dir(mode, state, output_ui) or ""),
         )
