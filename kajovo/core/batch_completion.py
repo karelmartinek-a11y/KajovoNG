@@ -31,6 +31,18 @@ def _bundle_if_present(run_dir):
     return RunBundle(root)
 
 
+def _verified_bundle_source(run_dir):
+    bundle = _bundle_if_present(run_dir)
+    if bundle:
+        integrity = bundle.verify_integrity()
+        errors = (bundle.verify_control_bindings()
+                  if integrity.get("status") == "unsealed"
+                  else integrity.get("errors") if not integrity.get("valid") else [])
+        if errors:
+            raise ContractError("Zdrojový Run Bundle má neplatnou integritu: " + "; ".join(errors))
+    return bundle
+
+
 def _sync_bundle_state(run_dir, state, event_type, data=None, *, seal=False):
     """Synchronizuje workflow, které historicky zapisovalo run_state přímo."""
     bundle = _bundle_if_present(run_dir)
@@ -125,6 +137,7 @@ def remember_remote_batch_state(run_dir, batch):
 def _remember_remote_batch_state_already_locked(run_dir, batch):
     if not isinstance(batch, dict) or not isinstance(batch.get("id"), str):
         return False
+    bundle = _verified_bundle_source(run_dir)
     state = read_state(run_dir)
     identifier = batch["id"]
     if identifier not in batch_ids(state):
@@ -142,6 +155,7 @@ def _remember_remote_batch_state_already_locked(run_dir, batch):
         state,
         "batch.remote_status_observed",
         {"batch_id": identifier, "remote_status": batch.get("status")},
+        seal=bool(bundle and bundle.checksums_path.exists()),
     )
     return True
 
@@ -198,6 +212,7 @@ def recover_unknown_submission(run_dir, records):
 
 
 def _recover_unknown_submission_already_locked(run_dir, records):
+    bundle = _verified_bundle_source(run_dir)
     state = read_state(run_dir)
     if not state.get("submission_unknown"):
         return None
@@ -264,6 +279,7 @@ def _recover_unknown_submission_already_locked(run_dir, records):
             "endpoint": endpoint,
             "message": "Neurčitý submit byl jednoznačně dohledán bez opakování POST /batches.",
         },
+        seal=bool(bundle and bundle.checksums_path.exists()),
     )
     return batch
 
@@ -543,14 +559,7 @@ def import_bundle(
 @locked_run_operation
 def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
     """Převezme existující dávku bez nových generujících požadavků."""
-    bundle = _bundle_if_present(run_dir)
-    if bundle:
-        integrity = bundle.verify_integrity()
-        errors = (bundle.verify_control_bindings()
-                  if integrity.get("status") == "unsealed"
-                  else integrity.get("errors") if not integrity.get("valid") else [])
-        if errors:
-            raise ContractError("Zdrojový Run Bundle má neplatnou integritu: " + "; ".join(errors))
+    bundle = _verified_bundle_source(run_dir)
     if progress:
         progress(
             ProgressEvent(

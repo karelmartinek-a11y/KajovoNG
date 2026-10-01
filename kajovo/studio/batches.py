@@ -237,8 +237,13 @@ class BatchesPage(QWidget):
                             continue
                         remote_record = remote.pop(identifier, {})
                         if remote_record:
-                            remember_remote_batch_state(directory, remote_record)
-                            state = read_state(directory)
+                            try:
+                                remember_remote_batch_state(directory, remote_record)
+                                state = read_state(directory)
+                            except (OSError, ValueError, ContractError) as error:
+                                errors.append(f"Dávka {identifier}: {friendly_error(error, 'Obnovení evidence')}")
+                                remote_record = {}
+                                state = {**state, "status": "corrupt_state"}
                         records.append({
                             "id": identifier,
                             "remote": remote_record,
