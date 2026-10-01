@@ -527,6 +527,6 @@ Import zadání ověřuje převod teploty a typy i syntaxi provider identifikát
 
 Výběr resource ze SourcePacku upřednostňuje explicitní `source_id`. Název, relativní cesta nebo reconstruction role jsou přípustné pouze při jednoznačné identitě a souhlasných známých hashech. Víceznačná vazba se odmítá v přípravě i v dispatcheru před zápisem stagingu; pořadí podkladů neurčuje jejich význam.
 
-Převzetí GENERATE/MODIFY BATCH zapečetí terminální místní výsledek až po aktualizaci stavu, archivaci všech artefaktů a záznamu validace. Platí také pro `files_complete_unverified` po dodání ručního resource; manifest umožňuje následnou samostatnou publikaci z Historie.
+Převzetí GENERATE/MODIFY BATCH aktualizuje existující integritní manifest až po aktualizaci stavu, archivaci všech artefaktů a záznamu validace. Platí také pro `files_complete_unverified` po dodání ručního resource. Nový nezapečetěný staging zůstává otevřený pro samostatnou publikaci z Historie. Před změnou evidence a před provider dotazem import ověřuje integritu zapečetěného bundle; u dosud nezapečetěného bundle ověřuje jeho řídicí identity. Poškozený zdroj se odmítne bez přepsání nebo nového zapečetění.
 
 Stop požadovaný během HTTP čekání se kontroluje znovu po uložení potvrzeného Response ID a raw odpovědi. Přijatá evidence zůstává zachovaná, ale místní workflow skončí jako `stopped` a UI jako zrušená operace; nepokračuje do doménového parsování, výroby ani úspěšného výsledku.

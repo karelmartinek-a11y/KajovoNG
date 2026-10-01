@@ -543,6 +543,14 @@ def import_bundle(
 @locked_run_operation
 def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
     """Převezme existující dávku bez nových generujících požadavků."""
+    bundle = _bundle_if_present(run_dir)
+    if bundle:
+        integrity = bundle.verify_integrity()
+        errors = (bundle.verify_control_bindings()
+                  if integrity.get("status") == "unsealed"
+                  else integrity.get("errors") if not integrity.get("valid") else [])
+        if errors:
+            raise ContractError("Zdrojový Run Bundle má neplatnou integritu: " + "; ".join(errors))
     if progress:
         progress(
             ProgressEvent(
@@ -570,7 +578,6 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
         if operation["run_id"] != Path(run_dir).name:
             raise ContractError("Evidence komiksu nepatří k tomuto běhu.")
         return service.run(operation["id"], allow_submit=False)
-    bundle = _bundle_if_present(run_dir)
     if bundle:
         client.evidence_bundle = bundle
         bundle.update_run({"status": "importing"})
@@ -724,9 +731,11 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
                     "omitted": result.get("omitted") or [],
                 },
             )
-            # Manifest musí zahrnout i následnou archivaci a validaci importu.
-            # Převzatý staging je terminální místní výsledek před publikací.
-            if final_state.get("status") in TERMINAL_STATUSES:
+            # Existující manifest musí zahrnout i archivaci a validaci importu.
+            # Nový staging zůstává otevřený pro samostatnou publikaci.
+            if (final_state.get("status") in {"completed", "dry_run", "failed"}
+                    or (bundle.checksums_path.exists()
+                        and final_state.get("status") in TERMINAL_STATUSES)):
                 bundle.seal()
         return result
     target = state.get("out_dir")
