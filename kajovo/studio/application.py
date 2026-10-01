@@ -6,7 +6,7 @@ from __future__ import annotations
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
+    QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
     QPlainTextEdit, QStackedWidget, QWidget,
 )
 
@@ -211,6 +211,8 @@ class StudioWindow(QMainWindow):
             "adresáře lze přetahovat do příslušných polí. Pořadí kroků kaskády lze změnit tažením i tlačítky. "
             "Animace lze omezit v Nastavení."
         )
+        self.navigation_group = QButtonGroup(self)
+        self.navigation_group.setExclusive(True)
         for key, title, page in (
             ("run", "Zadání", self.workbench), ("photos", "Fotografie", self.photos),
             ("comics", "Komiks", self.comics),
@@ -225,8 +227,11 @@ class StudioWindow(QMainWindow):
             else:
                 page.setMinimumHeight(620)
                 self.stack.addWidget(scroll(page))
-            button = action("navigation." + key, title, lambda checked=False, target=key: self.select_page(target))
+            button = action("navigation." + key, title, lambda checked=False: None)
             button.setCheckable(True)
+            self.navigation_group.addButton(button)
+            # Přístupná akce Toggle mění výběr bez signálu clicked.
+            button.toggled.connect(lambda checked, target=key: self.select_page(target) if checked else None)
             side.addWidget(button)
             self.navigation[key] = button
         side.addStretch()

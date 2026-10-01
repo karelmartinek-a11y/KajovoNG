@@ -74,20 +74,21 @@ ovladač,StudioWindow.self.activity,caption,Statická konstrukce; nedokazuje fun
 ovladač,StudioWindow.footer,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:178
 ovladač,StudioWindow.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:183
 ovladač,StudioWindow.help_page,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:197
-ovladač,StudioWindow.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:227
-ovladač,StudioWindow.button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:228
-ovladač,StudioWindow.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:233
-ovladač,StudioWindow.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:260
-ovladač,StudioWindow.placeholder,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:285
-ovladač,StudioWindow.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:289
+ovladač,StudioWindow.,scroll,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:229
+ovladač,StudioWindow.button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:230
+ovladač,StudioWindow.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:238
+ovladač,StudioWindow.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:265
+ovladač,StudioWindow.placeholder,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:290
+ovladač,StudioWindow.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/application.py:294
 signál,ModelsPage.form.changed,self.render,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:55
 signál,ModelsPage.context.models_changed,self.render,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:56
-signál,StudioWindow.self.operations.changed,self.update_activity,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:234
-signál,StudioWindow.self.history.activate_workbench,lambda: self.select_page('run'),Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:235
-signál,StudioWindow.self.history.activate_comic,self.open_comic_operation,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:236
-signál,StudioWindow.self.history.activate_batch,self.open_history_batch,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:237
-signál,StudioWindow.self.shortcut.activated,self.start_current,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:239
-signál,StudioWindow.dialog.finished,restore,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:304
+signál,StudioWindow.button.toggled,"lambda checked, target=key: self.select_page(target) if checked else None",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:234
+signál,StudioWindow.self.operations.changed,self.update_activity,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:239
+signál,StudioWindow.self.history.activate_workbench,lambda: self.select_page('run'),Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:240
+signál,StudioWindow.self.history.activate_comic,self.open_comic_operation,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:241
+signál,StudioWindow.self.history.activate_batch,self.open_history_batch,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:242
+signál,StudioWindow.self.shortcut.activated,self.start_current,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:244
+signál,StudioWindow.dialog.finished,restore,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/application.py:309
 ovladač,BatchesPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:93
 ovladač,BatchesPage.self.refresh_button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:94
 ovladač,BatchesPage.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/batches.py:95
