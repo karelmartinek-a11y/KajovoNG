@@ -25,7 +25,7 @@ from ..progress import ProgressEvent
 from ..structured_output import (
     text_format,
 )
-from ..utils import ensure_dir, safe_join_under_root, sha256_file, ts_code
+from ..utils import ensure_dir, safe_join_under_root, sha256_file, ts_code, validate_relative_path
 from .observability import record_event
 from .polling import VectorStorePollingContext, wait_vector_store_files
 
@@ -291,8 +291,13 @@ def _approved_project_items(self: RunContext, root: str, *, include_inventory: b
                 }
             )
 
+        lexical = root_path
+        for component in validate_relative_path(rel).split("/"):
+            lexical = lexical / component
+            if lexical.is_symlink() or is_junction(str(lexical)):
+                raise ContractError(f"Schválený zdroj změnil typ nebo chybí: {rel}")
         current = Path(safe_join_under_root(str(root_path), rel))
-        if current.is_symlink() or is_junction(str(current)) or not current.is_file():
+        if not current.is_file():
             raise ContractError(f"Schválený zdroj změnil typ nebo chybí: {rel}")
         if sha256_file(str(current)) != expected:
             raise ContractError(f"IN se od schváleného SourcePacku změnil: {rel}")
