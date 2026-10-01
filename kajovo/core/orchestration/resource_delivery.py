@@ -281,9 +281,23 @@ def _load_saved_resource_image(worker, path: str) -> dict[str, Any] | None:
         raise ContractError(
             f"{path}: uložená provider odpověď je poškozená."
         ) from exc
+    if not isinstance(payload, dict):
+        raise ContractError(f"{path}: uložená provider obálka je neplatná.")
+    if payload.get("target_path") != path:
+        raise ContractError(f"{path}: uložená provider odpověď patří jinému cíli.")
+    provider_id = payload.get("provider_id")
+    if not isinstance(provider_id, str) or not provider_id.strip():
+        raise ContractError(f"{path}: uložená provider identita chybí nebo je neplatná.")
     response = payload.get("response")
     if not isinstance(response, dict):
         raise ContractError(f"{path}: uložená provider odpověď chybí.")
+    for key in ("id", "_request_id"):
+        identity = response.get(key)
+        if identity is not None and (not isinstance(identity, str) or not identity.strip()):
+            raise ContractError(f"{path}: uložená provider identita je neplatná.")
+    identity = response.get("id") or response.get("_request_id")
+    if identity is not None and identity != provider_id:
+        raise ContractError(f"{path}: uložená provider identita neodpovídá odpovědi.")
     return response
 
 
