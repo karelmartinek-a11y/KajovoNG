@@ -71,3 +71,5 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# record_property zachovává scénářová metadata v podporovaném formátu JUnit.
+junit_family = "xunit1"
