@@ -182,6 +182,21 @@ class Operations(QObject):
     def active(self):
         return [record for record in self.records.values() if not record.terminal]
 
+    @staticmethod
+    def on_finished(record, callback):
+        """Úklid zaregistrovaný po startu proběhne právě jednou i u rychlého workeru."""
+        called = False
+
+        def once():
+            nonlocal called
+            if not called:
+                called = True
+                callback()
+
+        record.worker.finished.connect(once)
+        if record.worker.isFinished():
+            once()
+
     def assert_output_available(self, directory):
         if not directory:
             return

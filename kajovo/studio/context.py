@@ -96,7 +96,7 @@ class StudioContext(QObject):
             if self._model_refresh_record is record:
                 self._model_refresh_record = None
 
-        record.worker.finished.connect(release)
+        self.operations.on_finished(record, release)
         return record
 
     def ensure_models(self):

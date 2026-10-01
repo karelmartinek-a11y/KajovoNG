@@ -165,7 +165,7 @@ class ResourcesPage(QWidget):
             for widget in self.controls:
                 widget.setEnabled(True)
 
-        record.worker.finished.connect(release)
+        self.context.operations.on_finished(record, release)
         return record
 
     def refresh(self, kind):

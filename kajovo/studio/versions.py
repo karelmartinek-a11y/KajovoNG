@@ -98,7 +98,7 @@ class VersionsPage(QWidget):
             title, lambda task: {"status": "completed", "git_result": call(service)}, deliver,
             output_dir=service.root if reserve else None,
         )
-        record.worker.finished.connect(lambda: setattr(self, "busy", False))
+        self.context.operations.on_finished(record, lambda: setattr(self, "busy", False))
         return record
 
     def render(self, result):

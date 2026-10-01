@@ -212,7 +212,7 @@ class HistoryBranchLauncher:
         record = self.context.operations.adopt(
             f"{preview.relation.upper()} · {project}", worker,
             receive=lambda value: self.refreshed(), identifier=run_id, output_dir=output_dir)
-        record.worker.finished.connect(self.refreshed)
+        self.context.operations.on_finished(record, self.refreshed)
         return record
 
     def launch(self, adapter, preview: BranchPreview, repair_instruction: str = "", *, _prepare_only=False):

@@ -334,7 +334,7 @@ class PhotosPage(QWidget):
             self.busy = False
             self.start_button.setEnabled(True)
 
-        record.worker.finished.connect(release)
+        self.context.operations.on_finished(record, release)
         return record
 
     def improve(self):
@@ -633,4 +633,4 @@ class PhotosPage(QWidget):
             self.busy = False
             self.start_button.setEnabled(True)
 
-        record.worker.finished.connect(release)
+        self.context.operations.on_finished(record, release)

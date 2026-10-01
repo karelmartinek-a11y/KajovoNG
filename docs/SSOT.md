@@ -522,3 +522,5 @@ Workbench odmítá druhé totožné zadání během aktivní operace. Výsledky 
 Mutace Files a Vector Stores ověřují identitu potvrzení. Připojený soubor musí patřit požadovanému store; smazání vyžaduje stejné ID a `deleted=true`. Chybějící nebo cizí potvrzení po HTTP úspěchu má neurčitý výsledek, nikoli potvrzené dokončení. Nezpůsobí automatický další submit ani odstranění nepotvrzené identity z místního výběru.
 
 Import zadání ověřuje převod teploty a typy i syntaxi provider identifikátorů před změnou formuláře a výběru příloh. Vadný import zachová původní hodnoty a funkční signály.
+
+Úklid UI po dokončení workeru musí být zaregistrován bezpečně i tehdy, když QThread skončí před návratem spouštěče. `Operations.on_finished` provede callback právě jednou; dokončená operace nesmí ponechat panel zablokovaný.

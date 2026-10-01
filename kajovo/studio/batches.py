@@ -151,7 +151,7 @@ class BatchesPage(QWidget):
             self.refresh_button.setEnabled(True)
             self.render()
 
-        record.worker.finished.connect(release)
+        self.context.operations.on_finished(record, release)
         return record
 
     def page_activated(self):
