@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 import requests
+from shiboken6 import isValid
 
 from kajovo.core.config import AppSettings
 from kajovo.core.openai_client import OpenAIClient
@@ -129,7 +130,7 @@ def test_qa_actual_button_http_request_semantics_and_ui(qtbot, monkeypatch, tmp_
     result = page.result.value
     assert result["status"] == "completed" and result["claims"][0]["evidence_ids"] == ["SRC-USER-TEXT"]
     record = next(iter(operations.records.values()))
-    assert record.terminal == "completed" and not record.worker.isRunning()
+    assert record.terminal == "completed" and (not isValid(record.worker) or not record.worker.isRunning())
     manifests = list((tmp_path / "LOG" / record.identifier / "manifests").glob("*QA_answer*.json"))
     assert len(manifests) == 1 and json.loads(manifests[0].read_text())["answer"] == result["text"]
     assert page.widgets["qa_continue_conversation"].isChecked() is False
@@ -201,3 +202,79 @@ def test_foreground_crash_after_dispatch_new_process_never_resubmits(tmp_path, m
     child("from pathlib import Path; import sys; from test_qa_qfile_http_closure import foreground_process; foreground_process(Path(sys.argv[1]), " + repr(mode) + ", 'recover')", tmp_path)
     calls = [json.loads(line) for line in (tmp_path / "workflow-http.jsonl").read_text().splitlines()]
     assert sum(row["path"] == "/responses" for row in calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["QA", "QFILE"])
+def test_blocked_http_answer_enters_clarification_without_second_submit(qtbot, monkeypatch, tmp_path, mode):
+    answer = {"result": {"status": "blocked", "questions": [{"code": "missing_input",
+        "question": "Který podklad?", "blocking": True, "source_refs": []}]}}
+    transport = WorkflowHttp(tmp_path, answer=answer)
+    page, operations = page_fixture(qtbot, monkeypatch, tmp_path, mode, transport)
+    monkeypatch.setattr("kajovo.studio.workbench.QInputDialog.getMultiLineText", lambda *a: ("", False))
+    page.start_button.click()
+    settle(qtbot, operations, page)
+    record = next(iter(operations.records.values()))
+    assert record.result["status"] == "needs_clarification"
+    assert page.result.value["questions"][0]["question"] == "Který podklad?"
+    assert "Doplňte zadání" in page.validation.text()
+    assert sum(row["path"] == "/responses" for row in transport.calls) == 1
+
+
+@pytest.mark.parametrize("path", ["../escape.md", "/absolute.md"])
+def test_qfile_http_plan_rejects_foreign_path_before_manufacture(qtbot, monkeypatch, tmp_path, path):
+    transport = WorkflowHttp(tmp_path, answer=plan_value(path))
+    page, operations = page_fixture(qtbot, monkeypatch, tmp_path, "QFILE", transport)
+    page.start_button.click()
+    settle(qtbot, operations, page)
+    record = next(iter(operations.records.values()))
+    assert record.terminal == "failed" and not record.result
+    assert sum(row["path"] == "/responses" for row in transport.calls) == 1
+    assert not (tmp_path / "OUT").exists()
+
+
+def qfile_approved_restart(root):
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtWidgets import QApplication
+    app = QApplication([])
+    transport = WorkflowHttp(root)
+    operations = Operations(None)
+    settings = AppSettings(log_dir=str(root / "LOG"), cache_dir=str(root / "cache"))
+    context = StudioContext(settings, operations, api_key="synthetic-offline")
+    context.models = ["gpt-4o-mini"]
+    page = Workbench(context)
+    operations.setParent(page)
+    page.apply_state(json.loads((root / "approved-input.json").read_text()))
+    assert transport.calls == []
+    assert not (root / "OUT" / "výsledek/navrh.md").exists()
+    assert page.saved_extras["qfile_plan"] == plan_value()["result"]["data"]
+    loop, watchdog = QEventLoop(), QTimer()
+    watchdog.setSingleShot(True)
+    watchdog.timeout.connect(loop.quit)
+    operations.completed.connect(lambda *_: loop.quit() if not operations.active else None)
+    with patch("kajovo.core.runs.executor.OpenAIClient", lambda *a, **k: http_client(transport)):
+        page.start_button.click()
+        watchdog.start(30000)
+        loop.exec()
+    assert not operations.active
+    assert page.result.value["status"] == "files_complete_unverified"
+    posts = [row for row in transport.calls if row["path"] == "/responses"]
+    assert len(posts) == 1 and posts[0]["body"]["text"]["format"]["name"] == "FILE_CONTENT_V1"
+    from kajovo.core.orchestration.publish import publish_staged_run
+    record = next(iter(operations.records.values()))
+    publish_staged_run(root / "LOG" / record.identifier)
+    assert (root / "OUT" / "výsledek/navrh.md").read_bytes() == "# Výsledek\nPřesné bytes.\n".encode()
+    record.dialog.close()
+    page.close()
+    app.processEvents()
+
+
+def test_qfile_real_plan_survives_new_process_without_automatic_manufacture(qtbot, monkeypatch, tmp_path):
+    transport = WorkflowHttp(tmp_path)
+    page, operations = page_fixture(qtbot, monkeypatch, tmp_path, "QFILE", transport)
+    page.start_button.click()
+    settle(qtbot, operations, page)
+    (tmp_path / "approved-input.json").write_text(json.dumps(page.state(), ensure_ascii=False))
+    assert sum(row["path"] == "/responses" for row in transport.calls) == 1
+    child("from pathlib import Path; import sys; from test_qa_qfile_http_closure import qfile_approved_restart; qfile_approved_restart(Path(sys.argv[1]))", tmp_path)
+    posts = [json.loads(line) for line in (tmp_path / "workflow-http.jsonl").read_text().splitlines() if json.loads(line)["path"] == "/responses"]
+    assert [row["body"]["text"]["format"]["name"] for row in posts] == ["QFILE_PLAN_V1", "FILE_CONTENT_V1"]

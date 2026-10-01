@@ -166,6 +166,35 @@ def test_resources_upload_store_indexing_delete_ui_and_new_process(qtbot, monkey
     finish(qtbot, page)
     assert page.store_files.item(0).data(Qt.UserRole + 1)["status"] == "completed"
     client.validate_resources(payload)
+    # Navazující QA skutečně spotřebuje vybrané Files i store přes produkční dispatcher.
+    from kajovo.studio.workbench import Workbench
+    from test_qa_qfile_http_closure import WorkflowHttp, qa_value, http_client, settle
+    qa_transport = WorkflowHttp(tmp_path, answer=qa_value("file_1"))
+    class Router:
+        def request(self, method, url, **kwargs):
+            return (qa_transport if "/responses" in url else transport).request(method, url, **kwargs)
+    router = Router()
+    context.stores = ["vs_one"]
+    context.models = ["gpt-4o-mini"]
+    context.client_factory = lambda *a, **k: http_client(router)
+    monkeypatch.setattr("kajovo.core.runs.executor.OpenAIClient", lambda *a, **k: http_client(router))
+    workbench = Workbench(context)
+    qtbot.addWidget(workbench)
+    workbench.apply_state({"project":"Zdroje QA", "prompt":"Dolož odpověď z připojeného souboru", "mode":"QA", "model":"gpt-4o-mini", "out_dir":str(tmp_path / "OUT"), "attached_file_ids":["file_1"], "attached_vector_store_ids":["vs_one"]})
+    workbench.start_button.click()
+    settle(qtbot, context.operations, workbench)
+    assert workbench.result.value and workbench.result.value["status"] == "completed", [(r.error,r.result) for r in context.operations.records.values()]
+    qa_request = next(r["body"] for r in qa_transport.calls if r["path"] == "/responses")
+    assert qa_request["tools"] == [{"type":"file_search", "vector_store_ids":["vs_one"]}]
+    assert "file_1" in json.dumps(qa_request["input"])
+    page.store_files.setCurrentRow(0)
+    def attributes(dialog):
+        dialog.value = {"language":"cs"}
+        return QDialog.Accepted
+    monkeypatch.setattr(ValueDialog, "exec", attributes)
+    click(page, "resources.store.attributes")
+    assert finish(qtbot, page).terminal == "completed"
+    assert transport.state["members"]["file_1"]["attributes"] == {"language":"cs"}
     assert client.retrieve_file("file_1")["bytes"] == len(source.read_bytes())
     assert client.file_content("file_1") == source.read_bytes()
     child("from pathlib import Path; import sys; from test_resources_http_closure import resource_restart; resource_restart(Path(sys.argv[1]))", tmp_path)
@@ -178,6 +207,10 @@ def test_resources_upload_store_indexing_delete_ui_and_new_process(qtbot, monkey
     click(page, "resources.files.delete")
     finish(qtbot, page)
     assert page.lists["files"].count() == 0 and context.files == []
+    page.lists["stores"].setCurrentRow(0)
+    click(page, "resources.stores.delete")
+    assert finish(qtbot, page).terminal == "completed"
+    assert page.lists["stores"].count() == 0 and context.stores == []
 
 
 def resource_restart(root):
