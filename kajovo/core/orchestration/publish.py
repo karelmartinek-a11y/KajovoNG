@@ -526,6 +526,11 @@ def _apply_committed_report_to_state(
     state: dict[str, Any],
     report: dict[str, Any],
 ) -> None:
+    patch = {"published_files": report["published"], "publish_report": report,
+             "unverified_publish_approved": True, "status": "completed_unverified",
+             "publication_state": "published_unverified"}
+    if all(state.get(name) == value for name, value in patch.items()):
+        return
     state["published_files"] = report["published"]
     state["publish_report"] = report
     state["unverified_publish_approved"] = True
@@ -543,12 +548,17 @@ def _record_publication(run_root: Path, report: dict[str, Any]) -> None:
     if not (run_root / "bundle.json").is_file():
         return
     bundle = RunBundle(run_root)
-    bundle.update_run({"status": "completed_unverified", "result_class": "completed_unverified"})
     recorded = any(
         event.get("event_type") == "publication.completed_unverified"
         and (event.get("data") or {}).get("plan_id") == report["plan_id"]
         for event in LegacyRunAdapter(run_root).events()
     )
+    run = bundle.run_record()
+    if (recorded and run.get("status") == "completed_unverified"
+            and run.get("result_class") == "completed_unverified"
+            and bundle.verify_integrity().get("valid")):
+        return
+    bundle.update_run({"status": "completed_unverified", "result_class": "completed_unverified"})
     if not recorded:
         bundle.append_event(
             "publication.completed_unverified",
@@ -571,6 +581,23 @@ def publish_staged_run_already_locked(run_dir: str | Path) -> dict[str, Any]:
     state_path = run_root / "run_state.json"
     if not state_path.is_file():
         raise OrchestrationError("PUBLISH_RUN_MISSING", str(run_root))
+
+    if any((run_root / name).exists() for name in ("bundle.json", "run.json", "checksums.json")):
+        from ..run_bundle import RunBundle
+        bundle = RunBundle(run_root)
+        # Journal obnovuje již potvrzené zápisy; ty ještě nemusí být v posledním
+        # seal. Jeho vlastní hashe ověří recovery, řídicí identity však nesmějí
+        # být nahrazené ani během této obnovy.
+        journal_exists = (run_root / "manifests" / "publish_journal.json").is_file()
+        manifest = (parse_json_strict(bundle.checksums_path.read_text(encoding="utf-8"))
+                    if bundle.checksums_path.is_file() else {})
+        finalized_journal = (isinstance(manifest, dict) and isinstance(manifest.get("files"), dict)
+                             and "manifests/publish_journal.json" in manifest["files"])
+        integrity = None if journal_exists and not finalized_journal else bundle.verify_integrity()
+        errors = (bundle.verify_control_bindings() if integrity is None or integrity.get("status") == "unsealed"
+                  else integrity.get("errors", []))
+        if errors:
+            raise OrchestrationError("PUBLISH_BUNDLE_INTEGRITY", "Zdrojový Run Bundle neprošel kontrolou integrity.")
 
     recovery = recover_publish_journal_already_locked(run_root)
     state = parse_json_strict(state_path.read_text(encoding="utf-8"))

@@ -103,6 +103,8 @@ Archivace neznamená, že se pracovní OUT/IN cesta přesměruje. Bundle je důk
 
 Chybějící manifest označuje `unsealed` u dosud nezapečetěného běhu, včetně převzatého BATCH stagingu čekajícího na publikaci. Ztráta manifestu doloženě zapečetěného běhu a strukturálně neplatný existující manifest vracejí `changed`; přímá obnova a export je odmítnou bez přepsání evidence.
 
+Publikace kontroluje integritu před prvním zápisem. Obnova rozpracovaného publikačního journalu zachovává kontrolu řídicích identit a vlastní transakční hashe. Již zapečetěný journal vyžaduje úplnou kontrolu integrity; opakované převzetí dokončené publikace nepřepisuje evidenci ani čas jejího zapečetění.
+
 Řídicí `bundle.json` se kvůli vazbě na výsledné hashe nehashuje sám. Jeho `run_id` a `bundle_id` se ověřují proti hashovanému RunRecordu, `bundle_hash` proti integritnímu manifestu a `run_record_sha256` proti manifestovému hashi `run.json`. Chybějící či cizí vazba vrací `changed` a blokuje přímou obnovu z Historie. Kontrola zachovává původní metadata, manifest i artefakty.
 
 Provozní zámek `execution.lock` v kořeni běhu není důkazní artefakt a do nových otisků se nezahrnuje. U starších manifestů se jeho existence a obsah nekontrolují; původní manifest ani jeho souhrnný hash se nepřepisují. Kontrola ostatních souborů, včetně stejně pojmenovaných archivovaných artefaktů v podadresářích, zůstává beze změny.
