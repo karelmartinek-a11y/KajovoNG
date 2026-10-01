@@ -519,6 +519,9 @@ class Workbench(QWidget):
     def offer_repair(self, cfg, remote, expected_digest=""):
         from kajovo.core.repair_execution import execute_repair, prepare_repair
         from PySide6.QtWidgets import QDialog
+        revision = self._revision
+        request_state = copy.deepcopy(self.state(secrets=True))
+        cfg = copy.deepcopy(cfg)
 
         try:
             proposal = prepare_repair(
@@ -532,8 +535,11 @@ class Workbench(QWidget):
                    "popis": proposal.description, "obsah skriptu": proposal.content.decode("utf-8", errors="replace")}
         dialog = DetailDialog("Spustit připravenou opravu", "Opravný skript může změnit cílový počítač: " + target + ". Zkontrolujte obsah a účel v podrobnostech.", self, details, confirm=True)
         if dialog.exec() == QDialog.Accepted:
+            def received(value):
+                if revision == self._revision and request_state == self.state(secrets=True):
+                    self.result.set_value(value)
             self.context.operations.start("Provedení potvrzené opravy", lambda task: execute_repair(proposal, cfg),
-                                          self.result.set_value, output_dir=cfg.out_dir)
+                                          received, output_dir=cfg.out_dir)
 
     def save(self):
         path, _ = get_save_file_name(self, "Uložit zadání", "zadani.json", "Zadání (*.json)")
