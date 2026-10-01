@@ -524,3 +524,5 @@ Mutace Files a Vector Stores ověřují identitu potvrzení. Připojený soubor 
 Import zadání ověřuje převod teploty a typy i syntaxi provider identifikátorů před změnou formuláře a výběru příloh. Vadný import zachová původní hodnoty a funkční signály.
 
 Úklid UI po dokončení workeru musí být zaregistrován bezpečně i tehdy, když QThread skončí před návratem spouštěče. `Operations.on_finished` provede callback právě jednou; dokončená operace nesmí ponechat panel zablokovaný.
+
+Výběr resource ze SourcePacku upřednostňuje explicitní `source_id`. Název, relativní cesta nebo reconstruction role jsou přípustné pouze při jednoznačné identitě a souhlasných známých hashech. Víceznačná vazba se odmítá v přípravě i v dispatcheru před zápisem stagingu; pořadí podkladů neurčuje jejich význam.

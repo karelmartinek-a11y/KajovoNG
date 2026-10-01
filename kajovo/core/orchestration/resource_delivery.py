@@ -75,32 +75,43 @@ def _source_descriptors(worker) -> list[dict[str, Any]]:
     return values
 
 
+def _artifact_source(artifact: dict[str, Any]) -> dict[str, Any]:
+    metadata = artifact.get("metadata") or {}
+    return {
+        "source_id": metadata.get("source_id"),
+        "filename": metadata.get("filename") or metadata.get("relative_path")
+        or artifact.get("reconstruction_role"),
+        "relative_path": metadata.get("relative_path"),
+        "reconstruction_role": artifact.get("reconstruction_role"),
+        "sha256": metadata.get("sha256") or artifact.get("sha256"),
+        "path_in_bundle": artifact.get("path_in_bundle"),
+        "_artifact": artifact,
+    }
+
+
+def _select_source(rows: list[dict[str, Any]], identifier: str) -> dict[str, Any] | None:
+    # Explicitní SourcePack ID má přednost před názvem jiného podkladu.
+    exact = [row for row in rows if str(row.get("source_id") or "") == identifier]
+    matches = exact or [row for row in rows if identifier in {
+        str(row.get(name) or "")
+        for name in ("filename", "relative_path", "reconstruction_role")
+    }]
+    if not matches:
+        return None
+    identities = {
+        str(row.get("source_id") or row.get("path_in_bundle") or row.get("sha256") or "")
+        for row in matches
+    }
+    hashes = {str(row["sha256"]) for row in matches if row.get("sha256")}
+    if len(identities) != 1 or len(hashes) > 1:
+        raise ContractError(f"Resource source je víceznačný: {identifier}. Použijte jednoznačné SourcePack ID.")
+    return matches[0]
+
+
 def _known_source(worker, identifier: str) -> dict[str, Any] | None:
-    for row in _source_descriptors(worker):
-        if identifier in {
-            str(row.get("source_id") or ""),
-            str(row.get("filename") or ""),
-        }:
-            return row
-    for artifact in worker.log.bundle.artifacts():
-        metadata = artifact.get("metadata") or {}
-        if identifier in {
-            str(metadata.get("source_id") or ""),
-            str(metadata.get("relative_path") or ""),
-            str(metadata.get("filename") or ""),
-            str(artifact.get("reconstruction_role") or ""),
-        }:
-            return {
-                "source_id": metadata.get("source_id"),
-                "filename": (
-                    metadata.get("filename")
-                    or metadata.get("relative_path")
-                    or artifact.get("reconstruction_role")
-                ),
-                "sha256": metadata.get("sha256") or artifact.get("sha256"),
-                "path_in_bundle": artifact.get("path_in_bundle"),
-            }
-    return None
+    rows = _source_descriptors(worker)
+    rows.extend(_artifact_source(artifact) for artifact in worker.log.bundle.artifacts())
+    return _select_source(rows, identifier)
 
 
 def validate_resource_plan(worker, graph: dict[str, Any]) -> None:
@@ -186,15 +197,11 @@ def validate_resource_plan(worker, graph: dict[str, Any]) -> None:
 
 def _bundle_source_bytes(worker, identifier: str) -> tuple[bytes, str]:
     run_root = Path(worker.log.paths.run_dir).resolve()
-    for artifact in worker.log.bundle.artifacts():
+    selected = _select_source(
+        [_artifact_source(artifact) for artifact in worker.log.bundle.artifacts()], identifier,
+    )
+    for artifact in [selected["_artifact"]] if selected else []:
         metadata = artifact.get("metadata") or {}
-        if identifier not in {
-            str(metadata.get("source_id") or ""),
-            str(metadata.get("relative_path") or ""),
-            str(metadata.get("filename") or ""),
-            str(artifact.get("reconstruction_role") or ""),
-        }:
-            continue
         relative = artifact.get("path_in_bundle")
         if not isinstance(relative, str) or not relative:
             continue
