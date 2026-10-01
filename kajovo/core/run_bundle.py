@@ -1253,6 +1253,22 @@ class RunBundle:
         actual_bundle_hash = _sha256_bytes(_json_bytes(current))
         if actual_bundle_hash != expected.get("bundle_hash"):
             errors.append("Nesouhlasí hash Run Bundle.")
+        metadata = _read_json(self.bundle_path, {})
+        run = self.run_record()
+        if not isinstance(metadata, dict):
+            errors.append("Metadata Run Bundle musí být objekt.")
+        else:
+            # Řídicí soubor se nehashuje sám; jeho vazby ověřuje hashovaný run
+            # a manifest. Kontrola nikdy nepřepisuje cizí nebo vadnou evidenci.
+            bindings = {
+                "run_id": run.get("run_id"),
+                "bundle_id": run.get("artifact_bundle_id"),
+                "bundle_hash": expected.get("bundle_hash"),
+                "run_record_sha256": files.get("run.json"),
+            }
+            for name, value in bindings.items():
+                if not isinstance(value, str) or not value or metadata.get(name) != value:
+                    errors.append(f"Nesouhlasí vazba metadat Run Bundle: {name}.")
         return {
             "status": "verified" if not errors else "changed",
             "valid": not errors,
