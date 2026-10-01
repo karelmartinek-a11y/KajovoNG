@@ -100,10 +100,12 @@ def test_publication_new_process_after_bytes_before_bundle_update(qtbot, monkeyp
 def publication_restart(root, blocked):
     from pathlib import Path
     from kajovo.core.orchestration.errors import OrchestrationError
-    from kajovo.core.orchestration.publish import publish_staged_run
+    from kajovo.core.orchestration.publish import publish_staged_run, recover_publish_journal
 
     run = Path((root / "publish-run.txt").read_text())
     if blocked:
+        with pytest.raises(OrchestrationError, match="PUBLISH_BUNDLE_INTEGRITY"):
+            recover_publish_journal(run)
         with pytest.raises(OrchestrationError, match="PUBLISH_BUNDLE_INTEGRITY"):
             publish_staged_run(run)
     else:

@@ -419,6 +419,26 @@ def _recover_journal_locked(
     return _journal_report(journal, journal_path, run_root)
 
 
+def _assert_publish_bundle_integrity(run_root: Path) -> None:
+    """Společná ochrana zdroje pro publikaci i přímou obnovu journalu."""
+    if any((run_root / name).exists() for name in ("bundle.json", "run.json", "checksums.json")):
+        from ..run_bundle import RunBundle
+        bundle = RunBundle(run_root)
+        # Journal obnovuje již potvrzené zápisy; ty ještě nemusí být v posledním
+        # seal. Jeho vlastní hashe ověří recovery, řídicí identity však nesmějí
+        # být nahrazené ani během této obnovy.
+        journal_exists = (run_root / "manifests" / "publish_journal.json").is_file()
+        manifest = (parse_json_strict(bundle.checksums_path.read_text(encoding="utf-8"))
+                    if bundle.checksums_path.is_file() else {})
+        finalized_journal = (isinstance(manifest, dict) and isinstance(manifest.get("files"), dict)
+                             and "manifests/publish_journal.json" in manifest["files"])
+        integrity = None if journal_exists and not finalized_journal else bundle.verify_integrity()
+        errors = (bundle.verify_control_bindings() if integrity is None or integrity.get("status") == "unsealed"
+                  else integrity.get("errors", []))
+        if errors:
+            raise OrchestrationError("PUBLISH_BUNDLE_INTEGRITY", "Zdrojový Run Bundle neprošel kontrolou integrity.")
+
+
 def recover_publish_journal(run_dir: str | Path) -> dict[str, Any] | None:
     """Idempotentně dokončí commit nebo rollback po tvrdém pádu procesu."""
     with ExecutionLock(Path(run_dir) / "execution.lock"):
@@ -431,6 +451,7 @@ def recover_publish_journal_already_locked(run_dir: str | Path) -> dict[str, Any
     journal_path = run_root / "manifests" / "publish_journal.json"
     if not journal_path.is_file():
         return None
+    _assert_publish_bundle_integrity(run_root)
     journal = _read_journal(journal_path)
     try:
         target_root = Path(journal["plan"]["target_root"]).resolve()
@@ -582,22 +603,7 @@ def publish_staged_run_already_locked(run_dir: str | Path) -> dict[str, Any]:
     if not state_path.is_file():
         raise OrchestrationError("PUBLISH_RUN_MISSING", str(run_root))
 
-    if any((run_root / name).exists() for name in ("bundle.json", "run.json", "checksums.json")):
-        from ..run_bundle import RunBundle
-        bundle = RunBundle(run_root)
-        # Journal obnovuje již potvrzené zápisy; ty ještě nemusí být v posledním
-        # seal. Jeho vlastní hashe ověří recovery, řídicí identity však nesmějí
-        # být nahrazené ani během této obnovy.
-        journal_exists = (run_root / "manifests" / "publish_journal.json").is_file()
-        manifest = (parse_json_strict(bundle.checksums_path.read_text(encoding="utf-8"))
-                    if bundle.checksums_path.is_file() else {})
-        finalized_journal = (isinstance(manifest, dict) and isinstance(manifest.get("files"), dict)
-                             and "manifests/publish_journal.json" in manifest["files"])
-        integrity = None if journal_exists and not finalized_journal else bundle.verify_integrity()
-        errors = (bundle.verify_control_bindings() if integrity is None or integrity.get("status") == "unsealed"
-                  else integrity.get("errors", []))
-        if errors:
-            raise OrchestrationError("PUBLISH_BUNDLE_INTEGRITY", "Zdrojový Run Bundle neprošel kontrolou integrity.")
+    _assert_publish_bundle_integrity(run_root)
 
     recovery = recover_publish_journal_already_locked(run_root)
     state = parse_json_strict(state_path.read_text(encoding="utf-8"))
