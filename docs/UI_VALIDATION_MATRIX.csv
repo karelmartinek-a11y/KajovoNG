@@ -98,7 +98,6 @@ ovladač,BatchesPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu
 signál,BatchesPage.self.timer.timeout,lambda: self.refresh(automatic=True),Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:107
 signál,BatchesPage.context.key_changed,self.reset,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:108
 signál,BatchesPage.context.settings_changed,self.reset,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:109
-signál,BatchesPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/batches.py:154
 ovladač,CascadeItemDialog.page,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/cascade_items.py:21
 ovladač,CascadeItemDialog.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/cascade_items.py:24
 ovladač,CascadeItemDialog.value,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/cascade_items.py:27
@@ -305,7 +304,6 @@ ovladač,DetailDialog.,actions,Statická konstrukce; nedokazuje funkční obsluh
 signál,.widget.clicked,callback,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/components.py:128
 signál,"Form.getattr(widget, signal)",self.changed,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/components.py:192
 signál,StudioContext.self.settings_changed,self._settings_changed,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/context.py:37
-signál,StudioContext.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/context.py:99
 ovladač,ConverterWindow.root,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/converter.py:49
 ovladač,ConverterWindow.contents,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/converter.py:51
 ovladač,ConverterWindow.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/converter.py:54
@@ -491,7 +489,6 @@ signál,ModifyMap.self.table.currentCellChanged,lambda *_: self.load_diff(),Expl
 signál,CascadeStepsView.self.table.step_selected,self.select_step,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/history_details.py:222
 signál,RunDetailView.self.timeline.stage_selected,self.select_stage,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/history_details.py:381
 signál,HistoryBranchLauncher.sqlite3,database.resolve().as_uri() + '?mode=ro',Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/history_launcher.py:83
-signál,HistoryBranchLauncher.record.worker.finished,self.refreshed,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/history_launcher.py:215
 ovladač,"TextCard.(box, body)",panel,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/history_overview.py:21
 ovladač,TextCard.self.editor,QPlainTextEdit,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/history_overview.py:22
 ovladač,TextCard.self.notice,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/history_overview.py:28
@@ -513,24 +510,25 @@ ovladač,.status_label,caption,Statická konstrukce; nedokazuje funkční obsluh
 ovladač,.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/job_cards.py:42
 ovladač,.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/job_cards.py:43
 ovladač,.button,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/job_cards.py:49
-ovladač,Operations.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:475
-ovladač,Operations.self.listing,QListWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:476
-ovladač,Operations.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:481
-ovladač,Operations.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:482
-ovladač,Operations.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:483
+ovladač,Operations.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:490
+ovladač,Operations.self.listing,QListWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:491
+ovladač,Operations.,actions,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:496
+ovladač,Operations.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:497
+ovladač,Operations.,action,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/operations.py:498
 signál,Operations.self.changed,self.refresh_overview,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:179
-signál,Operations.worker.value,accept_result,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:256
-signál,Operations.worker.failure,"lambda error: setattr(record, 'error', error)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:257
-signál,Operations.worker.progress_event,"lambda event: self._event(record, event)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:258
-signál,Operations.worker.finished,finish,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:298
-signál,Operations.worker.progress_event,"lambda event: self._event(record, event)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:347
-signál,Operations.worker.status,dialog.inspector.append_log,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:349
-signál,Operations.worker.logline,dialog.inspector.append_log,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:351
-signál,Operations.success,accept_result,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:362
-signál,Operations.failure,"lambda error: setattr(record, 'error', error if isinstance(error, UserError) else describe_error(RuntimeError(str(error)), operation=title))",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:363
-signál,Operations.worker.finished_err,"lambda error: setattr(record, 'error', record.error or describe_error(RuntimeError(str(error)), operation=title))",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:371
-signál,Operations.worker.finished,"lambda: self._finished(record, receive)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:376
-signál,Operations.self.listing.itemDoubleClicked,self.open_selected,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:486
+signál,Operations.record.worker.finished,once,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:196
+signál,Operations.worker.value,accept_result,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:271
+signál,Operations.worker.failure,"lambda error: setattr(record, 'error', error)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:272
+signál,Operations.worker.progress_event,"lambda event: self._event(record, event)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:273
+signál,Operations.worker.finished,finish,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:313
+signál,Operations.worker.progress_event,"lambda event: self._event(record, event)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:362
+signál,Operations.worker.status,dialog.inspector.append_log,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:364
+signál,Operations.worker.logline,dialog.inspector.append_log,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:366
+signál,Operations.success,accept_result,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:377
+signál,Operations.failure,"lambda error: setattr(record, 'error', error if isinstance(error, UserError) else describe_error(RuntimeError(str(error)), operation=title))",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:378
+signál,Operations.worker.finished_err,"lambda error: setattr(record, 'error', record.error or describe_error(RuntimeError(str(error)), operation=title))",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:386
+signál,Operations.worker.finished,"lambda: self._finished(record, receive)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:391
+signál,Operations.self.listing.itemDoubleClicked,self.open_selected,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/operations.py:501
 ovladač,PhotosPage.self.tabs,QTabWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:52
 ovladač,PhotosPage.gallery,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:54
 ovladač,PhotosPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/photos.py:56
@@ -580,8 +578,6 @@ signál,PhotosPage.self.prompt.textChanged,self._update_template_actions,Explici
 signál,PhotosPage.self.template.currentIndexChanged,self.template_changed,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:123
 signál,PhotosPage.self.form.changed,self._edited,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:124
 signál,PhotosPage.self.options.changed,self._edited,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:125
-signál,PhotosPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:337
-signál,PhotosPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/photos.py:636
 ovladač,MultiProgressDialog.self.lifecycle_hint,label,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:31
 ovladač,MultiProgressDialog.self.notification,QCheckBox,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:33
 ovladač,MultiProgressDialog.button,QPushButton,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/progress_dialog.py:46
@@ -638,7 +634,6 @@ signál,ResourcesPage.self.resource_deleted,self._prune_deleted,Explicitní vazb
 signál,ResourcesPage.listing.currentItemChanged,self.clear_store_files,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/resources.py:98
 signál,ResourcesPage.context.key_changed,self.clear,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/resources.py:112
 signál,ResourcesPage.context.attachments_changed,self.update_summary,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/resources.py:113
-signál,ResourcesPage.record.worker.finished,release,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/resources.py:168
 ovladač,SettingsPage.self.tabs,QTabWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/settings.py:48
 ovladač,SettingsPage.access,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/settings.py:50
 ovladač,SettingsPage.,caption,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/settings.py:52
@@ -700,7 +695,6 @@ ovladač,VersionsPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,k
 ovladač,VersionsPage.,text,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/versions.py:183
 signál,VersionsPage.self.path.textChanged,self.invalidate,Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/versions.py:25
 signál,VersionsPage.self.files.itemDoubleClicked,lambda item: self.open_file(),Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/versions.py:55
-signál,VersionsPage.record.worker.finished,"lambda: setattr(self, 'busy', False)",Explicitní vazba signálu; funkční důkaz vyžaduje konkrétní scénář,kajovo/studio/versions.py:101
 ovladač,Workbench.self.tabs,QTabWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:70
 ovladač,Workbench.page,QWidget,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:72
 ovladač,"Workbench.(box, layout)",panel,Statická konstrukce; nedokazuje funkční obsluhu,kajovo/studio/workbench.py:74
