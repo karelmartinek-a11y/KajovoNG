@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from dataclasses import fields
 from pathlib import Path
 
@@ -171,9 +172,22 @@ class Workbench(QWidget):
         self.apply_state(default_state(self.context.settings))
         self.result.clear()
 
-    def apply_state(self, state):
+    def _validate_state(self, state):
         if not isinstance(state, dict):
             raise ValueError("Zadání musí být objekt.")
+        temperature = float(state.get("temperature", self.context.settings.default_temperature) or 0)
+        if not math.isfinite(temperature) or not 0 <= temperature <= 2:
+            raise ValueError("Teplota musí být konečné číslo od 0 do 2.")
+        from kajovo.core.openai_client import OpenAIClient
+        for field in ("attached_file_ids", "input_file_ids", "attached_vector_store_ids"):
+            identifiers = state.get(field) or []
+            if not isinstance(identifiers, list):
+                raise ValueError(f"{field} musí být seznam identifikátorů.")
+            for identifier in identifiers:
+                OpenAIClient._validate_resource_id(identifier)
+
+    def apply_state(self, state):
+        self._validate_state(state)
         self._edited()
         self._modify_dry_run = (
             state["dry_run"] is True
@@ -535,8 +549,7 @@ class Workbench(QWidget):
             try:
                 from kajovo.core.orchestration.contracts import parse_json_strict
                 loaded = parse_json_strict(Path(path).read_text(encoding="utf-8"))
-                if not isinstance(loaded, dict):
-                    raise ValueError("Zadání musí být objekt.")
+                self._validate_state(loaded)
                 self.reset()
                 self.apply_state(loaded)
             except (OSError, ValueError, TypeError) as error:

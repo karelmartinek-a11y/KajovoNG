@@ -512,3 +512,5 @@ History náhled první nové placené operace zohledňuje `stop_after_plan`. Nad
 Workbench odmítá druhé totožné zadání během aktivní operace. Výsledky a nabídka opravy patří ke generaci formuláře, účtu a nastavení při spuštění; pozdější změna nepřevezme starý callback. Dokončený výsledek zůstává u původní operace. Export History obdobně nemění oznámení nově vybraného běhu.
 
 Mutace Files a Vector Stores ověřují identitu potvrzení. Připojený soubor musí patřit požadovanému store; smazání vyžaduje stejné ID a `deleted=true`. Chybějící nebo cizí potvrzení po HTTP úspěchu má neurčitý výsledek, nikoli potvrzené dokončení. Nezpůsobí automatický další submit ani odstranění nepotvrzené identity z místního výběru.
+
+Import zadání ověřuje převod teploty a typy i syntaxi provider identifikátorů před změnou formuláře a výběru příloh. Vadný import zachová původní hodnoty a funkční signály.
