@@ -17,6 +17,7 @@ class VersionsPage(QWidget):
         self.context = context
         self.busy = False
         self.loaded = None
+        self.generation = 0
         root = vertical(self)
         form = Form()
         self.path = form.add("git.root", "Adresář projektu", PathInput(directories=True))
@@ -66,6 +67,7 @@ class VersionsPage(QWidget):
         root.addWidget(self.notice)
 
     def invalidate(self):
+        self.generation += 1
         self.loaded = None
         if hasattr(self, "editor"):
             self.editor.setReadOnly(True)
@@ -88,11 +90,12 @@ class VersionsPage(QWidget):
             return
         self.busy = True
         root = self.path.text()
+        generation = self.generation
         def deliver(value):
-            if self.path.text() == root:
-                (receive or self.render)(value)
+            if self.path.text() == root and generation == self.generation:
+                (receive or self.render)(value["git_result"])
         record = self.context.operations.start(
-            title, lambda task: call(service), deliver,
+            title, lambda task: {"status": "completed", "git_result": call(service)}, deliver,
             output_dir=service.root if reserve else None,
         )
         record.worker.finished.connect(lambda: setattr(self, "busy", False))
