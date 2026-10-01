@@ -272,7 +272,7 @@ Multipart požadavek nemá globální JSON Content-Type a při opakování obnov
 
 ## Souběh, zastavení a zabezpečení
 
-Workery běžných běhů i kaskád při vytvoření pořizují hlubokou kopii konfigurace a nastavení, včetně vnořených seznamů a definic kroků. Následné změny původních objektů neovlivňují běh. Sdílený registr desktopových operací odmítá překrývající se kořeny zápisu napříč běhy, obnovou verzí a převodníkem; rezervace zahrnuje všechny cílové a záložní adresáře. Zámek konkrétního běhu chrání souborový BATCH import a ruční opakování i mezi procesy; desktopový registr sám není systémovým zámkem všech adresářů. Dokončení a oznámení používají údaje příslušného běhu.
+Workery běžných běhů i kaskád při vytvoření pořizují hlubokou kopii konfigurace a nastavení, včetně vnořených seznamů a definic kroků. Následné změny původních objektů neovlivňují běh. Sdílený registr desktopových operací odmítá překrývající se kořeny zápisu napříč běhy, obnovou verzí a převodníkem; rezervace zahrnuje všechny cílové a záložní adresáře. Zámek konkrétního běhu chrání souborový BATCH import a ruční opakování i mezi procesy; desktopový registr sám není systémovým zámkem všech adresářů. Dokončení a oznámení používají údaje příslušného běhu. Úspěšné explicitní převzetí staged artefaktů má stav desktopové operace completed; běh zůstává completed_unverified, dokud chybí funkční ověření. Publikační report committed/already_published je samostatný výsledek předání a nesmí způsobit unknown stav dialogu.
 
 STOP je kooperativní. Kontrola zastavení probíhá mezi operacemi; probíhající síťový požadavek nebo retry může návrat oddálit. Okno čeká na aktivní workery a nepoužívá násilné ukončení QThread.
 

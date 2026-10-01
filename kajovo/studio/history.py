@@ -490,9 +490,15 @@ class HistoryPage(QWidget):
             self.workbench.offer_repair_from_publish(root, current)
             self.refresh()
 
+        def publish(_task):
+            report = publish_staged_run(root)
+            if report.get("status") not in {"committed", "already_published"}:
+                raise ValueError("Převzetí staged artefaktů nebylo potvrzeno.")
+            return {"status": "completed", "publish_report": report}
+
         self.context.operations.start(
             "Převzetí neověřených staged artefaktů",
-            lambda task: publish_staged_run(root),
+            publish,
             received,
             output_dir=output,
             identifier=f"publish.staged:{self.adapter.run_id}",
