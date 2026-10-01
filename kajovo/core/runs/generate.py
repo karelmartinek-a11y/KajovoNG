@@ -30,6 +30,7 @@ def _run_v3_generate_production(
     from ..orchestration.resource_delivery import (
         dispatch_resource_target,
         prepare_production_scope,
+        stage_validated_text,
     )
     selected, completed, excluded = prepare_production_scope(self, struct)
     files_by_path = {
@@ -271,6 +272,7 @@ def _run_v3_generate_production(
                     model_override=a3_model,
                 )
                 generated_text[path] = content
+                stage_validated_text(self, target, content)
                 out_files.append(
                     {
                         "path": path,

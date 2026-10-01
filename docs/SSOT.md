@@ -390,6 +390,8 @@ Integrita uzavřeného Run Bundle zahrnuje i úplnost seznamu souborů; dodateč
 
 Profil evidence dodání `delivery-no-product-tests` otiskuje manifest staged souborů, nikoli výsledek testů. Nevytváří kopii projektu pro ověřování. `candidate_root` ukazuje na existující staging a `candidate_scope=staged_outputs`; doprovodná evidence nesmí tvrdit, že proběhlo sestavení nebo funkční ověření.
 
+LIVE GENERATE a MODIFY ukládají každý validovaný textový výsledek do immutable stagingu a `staged_files` ještě před výrobou dalšího cíle. Chyba dalšího requestu nemění OUT a neztrácí již zaplacené bytes. History Repair přebírá tyto artefakty s původními hashi cílových souborů a vazbou na stejný implementační graf; nové requesty vytváří pouze chybějící cíle. Standardní Continue zůstává pro terminální failed běh nedostupné. Úplnost stagingu ani jeho průběžná persistence neznamenají publikaci nebo funkční ověření produktu.
+
 Kontext souboru obsahuje skutečné definice jemu přiřazených invariantů, toků a životních cyklů i úplné akceptační podmínky, nikoli pouze jejich ID. Nese komponentu, relevantní architektonická rozhodnutí, integrační pravidla a balíčky. Kanonická projekce zahrnuje tyto části i přesný obsah ověřených závislostí; její selektory odkazují na skutečné klíče kontextu. Změna účinného kontraktu mění jeho otisk.
 
 Příprava před dalším krokem kontroluje původ explicitních požadavků, acyklické odvození, obousměrné vazby akceptace a provider/consumer rozhraní, platné stavy přechodů a úplné přiřazení povinností souborům. Jde o kontrolu podkladů generování, nikoli o následné spouštění vytvořených produktů.

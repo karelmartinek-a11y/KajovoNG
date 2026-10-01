@@ -39,6 +39,7 @@ def _run_v3_modify_production(
     from ..orchestration.resource_delivery import (
         dispatch_resource_target,
         prepare_production_scope,
+        stage_validated_text,
     )
     selected, completed, excluded = prepare_production_scope(self, struct)
     files_by_path = {
@@ -319,6 +320,7 @@ def _run_v3_modify_production(
                 if last_response_id:
                     chain_prev_id = last_response_id
                 generated_text[path] = content
+                stage_validated_text(self, target, content)
                 out_files.append(
                     {"path": path, "content": content, "action": action}
                 )

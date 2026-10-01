@@ -517,7 +517,7 @@ def _generate_image(worker, client, graph, target, delivery) -> bytes:
     return binary
 
 
-def _stage_resource(worker, path: str, data: bytes, producer: str) -> dict[str, Any]:
+def _stage_resource(worker, path: str, data: bytes, producer: str, *, action: str = "resource") -> dict[str, Any]:
     expected = getattr(worker, "_delivery_expected_target_hashes", {})
     if path not in expected:
         raise ContractError(f"{path}: chybí původní očekávaný stav cíle.")
@@ -559,7 +559,7 @@ def _stage_resource(worker, path: str, data: bytes, producer: str) -> dict[str, 
         "bytes": len(data),
         "sha256": digest,
         "expected_target_hash": expected[path],
-        "action": "resource",
+        "action": action,
         "purpose": producer,
         "artifact_id": artifact.get("artifact_id"),
         "resource_producer": producer,
@@ -571,8 +571,13 @@ def _stage_resource(worker, path: str, data: bytes, producer: str) -> dict[str, 
         **dict(getattr(worker, "_resource_states", {}) or {}),
         path: {"status": "completed_unverified", "producer": producer, "sha256": digest},
     }
+    from ..recoverable_artifacts import load_run_state
+    previous = load_run_state(run_root).get("staged_files") or []
+    durable = {row["path"]: row for row in previous}
+    durable.update(current)
     worker.log.update_state(
         {
+            "staged_files": [durable[key] for key in sorted(durable)],
             "resource_staged_files": [
                 current[key] for key in sorted(current)
             ],
@@ -587,6 +592,14 @@ def _stage_resource(worker, path: str, data: bytes, producer: str) -> dict[str, 
         }
     )
     return row
+
+
+def stage_validated_text(worker, target: dict[str, Any], content: str) -> None:
+    """Validovaný text přežije chybu dalšího cíle bez předčasné publikace."""
+    _stage_resource(
+        worker, target["path"], content.encode("utf-8"), "validated_text",
+        action="modify" if target.get("action") == "modify" else "add",
+    )
 
 
 def prepare_production_scope(
