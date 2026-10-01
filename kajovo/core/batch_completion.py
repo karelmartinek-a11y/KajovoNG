@@ -17,7 +17,7 @@ from .generate_batch import encode_requests, process_saved_batch_already_locked
 from .runs.locking import ExecutionLock, locked_run_operation
 from .progress import ProgressEvent
 from .batch_submit import exact_batch_matches
-from .run_bundle import RunBundle
+from .run_bundle import RunBundle, TERMINAL_STATUSES
 from .orchestration.contracts import canonical_bytes
 
 TERMINAL = {"completed", "failed", "expired", "cancelled"}
@@ -646,7 +646,6 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
                 "errors": result.get("errors") or [],
                 "message": "Výsledky GENERATE/MODIFY BATCH byly převzaty do lokálního stavu.",
             },
-            seal=str(final_state.get("status")) in {"completed", "failed"},
         )
         if bundle:
             for staged in result.get("staged_files") or []:
@@ -725,7 +724,9 @@ def complete_saved_batch(client, run_dir, batch_id, settings, progress=None):
                     "omitted": result.get("omitted") or [],
                 },
             )
-            if result.get("status") in {"completed", "dry_run", "failed"}:
+            # Manifest musí zahrnout i následnou archivaci a validaci importu.
+            # Převzatý staging je terminální místní výsledek před publikací.
+            if final_state.get("status") in TERMINAL_STATUSES:
                 bundle.seal()
         return result
     target = state.get("out_dir")

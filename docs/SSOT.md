@@ -526,3 +526,5 @@ Import zadání ověřuje převod teploty a typy i syntaxi provider identifikát
 Úklid UI po dokončení workeru musí být zaregistrován bezpečně i tehdy, když QThread skončí před návratem spouštěče. `Operations.on_finished` provede callback právě jednou; dokončená operace nesmí ponechat panel zablokovaný.
 
 Výběr resource ze SourcePacku upřednostňuje explicitní `source_id`. Název, relativní cesta nebo reconstruction role jsou přípustné pouze při jednoznačné identitě a souhlasných známých hashech. Víceznačná vazba se odmítá v přípravě i v dispatcheru před zápisem stagingu; pořadí podkladů neurčuje jejich význam.
+
+Převzetí GENERATE/MODIFY BATCH zapečetí terminální místní výsledek až po aktualizaci stavu, archivaci všech artefaktů a záznamu validace. Platí také pro `files_complete_unverified` po dodání ručního resource; manifest umožňuje následnou samostatnou publikaci z Historie.
