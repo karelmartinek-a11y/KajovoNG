@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from kajovo.core.filesystem_metadata import is_appledouble_metadata
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -11,10 +13,12 @@ def _python_files(*relative_roots: str):
         root = ROOT / relative_root
         if not root.exists():
             continue
-        yield from (path for path in root.rglob("*.py") if not path.name.startswith("._"))
+        yield from (path for path in root.rglob("*.py") if not is_appledouble_metadata(path))
 
 
 def _imports(path: Path) -> set[str]:
+    if is_appledouble_metadata(path):
+        return set()
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imported: set[str] = set()
     for node in ast.walk(tree):
