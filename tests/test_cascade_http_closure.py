@@ -177,3 +177,45 @@ def test_cascade_http_hard_exit_reuses_accepted_or_blocks_unknown(tmp_path, phas
     calls = [json.loads(line) for line in (tmp_path / "cascade-http.jsonl").read_text().splitlines()]
     posts = [row for row in calls if row["path"] == "/responses"]
     assert len(posts) == (3 if phase == "accepted" else 1)
+
+
+def test_cascade_stop_during_http_retains_paid_result_without_next_submit(qtbot, monkeypatch, tmp_path):
+    import threading
+    from PySide6.QtCore import QCoreApplication, QEvent
+    value = definition()
+    transport = CascadeHttp(tmp_path,value)
+    entered, release = threading.Event(), threading.Event()
+    original = transport.request
+    def boundary(method,url,**kwargs):
+        if method == 'POST' and url.endswith('/responses'):
+            entered.set()
+            assert release.wait(20), 'HTTP stop bariéra nebyla uvolněna'
+        return original(method,url,**kwargs)
+    transport.request = boundary
+    operations = Operations(None)
+    context = StudioContext(AppSettings(log_dir=str(tmp_path/'LOG')),operations,api_key='synthetic')
+    context.models = [MODEL]
+    page = CascadesPage(context)
+    operations.setParent(page)
+    qtbot.addWidget(page)
+    page.definition, page.current_id = value, None
+    page.name.setText(value.name)
+    page.output.setText(str(tmp_path/'OUT'))
+    page.project.setText('Stop HTTP')
+    page.draw_steps()
+    monkeypatch.setattr('kajovo.core.cascade_pipeline.OpenAIClient',lambda *a,**k:client_for(transport))
+    page.findChild(QPushButton,'cascade.start').click()
+    qtbot.waitUntil(entered.is_set)
+    record = next(iter(operations.records.values()))
+    record.dialog.stop.click()
+    release.set()
+    qtbot.waitUntil(lambda:not operations.active,timeout=30000)
+    qtbot.addWidget(record.dialog)
+    assert record.terminal == 'cancelled', (record.terminal,record.error)
+    assert transport.submits == 1
+    state = json.loads(Path(record.worker.logger.state_path).read_text()) if isValid(record.worker) else json.loads((tmp_path/'LOG'/record.identifier/'run_state.json').read_text())
+    assert state['status'] == 'cancelled'
+    assert state['cascade_runtime']['primary_responses']
+    # Návrat stránky nepřipojí dokončení zrušené operace k novému zadání.
+    record.dialog.close()
+    QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
