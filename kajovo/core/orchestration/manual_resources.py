@@ -113,7 +113,12 @@ def recoverable_staged_files(parent_dir, state=None):
     if not artifacts and not (state.get("preparation_snapshot") or {}).get("graph"):
         return [rows[path] for path in sorted(rows)]
     graph = graph_from_state(state)
-    targets = {row["path"]: row for row in graph["spine"]["files"]}
+    file_targets = graph["spine"].get("files")
+    if file_targets is None:
+        if artifacts or state.get("production_expected_target_hashes"):
+            raise ContractError("Textový artefakt vyžaduje původní seznam výrobních cílů.")
+        return [rows[path] for path in sorted(rows)]
+    targets = {row["path"]: row for row in file_targets}
     expected = state.get("production_expected_target_hashes") or {}
     adapter = LegacyRunAdapter(parent_dir)
     validations = adapter.validations()

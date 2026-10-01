@@ -130,3 +130,14 @@ def test_manual_input_completes_real_workflow_without_repeating_text(tmp_path, b
     assert set(rows) == {"hello.txt", "asset.bin"}
     assert rows["asset.bin"]["expected_target_hash"] is None
     assert Path(target_log.paths.run_dir, rows["asset.bin"]["staged_path"]).read_bytes() == b"dodany podklad"
+
+
+def test_missing_text_targets_cannot_hide_confirmed_text_evidence(tmp_path):
+    graph = {"contract": "IMPLEMENTATION_GRAPH_V3", "spine": {"resource_deliveries": []}}
+    parent = RunLogger(str(tmp_path), "RUN_text_targets", project_name="Test")
+    parent.update_state({"preparation_snapshot": {"graph": graph},
+                         "production_expected_target_hashes": {"file.txt": None}})
+    child = RunLogger(str(tmp_path), "RUN_text_targets_child", project_name="Test")
+    with pytest.raises(ContractError, match="seznam výrobních cílů"):
+        inherit_resources(parent.paths.run_dir, child)
+    assert not load_run_state(child.paths.run_dir).get("inherited_staged_files")
