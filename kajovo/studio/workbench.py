@@ -60,6 +60,7 @@ class Workbench(QWidget):
         self.context = context
         self.saved_extras = {}
         self.busy_outputs = {}
+        self._active_requests = {}
         self.pending_lineage = None
         self._revision = 0
         self._modify_dry_run = bool(context.settings.dry_run_modify)
@@ -151,6 +152,7 @@ class Workbench(QWidget):
         context.attachments_changed.connect(self._edited)
         context.key_changed.connect(self._edited)
         context.key_changed.connect(self.validate)
+        context.settings_changed.connect(self._edited)
         self.widgets["mode"].currentIndexChanged.connect(self.refresh_models)
         self.widgets["send_as_c"].toggled.connect(self.refresh_models)
         self.reset()
@@ -357,6 +359,13 @@ class Workbench(QWidget):
         if not self.validate():
             return
         cfg = self.config()
+        request_state = self.state(secrets=True)
+        identity = (self.context.api_key, request_state, self.context.settings)
+        active_ids = {record.identifier for record in self.context.operations.active}
+        if any(run_id in active_ids and request == identity
+               for run_id, request in self._active_requests.items()):
+            self.validation.setText("Stejné zadání již zpracovává aktivní operace; druhý submit nebyl spuštěn.")
+            return
         if len(self.context.operations.active) >= 4:
             self.validation.setText("Počkejte na dokončení některé ze čtyř aktivních operací.")
             return
@@ -395,20 +404,18 @@ class Workbench(QWidget):
         request_state = self.state(secrets=True)
 
         def receive(value):
-            self.result.setPlainText(json.dumps(value, ensure_ascii=False, indent=2, default=str))
-            self.result_ready.emit(value)
             if revision == self._revision and request_state == self.state(secrets=True):
+                self.result.setPlainText(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+                self.result_ready.emit(value)
                 self._apply_run_result(value, cfg)
-            if (
-                value.get("status") == "completed_unverified"
-                and value.get("published_files")
-                and not value.get("dry_run")
-            ):
-                self.offer_repair_from_publish(
-                    str(Path(self.context.settings.log_dir).resolve() / run_id),
-                    value,
-                    cfg,
-                )
+                if (
+                    value.get("status") == "completed_unverified"
+                    and value.get("published_files")
+                    and not value.get("dry_run")
+                ):
+                    self.offer_repair_from_publish(
+                        str(Path(settings.log_dir).resolve() / run_id), value, cfg,
+                    )
             if record.dialog.notification.isChecked():
                 from kajovo.core.notifications import send_smtp_notification
                 from .operations import STATES
@@ -419,6 +426,8 @@ class Workbench(QWidget):
                 self.context.operations.start("Odeslání oznámení o výsledku", lambda task: send_smtp_notification(settings.smtp, "Kájovo NG · výsledek operace", message, raise_errors=True))
 
         record = self.context.operations.adopt("Práce na projektu · " + cfg.project, worker, receive, identifier=run_id, output_dir=target)
+        self._active_requests[run_id] = (self.context.api_key, copy.deepcopy(request_state), settings)
+        worker.finished.connect(lambda: self._active_requests.pop(run_id, None))
         record.dialog.notification.show()
         worker.finished.connect(lambda: self.busy_outputs.pop(run_id, None))
         self.pending_lineage = None

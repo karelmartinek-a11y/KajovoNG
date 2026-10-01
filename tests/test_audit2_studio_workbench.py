@@ -101,4 +101,4 @@ def test_result_changes_only_original_form_revision(workbench, tmp_path, change,
         if mode == "QFILE":
             assert workbench.state()["qfile_output_path"] == "navrh.md"
             assert workbench.state()["qfile_plan"] == result["qfile_plan"]
-    assert workbench.result.value == result
+    assert workbench.result.value == (None if change else result)
