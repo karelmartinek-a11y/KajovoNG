@@ -1671,7 +1671,7 @@
     },
     {
       "path": "tools/verify_progress_coverage.py",
-      "sha256": "c91c89621fab9fe324b5ab24ca5f1455ce571d2521c5caebaa903b4bc26c7dab",
+      "sha256": "b5e70ed0924f5277a2761483be4eb7a857ec0d7098c79694c2347e00f347ff84",
       "lines": 201,
       "review": {
         "status": "full_read",
@@ -25513,7 +25513,9 @@
         "tests/test_local_tools_qt_closure.py",
         "tests/test_lock_process_closure.py",
         "tests/test_qa_qfile_http_closure.py",
-        "tools/verify_dependency_contract.py"
+        "tools/verify_dependency_contract.py",
+        "tools/verify_progress_coverage.py",
+        "tests/test_audit_metadata_closure.py"
       ],
       "tests": [
         "tests/test_portability_closure.py::test_closure_text_files_have_explicit_encoding",
@@ -25521,7 +25523,8 @@
         "tests/test_local_tools_qt_closure.py::test_git_milestone_restore_and_local_remote_real_ui",
         "tests/test_lock_process_closure.py::test_execution_lock_two_processes_and_killed_owner",
         "tests/test_dependency_metadata_closure.py::test_dependency_audit_keeps_ordinary_scripts",
-        "tests/test_qa_qfile_http_closure.py::test_qa_invalid_output_never_reports_completed_or_retries"
+        "tests/test_qa_qfile_http_closure.py::test_qa_invalid_output_never_reports_completed_or_retries",
+        "tests/test_audit_metadata_closure.py::test_progress_audit_detects_named_source_with_unsupported_dialog"
       ],
       "status": "repaired_regression_tests_present"
     },

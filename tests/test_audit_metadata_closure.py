@@ -2,7 +2,7 @@
 import json
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -26,7 +26,8 @@ def test_semantic_contract_discovery_checks_named_source(tmp_path, monkeypatch, 
 
 
 @pytest.mark.parametrize('sidecar', [False, True])
-def test_progress_audit_detects_named_source_with_unsupported_dialog(tmp_path, monkeypatch, sidecar):
+@pytest.mark.parametrize('windows_paths', [False, True])
+def test_progress_audit_detects_named_source_with_unsupported_dialog(tmp_path, monkeypatch, sidecar, windows_paths):
     names = {'docs/progress/reference_inventory_182.json', 'kajovo/studio/operations.py', 'kajovo/studio/progress_dialog.py', 'kajovo/studio/progress_view.py'}
     names.update(owner for family in progress.REFERENCE_PROGRESS_FAMILIES for owner in family.owners)
     for name in names:
@@ -38,6 +39,12 @@ def test_progress_audit_detects_named_source_with_unsupported_dialog(tmp_path, m
     output = tmp_path / 'report.json'
     monkeypatch.setattr(progress, 'ROOT', tmp_path)
     monkeypatch.setattr(sys, 'argv', ['audit', '--output', str(output)])
-    assert progress.main() == (0 if sidecar else 1)
+    if windows_paths:
+        original_relative_to = Path.relative_to
+        with monkeypatch.context() as context:
+            context.setattr(Path, 'relative_to', lambda self, *args: PureWindowsPath(original_relative_to(self, *args)))
+            assert progress.main() == (0 if sidecar else 1)
+    else:
+        assert progress.main() == (0 if sidecar else 1)
     errors = json.loads(output.read_text(encoding="utf-8"))['errors']
     assert errors == ([] if sidecar else [{'path': 'kajovo/studio/._ordinary.py', 'error': 'Produkční Studio znovu používá starý QProgressDialog.'}])

@@ -136,7 +136,7 @@ def main() -> int:
         if "QProgressDialog" in source:
             errors.append(
                 {
-                    "path": str(path.relative_to(ROOT)),
+                    "path": path.relative_to(ROOT).as_posix(),
                     "error": "Produkční Studio znovu používá starý QProgressDialog.",
                 }
             )
