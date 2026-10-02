@@ -1554,8 +1554,8 @@
     },
     {
       "path": "scripts/start_app.py",
-      "sha256": "b5f839233da0f2e107db71b489bb313c39b37b3682d709f7895d97ef73c69b68",
-      "lines": 173,
+      "sha256": "b5e78ae37dac47025ba4d367209c45630531d75b8bd90c5fc545609a2f2434b6",
+      "lines": 174,
       "review": {
         "status": "full_read",
         "purpose": "Předstartovní runtime kontrola, přesná identita fyzických masek a obsah distribuovaných prostředků."
@@ -24977,13 +24977,13 @@
     {
       "id": "scripts/start_app.py::runtime_sanity::connect::1",
       "path": "scripts/start_app.py",
-      "line": 83,
-      "end_line": 83,
+      "line": 84,
+      "end_line": 84,
       "scope": "runtime_sanity",
       "call": "connect",
       "expression": "sqlite3.connect(str(Path(probe) / 'check.sqlite'))",
       "call_sha256": "25aa55ca77511b6d7031d0a9b427fbb60475b1f807d088a245ba4e4d7a16f0a2",
-      "caller_sha256": "022fd6bbe48a98935be9677a2fed57450b6e8035a6458ac2f56889ae06b8e36f",
+      "caller_sha256": "94b4b801a54e70d94a7138658c009cdcb41df50c16ca414b0984db436962599a",
       "process": "runtime_sanity",
       "reachability": {
         "status": "unproven",
@@ -25014,13 +25014,13 @@
     {
       "id": "scripts/start_app.py::runtime_sanity::getattr::1",
       "path": "scripts/start_app.py",
-      "line": 65,
-      "end_line": 65,
+      "line": 66,
+      "end_line": 66,
       "scope": "runtime_sanity",
       "call": "getattr",
       "expression": "getattr(settings, field)",
       "call_sha256": "4e76697ed3d96c4fe358b8ef5102e63157e54f66aaaa2b9e2e5a25ea202b6b5d",
-      "caller_sha256": "022fd6bbe48a98935be9677a2fed57450b6e8035a6458ac2f56889ae06b8e36f",
+      "caller_sha256": "94b4b801a54e70d94a7138658c009cdcb41df50c16ca414b0984db436962599a",
       "process": "runtime_sanity",
       "reachability": {
         "status": "unproven",
@@ -25490,6 +25490,17 @@
         "tests/test_startup_resource_integrity.py::test_check_only_rejects_corrupt_required_resource",
         "tests/test_startup.py::test_prepare_repairs_only_when_needed",
         "tests/test_startup_sanity.py::test_runtime_sanity_does_not_migrate_or_read_credentials"
+      ],
+      "status": "repaired_regression_tests_present"
+    },
+    {
+      "id": "RC16",
+      "finding": "Runtime SQLite probe předával connection do smazání dočasného adresáře bez explicitního close; context manager ukončil jen transakci. Windows pak odmítl odstranění otevřeného souboru.",
+      "repair_files": [
+        "scripts/start_app.py"
+      ],
+      "tests": [
+        "tests/test_startup_sanity.py::test_runtime_sanity_closes_sqlite_before_probe_directory_cleanup"
       ],
       "status": "repaired_regression_tests_present"
     }

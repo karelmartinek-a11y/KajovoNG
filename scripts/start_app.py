@@ -1,6 +1,7 @@
 """Ověření provozních závislostí a spuštění z projektového prostředí."""
 
 import argparse
+from contextlib import closing
 import importlib
 from importlib import metadata
 from pathlib import Path, PureWindowsPath
@@ -80,7 +81,7 @@ def runtime_sanity() -> None:
             if target.read_bytes() != b"kajovo":
                 raise OSError(f"Nelze ověřit zápis do {field}.")
             target.rename(target.with_suffix(".renamed"))
-            with sqlite3.connect(str(Path(probe) / "check.sqlite")) as connection:
+            with closing(sqlite3.connect(str(Path(probe) / "check.sqlite"))) as connection:
                 connection.execute("CREATE TABLE sanity (value TEXT)")
                 connection.execute("INSERT INTO sanity VALUES ('ok')")
                 connection.commit()

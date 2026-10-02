@@ -386,6 +386,8 @@ Wheel obsahuje balíčky `kajovo`, `kajovong`, `utf8nobom`, diagnostický skript
 
 CI lane provádějící skutečnou kontrolu runtime prostředků musí stáhnout obsah Git LFS. Textový LFS ukazatel není font a předstartovní kontrola jej odmítá. JSON checkpointy a uložené runtime masky jsou UTF-8; jejich čtení i ověřování nezávisí na systémovém kódování Windows.
 
+SQLite connection kontrolního zápisu se explicitně zavře před odstraněním dočasného podadresáře. Samotný transakční context manager connection nezavírá; úspěšná transakce ještě neprokazuje uvolnění souborového prostředku pro následný krok.
+
 Repozitář neobsahuje placené `verify_*_live.py` nástroje, které by kvůli samotnému ověření automaticky odesílaly generativní Responses nebo zkušební dávky. CI a standardní validační postupy jsou offline vůči placeným generativním endpointům: používají mocky, lokální validátory a statické kontroly. Ruční spuštění skutečné pracovní funkce aplikace samozřejmě může vytvořit placený pracovní požadavek; ten není validačním preflightem.
 
 | Testy | Ověřované chování |

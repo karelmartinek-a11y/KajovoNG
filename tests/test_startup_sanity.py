@@ -53,6 +53,27 @@ def test_runtime_sanity_does_not_migrate_or_read_credentials(launcher, monkeypat
     assert get_secret.call_count == set_secret.call_count == 0
 
 
+def test_runtime_sanity_closes_sqlite_before_probe_directory_cleanup(launcher, monkeypatch):
+    import sqlite3
+
+    original = sqlite3.connect
+    connections = []
+
+    def retained_connection(*args, **kwargs):
+        connection = original(*args, **kwargs)
+        # Silná reference brání tomu, aby chybnou životnost zakrylo GC.
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", retained_connection)
+    launcher.runtime_sanity()
+    assert len(connections) == 3
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+    assert not list(launcher.ROOT.rglob(".kajovo-check-*"))
+
+
 def test_explicit_local_settings_override_preserves_archived_settings(launcher, monkeypatch):
     archive = launcher.ROOT / "kajovo_settings.json"
     archive.write_text('{"retry":{"max_attempts":0}}', encoding="utf-8")
