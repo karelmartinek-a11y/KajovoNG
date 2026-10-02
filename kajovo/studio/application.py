@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QSize, QTimer, Qt
 from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
@@ -16,8 +16,10 @@ from .batches import BatchesPage
 from .cascades import CascadesPage
 from .components import BranchMark, DetailDialog, Form, action, actions, caption, friendly_error, install_theme, scroll, vertical
 from .context import StudioContext
+from .command_palette import CommandPalette, PaletteCommand
 from .history import HistoryPage
 from .operations import Operations
+from .navigation_icons import navigation_icon
 from .photos import PhotosPage
 from .comics import ComicsPage
 from .resources import ResourcesPage
@@ -161,18 +163,33 @@ class StudioWindow(QMainWindow):
         outer.setSpacing(0)
         self.sidebar = QFrame()
         side = vertical(self.sidebar, 20)
+        side.setSpacing(6)
+        brand = QWidget()
+        brand_layout = QHBoxLayout(brand)
+        brand_layout.setContentsMargins(0, 0, 0, 12)
+        brand_layout.setSpacing(10)
         self.logo = QLabel()
         icon_path = resource_path("studio-symbol.png")
         pixmap = QPixmap(str(icon_path))
         if not pixmap.isNull():
-            self.logo.setPixmap(pixmap.scaled(58, 58, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.logo.setPixmap(pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             self.setWindowIcon(QIcon(str(icon_path)))
         self.logo.setAccessibleName("Logo Kájovo NG")
-        side.addWidget(self.logo)
-        side.addWidget(caption("Kájovo NG", "heading"))
-        side.addWidget(caption("ŘÍDICÍ STUDIO", "muted"))
+        brand_layout.addWidget(self.logo)
+        brand_text = QWidget()
+        brand_text_layout = vertical(brand_text, 0)
+        brand_text_layout.setSpacing(4)
+        brand_text_layout.addWidget(caption("Kájovo NG", "brand"))
+        brand_text_layout.addWidget(caption("ŘÍDICÍ STUDIO", "eyebrow"))
+        brand_layout.addWidget(brand_text, 1)
+        side.addWidget(brand)
+        divider = QFrame()
+        divider.setObjectName("studioDivider")
+        divider.setFixedHeight(1)
+        side.addWidget(divider)
+        side.addSpacing(10)
         self.navigation_area = scroll(self.sidebar)
-        self.navigation_area.setFixedWidth(230)
+        self.navigation_area.setFixedWidth(260)
         outer.addWidget(self.navigation_area)
         content = QWidget()
         body = vertical(content, 12)
@@ -183,15 +200,22 @@ class StudioWindow(QMainWindow):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.addWidget(self.menu_button)
         header_layout.addWidget(self.heading, 1)
-        header_layout.addWidget(action("page.detach", "Samostatné okno", self.detach_page))
+        self.quick_button = action("navigation.quick", "Rychlý přechod  Ctrl+K", self.open_command_palette)
+        self.quick_button.setIcon(navigation_icon("search"))
+        self.quick_button.setAccessibleName("Rychlý přechod do sekce nebo k probíhající práci")
+        self.quick_button.setToolTip("Vyhledat sekci, nástroj nebo probíhající práci · Ctrl+K")
+        header_layout.addWidget(self.quick_button)
+        self.detach_button = action("page.detach", "Samostatné okno", self.detach_page)
+        header_layout.addWidget(self.detach_button)
         body.addWidget(header)
         self.stack = QStackedWidget()
         body.addWidget(self.stack, 1)
         self.activity = caption("Připraveno k práci", "muted")
         self.mark = BranchMark()
         footer = QWidget()
+        footer.setObjectName("studioFooter")
         footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setContentsMargins(0, 8, 0, 0)
         footer_layout.addWidget(self.mark)
         footer_layout.addWidget(self.activity, 1)
         footer_layout.addWidget(action("operations.open", "Přehled probíhající práce", self.operations.show_all))
@@ -247,7 +271,9 @@ class StudioWindow(QMainWindow):
             else:
                 page.setMinimumHeight(620)
                 self.stack.addWidget(scroll(page))
-            button = action("navigation." + key, title, lambda checked=False: None)
+            button = action("navigation." + key, title, lambda checked=False: None, "navigation")
+            button.setIcon(navigation_icon(key))
+            button.setIconSize(QSize(20, 20))
             button.setCheckable(True)
             self.navigation_group.addButton(button)
             # Přístupná akce Toggle mění výběr bez signálu clicked.
@@ -255,14 +281,26 @@ class StudioWindow(QMainWindow):
             side.addWidget(button)
             self.navigation[key] = button
         side.addStretch()
-        side.addWidget(action("converter.open", "Převod textů", self.open_converter))
+        converter_button = action("converter.open", "Převod textů", self.open_converter)
+        converter_button.setIcon(navigation_icon("converter"))
+        side.addWidget(converter_button)
+        self.command_palette = CommandPalette([], self)
+        self.command_palette.command_selected.connect(self.execute_palette_command)
+        self.command_shortcuts = []
+        for sequence in ("Ctrl+K", "Meta+K"):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.WindowShortcut)
+            shortcut.activated.connect(self.open_command_palette)
+            self.command_shortcuts.append(shortcut)
         self.operations.changed.connect(self.update_activity)
+        self.context.settings_changed.connect(self.update_activity)
         self.history.activate_workbench.connect(lambda: self.select_page("run"))
         self.history.activate_comic.connect(self.open_comic_operation)
         self.history.activate_batch.connect(self.open_history_batch)
         self.shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
         self.shortcut.activated.connect(self.start_current)
         self.select_page("run")
+        self.update_activity()
         if self.context.api_key:
             QTimer.singleShot(0, self.context.ensure_models)
 
@@ -333,22 +371,76 @@ class StudioWindow(QMainWindow):
     def toggle_navigation(self):
         self.navigation_area.setVisible(not self.navigation_area.isVisible())
 
+    def open_command_palette(self):
+        descriptions = {
+            "run": "Připravit novou práci", "photos": "Hromadné úpravy fotografií",
+            "comics": "Postavy, prostředí a obrázky příběhu", "cascade": "Propojit kroky a jejich výsledky",
+            "resources": "Soubory a knihovny dokumentů", "batch": "Vzdálené dávky a převzetí výsledků",
+            "history": "Běhy, výsledky a další postup", "versions": "Soubory, změny a uložené verze",
+            "models": "Vybrat model pro práci", "settings": "Přístup a nastavení aplikace",
+            "help": "Jak pracovat se Studiem",
+        }
+        commands = [PaletteCommand("section:" + key, button.text(), descriptions[key])
+                    for key, button in self.navigation.items()]
+        commands.extend((
+            PaletteCommand("tool:converter", "Převod textů", "Záloha a převod do UTF-8", category="Nástroje"),
+            PaletteCommand("work:overview", "Přehled probíhající práce", "Otevřít již spuštěné úlohy", category="Práce"),
+        ))
+        commands.extend(PaletteCommand("operation:" + record.identifier, record.title,
+                                       "Otevřít průběh této úlohy", category="Probíhá")
+                        for record in self.operations.active)
+        if self.converter is not None:
+            commands.extend(PaletteCommand("converter-operation:" + record.identifier, record.title,
+                                           "Otevřít průběh převodu textů", category="Probíhá")
+                            for record in self.converter.operations.active)
+        self.command_palette.set_commands(commands)
+        self.command_palette.open()
+
+    def execute_palette_command(self, key):
+        if key.startswith("section:"):
+            section = key.removeprefix("section:")
+            if section in self.pages:
+                self.select_page(section)
+        elif key == "tool:converter":
+            self.open_converter()
+        elif key == "work:overview":
+            self.show_work_overview()
+        elif key.startswith("operation:"):
+            self.operations.show_operation(key.removeprefix("operation:"))
+        elif key.startswith("converter-operation:") and self.converter is not None:
+            self.converter.operations.show_operation(key.removeprefix("converter-operation:"))
+
+    def show_work_overview(self):
+        converter_active = self.converter is not None and self.converter.operations.active
+        if self.operations.active or not converter_active:
+            self.operations.show_all()
+        if converter_active:
+            self.converter.show()
+            self.converter.raise_()
+            self.converter.operations.show_all()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "navigation_area"):
             self.navigation_area.setVisible(event.size().width() >= 1000)
             self.menu_button.setVisible(event.size().width() < 1000)
+            if hasattr(self, "quick_button"):
+                narrow = event.size().width() < 1000
+                self.quick_button.setText("Přejít…" if narrow else "Rychlý přechod  Ctrl+K")
+                self.detach_button.setText("Okno" if narrow else "Samostatné okno")
 
     def update_activity(self):
         count = len(self.operations.active)
         self.activity.setText(f"Právě spuštěné úlohy: {count}" if count else "V tomto okně nyní neprobíhá práce")
         self.mark.set_running(bool(count), self.context.settings.ui_reduced_motion)
+        if self.converter is not None:
+            self.converter.set_reduced_motion(self.context.settings.ui_reduced_motion)
 
     def open_converter(self):
         from .converter import ConverterWindow
 
         if self.converter is None:
-            self.converter = ConverterWindow()
+            self.converter = ConverterWindow(self, reduced_motion=self.context.settings.ui_reduced_motion)
         self.converter.show()
         self.converter.raise_()
 
@@ -361,7 +453,7 @@ class StudioWindow(QMainWindow):
         if self.operations.active or (self.converter and self.converter.operations.active):
             self.activity.setText("Ještě probíhají operace; dokončete nebo bezpečně zastavte práci před zavřením.")
             event.ignore()
-            self.operations.show_all()
+            self.show_work_overview()
         else:
             if not self.comics.save_pending():
                 self.select_page("comics")

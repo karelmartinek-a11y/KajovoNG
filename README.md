@@ -2,7 +2,9 @@
 
 Desktopová aplikace v Pythonu a PySide6 pro práci s OpenAI Responses API, soubory, vlastními kaskádami, dávkami a hromadnými úpravami fotografií.
 
-Řídicí studio má jednotné tmavé rozhraní, přehled operací a možnost otevřít sekci v samostatném okně. Malé okno zpřístupní navigaci tlačítkem Sekce; delší formuláře i řady akcí lze posouvat. Animace lze omezit v Nastavení. Samostatný Převod textů používá stejné ovládání.
+Řídicí studio má jednotné tmavé rozhraní, rastrové logo, přehled operací a možnost otevřít sekci v samostatném okně. Tlačítko **Rychlý přechod** nebo **Ctrl+K** (na macOS také **⌘+K**) otevře hledání sekcí, nástrojů a právě spuštěné práce. Hledání rozumí názvům bez diakritiky; šipky vybírají, Enter otevře a Escape zavře. Rozepsané zadání zůstane zachované.
+
+Malé okno zpřístupní navigaci tlačítkem Sekce; delší formuláře i řady akcí lze posouvat. Jemný dvojitý pulz označuje místní práci, pomalý dech čekání. Pohyb nepřidává hotové kroky ani nepotvrzuje aktivitu vzdálené služby. Animace lze omezit v Nastavení i během práce. Skrytá a dokončená okna neanimují. Samostatný Převod textů používá stejné ovládání a přebírá volbu animací ze Studia.
 
 Kanonická specifikace systému: [SSOT](docs/SSOT.md).
 
@@ -58,7 +60,7 @@ U hlavní volby modelu nebo v **Modelech** použijte **Nastavit jako výchozí**
 
 Průběh ukazuje dokončené jednotky, fázi, trvání, ETA a stáří poslední události. U čekání na API může být ETA neznámá. Skrytý průběh znovu otevřete přes Aktivní běhy. Zavření okna nezničí běžící worker; Stop čeká na bezpečné přerušení mezi operacemi. Průběh uploadu a potvrzení mazání mají samostatná okna.
 
-Izolované snímky pořídí `.venv\Scripts\python.exe scripts/render_ui.py --output C:\Temp\kajovo-ui --size 1366,900 --scale 1`. Pro malou logickou plochu použijte `--size 911,480 --scale 1.5`. Skript vykresluje skutečné Qt rozhraní s označenými ukázkovými daty v dočasném pracovním adresáři, bez API volání. Parametr `--native` volí vykreslování Windows; systémový tiskový dialog vyžaduje samostatnou kontrolu na Windows.
+Izolované snímky pořídí `.venv\Scripts\python.exe scripts/render_ui.py --output C:\Temp\kajovo-ui --size 1366,900 --scale 1`. Pro malou logickou plochu použijte `--size 911,480 --scale 1.5`. Skript vykresluje skutečné Qt rozhraní s označenými ukázkovými daty v dočasném pracovním adresáři, bez API volání. Parametr `--native` volí nativní backend aktuálního systému; `--main-only` omezuje sadu na hlavní sekce, nástroje a průběh. Systémový tiskový dialog vyžaduje samostatnou kontrolu na Windows. `scripts/render_progress_catalog.py` fotografuje všech 182 referenčních variant jako výslovně označené vizuální projekce, nikoli jako vykonání jejich backendů.
 
 GENERATE začíná requirements A0R, pokračuje plánem A1, strukturou A2 a generováním souborů A3. MODIFY používá change requirements B0R, plán B1, strukturu změny B2 a úplné výsledné soubory B3. Standard zahrnuje requirements a zachovává běžnou politiku reasoning.
 

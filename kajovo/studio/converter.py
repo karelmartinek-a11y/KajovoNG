@@ -39,18 +39,19 @@ class ConversionEvents:
 
 
 class ConverterWindow(QMainWindow):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, reduced_motion=False):
         super().__init__(parent)
         self.setObjectName("converter.window")
         self.setWindowTitle("Kájovo NG · Převod textů")
         self.resize(1060, 820)
         self.setMinimumSize(640, 360)
-        self.operations = Operations(self)
+        self.operations = Operations(self, reduced_motion)
         root = QWidget()
         body = vertical(root, 20)
         contents = QWidget()
         area = vertical(contents)
-        area.addWidget(BranchMark())
+        self.mark = BranchMark()
+        area.addWidget(self.mark)
         area.addWidget(caption("Převést textové soubory do jednotného kódování", "heading"))
         area.addWidget(caption("Před úpravou se uloží záloha. Převod sjednotí ukládání znaků do UTF-8 bez úvodní značky; neopravuje obsah textu.", "muted"))
         box, fields = panel("Složky s textovými soubory")
@@ -84,6 +85,18 @@ class ConverterWindow(QMainWindow):
         for path in [*self.paths, self.backup]:
             path.textChanged.connect(self.validate)
         self.operations.changed.connect(self.validate)
+        self.operations.changed.connect(self.update_activity)
+        self.update_activity()
+
+    def set_reduced_motion(self, reduced_motion):
+        self.operations.reduced_motion = bool(reduced_motion)
+        for record in self.operations.records.values():
+            if record.dialog is not None:
+                record.dialog.set_reduced_motion(reduced_motion)
+        self.update_activity()
+
+    def update_activity(self):
+        self.mark.set_running(bool(self.operations.active), self.operations.reduced_motion)
 
     def browse(self, target):
         path = get_existing_directory(self, "Vybrat složku", target.text())

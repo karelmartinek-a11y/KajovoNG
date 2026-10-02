@@ -19,6 +19,8 @@
 - Dokončená vzdálená fotografická dávka čeká na místní převzetí. Teprve `downloaded` potvrzuje dokončené stažení; neznámé odeslání bez čísla dávky není úspěch.
 - Počet vytvořených cílů nezahrnuje čekání na ručně dodané prostředky. Místní staging, publikace do OUT a ověření funkčnosti jsou odlišné skutečnosti.
 - Technické podrobnosti obsahují původní události včetně identifikátorů. Uživatelská plocha používá české významové názvy. Původní implementace dialogů ani jejich kopie nejsou součástí runtime.
+- `studio/motion.py` přidává dvojitý pulz aktivní etapě a pomalejší dech při čekání, frontě či žádosti o zastavení. Jde o místní indikaci aktivity; animace nevydává události, nezvyšuje počty a nedokazuje činnost vzdáleného serveru.
+- Omezit animace zachová stejné údaje ve statickém zobrazení. Skrytí dialogu zastavuje animaci i timer obnovy popisků, nikoli práci ani monotónní hodiny modelu. Opětovné otevření okamžitě ukáže aktuální uplynulý čas. Koncová událost zastaví pulz ještě před převzetím výsledku; tlačítko OK nadále čeká na skutečný konec pracovníka.
 
 ## Vizuální kontrola
 
@@ -27,6 +29,8 @@
 `--replay _skill_runs/progress/desktop/traces.json --size 480,640` přehraje stejné události do úzkého okna. `--scale 1.5` kontroluje větší měřítko. Přehrané časy označují stáří původních testovacích událostí. Snímky a záznam přehrání nejsou provozní evidence uživatele ani součást distribuovaného programu.
 
 Referenční PDF zahrnuje podrobnější rozklad 182 variant. Současný plán executorů slučuje některé referenční podkroky do jedné ověřované etapy; u obecných obslužných úloh potvrzuje pouze skutečně provedenou funkci a případné vnitřní události. Samotné společné vykreslení nezakládá důkaz samostatného pokrytí všech 1 284 referenčních podkroků. Rozsah doložených hranic uvádí [pokrytí](coverage.md).
+
+`python scripts/render_progress_catalog.py --output <adresář>` vytváří úplnou obrazovou mapu referenčního katalogu s aktivním a dokončeným stavem každé varianty a posuvnými částmi dlouhých plánů. Katalog, jeho otisk, manifest a galerie uchovávají původ snímků. Každý snímek je výslovně označen jako `reference_visual_projection` s `backend_executed=false`; nevydává se za skutečné vykonání referenčních kroků.
 
 
 ## Uzavření úplného pokrytí

@@ -580,7 +580,7 @@ def main() -> int:
         "pytest_execute": execute["returncode"],
         "errors": errors,
     }
-    print("SEMANTIC_FLOWS", json.dumps(summary, ensure_ascii=False))
+    print("SEMANTIC_FLOWS", json.dumps(summary, ensure_ascii=True))
     return 1 if errors else 0
 
 

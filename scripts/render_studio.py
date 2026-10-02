@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,28 +13,91 @@ import tempfile
 from unittest.mock import patch
 
 
+def scroll_positions(maximum, viewport):
+    """Pokryje celý posuvný obsah s překryvem sousedních snímků."""
+    maximum = max(0, int(maximum))
+    step = max(1, int(viewport) - 32)
+    return tuple(sorted({0, maximum, *range(0, maximum, step)}))
+
+
+def native_platform(platform):
+    """Vybere Qt backend odpovídající hostitelskému systému."""
+    return "windows" if platform == "win32" else "cocoa" if platform == "darwin" else "xcb"
+
+
+def source_inventory(root):
+    """Odvodí třídy, dialogy a záložky z distribuovaných zdrojů Studia."""
+    modules = []
+    for path in sorted((root / "kajovo" / "studio").glob("*.py")):
+        if path.name.startswith("._"):
+            continue
+        source = path.read_bytes()
+        tree = ast.parse(source.decode("utf-8"))
+        classes = [{"name": node.name, "line": node.lineno,
+                    "bases": [ast.unparse(base) for base in node.bases]}
+                   for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+        views = [{"line": node.lineno, "expression": ast.unparse(node)}
+                 for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and ("Dialog" in ast.unparse(node.func) or ast.unparse(node.func).endswith(".addTab"))]
+        modules.append({"file": path.relative_to(root).as_posix(),
+                        "sha256": hashlib.sha256(source).hexdigest(), "classes": classes, "views": views})
+    return {"schema_version": 1, "modules": modules,
+            "note": "Inventář vzniká ze zdrojů. Snímky zachycují jejich skutečné Qt instance nad izolovanými ukázkovými daty."}
+
+
+def capture_command_palette(window, capture, *, concurrent=False):
+    """Vyfotografuje hledání bez aktivace příkazu či spuštění nové práce."""
+    window.open_command_palette()
+    palette = window.command_palette
+    states = (("command_palette_concurrent", ""),
+              ("command_palette_active_operation", "mistni kontrola")) if concurrent else (
+                  ("command_palette", ""),
+                  ("command_palette_query", "nastaveni"),
+                  ("command_palette_empty", "nenalezitelny prikaz 938147"),
+              )
+    try:
+        for name, query in states:
+            palette.search.setText(query)
+            capture(palette, name)
+    finally:
+        palette.hide()
+
+
+def batch_fixture(workspace):
+    """Zachová ukázková vzdálená čísla i při opětovném otevření přehledu."""
+    return [{"id": "batch_ukazka", "remote": {"status": "in_progress",
+                                             "request_counts": {"completed": 8, "failed": 1, "total": 12}},
+             "state": {"project": "Rezervace", "status": "batch_pending"},
+             "run_dir": str(workspace / "LOG" / "RUN_ukazka"), "kind": "GENERATE", "photo": None,
+             "started_at": "2026-09-15T10:00:00+00:00"}]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--size", default="1366,900")
     parser.add_argument("--scale", default="1")
     parser.add_argument("--native", action="store_true")
+    parser.add_argument("--main-only", action="store_true", help="Hlavní sekce a průběh bez komplexních detailů historie")
     args = parser.parse_args()
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    os.environ["QT_QPA_PLATFORM"] = "windows" if args.native else "offscreen"
+    if args.native:
+        os.environ.setdefault("QT_QPA_PLATFORM", native_platform(sys.platform))
+    else:
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
     os.environ["QT_SCALE_FACTOR"] = args.scale
     os.environ.pop("OPENAI_API_KEY", None)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QModelIndex, QTimer, Qt
-    from PySide6.QtWidgets import QApplication, QAbstractButton, QAbstractItemView, QComboBox, QDialog, QFileDialog, QInputDialog, QLabel, QLineEdit, QListView, QMenu, QMessageBox, QPlainTextEdit, QScrollArea, QTabWidget, QTextEdit, QWidget
+    from PySide6.QtWidgets import QApplication, QAbstractButton, QAbstractItemView, QAbstractScrollArea, QComboBox, QDialog, QFileDialog, QInputDialog, QLabel, QLineEdit, QListView, QMenu, QMessageBox, QPlainTextEdit, QTabWidget, QTextEdit, QWidget
     from kajovo.core.config import AppSettings
     from kajovo.core import secret_store
     from kajovo.core.runlog import RunLogger
     from kajovo.core.run_bundle import LegacyRunAdapter
     from kajovo.core.batch_completion import read_state
     from kajovo.core.cascade_types import CascadeDefinition, CascadeStep
-    from kajovo.core.progress import ProgressEvent
+    from kajovo.core.progress import ProgressEvent, TERMINAL_RUN_STATES
     from kajovo.studio.application import create_window
     from kajovo.studio.components import DetailDialog
     from kajovo.studio.converter import ConverterWindow
@@ -243,7 +308,8 @@ def main():
                  patch("requests.sessions.Session.request", side_effect=AssertionError("Síť je při snímkování zakázaná.")), \
                  patch("kajovo.core.secret_store._read_persisted_api_key", return_value=None), \
                  patch("kajovo.core.secret_store._read_keyring_api_key_record", return_value=secret_store._MISSING), \
-                 patch("kajovo.core.secret_store.get_secret", return_value=None):
+                 patch("kajovo.core.secret_store.get_secret", return_value=None), \
+                 patch("kajovo.studio.batches.BatchesPage._local_records", side_effect=lambda: batch_fixture(workspace)):
                 settings = AppSettings(log_dir=str(workspace / "LOG"), cache_dir=str(workspace / "cache"))
                 fixtures = create_run_fixtures(workspace, settings)
                 window = create_window(settings)
@@ -257,8 +323,16 @@ def main():
                 window.cascades.add_step()
                 window.cascades.title.setText("Připravit návrh řešení")
                 window.cascades.model.setCurrentText("gpt-4.1")
+                window.cascades.deterministic.setChecked(True)
                 window.cascades.commit_step()
-                window.batches.records = [{"id": "batch_ukazka", "remote": {"status": "in_progress", "request_counts": {"completed": 8, "failed": 1, "total": 12}}, "state": {"project": "Rezervace", "status": "batch_pending"}, "run_dir": str(workspace / "LOG" / "RUN_ukazka"), "kind": "GENERATE", "photo": None, "started_at": "2026-09-15T10:00:00+00:00"}]
+                window.cascades.selected().inputs = [CascadeInput(name="Specifikace", source="text", value="Podklady pro návrh")]
+                window.cascades.selected().outputs = [CascadeOutput(id="navrh", name="Návrh řešení", kind="text")]
+                window.cascades.draw_steps(window.cascades.current_id)
+                window.resources.lists["stores"].setCurrentRow(0)
+                fill_records(window.resources.store_files, [{"id": "file_ukazka", "filename": "Specifikace rezervací.pdf", "attributes": {"oddeleni": "Recepce", "rok": 2026}}])
+                window.resources.store_files.setCurrentRow(0)
+                window.models.listing.setCurrentRow(0)
+                window.batches.records = batch_fixture(workspace)
                 window.batches.render()
                 window.workbench.result.set_value({"status": "completed", "text": "Projekt je připravený k místnímu ověření.", "saved": ["rezervace.py", "README.md"]})
                 from PySide6.QtGui import QColor, QImage
@@ -277,6 +351,7 @@ def main():
                                           template_id="", prompt_model="", prompt_response_id="", image_model="gpt-image-1.5",
                                           quality="high", size="1024x1024", output_format="png", output_dir=str(workspace / "output"))
                 job.items[0].output_path = str(edited_path)
+                job.created_at = "2026-09-15T10:00:00+00:00"
                 job.status = "completed"
                 job.request_completed = 1
                 window.photos.jobs = [job]
@@ -345,36 +420,46 @@ def main():
                                       "visible_classes": sorted({type(child).__name__ for child in widget.findChildren(QWidget) if child.isVisibleTo(widget)}),
                                       "tabs": [tabs.tabText(index) for tabs in widget.findChildren(QTabWidget) if tabs.isVisibleTo(widget) for index in range(tabs.count())],
                                       "current_tabs": [tabs.tabText(tabs.currentIndex()) for tabs in widget.findChildren(QTabWidget) if tabs.isVisibleTo(widget)],
-                                      "menu_actions": [item.text() for item in widget.actions()] if isinstance(widget, QMenu) else []})
+                                      "menu_actions": [item.text() for item in widget.actions()] if isinstance(widget, QMenu) else [],
+                                      "scroll_areas": [{"type": type(area).__name__, "id": area.objectName(),
+                                                        "vertical": {"position": area.verticalScrollBar().value(), "maximum": area.verticalScrollBar().maximum()},
+                                                        "horizontal": {"position": area.horizontalScrollBar().value(), "maximum": area.horizontalScrollBar().maximum()}}
+                                                       for area in widget.findChildren(QAbstractScrollArea) if area.isVisibleTo(widget)]})
+                    if widget is getattr(window, "command_palette", None):
+                        snapshots[-1]["palette"] = {"query": widget.search.text(), "status": widget.status.text(),
+                                                    "result_keys": [widget.results.item(index).data(Qt.UserRole)
+                                                                    for index in range(widget.results.count())],
+                                                    "empty_visible": widget.empty.isVisibleTo(widget),
+                                                    "open_enabled": widget.open_button.isEnabled(),
+                                                    "command_activated": False}
                     if include_scroll and isinstance(widget, QDialog):
-                        for index, area in enumerate(widget.findChildren(QScrollArea)):
-                            if area.isVisible():
-                                bar = area.verticalScrollBar()
-                                previous = bar.value()
-                                if bar.maximum():
-                                    bar.setValue(bar.maximum())
-                                    capture(widget, name + f"_lower{index}", False)
-                                bar.setValue(previous)
+                        capture_widget_scrolls(widget, name)
+
+                def capture_widget_scrolls(widget, name, container=None):
+                    container = container or widget
+                    areas = container.findChildren(QAbstractScrollArea)
+                    if isinstance(container, QAbstractScrollArea):
+                        areas.insert(0, container)
+                    for number, area in enumerate(areas):
+                        if not area.isVisibleTo(widget):
+                            continue
+                        vertical = area.verticalScrollBar()
+                        horizontal = area.horizontalScrollBar()
+                        original = vertical.value(), horizontal.value()
+                        if not vertical.maximum() and not horizontal.maximum():
+                            continue
+                        for y in scroll_positions(vertical.maximum(), area.viewport().height()):
+                            for x in scroll_positions(horizontal.maximum(), area.viewport().width()):
+                                if (y, x) == original:
+                                    continue
+                                vertical.setValue(y)
+                                horizontal.setValue(x)
+                                capture(widget, f"{name}_scroll{number}_{y}_{x}", False)
+                        vertical.setValue(original[0])
+                        horizontal.setValue(original[1])
 
                 def capture_scrolls(name):
-                    areas = window.stack.currentWidget().findChildren(QScrollArea)
-                    if isinstance(window.stack.currentWidget(), QScrollArea):
-                        areas.insert(0, window.stack.currentWidget())
-                    for number, area in enumerate(areas):
-                        if not area.isVisible():
-                            continue
-                        bar = area.verticalScrollBar()
-                        original = bar.value()
-                        for position in sorted({bar.maximum() // 2, bar.maximum()} - {0}):
-                            bar.setValue(position)
-                            capture(window, f"{name}_scroll{number}_{position}")
-                        bar.setValue(original)
-                        horizontal = area.horizontalScrollBar()
-                        if horizontal.maximum():
-                            previous = horizontal.value()
-                            horizontal.setValue(horizontal.maximum())
-                            capture(window, f"{name}_horizontal{number}")
-                            horizontal.setValue(previous)
+                    capture_widget_scrolls(window, name, window.stack.currentWidget())
 
                 def capture_evidence_dialog(view, name):
                     capture(view, name)
@@ -393,6 +478,10 @@ def main():
 
                 def capture_popup(view, name):
                     capture(view, name)
+                    toggle = view.findChild(QAbstractButton, "dialog.details")
+                    if toggle:
+                        toggle.click()
+                        capture(view, name + "_expanded")
                     view.hide()
                     return QDialog.Rejected
 
@@ -402,6 +491,10 @@ def main():
                     ("photo_save_template", window.photos.save_template),
                     ("cascade_contract", window.cascades.edit_contract),
                     ("cascade_options", window.cascades.definition_options),
+                    ("resource_attributes", window.resources.attributes),
+                    ("model_details", window.models.details),
+                    ("version_milestone", window.versions.create_tag),
+                    ("version_technical", window.versions.show_technical_status),
                 ):
                     with patch.object(QDialog, "exec", lambda view, n=name: capture_popup(view, n)):
                         callback()
@@ -482,36 +575,37 @@ def main():
                         dialog.view.open_evidence()
                     dialog.hide()
 
-                run_detail("generate", "Přehled")
-                run_detail("modify", "Mapa změn a porovnání")
-                run_detail("qa", "Přehled")
-                run_detail("qfile", "Přehled")
-                run_detail("cascade", "Přehled")
-                run_detail("comic", "Přehled")
-                def capture_menu():
-                    menu = app.activePopupWidget()
-                    if isinstance(menu, QMenu):
-                        capture(menu, "history_actions")
-                        menu.close()
-                QTimer.singleShot(0, capture_menu)
-                window.history.show_more()
-                capture(window.history.filter_dialog, "history_filters")
-                window.history.filter_dialog.hide()
-                cascade_adapter = LegacyRunAdapter(fixtures["cascade"])
-                repair = BranchComposer(window.history.launcher, cascade_adapter, cascade_adapter.checkpoints(),
-                                        "repair", "validation", window)
-                repair.show()
-                for _ in range(200):
-                    app.processEvents(QEventLoop.AllEvents, 25)
-                    if not window.context.operations.active:
-                        break
-                    QTest.qWait(10)
-                capture(repair, "run_studio_repair", include_scroll=False)
-                repair.hide()
-                for relation, edit in (("continue", False), ("rerun", False), ("rerun", True)):
-                    composer = BranchComposer(window.history.launcher, cascade_adapter, cascade_adapter.checkpoints(), relation, "validation", window, edit_input=edit)
-                    capture(composer, "history_branch_" + relation + ("_edit" if edit else ""))
-                    composer.hide()
+                if not args.main_only:
+                    run_detail("generate", "Přehled")
+                    run_detail("modify", "Mapa změn a porovnání")
+                    run_detail("qa", "Přehled")
+                    run_detail("qfile", "Přehled")
+                    run_detail("cascade", "Přehled")
+                    run_detail("comic", "Přehled")
+                    def capture_menu():
+                        menu = app.activePopupWidget()
+                        if isinstance(menu, QMenu):
+                            capture(menu, "history_actions")
+                            menu.close()
+                    QTimer.singleShot(0, capture_menu)
+                    window.history.show_more()
+                    capture(window.history.filter_dialog, "history_filters")
+                    window.history.filter_dialog.hide()
+                    cascade_adapter = LegacyRunAdapter(fixtures["cascade"])
+                    repair = BranchComposer(window.history.launcher, cascade_adapter, cascade_adapter.checkpoints(),
+                                            "repair", "validation", window)
+                    repair.show()
+                    for _ in range(200):
+                        app.processEvents(QEventLoop.AllEvents, 25)
+                        if not window.context.operations.active:
+                            break
+                        QTest.qWait(10)
+                    capture(repair, "run_studio_repair", include_scroll=False)
+                    repair.hide()
+                    for relation, edit in (("continue", False), ("rerun", False), ("rerun", True)):
+                        composer = BranchComposer(window.history.launcher, cascade_adapter, cascade_adapter.checkpoints(), relation, "validation", window, edit_input=edit)
+                        capture(composer, "history_branch_" + relation + ("_edit" if edit else ""))
+                        composer.hide()
                 for key, page in window.pages.items():
                     window.select_page(key)
                     capture(window, key)
@@ -534,6 +628,8 @@ def main():
                         capture(detached, "detached_" + key)
                         detached.accept()
                 window.select_page("run")
+                if hasattr(window, "open_command_palette"):
+                    capture_command_palette(window, capture)
                 for mode in ("GENERATE", "MODIFY", "QA", "QFILE"):
                     window.workbench.widgets["mode"].setCurrentIndex(window.workbench.widgets["mode"].findData(mode))
                     capture(window, "run_mode_" + mode)
@@ -571,7 +667,7 @@ def main():
                     dialog.on_event(ProgressEvent("PLAN", planned_steps=("QA_INPUT", "QA_RESPONSE", "QA_VALIDATION")))
                     dialog.on_event(ProgressEvent("QA_INPUT", "completed"))
                     dialog.on_event(ProgressEvent("Ověřování souborů", state, 8 if state == "completed" else 3, 8, "souborů", "Kontroluji obsah souborů před uložením."))
-                    if state not in ("active", "waiting"):
+                    if state in TERMINAL_RUN_STATES:
                         dialog.finish(state)
                     capture(dialog, "operation_" + state)
                     dialog.timer.stop()
@@ -583,6 +679,29 @@ def main():
                 capture(dialog, "operation_stopping")
                 dialog.inspector.tech_toggle.setChecked(True)
                 capture(dialog, "operation_technical")
+                dialog.timer.stop()
+                dialog.hide()
+                from kajovo.core.user_errors import describe_error
+                dialog = OperationDialog("Kontrola souborů · podrobnosti výsledku", window)
+                dialog.on_event(ProgressEvent("PLAN", planned_steps=("QA_INPUT", "QA_RESPONSE", "QA_VALIDATION")))
+                dialog.on_event(ProgressEvent("QA_INPUT", "completed"))
+                dialog.on_event(ProgressEvent("QA_VALIDATION", "failed", detail="Kontrolovaná ukázková chyba souboru."))
+                dialog.result = {"status": "partial", "saved": ["navrh.txt"], "missing_deliverables": [{"path": "README.md"}]}
+                dialog.finish("partial", describe_error(ValueError("Ukázkový výstup neobsahuje README.md.")))
+                capture(dialog, "operation_error_result")
+                with patch.object(QDialog, "exec", lambda view: capture_popup(view, "operation_error_detail")):
+                    dialog.show_details()
+                with patch.object(QDialog, "exec", lambda view: capture_popup(view, "operation_result_detail")):
+                    dialog.show_result()
+                dialog.hide()
+                dialog = OperationDialog("Průběh souborů · dlouhý plán a technická evidence", window)
+                stages = tuple(f"Soubor {index:02d} · kontrola a bezpečné uložení" for index in range(1, 33))
+                dialog.on_event(ProgressEvent("PLAN", planned_steps=stages))
+                for index, stage in enumerate(stages):
+                    dialog.on_event(ProgressEvent(stage, "completed" if index < 24 else "active", index + 1, 32, "souborů",
+                                                  "Kontrolovaný lokální fixture obsah bez služby a přístupových údajů."))
+                dialog.inspector.tech_toggle.setChecked(True)
+                capture(dialog, "operation_long_plan_technical")
                 dialog.timer.stop()
                 dialog.hide()
                 dialog = DetailDialog("Kontrola vstupu", "Vybraný soubor se nepodařilo otevřít.", window, {"soubor": "ukazka.txt"})
@@ -621,6 +740,41 @@ def main():
                 window.operations.show_all()
                 capture(window.operations.overview, "operations_overview")
                 window.operations.overview.hide()
+                import threading
+                release = threading.Event()
+                def local_operation(task):
+                    task.progress_event.emit(ProgressEvent("Lokální kontrola", "waiting", source="local",
+                                                           detail="Izolovaný snímkovací pracovník čeká na místní pokračování."))
+                    release.wait(30)
+                    return {"status": "completed", "text": "Izolovaná místní operace je dokončena."}
+                records = [window.operations.start(title, local_operation, popup=False)
+                           for title in ("Místní kontrola souborů", "Příprava náhledu výsledku")]
+                try:
+                    for _ in range(100):
+                        app.processEvents(QEventLoop.AllEvents, 25)
+                        if all(len(record.events) >= 4 for record in records):
+                            break
+                        QTest.qWait(10)
+                    window.operations.show_all()
+                    capture(window.operations.overview, "operations_overview_concurrent")
+                    if hasattr(window, "open_command_palette"):
+                        capture_command_palette(window, capture, concurrent=True)
+                    window.operations.open_selected()
+                    selected = window.operations.records[window.operations.listing.currentItem().data(Qt.UserRole)]
+                    capture(selected.dialog, "operation_concurrent_reopened")
+                    window.select_page("run")
+                    capture(window, "run_concurrent_activity")
+                finally:
+                    release.set()
+                    for _ in range(300):
+                        app.processEvents(QEventLoop.AllEvents, 25)
+                        if all(record.terminal for record in records):
+                            break
+                        QTest.qWait(10)
+                    for record in records:
+                        if record.dialog:
+                            record.dialog.hide()
+                    window.operations.overview.hide()
                 window.close()
                 window.deleteLater()
                 converter.deleteLater()
@@ -630,6 +784,22 @@ def main():
             os.chdir(old_cwd)
     (output / "manifest.json").write_text(json.dumps(snapshots, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output / "qt-texts.json").write_text(json.dumps(list(qt_texts.values()), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    source = source_inventory(Path(__file__).resolve().parents[1])
+    (output / "source-inventory.json").write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    expected_dialogs = sorted({row["name"] for module in source["modules"] for row in module["classes"]
+                               if any(base in {"QDialog", "QFileDialog"} for base in row["bases"])})
+    captured_dialogs = sorted({row["class"] for row in snapshots})
+    coverage = {"schema_version": 1, "platform": os.environ["QT_QPA_PLATFORM"], "size": args.size,
+                "scale": args.scale, "network": "blocked", "data": "isolated_fixtures",
+                "scope": "main_sections_and_progress" if args.main_only else "full_studio",
+                "partial_coverage": args.main_only,
+                "screenshots": len(snapshots), "source_dialog_classes": expected_dialogs,
+                "captured_dialog_classes": [name for name in expected_dialogs if name in captured_dialogs],
+                "missing_dialog_classes": [name for name in expected_dialogs if name not in captured_dialogs],
+                "progress_states": sorted(state for state in STATES if any(row["name"] == "operation_" + state for row in snapshots)),
+                "captured_tabs": sorted({title for row in snapshots for title in row["current_tabs"]}),
+                "note": "Snímky dokazují vykreslení Qt nad ukázkovými daty. Neprokazují živé operace služby ani samostatné spuštění všech 182 referenčních procesních variant."}
+    (output / "coverage.json").write_text(json.dumps(coverage, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"screenshots": len(snapshots), "output": str(output), "label_clipping": sum(len(row["label_clipping"]) for row in snapshots)}, ensure_ascii=False))
 
 

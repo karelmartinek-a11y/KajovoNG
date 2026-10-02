@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QWidget
+from PySide6.QtWidgets import QBoxLayout, QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QWidget
 
 from kajovo.core.batch_completion import batch_ids, complete_saved_batch, pending_batch_ids, read_state
 from kajovo.core.run_bundle import HistoryIndex
@@ -136,14 +136,27 @@ class HistoryPage(QWidget):
         menu.exec(self.more.mapToGlobal(self.more.rect().bottomLeft()))
 
     def _filter_bar(self):
-        box, layout = QWidget(), QHBoxLayout()
+        box, layout = QWidget(), QBoxLayout(QBoxLayout.LeftToRight)
         box.setLayout(layout)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self._filter_layout = layout
+        text_fields, text_layout = QWidget(), QHBoxLayout()
+        text_fields.setLayout(text_layout)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(8)
+        options, options_layout = QWidget(), QHBoxLayout()
+        options.setLayout(options_layout)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(8)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Hledat projekt, číslo běhu, odpověď nebo soubor…")
         self.search.setAccessibleName("Hledat v celé historii")
+        self.search.setMinimumWidth(180)
         self.project_filter = QLineEdit()
         self.project_filter.setPlaceholderText("Projekt")
+        self.project_filter.setAccessibleName("Filtrovat historii podle projektu")
+        self.project_filter.setMinimumWidth(140)
         self.mode_filter, self.status_filter, self.transport_filter = QComboBox(), QComboBox(), QComboBox()
         self.model_filter = QLineEdit()
         self.model_filter.setPlaceholderText("Model")
@@ -153,24 +166,38 @@ class HistoryPage(QWidget):
             (self.transport_filter, "Způsob zpracování", ["LIVE", "BATCH"]),
         ):
             combo.setAccessibleName(label)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(12)
             combo.addItem(label, "")
             for value in values:
                 from .history_state import present_state
                 combo.addItem(present_state(value).label if combo is self.status_filter else mode_name(value), value)
-        for widget, stretch in ((self.search, 3), (self.project_filter, 1), (self.mode_filter, 1),
-                                (self.status_filter, 1)):
-            layout.addWidget(widget, stretch)
+        for widget, target, stretch in ((self.search, text_layout, 3), (self.project_filter, text_layout, 2),
+                                       (self.mode_filter, options_layout, 1), (self.status_filter, options_layout, 1)):
+            target.addWidget(widget, stretch)
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
             signal.connect(lambda *_: self.filter_timer.start())
         self.transport_filter.currentIndexChanged.connect(lambda *_: self.filter_timer.start())
         self.model_filter.textChanged.connect(lambda *_: self.filter_timer.start())
-        layout.addWidget(action("history.refresh", "Obnovit", self.refresh))
+        options_layout.addWidget(action("history.refresh", "Obnovit", self.refresh))
+        layout.addWidget(text_fields, 3)
+        layout.addWidget(options, 2)
         return box
 
     def _timeline_bar(self):
-        box, layout = QWidget(), QHBoxLayout()
+        box, layout = QWidget(), QBoxLayout(QBoxLayout.LeftToRight)
         box.setLayout(layout)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self._timeline_layout = layout
+        filter_actions, filter_layout = QWidget(), QHBoxLayout()
+        filter_actions.setLayout(filter_layout)
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.setSpacing(8)
+        zoom_actions, zoom_layout = QWidget(), QHBoxLayout()
+        zoom_actions.setLayout(zoom_layout)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(8)
         self.date_from, self.date_to = QLineEdit(), QLineEdit()
         self.date_from.setPlaceholderText("Od DD.MM.RRRR")
         self.date_to.setPlaceholderText("Do DD.MM.RRRR")
@@ -196,20 +223,29 @@ class HistoryPage(QWidget):
                        self.flag_checkpoint, self.flag_output, self.flag_lineage):
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.toggled
             signal.connect(lambda *_: self.filter_timer.start())
-        layout.addWidget(self.only_errors)
-        layout.addWidget(action("history.filters.advanced", "Další filtry…", self.filter_dialog.show))
-        layout.addWidget(action("history.filters.reset", "Zrušit filtry", self.reset_filters))
-        layout.addStretch()
+        filter_layout.addWidget(self.only_errors)
+        filter_layout.addWidget(action("history.filters.advanced", "Další filtry…", self.filter_dialog.show))
+        filter_layout.addWidget(action("history.filters.reset", "Zrušit filtry", self.reset_filters))
+        filter_layout.addStretch()
         self.zoom_label = caption("Zvětšení 100 %", "muted")
-        layout.addWidget(self.zoom_label)
+        zoom_layout.addWidget(self.zoom_label)
         for identifier, text, factor, name in (("history.zoom.out", "−", 1 / 1.2, "Zmenšit časovou osu"),
                                                 ("history.zoom.in", "+", 1.2, "Zvětšit časovou osu")):
             button = action(identifier, text, lambda _checked=False, amount=factor: self.set_zoom(self.zoom * amount))
             button.setToolTip(name)
             button.setAccessibleName(name)
-            layout.addWidget(button)
-        layout.addWidget(action("history.zoom.fit", "Přizpůsobit", self.fit_tracks))
+            zoom_layout.addWidget(button)
+        zoom_layout.addWidget(action("history.zoom.fit", "Přizpůsobit", self.fit_tracks))
+        layout.addWidget(filter_actions, 1)
+        layout.addWidget(zoom_actions, 1)
         return box
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_timeline_layout"):
+            direction = QBoxLayout.TopToBottom if event.size().width() < 800 else QBoxLayout.LeftToRight
+            self._filter_layout.setDirection(direction)
+            self._timeline_layout.setDirection(direction)
 
     def reset_filters(self):
         for widget in (self.search, self.project_filter, self.model_filter, self.date_from, self.date_to):

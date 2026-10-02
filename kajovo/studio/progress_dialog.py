@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, is_dataclass
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QCheckBox, QDialog, QGridLayout, QPushButton, QVBoxLayout
 
 from kajovo.core.progress import ProgressClock, ProgressEvent
@@ -51,18 +51,22 @@ class MultiProgressDialog(QDialog):
             self.action_buttons.append(button)
         self.close_button.setObjectName("operation.hide")
         self.stop.setObjectName("operation.stop")
+        self.stop.setProperty("variant", "danger")
         self.details.setObjectName("operation.details")
         self.result_button.setObjectName("operation.result")
         self.setStyleSheet('''
-            QDialog { background: #1e2b43; color: #f4f5fb; }
-            QPushButton { color: #f4f5fb; background: #2d3c58; border: 1px solid #667693;
+            QDialog { background: #0B1220; color: #F3F7FC; }
+            QPushButton { color: #F3F7FC; background: #1B2C41; border: 1px solid #465B75;
                 border-radius: 8px; padding: 10px 12px; font-size: 15px; }
-            QPushButton:focus { border: 2px solid #b6a5ff; }
-            QPushButton:disabled { color: #aebbd2; }
-            QCheckBox { color: #f4f5fb; }
+            QPushButton:hover { border-color: #5EEAD4; }
+            QPushButton:focus { border: 2px solid #7DBBFF; }
+            QPushButton[variant="danger"] { color: #FF9DAB; }
+            QPushButton:disabled { color: #B8C7D9; }
+            QCheckBox { color: #F3F7FC; }
         ''')
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
+        self.timer.setTimerType(Qt.CoarseTimer)
         self.timer.timeout.connect(self.tick)
         self.restart(title)
 
@@ -84,23 +88,34 @@ class MultiProgressDialog(QDialog):
         self.close_button.setAccessibleName("Skrýt průběh")
         self.close_button.setDefault(False)
         self.notification.setEnabled(True)
-        self.mark.set_running(True)
-        self.timer.start()
+        self.mark.set_activity("preparing")
+        self.mark.set_running(True, self.reduced_motion)
+        if self.isVisible():
+            self.timer.start()
+        else:
+            self.timer.stop()
         self.layout_actions()
+
+    def set_reduced_motion(self, reduced):
+        self.reduced_motion = bool(reduced)
+        self.mark.set_running(self.active and not bool(self.inspector.model.terminal), self.reduced_motion)
 
     def on_event(self, event):
         self.events.append(event)
         del self.events[:-2000]
         self.clock.update(event)
-        self.inspector.on_event(event, self.clock)
+        self.inspector.on_event(event, self.clock, self.motion_state())
         if self.stop_requested and self.active:
             self.tick()
 
     def tick(self):
-        self.inspector.refresh(self.clock)
+        self.inspector.refresh(self.clock, self.motion_state())
         if self.stop_requested and self.active:
             self.inspector.state_label.setText("Čekáme na potvrzení zastavení")
             self.inspector.activity_label.setText("Žádost byla předána pracovnímu procesu. Čekáme na jeho bezpečné ukončení.")
+
+    def motion_state(self):
+        return "cancelling" if self.stop_requested and self.active else ""
 
     def request_stop(self):
         if self.active and self.stop_callback and not self.stop_requested:
@@ -119,7 +134,7 @@ class MultiProgressDialog(QDialog):
         self.on_event(event)
         self.clock.finished = event.timestamp
         self.timer.stop()
-        self.mark.set_running(False)
+        self.mark.set_running(False, self.reduced_motion)
         self.stop.hide()
         self.lifecycle_hint.setText("Okno můžete zavřít tlačítkem OK.")
         self.stop.setEnabled(False)
@@ -158,6 +173,13 @@ class MultiProgressDialog(QDialog):
         area = self.screen().availableGeometry()
         self.resize(min(self.width(), area.width()), min(self.height(), area.height()))
         super().showEvent(event)
+        self.tick()
+        if self.active:
+            self.timer.start()
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        super().hideEvent(event)
 
     def resizeEvent(self, event):
         if hasattr(self, "active"):

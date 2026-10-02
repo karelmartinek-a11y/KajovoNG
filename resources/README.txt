@@ -1,5 +1,6 @@
 Prostředky aplikace KájovoNG:
-- Kajovo_new.png: zdrojové logo.
+- studio-symbol.png: produkční rastrové logo KájovoNG pro Studio, okna průběhu a ikony balíčku.
+- Kajovo_new.png: kompatibilní obrazový prostředek pro dřívější spotřebitele.
 - montserrat_regular.ttf, montserrat_bold.ttf: fonty Montserrat, Git LFS.
 - app_icon.png: generovaný výstup Build/generate_icons.py.
 

@@ -4,9 +4,11 @@ Produkční sestavu vytváří `kajovo.studio.application.create_window`; stejno
 
 ## Vizuální pravidla
 
-Tmavá plocha `#0B1220`, karty `#131F30`, zvýrazněné plochy `#1B2C41`, text `#F3F7FC`, vedlejší text `#B8C7D9`, akcent `#5EEAD4`, fokus `#7DBBFF`, úspěch `#79E2B0`, upozornění `#FFD080`, chyba `#FF9DAB`. Písmo Montserrat 11 bodů. Pole, výběr cesty, karty, posuvné formuláře, detail a průběh pocházejí ze společných komponent. Barva doprovází textový stav.
+Tmavá plocha `#0B1220`, karty `#131F30`, zvýrazněné plochy `#1B2C41`, text `#F3F7FC`, vedlejší text `#B8C7D9`, akcent `#5EEAD4`, fokus `#7DBBFF`, úspěch `#79E2B0`, upozornění `#FFD080`, chyba `#FF9DAB`. Písmo Montserrat 14 logických pixelů respektuje škálování Qt. Pole, výběr cesty, karty, posuvné formuláře, detail a průběh pocházejí ze společných komponent. Barva doprovází textový stav.
 
-Logo `resources/studio-symbol.png` doprovází větvený symbol kreslený Qt. Animace značí místní aktivní operaci, nikoli potvrzenou aktivitu serveru. Volba Omezit animace se ukládá v Nastavení. Pod šířkou 1000 logických bodů se navigace otevírá tlačítkem Sekce. Minimum hlavního okna je 640 × 360. Dlouhé formuláře a skupiny tlačítek mají posuv; spuštění Zadání zůstává mimo posuvný obsah. Sekci lze oddělit do okna a zavřením vrátit se stejnými hodnotami.
+Logo `resources/studio-symbol.png` je rastrový geometrický znak K ve dvou tónech tyrkysové na tmavé ploše. Sdílí jej navigace, indikátor aktivity i záhlaví průběhů. Navigační piktogramy jsou samostatné drobné Qt kresby. Aktivní místní operaci doprovází dvoupulz; čekání pomalejší dech. Animace nepotvrzuje aktivitu serveru a nemění doložený postup. Volba Omezit animace se ukládá v Nastavení a platí i pro převodník. Skrytí a koncový stav animaci zastavují. Pod šířkou 1000 logických bodů se navigace otevírá tlačítkem Sekce. Minimum hlavního okna je 640 × 360. Dlouhé formuláře a skupiny tlačítek mají posuv; spuštění Zadání zůstává mimo posuvný obsah. Sekci lze oddělit do okna a zavřením vrátit se stejnými hodnotami.
+
+Rychlý přechod z tlačítka nebo `Ctrl+K` / `⌘K` vyhledává sekce a již spuštěnou práci bez diakritiky. Klávesnice podporuje šipky, Enter a Escape. Jednoduché kliknutí vybírá, dvojklik otevírá. Dlouhé názvy se zalamují a výsledky dovolují posuv. Přechod zachovává rozpracované formuláře. [Obrazové návrhy, prompty a skutečné snímky](design/README.md) dokumentují cílový vzhled.
 
 ## Funkční mapa
 
@@ -35,7 +37,7 @@ Dokončeno, částečný výsledek, zastavení, předání dávky, čekání na 
 
 `core/user_errors.py` klasifikuje konkrétní kód a řetězec příčin. Samotné HTTP 429 nerozlišuje kredit a rychlost; timeout nepotvrzuje přijetí požadavku. Neznámá příčina zůstává výslovně neznámá. Technické podrobnosti jsou dostupné. Stoprocentní určení kořenové příčiny bez důkazů není součástí kontraktu.
 
-[Procházet galerii všech výsledných snímků](ui/gallery.html).
+[Procházet původní galerii](ui/gallery.html). Aktuální reprodukovatelné sady vytvářejí níže uvedené nástroje.
 
 ## Historie / Run Studio
 
@@ -64,7 +66,9 @@ Centrální `ActionAvailabilityPolicy` řídí viditelné důvody disabled stav�
 
 Snímkování používá dočasné ukázkové podklady, blokuje síť a čtení skutečných klíčů. Zelený testovací obrázek slouží geometrii galerie. Automatické funkční testy nahrazují vzdálené služby a pracují se skutečnými dočasnými soubory. Snímky neprokazují úspěšnost placené operace u poskytovatele.
 
-![Zadání řídicího studia](ui/after/1366x900/run.png)
+`--native` používá nativní platformu aktuálního systému. `--main-only` vynechá detailní historické dialogy a označí rozsah jako částečný. Úplná sada prochází sekce, aktivní záložky, dialogy i svislé a vodorovné posuvy. Manifest zachovává inventář tříd, stavů a mezer pokrytí. `scripts/render_progress_catalog.py --output <adresář>` fotografuje aktivní a koncový stav všech referenčních variant; manifest je označuje jako vizuální projekce bez vykonání backendů.
+
+![Zadání řídicího studia](design/studio.png)
 
 
 ## Komiks

@@ -175,8 +175,7 @@ class SettingsPage(QWidget):
         for record in self.context.operations.records.values():
             if record.dialog is None:
                 continue
-            record.dialog.reduced_motion = settings.ui_reduced_motion
-            record.dialog.mark.set_running(not record.terminal, settings.ui_reduced_motion)
+            record.dialog.set_reduced_motion(settings.ui_reduced_motion)
         self.notice.setText("Nastavení bylo uloženo.")
         self.context.settings_changed.emit()
 
