@@ -524,18 +524,19 @@ class Operations(QObject):
     def open_selected(self, *_):
         item = self.listing.currentItem()
         if item:
-            record = self.records.get(item.data(Qt.UserRole))
-            if record is None:
-                return
-            if record.dialog is None:
-                record.dialog = MultiProgressDialog(
-                    record.title, self.parent(), self.reduced_motion
-                )
-                for event in record.events:
-                    record.dialog.on_event(event)
-            dialog = record.dialog
-            dialog.show()
-            dialog.raise_()
+            self.show_operation(item.data(Qt.UserRole))
+
+    def show_operation(self, identifier):
+        """Otevře pouze existující práci, včetně událostí krátkého čtení."""
+        record = self.records.get(identifier)
+        if record is None:
+            return
+        if record.dialog is None:
+            record.dialog = MultiProgressDialog(record.title, self.parent(), self.reduced_motion)
+            for event in record.events:
+                record.dialog.on_event(event)
+        record.dialog.show()
+        record.dialog.raise_()
 
 
 # Veřejné jméno používané integracemi studia.

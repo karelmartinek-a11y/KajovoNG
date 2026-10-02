@@ -6,17 +6,19 @@ from dataclasses import asdict
 import json
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QBoxLayout, QFrame, QLabel, QListWidget, QListWidgetItem, QPlainTextEdit,
+    QBoxLayout, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPlainTextEdit,
     QProgressBar, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
 from kajovo.core.progress_model import BLOCKED, ERRORS, PROVIDER, STATES, ProgressModel, step_name
+from kajovo.core.resources import resource_path
+from .motion import PulseController
 
 
-COLORS = {"done": "#a5efd7", "current": "#b6a5ff", "pending": "#8292ae",
-          "error": "#ffadb7", "blocked": "#ffd17d", "unconfirmed": "#aebbd2", "skipped": "#8292ae", "not_run": "#aebbd2"}
+COLORS = {"done": "#79E2B0", "current": "#5EEAD4", "pending": "#B8C7D9",
+          "error": "#FF9DAB", "blocked": "#FFD080", "unconfirmed": "#B8C7D9", "skipped": "#B8C7D9", "not_run": "#B8C7D9"}
 ROW_TEXT = {"done": "Hotovo", "current": "Právě se děje", "pending": "Čeká",
             "error": "Chyba", "blocked": "Nelze potvrdit", "unconfirmed": "Dokončení nepotvrzeno",
             "skipped": "Přeskočeno", "not_run": "Provedení nepotvrzeno"}
@@ -37,11 +39,22 @@ class StepRing(QWidget):
         self.done = self.total = 0
         self.caption = "Čekáme na zprávu"
         self.running = False
+        self.reduced_motion = False
+        self.motion_mode = "heartbeat"
+        self.pulse = PulseController(self)
+        self.pulse.changed.connect(lambda _value: self.update())
         self.setMinimumSize(270, 270)
         self.setAccessibleName("Kruhová mapa potvrzených kroků")
+        self.setToolTip("Pohyb označuje místní sledování operace. Nepotvrzuje aktivitu služby ani další hotový krok.")
 
     def set_running(self, active, reduced_motion=False):
         self.running = bool(active)
+        self.reduced_motion = bool(reduced_motion)
+        self.pulse.set_running(self.running, self.reduced_motion, self.motion_mode)
+
+    def set_activity(self, state, provider_state=""):
+        self.motion_mode = "waiting" if state in {"waiting", "cancelling"} or provider_state == "queued" else "heartbeat"
+        self.pulse.set_running(self.running, self.reduced_motion, self.motion_mode)
 
     def display(self, rows, caption):
         self.rows = rows
@@ -54,10 +67,10 @@ class StepRing(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        size = min(self.width(), self.height()) - 32
+        size = min(self.width(), self.height()) - 44
         center = QPointF(self.width() / 2, self.height() / 2)
         radius = size / 2
-        painter.setPen(QPen(QColor("#52617c"), 3))
+        painter.setPen(QPen(QColor("#465B75"), 3))
         painter.drawEllipse(center, radius, radius)
         for index, (_, state) in enumerate(self.rows):
             angle = index / max(1, self.total) * math.tau - math.pi / 2
@@ -67,19 +80,30 @@ class StepRing(QWidget):
             dot = min(7, max(2, radius * math.pi / max(1, self.total) / 2))
             painter.drawEllipse(point, dot, dot)
             if state == "current":
+                glow = QColor(COLORS[state])
+                glow.setAlphaF(0.10 + self.pulse.value * 0.12)
+                painter.setBrush(glow)
+                painter.setPen(Qt.NoPen)
+                halo = dot + 8 + (4 * self.pulse.value if self.running and not self.reduced_motion else 0)
+                painter.drawEllipse(point, halo, halo)
                 painter.setBrush(Qt.NoBrush)
                 painter.setPen(QPen(QColor(COLORS[state]), 2))
                 painter.drawEllipse(point, dot + 5, dot + 5)
         rect = QRectF(center.x() - radius * .70, center.y() - 62, radius * 1.4, 124)
-        painter.setBrush(QColor("#2d3c58"))
-        painter.setPen(QPen(QColor("#53627e"), 1))
+        painter.setBrush(QColor("#131F30"))
+        painter.setPen(QPen(QColor("#31445A"), 1))
         painter.drawRoundedRect(rect, 15, 15)
-        painter.setPen(QColor("#b6a5ff"))
-        painter.setFont(QFont(self.font().family(), 25, QFont.Bold))
+        painter.setPen(QColor(COLORS["current"]))
+        number_font = QFont(self.font().family())
+        number_font.setPixelSize(36)
+        number_font.setWeight(QFont.Bold)
+        painter.setFont(number_font)
         painter.drawText(rect.adjusted(4, 8, -4, -55), Qt.AlignCenter,
                          f"{self.done:02d} / {self.total:02d}" if self.total else "— / —")
-        painter.setPen(QColor("#f4f5fb"))
-        painter.setFont(QFont(self.font().family(), 11))
+        painter.setPen(QColor("#F3F7FC"))
+        caption_font = QFont(self.font().family())
+        caption_font.setPixelSize(15)
+        painter.setFont(caption_font)
         painter.drawText(rect.adjusted(10, 62, -10, -8), Qt.AlignCenter | Qt.TextWordWrap,
                          "potvrzených kroků" if self.total else "Čekáme na plán práce")
 
@@ -103,7 +127,17 @@ class MultiProgressView(QWidget):
         body = QVBoxLayout(page)
         body.setContentsMargins(24, 20, 24, 20)
         body.setSpacing(16)
-        body.addWidget(label("KÁJOVO NG   /   KRUHOVÁ MAPA", "eyebrow"))
+        brand = QHBoxLayout()
+        brand.setSpacing(12)
+        self.brand_symbol = QLabel()
+        self.brand_symbol.setObjectName("progress.brand")
+        self.brand_symbol.setFixedSize(32, 32)
+        self.brand_symbol.setAccessibleName("Logo KájovoNG")
+        symbol = QPixmap(str(resource_path("studio-symbol.png")))
+        self.brand_symbol.setPixmap(symbol.scaled(32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        brand.addWidget(self.brand_symbol)
+        brand.addWidget(label("KÁJOVO NG   /   PRŮBĚH PRÁCE", "eyebrow"), 1)
+        body.addLayout(brand)
         self.title_label = label(title, "title")
         body.addWidget(self.title_label)
         self.columns = QBoxLayout(QBoxLayout.LeftToRight)
@@ -130,7 +164,6 @@ class MultiProgressView(QWidget):
         self.columns.addWidget(card, 3)
         body.addLayout(self.columns)
         self.progress_note = label("Zatím není potvrzen žádný krok.", "muted")
-        body.addWidget(self.progress_note)
         self.unit_progress = QProgressBar()
         self.unit_progress.setAccessibleName("Poslední potvrzený počet zpracovaných položek")
         self.unit_progress.hide()
@@ -141,6 +174,7 @@ class MultiProgressView(QWidget):
         self.steps.setAccessibleName("Plán a potvrzené kroky")
         self.steps.setMinimumHeight(150)
         body.addWidget(self.steps)
+        body.addWidget(self.progress_note)
         self.tech_toggle = QToolButton()
         self.tech_toggle.setCheckable(True)
         self.tech_toggle.setText("Zobrazit technické podrobnosti")
@@ -153,21 +187,22 @@ class MultiProgressView(QWidget):
         self.log.hide()
         body.addWidget(self.log)
         self.setStyleSheet('''
-            #circularMap, #progressPage, QScrollArea { background: #1e2b43; }
-            QLabel { background: transparent; color: #f4f5fb; font-size: 16px; }
-            QLabel[role="eyebrow"] { color: #b6a5ff; font-weight: bold; font-size: 15px; }
-            QLabel[role="title"] { font-size: 25px; font-weight: bold; }
-            QLabel[role="phase"] { font-size: 23px; font-weight: bold; }
-            QLabel[role="muted"] { color: #c3cee2; font-size: 14px; }
-            QLabel[role="state"] { color: #a5efd7; font-weight: bold; }
-            #currentCard { background: #2d3c58; border: 1px solid #53627e; border-radius: 16px; }
-            QListWidget, QPlainTextEdit { color: #f4f5fb; background: #26354f;
-                border: 1px solid #53627e; border-radius: 9px; padding: 8px; font-size: 15px; }
+            #circularMap, #progressPage, QScrollArea { background: #0B1220; }
+            QLabel { background: transparent; color: #F3F7FC; font-size: 15px; }
+            QLabel[role="eyebrow"] { color: #5EEAD4; font-weight: bold; font-size: 14px; }
+            QLabel[role="title"] { font-size: 26px; font-weight: bold; }
+            QLabel[role="phase"] { font-size: 24px; font-weight: bold; }
+            QLabel[role="muted"] { color: #B8C7D9; font-size: 14px; }
+            QLabel[role="state"] { color: #79E2B0; font-weight: bold; }
+            #currentCard { background: #131F30; border: 1px solid #31445A; border-radius: 14px; }
+            QListWidget, QPlainTextEdit { color: #F3F7FC; background: #131F30;
+                border: 1px solid #31445A; border-radius: 10px; padding: 8px; font-size: 14px; }
             QListWidget::item { padding: 6px; }
-            QToolButton { color: #c9bdff; background: transparent; border: 0; padding: 6px; font-size: 15px; }
-            QProgressBar { color: #f4f5fb; background: #384863; border: 0;
-                min-height: 26px; text-align: center; }
-            QProgressBar::chunk { background: #426f68; }
+            QToolButton { color: #5EEAD4; background: transparent; border: 0; padding: 6px; font-size: 14px; }
+            QToolButton:focus { border: 1px solid #7DBBFF; border-radius: 6px; }
+            QProgressBar { color: #F3F7FC; background: #1B2C41; border: 1px solid #31445A;
+                border-radius: 8px; min-height: 26px; text-align: center; }
+            QProgressBar::chunk { background: #347F77; border-radius: 7px; }
         ''')
 
     def resizeEvent(self, event):
@@ -197,11 +232,11 @@ class MultiProgressView(QWidget):
         if message:
             self.log.appendPlainText(str(message))
 
-    def on_event(self, event, clock=None):
+    def on_event(self, event, clock=None, motion_state=""):
         self.events.append(event)
         self.model.update(event)
         self.append_log(json.dumps(asdict(event), ensure_ascii=False))
-        self.refresh(clock)
+        self.refresh(clock, motion_state)
 
     def reset(self, title):
         self.model = ProgressModel()
@@ -225,7 +260,7 @@ class MultiProgressView(QWidget):
         self.unit_progress.hide()
         self.tech_toggle.setChecked(False)
 
-    def refresh(self, clock=None):
+    def refresh(self, clock=None, motion_state=""):
         model = self.model
         event = model.last
         rows = model.rows()
@@ -234,6 +269,8 @@ class MultiProgressView(QWidget):
             self.render_rows(rows)
             return
         state = model.terminal or event.state
+        self.ring.set_activity(motion_state or state, event.provider_state)
+        self.ring.set_running(not bool(model.terminal or model.received), self.ring.reduced_motion)
         text = STATES.get(state, "Stav tohoto kroku zatím není potvrzen")
         self.state_label.setText(text)
         attention = BLOCKED | {"partial", "completed_unverified", "files_complete_unverified",

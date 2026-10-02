@@ -337,7 +337,8 @@ class BatchesPage(QWidget):
         local_result = VALUES.get(local_state.get("status"), "") if local_state else ""
         if record["id"] in pending_batch_ids(local_state):
             local_result = "Čeká na stažení výsledků"
-        summary = f"{complete + failed} z {total} úloh · {failed} chyb"
+        error_word = "chyba" if failed == 1 else "chyby" if 2 <= failed <= 4 else "chyb"
+        summary = f"{complete + failed} z {total} úloh · {failed} {error_word}"
         imported = (local_state.get("batch_imports") or {}).get(record["id"], {}) if local_state else {}
         errors = imported.get("errors") or imported.get("completed_errors") or {}
         if isinstance(errors, dict) and errors:

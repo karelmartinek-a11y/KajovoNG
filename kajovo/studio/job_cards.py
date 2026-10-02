@@ -59,12 +59,14 @@ def clear_cards(layout):
         item = layout.takeAt(0)
         widget = item.widget()
         if widget is not None:
+            widget.hide()
             widget.deleteLater()
         elif item.layout() is not None:
             child = item.layout()
             while child.count():
                 nested = child.takeAt(0)
                 if nested.widget() is not None:
+                    nested.widget().hide()
                     nested.widget().deleteLater()
 
 

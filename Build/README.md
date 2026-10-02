@@ -34,7 +34,7 @@ Výstup je `dist/Kajovo.app`. Sestavení musí proběhnout na cílovém operačn
 
 ## Git LFS a prostředky
 
-Zdrojové logo je `resources/Kajovo_new.png`. Ikony v `Build/assets` a `resources/app_icon.png` jsou generované a necommitují se. Fonty jsou verzované prostřednictvím Git LFS. Před lokálním sestavením proveďte:
+Zdrojové rastrové logo je `resources/studio-symbol.png`. `Build/generate_icons.py` z téhož PNG vytváří ikony oken, Windows ICO i podklad macOS ikony. Ikony v `Build/assets` a `resources/app_icon.png` jsou generované a necommitují se. Fonty jsou verzované prostřednictvím Git LFS. Před lokálním sestavením proveďte:
 
 ```text
 git lfs pull

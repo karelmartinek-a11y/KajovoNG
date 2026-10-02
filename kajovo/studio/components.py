@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Property, QLibraryInfo, QLocale, QPropertyAnimation, Qt, QTranslator, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen
+from PySide6.QtCore import QLibraryInfo, QLocale, QRectF, Qt, QTranslator, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
+
+from kajovo.core.resources import resource_path
+from .motion import PulseController
 
 
 COLORS = {
@@ -71,23 +74,33 @@ def install_theme(app: QApplication) -> None:
     app.setPalette(palette)
     app.setFont(QFont("Montserrat", 11))
     app.setStyleSheet("""
-        QWidget { background: #0B1220; color: #F3F7FC; font-family: Montserrat; font-size: 11pt; }
+        QWidget { background: #0B1220; color: #F3F7FC; font-family: Montserrat; font-size: 14px; }
         QLabel { background: transparent; }
         QToolTip { background: #1B2C41; color: #F3F7FC; border: 1px solid #7DBBFF; padding: 8px; }
-        QFrame[card="true"] { background: #131F30; border: 1px solid #465B75; border-radius: 12px; }
+        QFrame[card="true"] { background: #131F30; border: 1px solid #31445A; border-radius: 12px; }
         QFrame[card="true"] > QLabel { background: transparent; }
         QLabel[role="heading"] { font-size: 26px; font-weight: 700; }
         QLabel[role="section"] { font-size: 18px; font-weight: 700; }
         QLabel[role="muted"] { color: #B8C7D9; }
         QLabel[role="error"] { color: #FF9DAB; }
-        QPushButton { background: #1B2C41; border: 1px solid #465B75; border-radius: 8px; padding: 9px 14px; min-height: 22px; }
+        QPushButton { background: #1B2C41; border: 1px solid #31445A; border-radius: 8px; padding: 9px 14px; min-height: 22px; }
         QPushButton:hover { background: #28405B; border-color: #7DBBFF; }
         QPushButton:checked { background: #213F5A; border-color: #7DBBFF; }
         QPushButton[role="primary"] { background: #5EEAD4; color: #0B1220; font-weight: 700; border-color: #5EEAD4; }
         QPushButton[role="danger"] { color: #FF9DAB; border-color: #FF9DAB; }
         QPushButton:disabled { color: #91A2B8; background: #182333; border-color: #34465D; }
+        QPushButton[role="navigation"] { background: transparent; border-color: transparent;
+            border-left: 3px solid transparent; text-align: left; padding: 10px 12px; }
+        QPushButton[role="navigation"]:hover { background: #131F30; border-color: #31445A; }
+        QPushButton[role="navigation"]:checked { background: #1B2C41; color: #5EEAD4;
+            border-color: #31445A; border-left: 3px solid #5EEAD4; font-weight: 700; }
+        QPushButton[role="navigation"]:focus { border: 2px solid #7DBBFF; }
+        QFrame#studioDivider { background: #263B52; border: 0; }
+        QWidget#studioFooter { border-top: 1px solid #263B52; }
+        QLabel[role="brand"] { font-size: 22px; font-weight: 700; }
+        QLabel[role="eyebrow"] { color: #B8C7D9; font-size: 11px; }
         QPushButton:focus, QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 2px solid #7DBBFF; }
-        QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit { background: #0F1928; border: 1px solid #465B75; border-radius: 6px; padding: 8px; selection-background-color: #285B85; }
+        QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit { background: #0F1928; border: 1px solid #31445A; border-radius: 6px; padding: 8px; selection-background-color: #285B85; }
         QLineEdit:disabled, QComboBox:disabled { color: #91A2B8; }
         QComboBox QAbstractItemView { background: #131F30; selection-background-color: #285B85; }
         QCheckBox { spacing: 10px; padding: 6px 0; }
@@ -267,60 +280,35 @@ class PathInput(QLineEdit):
 
 
 class BranchMark(QWidget):
-    """Stavový motiv větví; animace nevyjadřuje procenta ani aktivitu serveru."""
+    """Rastrová značka s pulzem místní práce bez odvozování postupu služby."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(42, 42)
         self.setMaximumSize(64, 64)
-        self._intensity = 1.0
         self.running = False
         self.reduced_motion = False
-        self.animation = QPropertyAnimation(self, b"intensity", self)
-        self.animation.setDuration(1500)
-        self.animation.setStartValue(0.45)
-        self.animation.setKeyValueAt(0.5, 1.0)
-        self.animation.setEndValue(0.45)
-        self.animation.setLoopCount(-1)
+        self.pixmap = QPixmap(str(resource_path("studio-symbol.png")))
+        self.pulse = PulseController(self)
+        self.animation = self.pulse.animation
+        self.pulse.changed.connect(lambda _value: self.update())
         self.setAccessibleName("Stav práce")
 
-    def get_intensity(self):
-        return self._intensity
-
-    def set_intensity(self, value):
-        self._intensity = value
-        self.update()
-
-    intensity = Property(float, get_intensity, set_intensity)
-
     def set_running(self, active, reduced_motion=False):
-        self.running = active
-        self.reduced_motion = reduced_motion
-        self.animation.stop()
-        self.set_intensity(1.0)
-        if active and not reduced_motion and self.isVisible():
-            self.animation.start()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.set_running(self.running, self.reduced_motion)
-
-    def hideEvent(self, event):
-        self.animation.stop()
-        super().hideEvent(event)
+        self.running = bool(active)
+        self.reduced_motion = bool(reduced_motion)
+        self.pulse.set_running(self.running, self.reduced_motion)
+        self.setAccessibleDescription("Probíhá místní práce" if active else "Místní práce nyní neprobíhá")
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.scale(self.width() / 64, self.height() / 64)
-        color = QColor(COLORS["primary"])
-        color.setAlphaF(self._intensity)
-        painter.setPen(QPen(color, 5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        painter.drawLine(16, 12, 16, 52)
-        painter.drawLine(16, 32, 48, 12)
-        painter.drawLine(16, 32, 48, 52)
-        painter.setBrush(color)
-        painter.drawEllipse(11, 27, 10, 10)
+        if not self.pixmap.isNull():
+            painter.setOpacity(0.65 + 0.35 * self.pulse.value)
+            size = min(self.width(), self.height())
+            target = QRectF((self.width() - size) / 2, (self.height() - size) / 2, size, size)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
+            painter.drawPixmap(target, self.pixmap, QRectF(self.pixmap.rect()))
 
 
 class DetailDialog(QDialog):
