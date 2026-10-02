@@ -4,7 +4,7 @@ import threading
 import zipfile
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer
 from PySide6.QtWidgets import QPushButton
 
 from kajovo.core.project_git import ProjectGit
@@ -13,10 +13,11 @@ from kajovo.studio.versions import VersionsPage
 from test_settings_http_closure import fixture
 
 
-def finished(qtbot, operations):
+def finished(qtbot, operations, receiver=None):
     qtbot.waitUntil(lambda: bool(operations.records) and not operations.active, timeout=30000)
+    if receiver is not None:
+        qtbot.waitUntil(lambda: not receiver.busy, timeout=30000)
     record = list(operations.records.values())[-1]
-    qtbot.addWidget(record.dialog)
     record.dialog.close()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     return record
@@ -40,7 +41,7 @@ def test_git_real_ui_init_edit_hash_guard_and_symlink(qtbot, monkeypatch, tmp_pa
     target.write_bytes(original)
     page.path.setText(str(root))
     click(qtbot, page, 'git.init')
-    assert finished(qtbot, context.operations).terminal == 'completed'
+    assert finished(qtbot, context.operations, page).terminal == 'completed'
     assert (root / '.git').is_dir() and not page.busy
     service = ProjectGit(root)
     service.command('config','core.autocrlf','false')
@@ -49,20 +50,20 @@ def test_git_real_ui_init_edit_hash_guard_and_symlink(qtbot, monkeypatch, tmp_pa
     service.command('add','.')
     service.command('commit','-m','Výchozí stav')
     click(qtbot, page, 'git.refresh')
-    finished(qtbot, context.operations)
+    finished(qtbot, context.operations, page)
     selected = next(i for i in range(page.files.count()) if page.files.item(i).text() == 'soubor.txt')
     page.files.setCurrentRow(selected)
     click(qtbot, page, 'git.file.open')
-    assert finished(qtbot, context.operations).terminal == 'completed'
+    assert finished(qtbot, context.operations, page).terminal == 'completed'
     assert page.editor.toPlainText().encode() == original.rstrip(b'\n') + b'\n'
     page.editor.setPlainText('Upravené bytes.\n')
     click(qtbot, page, 'git.file.save')
-    assert finished(qtbot, context.operations).terminal == 'completed'
+    assert finished(qtbot, context.operations, page).terminal == 'completed'
     assert target.read_bytes() == 'Upravené bytes.\n'.encode()
     target.write_bytes(b'external change\n')
     page.editor.setPlainText('Nesmí přepsat')
     click(qtbot, page, 'git.file.save')
-    assert finished(qtbot, context.operations).terminal == 'failed'
+    assert finished(qtbot, context.operations, page).terminal == 'failed'
     assert target.read_bytes() == b'external change\n'
     external = tmp_path / 'foreign.txt'
     external.write_bytes(b'foreign')
@@ -94,7 +95,7 @@ def test_git_accountless_path_aba_rejects_late_snapshot(qtbot, monkeypatch, tmp_
     page.path.setText(str(root))
     page.status.setPlainText('Nový výběr čeká na načtení.')
     release.set()
-    record = finished(qtbot, context.operations)
+    record = finished(qtbot, context.operations, page)
     assert page.status.toPlainText() == 'Nový výběr čeká na načtení.'
     assert record.terminal == 'completed'
 
@@ -136,19 +137,25 @@ def test_utf8_native_action_backup_bytes_symlink_and_failure(qtbot, monkeypatch,
         assert any(event.total and event.completed == event.total for event in record.events)
 
 
-def test_git_milestone_restore_and_local_remote_real_ui(qtbot, monkeypatch, tmp_path):
+@pytest.mark.parametrize('cleanup_delay', [False, True])
+def test_git_milestone_restore_and_local_remote_real_ui(qtbot, monkeypatch, tmp_path, cleanup_delay):
     from PySide6.QtWidgets import QDialog
     from kajovo.studio.resources import ValueDialog
     settings_page, context, _, _ = fixture(qtbot,monkeypatch,tmp_path)
     page = VersionsPage(context,settings_page)
     qtbot.addWidget(page)
+    if cleanup_delay:
+        original_finished = context.operations.on_finished
+        monkeypatch.setattr(context.operations, 'on_finished', lambda record, callback:
+                            original_finished(record, lambda: QTimer.singleShot(40, callback)))
     root = tmp_path/'project'
     root.mkdir()
     target = root/'obsah.txt'
     target.write_bytes('Původní český obsah\n'.encode())
     page.path.setText(str(root))
     click(qtbot, page,'git.init')
-    finished(qtbot,context.operations)
+    finished(qtbot,context.operations,page)
+    assert not page.busy
     service = ProjectGit(root)
     service.command('config','core.autocrlf','false')
     service.command('config','user.name','Offline test')
@@ -161,14 +168,14 @@ def test_git_milestone_restore_and_local_remote_real_ui(qtbot, monkeypatch, tmp_
     monkeypatch.setattr(ValueDialog,'exec',accept)
     monkeypatch.setattr('kajovo.studio.versions.confirm',lambda *a:True)
     click(qtbot, page,'git.tag.create')
-    assert finished(qtbot,context.operations).terminal == 'completed'
+    assert finished(qtbot,context.operations,page).terminal == 'completed'
     assert page.tags.count() == 1
     target.write_bytes(b'changed\n')
     service.command('add','obsah.txt')
     service.command('commit','-m','change')
     page.tags.setCurrentRow(0)
     click(qtbot, page,'git.tag.restore')
-    assert finished(qtbot,context.operations).terminal == 'completed'
+    assert finished(qtbot,context.operations,page).terminal == 'completed'
     assert target.read_bytes() == 'Původní český obsah\n'.encode()
     service.command('add','obsah.txt')
     service.command('commit','-m','restore')
@@ -176,14 +183,14 @@ def test_git_milestone_restore_and_local_remote_real_ui(qtbot, monkeypatch, tmp_
     service.command('init','--bare',str(remote))
     page.remote.setText(str(remote))
     click(qtbot, page,'git.remote.save')
-    finished(qtbot,context.operations)
+    finished(qtbot,context.operations,page)
     for operation in ['git.push','git.pull']:
         click(qtbot, page,operation)
-        assert finished(qtbot,context.operations).terminal == 'completed'
+        assert finished(qtbot,context.operations,page).terminal == 'completed'
     assert ProjectGit(remote).command('show','HEAD:obsah.txt').stdout.encode() == target.read_bytes()
     page.tags.setCurrentRow(0)
     click(qtbot, page,'git.tag.delete')
-    assert finished(qtbot,context.operations).terminal == 'completed'
+    assert finished(qtbot,context.operations,page).terminal == 'completed'
     assert page.tags.count() == 0 and target.read_bytes() == 'Původní český obsah\n'.encode()
 
 

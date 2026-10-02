@@ -1080,8 +1080,8 @@
       "sha256": "2e12181ddd704b5638e48bb8a1c50d6d20c734a54b3bead6c6a49cd0fd58780a",
       "lines": 161,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Úplné čtení převodníku UI, typů výsledků a ne-API async callbacků; přesný interní event kontrakt zůstává otevřený."
       }
     },
     {
@@ -1323,8 +1323,8 @@
       "sha256": "7f13cea128999d3eff958b2d9c60ef3969bd1edcf1364fc9d81fff3a16215afa",
       "lines": 200,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Úplné čtení UI příjemce Git snapshotů, synchronizace a callback cleanup; přesné doménové modely zůstávají otevřené."
       }
     },
     {
@@ -25549,6 +25549,17 @@
       "tests": [
         "tests/test_photo_context_generation_closure.py::test_photo_overview_late_worker_rejects_context_aba",
         "tests/test_batch_panel_photo_boundaries.py"
+      ],
+      "status": "repaired_regression_tests_present"
+    },
+    {
+      "id": "RC20",
+      "finding": "Pomocník lokálních Git UI testů zaměňoval backend terminal za dokončení queued UI cleanup, vynucená destrukce pak ponechala busy=true před synchronizací.",
+      "repair_files": [
+        "tests/test_local_tools_qt_closure.py"
+      ],
+      "tests": [
+        "tests/test_local_tools_qt_closure.py::test_git_milestone_restore_and_local_remote_real_ui"
       ],
       "status": "repaired_regression_tests_present"
     }
