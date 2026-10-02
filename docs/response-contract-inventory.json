@@ -1008,8 +1008,8 @@
       "sha256": "a56468dd2540422a4108485f35eab728f100ae078c5938c41e3112cd136ca8dc",
       "lines": 500,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Úplný příjemce dávkových odpovědí v UI, PHOTO/legacy varianty, kontextové generace a cleanup; přesné doménové typy zůstávají otevřené."
       }
     },
     {
@@ -1251,8 +1251,8 @@
       "sha256": "401fc9b8eef0dd29f6cc8eda73a6910c89e49865a1d702679e576759b0db9cf7",
       "lines": 543,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Konec QThread, receipt a queued předání do UI; odlišení terminal stavu od dokončení cleanup."
       }
     },
     {
@@ -25536,6 +25536,19 @@
       ],
       "tests": [
         "tests/test_ssh_repair_qt_closure.py::test_confirmed_ssh_repair_actual_dialog_worker_bytes_and_context"
+      ],
+      "status": "repaired_regression_tests_present"
+    },
+    {
+      "id": "RC19",
+      "finding": "Qt pomocník předávacích testů vynucoval DeferredDelete po backend terminal stavu, ale před doručením queued UI cleanup; test ABA mohl skončit s busy=True.",
+      "repair_files": [
+        "tests/test_batch_panel_photo_boundaries.py",
+        "tests/test_photo_context_generation_closure.py"
+      ],
+      "tests": [
+        "tests/test_photo_context_generation_closure.py::test_photo_overview_late_worker_rejects_context_aba",
+        "tests/test_batch_panel_photo_boundaries.py"
       ],
       "status": "repaired_regression_tests_present"
     }

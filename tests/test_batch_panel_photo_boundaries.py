@@ -40,8 +40,11 @@ def setup(qtbot, tmp_path):
     return job, client, page, context, log_dir
 
 
-def finish(qtbot, context):
+def finish(qtbot, context, page=None):
     qtbot.waitUntil(lambda: not context.operations.active, timeout=10000)
+    receiver = page if page is not None else context.operations.parent()
+    if receiver is not None and hasattr(receiver, "busy"):
+        qtbot.waitUntil(lambda: not receiver.busy, timeout=10000)
     for record in context.operations.records.values():
         qtbot.addWidget(record.dialog)
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
