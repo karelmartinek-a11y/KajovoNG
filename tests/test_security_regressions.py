@@ -24,7 +24,8 @@ class OpenAIClientRequestTests(unittest.TestCase):
         client = OpenAIClient('k')
         client._sdk = None
         mock_response = Mock(status_code=200, headers={'content-type': 'application/json'})
-        mock_response.json.return_value = {'id': 'ok'}
+        from native_provider_fixtures import native_fixture
+        mock_response.json.return_value = native_fixture('POST', '/files', {'id': 'ok'}, {'purpose': 'user_data'})
         client.session.request = Mock(return_value=mock_response)
 
         client._req('POST', '/files', json_body={'purpose': 'user_data'}, files={'file': ('x', b'1')}, timeout=12.0)

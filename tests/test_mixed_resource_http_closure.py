@@ -1,6 +1,7 @@
 """Smíšená výroba přes Qt, skutečné TCP a dva nezávislé procesy."""
 import base64
 import copy
+from native_provider_fixtures import native_fixture
 import hashlib
 import io
 import json
@@ -105,7 +106,7 @@ class MixedHttp(RecordingHttp):
             result = requests.Response()
             result.status_code = 200
             result.headers['Content-Type'] = 'application/octet-stream' if raw else 'application/json'
-            result._content = raw if raw else json.dumps(value).encode()
+            result._content = raw if raw else json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode()
             return result
         return super().request(method, url, **kwargs)
 

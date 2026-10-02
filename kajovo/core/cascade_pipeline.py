@@ -10,7 +10,7 @@ import re
 import sqlite3
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,8 +26,10 @@ from .cascade_contract import (
     runtime_schema_for_step,
     step_signature,
     validate_cascade_definition,
+    validate_output_binding,
 )
 from .cascade_log import CascadeLogger
+from .cascade_schemas import legacy_schema_for_step
 from .cascade_types import CascadeDefinition, CascadeOutput, CascadeStep
 from .contracts import ContractError, parse_json_strict, validate_paths
 from .model_registry import model_spec
@@ -55,6 +57,8 @@ from .runs.locking import ExecutionLock
 from .runs.ports import EventPort
 from .structured_output import (
     OutputContractError,
+    compile_schema,
+    prepare_payload,
     resolve_schema,
     response_format,
     restore_optional_fields,
@@ -73,68 +77,6 @@ from .utils import (
 PLACEHOLDER_RE = re.compile(
     r"\{\{\s*step\.(\d+)\.(response_id|json|text|out_file_path|out_file_id)(?::([^}]+))?\s*\}\}"
 )
-
-
-PRESET_MANIFEST_SCHEMA: dict[str, Any] = {
-    "description": "Souborový manifest pro přímé uložení do OUT.",
-    "type": "object",
-    "required": ["files"],
-    "additionalProperties": False,
-    "properties": {
-        "files": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-                "type": "object",
-                "required": ["path", "content", "encoding"],
-                "additionalProperties": False,
-                "properties": {
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
-                    "encoding": {"type": "string", "enum": ["utf-8", "base64"]},
-                },
-            },
-        }
-    },
-}
-
-
-PRESET_PROMPTS_SCHEMA: dict[str, Any] = {
-    "description": "Definice kaskády promptů.",
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "version": {"type": "integer"},
-        "name": {"type": "string"},
-        "steps": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "title": {"type": "string"},
-                    "model": {"type": "string"},
-                    "instructions": {"type": "string"},
-                    "input_text": {"type": "string"},
-                },
-                "required": ["title", "model", "instructions", "input_text"],
-            },
-        },
-    },
-    "required": ["version", "name", "steps"],
-}
-
-
-JSON_ONLY_DEVELOPER_MESSAGE = {
-    "type": "message",
-    "role": "developer",
-    "content": [
-        {
-            "type": "input_text",
-            "text": "Vrať pouze data vyhovující přesně předepsanému JSON schématu; žádný další text.",
-        }
-    ],
-}
 
 
 @dataclass
@@ -188,6 +130,7 @@ class CascadeRunExecutor:
         attempt_no: int,
         task_suffix: str = "schema",
     ) -> dict[str, Any]:
+        prepare_payload(payload)
         if self.logger is None:
             raise RuntimeError("Cascade logger není inicializovaný.")
         run_id = str(self.cfg.run_id or self.logger.run_id)
@@ -201,7 +144,7 @@ class CascadeRunExecutor:
             "purpose": task_suffix,
             "input": payload.get("input"),
         }
-        wire_format = (payload.get("text") or {}).get("format") or {}
+        wire_format = payload["text"]["format"]
         order = freeze_order(
             operation_cfg,
             {
@@ -214,10 +157,8 @@ class CascadeRunExecutor:
                 "target_id": step.id,
                 "target_path": None,
                 "expected_target_hash": None,
-                "contract_name": str(
-                    wire_format.get("name") or "SCHEMA_PREPARATION"
-                ),
-                "schema": wire_format.get("schema") or {},
+                "contract_name": wire_format["name"],
+                "schema": wire_format["schema"],
                 "prompt": str(payload.get("instructions") or ""),
                 "request_payload": payload,
                 "model": step.model,
@@ -610,6 +551,17 @@ class CascadeRunExecutor:
                 if storage_key not in context or context.get(storage_key) in (None, ""):
                     raise ContractError(f"Chybí hodnota odkazu: {storage_key}")
                 value = context[storage_key]
+                if key in {"text", "response_id"} and not isinstance(value, str):
+                    raise CascadeValidationError("Uložený návazný text má nekompatibilní datový typ.")
+                if key == "json":
+                    if not 1 <= idx <= len(self.cfg.cascade.steps):
+                        raise CascadeValidationError("Návazný JSON nemá původní krok.")
+                    source = self.cfg.cascade.steps[idx - 1]
+                    matching = [output for output in source.outputs if output.kind in {"json", "decision"}]
+                    if len(matching) != 1:
+                        raise CascadeValidationError("Návazný JSON nemá jednoznačný původní kontrakt.")
+                    output = self._source_output_contract(source, matching[0])
+                    validate_output_binding(output, {"kind": output.kind, "value": value})
                 if isinstance(value, str):
                     return value
                 return json.dumps(value, ensure_ascii=False)
@@ -620,7 +572,9 @@ class CascadeRunExecutor:
                 storage_key = f"step.{idx}.{key}:{rel_suffix}"
                 if not context.get(storage_key):
                     raise ContractError(f"Chybí hodnota odkazu: {storage_key}")
-                return str(context[storage_key])
+                if not isinstance(context[storage_key], str):
+                    raise CascadeValidationError("Uložená souborová předávka musí být text.")
+                return context[storage_key]
             return ""
 
         return PLACEHOLDER_RE.sub(repl, text)
@@ -640,15 +594,8 @@ class CascadeRunExecutor:
                     and "code_interpreter" not in model_spec(step.model).get("features", [])):
                 raise ContractError(f"{step.model}: výroba dokumentů vyžaduje Code Interpreter.")
             return runtime_schema_for_step(step)
-        if step.output_type != "json":
-            return None
-        if step.output_schema_kind == "manifest":
-            return copy.deepcopy(PRESET_MANIFEST_SCHEMA)
-        if step.output_schema_kind == "prompts":
-            return copy.deepcopy(PRESET_PROMPTS_SCHEMA)
-        if step.output_schema_kind == "custom" and isinstance(step.output_schema_custom, dict):
-            return copy.deepcopy(step.output_schema_custom)
-        return None
+        _original, wire = legacy_schema_for_step(step)
+        return wire
 
     def _validate_schema_minimal(self, schema: dict[str, Any]) -> None:
         if not isinstance(schema, dict):
@@ -672,9 +619,8 @@ class CascadeRunExecutor:
         check_refs(schema)
 
     def _validate_json_output(self, obj: dict[str, Any], schema: dict[str, Any]) -> None:
-        if schema:
-            self._validate_schema_minimal(schema)
-        jsonschema.validate(obj, schema)
+        compile_schema(schema)
+        jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(obj)
         if not isinstance(obj, dict):
             raise RuntimeError("JSON výstup musí být objekt.")
 
@@ -712,11 +658,18 @@ class CascadeRunExecutor:
         return (self.cfg.cascade.default_out_dir or "").strip()
 
     @staticmethod
+    def _file_encoding(row: dict[str, Any]) -> str:
+        encoding = row.get("encoding", "utf-8")
+        if not isinstance(encoding, str) or encoding.lower() not in {"utf-8", "base64"}:
+            raise ContractError("Neplatné kódování výstupního souboru.")
+        return encoding.lower()
+
+    @staticmethod
     def _decode_file_content(row: dict[str, Any]) -> bytes:
         content = row.get("content")
         if not isinstance(content, str):
             raise ContractError("Obsah výstupního souboru musí být text nebo base64.")
-        encoding = str(row.get("encoding") or "utf-8").lower()
+        encoding = CascadeRunExecutor._file_encoding(row)
         if encoding == "utf-8":
             return content.encode("utf-8")
         if encoding == "base64":
@@ -947,7 +900,7 @@ class CascadeRunExecutor:
                 {
                     "path": str(row.get("path") or ""),
                     "content": row.get("content"),
-                    "encoding": str(row.get("encoding") or "utf-8"),
+                    "encoding": self._file_encoding(row),
                 }
             )
         return self._write_files_atomically(normalized, out_dir, step_idx)
@@ -988,7 +941,7 @@ class CascadeRunExecutor:
                 {
                     "path": rel,
                     "content": row.get("content"),
-                    "encoding": str(row.get("encoding") or "utf-8"),
+                    "encoding": self._file_encoding(row),
                 }
             )
         manifest_paths = [row["path"] for row in normalized_manifest]
@@ -1053,6 +1006,7 @@ class CascadeRunExecutor:
         if cache.get("version", 1) not in {1, 2}:
             raise CascadeValidationError("Nepodporovaná verze cache kaskády.")
         self._primary_responses = copy.deepcopy(cache.get("primary_responses") or {})
+        self._legacy_output_schemas = copy.deepcopy(cache.get("legacy_output_schemas") or {})
         if not self.cfg.resume_source_dir and state.get("run_id"):
             self.cfg.resume_source_dir = str(Path(self.settings.log_dir) / state["run_id"])
         assert self.logger is not None
@@ -1125,6 +1079,54 @@ class CascadeRunExecutor:
     def _value_key(step_id: str, output_id: str) -> str:
         return f"{step_id}|{output_id}"
 
+    def _source_output_contract(self, step, output):
+        if step.deterministic or output.kind != "json":
+            return output
+        original, _wire = legacy_schema_for_step(step)
+        if original is None:
+            original = getattr(self, "_legacy_output_schemas", {}).get(step.id)
+        if not isinstance(original, dict):
+            raise CascadeValidationError("Návazný JSON nemá doloženou původní response masku.")
+        compile_schema(original)
+        return replace(output, json_schema=original)
+
+    def _store_legacy_outputs(self, step, schema, decoded, files, values):
+        if step.output_type == "json":
+            compile_schema(schema)
+            self._legacy_output_schemas = {
+                **getattr(self, "_legacy_output_schemas", {}), step.id: copy.deepcopy(schema),
+            }
+        for output in step.outputs:
+            if output.kind == "file":
+                row = files.get(output.file_name)
+                if not isinstance(row, dict):
+                    raise CascadeValidationError("Starší kaskáda nepředala předepsaný soubor.")
+                value = {"kind": "file", "path": row["path"], "file_id": row["file_id"], "file_type": output.file_type}
+            else:
+                value = {"kind": output.kind, "value": copy.deepcopy(decoded)}
+            validate_output_binding(self._source_output_contract(step, output), value)
+            values[self._value_key(step.id, output.id)] = value
+
+    def _validate_primary_contract(self, step, idx, payload, schema):
+        """Uložená maska musí stále patřit právě obnovovanému kroku."""
+        prepared = prepare_payload(payload)
+        if step.deterministic:
+            expected_schema = self._schema_for_step(step)
+            expected = response_format(f"cascade_step_{idx:02d}_det", expected_schema)
+            if schema != expected_schema:
+                raise CascadeValidationError("Obnovený krok má jinou původní response masku.")
+        elif step.output_type == "json":
+            original, wire = legacy_schema_for_step(step)
+            if original is not None and schema != original:
+                raise CascadeValidationError("Obnovený krok má jinou původní response masku.")
+            expected = response_format(f"cascade_step_{idx:02d}_schema", wire if wire is not None else compile_schema(schema))
+        else:
+            expected = text_format()
+            if schema != expected["format"]["schema"]:
+                raise CascadeValidationError("Obnovený textový krok nemá přesnou původní response masku.")
+        if prepared["text"] != expected:
+            raise CascadeValidationError("Uložená response maska neodpovídá aktuálnímu kroku.")
+
     def _resolve_deterministic_inputs(
         self,
         *,
@@ -1173,6 +1175,14 @@ class CascadeRunExecutor:
                         f"Krok {idx}: vstup „{item.name}“ nemá k dispozici výstup předchozího kroku."
                     )
                 value = values[key]
+                source_step = self.cfg.cascade.step_by_id(item.source_step_id)
+                source_output = next(
+                    (output for output in source_step.outputs if output.id == item.source_output_id),
+                    None,
+                ) if source_step is not None else None
+                if source_output is None:
+                    raise CascadeValidationError("Návazný vstup nemá původní response kontrakt.")
+                validate_output_binding(self._source_output_contract(source_step, source_output), value)
                 if isinstance(value, dict) and value.get("kind") == "file":
                     file_id = str(value.get("file_id") or "").strip()
                     if file_id:
@@ -1277,7 +1287,9 @@ class CascadeRunExecutor:
             client.validate_prepared_payload(payload)
             return payload, schema or {}, file_ids
 
-        # Legacy compatibility path.
+        # Maska musí být konkrétní ještě před uploadem vstupních souborů.
+        schema = self._schema_for_step(step)
+        original_schema, _wire = legacy_schema_for_step(step)
         legacy_file_ids: list[str] = []
         for expression in step.files_existing_ids or []:
             resolved = self._resolve_text(expression, context).strip()
@@ -1287,6 +1299,7 @@ class CascadeRunExecutor:
         if self.cfg.recovery_instruction:
             resolved_input += self._recovery_suffix()
         resolved_instructions = self._resolve_text(step.instructions, context)
+        resolved_prev = self._resolve_text(step.previous_response_id_expr or "", context).strip()
         resolved_content = (
             self._resolve_json(step.input_content_json, context)
             if step.input_content_json is not None
@@ -1326,6 +1339,8 @@ class CascadeRunExecutor:
         }
         if step.temperature is not None:
             preflight_payload["temperature"] = float(step.temperature)
+        if resolved_prev:
+            preflight_payload["previous_response_id"] = resolved_prev
         validate_response_payload(preflight_payload)
         client.validate_prepared_payload(preflight_payload)
 
@@ -1345,7 +1360,6 @@ class CascadeRunExecutor:
                 content_parts.append({"type": "input_file", "file_id": file_id})
                 existing.add(file_id)
 
-        schema = self._schema_for_step(step)
         if step.output_type == "json":
             if schema is None:
                 schema = resolve_schema(
@@ -1373,12 +1387,15 @@ class CascadeRunExecutor:
         }
         if step.temperature is not None:
             payload["temperature"] = float(step.temperature)
-        resolved_prev = self._resolve_text(step.previous_response_id_expr or "", context).strip()
         if resolved_prev:
             payload["previous_response_id"] = resolved_prev
         validate_response_payload(payload)
         client.validate_prepared_payload(payload)
-        return payload, schema or {}, legacy_file_ids
+        if step.output_type != "json":
+            schema = text_format()["format"]["schema"]
+        if schema is None:
+            raise ContractError("Pracovní krok nemá připravenou přesnou response masku.")
+        return payload, original_schema if original_schema is not None else schema, legacy_file_ids
 
     def _process_deterministic_output(
         self,
@@ -1522,6 +1539,7 @@ class CascadeRunExecutor:
         return {
             "version": 2,
             "primary_responses": copy.deepcopy(getattr(self, "_primary_responses", {})),
+            "legacy_output_schemas": copy.deepcopy(getattr(self, "_legacy_output_schemas", {})),
             "legacy_context": copy.deepcopy(context),
             "cascade_staged_files": copy.deepcopy(
                 getattr(self, "_cascade_staged_files", {}) or {}
@@ -1896,6 +1914,7 @@ class CascadeRunExecutor:
                 self.logger._cascade_resume_root = self.cfg.resume_source_dir if cached_primary else ""
                 if cached_primary:
                     payload, schema = cached_primary["payload"], cached_primary["schema"]
+                    self._validate_primary_contract(step, idx, payload, schema)
                     response = cached_primary["response"]
                     decoded = validate_output(response, payload)
                     self._step_input_bindings = cached_primary["bindings"]
@@ -1948,9 +1967,8 @@ class CascadeRunExecutor:
                             "previous_response_id"
                         ),
                     }
-                    wire_format = (payload.get("text") or {}).get(
-                        "format"
-                    ) or {}
+                    prepare_payload(payload)
+                    wire_format = payload["text"]["format"]
                     order = freeze_order(
                         operation_cfg,
                         {
@@ -1963,11 +1981,8 @@ class CascadeRunExecutor:
                             "target_id": step.id,
                             "target_path": None,
                             "expected_target_hash": None,
-                            "contract_name": str(
-                                wire_format.get("name")
-                                or "CASCADE_TEXT"
-                            ),
-                            "schema": wire_format.get("schema") or {},
+                            "contract_name": wire_format["name"],
+                            "schema": wire_format["schema"],
                             "request_payload": payload,
                             "prompt": str(
                                 payload.get("instructions") or ""
@@ -2146,8 +2161,8 @@ class CascadeRunExecutor:
                         values=values,
                     )
                 elif step.output_type == "json":
-                    restored = restore_optional_fields(decoded, schema or {})
-                    self._validate_json_output(restored, schema or {})
+                    restored = restore_optional_fields(decoded, schema)
+                    self._validate_json_output(restored, schema)
                     per_step_json[str(idx)] = restored
                     context[f"step.{idx}.json"] = restored
                     if step.expected_out_files:
@@ -2158,10 +2173,12 @@ class CascadeRunExecutor:
                             context=context,
                             client=client,
                         )
+                    self._store_legacy_outputs(step, schema, restored, per_step_out_files.get(str(idx), {}), values)
                 else:
                     text = str(decoded.get("text") or "")
                     per_step_text[str(idx)] = text
                     context[f"step.{idx}.text"] = text
+                    self._store_legacy_outputs(step, schema, text, {}, values)
 
                 response_id = str(response.get("id") or "").strip()
                 if response_id:

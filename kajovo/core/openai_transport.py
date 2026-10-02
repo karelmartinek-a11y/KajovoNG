@@ -1,8 +1,7 @@
 """Autoritativni transportni a retry politika pro OpenAI API.
 
 Modul zamerne nerozhoduje podle samotne HTTP metody. Kazda podporovana
-operace ma explicitni :class:`OperationSpec`; nezname operace jsou
-konzervativne jednopokusove.
+operace ma explicitni :class:`OperationSpec`; nezname operace se neodesilaji.
 """
 
 from __future__ import annotations
@@ -15,10 +14,12 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
 
+import jsonschema
 import requests
 
 from .orchestration.contracts import canonical_bytes, parse_json_strict
 from .orchestration.errors import OrchestrationError
+from .provider_contracts import native_contract, validate_native_response
 
 
 class OpenAIError(Exception):
@@ -38,6 +39,7 @@ class OpenAIError(Exception):
         self.code = code
         self.request_id: str | None = None
         self.request_sent: bool | None = None
+        self.response: object = None
 
 
 class OperationEffect(Enum):
@@ -281,6 +283,20 @@ class OpenAITransport:
         max_attempts: int | None = None,
         observer=None,
     ) -> Any:
+        expected = operation_spec(method, path)
+        if (expected.name == f"{method.upper()} {path.split('?', 1)[0]}"
+                or spec.name != expected.name or spec.effect != expected.effect):
+            error = OpenAIError("Nepopsaná nebo nesprávně přiřazená operace API.", code="unregistered_operation")
+            error.request_sent = False
+            raise error
+        # Všechny podporované management modely se sestaví před sítí.
+        # Responses obálka zůstává oddělená od její doménové JSON masky.
+        try:
+            contract = native_contract(spec.name, request=json_body, path=path)
+        except (ValueError, TypeError, jsonschema.SchemaError) as exc:
+            error = OpenAIError("Nelze sestavit nativní kontrakt odpovědi.", code="invalid_native_schema")
+            error.request_sent = False
+            raise error from exc
         if files is None and json_body is not None:
             try:
                 if not isinstance(json_body, dict):
@@ -389,6 +405,8 @@ class OpenAITransport:
                 raise error
 
             if spec.name == FILE_CONTENT.name:
+                if not isinstance(response.content, bytes):
+                    raise OpenAIError(f"{method} {path}: obsah souboru musí být bytes")
                 return response.content
 
             content_type = str(response.headers.get("content-type", "")).lower()
@@ -396,7 +414,9 @@ class OpenAITransport:
             if not content_type.startswith("application/json"):
                 if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT:
                     raise SubmissionOutcomeUnknown(spec.name, method, path, request_id=request_id)
-                return raw_content if isinstance(raw_content, bytes) else response.content
+                error = OpenAIError(f"{method} {path}: očekávána JSON odpověď, přijat {content_type!r}")
+                error.request_id = request_id
+                raise error
 
             try:
                 if isinstance(raw_content, (bytes, bytearray)):
@@ -418,6 +438,18 @@ class OpenAITransport:
                 error = OpenAIError(f"{method} {path}: neplatná JSON odpověď")
                 error.request_id = request_id
                 raise error from exc
+            if contract is not None:
+                try:
+                    validate_native_response(spec.name, result, path=path, request=json_body)
+                except (ValueError, TypeError, KeyError, jsonschema.ValidationError) as exc:
+                    invalid: OpenAIError
+                    if spec.effect is OperationEffect.NON_IDEMPOTENT_SIDE_EFFECT or spec.name.startswith(("delete_", "cancel_", "update_")):
+                        invalid = SubmissionOutcomeUnknown(spec.name, method, path, request_id=request_id, cause=exc)
+                    else:
+                        invalid = OpenAIError(f"{method} {path}: odpověď porušuje nativní kontrakt", code="invalid_provider_response")
+                    invalid.response = result
+                    invalid.request_id = request_id
+                    raise invalid from exc
             if request_id:
                 result["_request_id"] = request_id
             return result

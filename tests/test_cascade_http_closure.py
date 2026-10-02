@@ -1,6 +1,7 @@
 """Kaskáda přes produkční HTTP, návazné hodnoty a skutečné procesy/Qt."""
 
 import copy
+from native_provider_fixtures import native_fixture
 import json
 import os
 from pathlib import Path
@@ -86,7 +87,7 @@ class CascadeHttp:
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
-        response._content = json.dumps(value, ensure_ascii=False).encode()
+        response._content = json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data")), ensure_ascii=False).encode()
         return response
 
 

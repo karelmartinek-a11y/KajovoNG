@@ -99,6 +99,10 @@ class OpenAIClient:
     ) -> Any:
         """Kompatibilitni fasada; retry rozhoduje vyhradne OpenAITransport."""
         spec = operation_spec(method, path)
+        if spec.name == f"{method.upper()} {path.split('?', 1)[0]}":
+            error = OpenAIError("Nepopsaná operace API se nesmí odeslat.", code="unregistered_operation")
+            error.request_sent = False
+            raise error
         bundle = getattr(self, "evidence_bundle", None)
         record = None
         def observe(event, **details):
@@ -223,7 +227,8 @@ class OpenAIClient:
         if response_id in self._known_responses:
             return
         response = self._req("GET", f"/responses/{response_id}")
-        if not isinstance(response, dict) or response.get("status") != "completed":
+        if (not isinstance(response, dict) or response.get("id") != response_id
+                or response.get("status") != "completed" or response.get("error") is not None):
             raise ValueError("Předchozí odpověď není dostupná a dokončená.")
         self._known_responses.add(response_id)
 
@@ -365,13 +370,13 @@ class OpenAIClient:
         return {"input_tokens": count, "request_hash": content_hash(payload), "method": "responses.input_tokens"}
 
     def create_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        from .structured_output import validate_output
+        from .structured_output import prepare_payload, validate_output
         from .contracts import ContractError
 
-        # Výchozí wire maska se doplňuje do vlastní kopie. Volající může stejný
-        # objekt držet jako zmrazený payload journalu pod již uloženým hashem.
+        # Validace pracuje s kopií neměnného payloadu journalu.
         payload = copy.deepcopy(payload)
         try:
+            prepare_payload(payload)
             self.validate_access(payload)
             self._policy.ensure(payload)
         except Exception as exc:
@@ -390,9 +395,13 @@ class OpenAIClient:
     def _response_operation(self, response_id, *, cancel=False):
         self._validate_resource_id(response_id)
         if cancel:
-            return self._req("POST", f"/responses/{response_id}/cancel", max_attempts=1)
-        # Opakování pollingu řídí ResponseJournal, nikoli vnořený transport.
-        return self._req("GET", f"/responses/{response_id}", max_attempts=1)
+            value = self._req("POST", f"/responses/{response_id}/cancel", max_attempts=1)
+        else:
+            # Opakování pollingu řídí ResponseJournal, nikoli vnořený transport.
+            value = self._req("GET", f"/responses/{response_id}", max_attempts=1)
+        if not isinstance(value, dict) or value.get("id") != response_id:
+            raise OpenAIError("API vrátilo jinou identitu odpovědi.", code="response_identity_mismatch")
+        return value
 
     def retrieve_response(self, response_id):
         return self._response_operation(response_id)
@@ -408,8 +417,6 @@ class OpenAIClient:
         started = time.monotonic()
         try:
             result = self._req("POST", "/responses", json_body=payload, timeout=self.timeout_s)
-            if payload.get("store", True) and result.get("status") == "completed" and result.get("id"):
-                self._known_responses.add(result["id"])
             return result
         except OpenAIError as exc:
             exc.elapsed_s = time.monotonic() - started
@@ -427,12 +434,17 @@ class OpenAIClient:
         rows = []
         cursor = None
         seen = set()
+        resource_ids = set()
         while True:
             query = {"limit": 100}
             if cursor:
                 query["after"] = cursor
             page = self._req("GET", path + "?" + urlencode(query))
-            data = page.get("data", [])
+            data = page["data"]
+            page_ids = {row["id"] for row in data}
+            if resource_ids & page_ids:
+                raise OpenAIError("Stránkování opakuje již předanou identitu prostředku.", code="invalid_provider_response")
+            resource_ids.update(page_ids)
             rows.extend(data)
             if not page.get("has_more"):
                 return rows

@@ -1,6 +1,7 @@
 """Obraz kaskády musí před publikací projít dekódováním a kontrolou formátu."""
 
 import base64
+from native_provider_fixtures import native_fixture
 import io
 import json
 from unittest.mock import patch
@@ -59,7 +60,7 @@ class ImageHttp:
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
-        response._content = json.dumps(value).encode()
+        response._content = json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode()
         return response
 
 

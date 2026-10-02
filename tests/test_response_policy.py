@@ -192,10 +192,10 @@ def test_schema_preparation_repairs_without_user_input():
     client = Mock()
     target = obj({"answer": {"type": "string"}})
     client.create_response.side_effect = [
-        {"status": "completed", "output_text": json.dumps({"schema_json": "{}"})},
+        {"status": "completed", "output_text": json.dumps({"schema": {}})},
         {
             "status": "completed",
-            "output_text": json.dumps({"schema_json": json.dumps(target)}),
+            "output_text": json.dumps({"schema": {"kind": "object", "nullable": False, "fields": [{"name": "answer", "schema": {"kind": "string", "nullable": False, "choices": None}}]}}),
         },
     ]
     assert resolve_schema(client, "gpt-5.2", "Vrať odpověď v answer") == target
@@ -206,7 +206,7 @@ def test_schema_preparation_has_bounded_failure():
     client = Mock()
     client.create_response.return_value = {
         "status": "completed",
-        "output_text": '{"schema_json":"{}"}',
+        "output_text": '{"schema":{}}',
     }
     with pytest.raises(ContractError):
         resolve_schema(client, "gpt-5.2", "test")

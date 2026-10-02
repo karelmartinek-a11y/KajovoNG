@@ -1,3 +1,4 @@
+from native_provider_fixtures import native_fixture
 """Qt a HTTP průchody s kontrolou bytes, identity a viditelných stavů."""
 import io,json,zipfile
 from pathlib import Path
@@ -114,7 +115,7 @@ def test_nonusable_store_blocks_qa_before_http_submit(qtbot,monkeypatch,tmp_path
                 self.calls.append({'method':method,'path':path,'body':kwargs.get('json')})
                 counts={'completed':0,'in_progress':int(index_status=='in_progress'),'failed':int(index_status=='failed'),'cancelled':0,'total':1}
                 value={'id':'vs_nonusable','status':index_status,'file_counts':counts}
-                response=requests.Response();response.status_code=200;response.headers['Content-Type']='application/json';response._content=json.dumps(value).encode();return response
+                response=requests.Response();response.status_code=200;response.headers['Content-Type']='application/json';response._content=json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode();return response
             return super().request(method,url,**kwargs)
     transport=StoreHttp(tmp_path)
     page,operations=page_fixture(qtbot,monkeypatch,tmp_path,'QA',transport)

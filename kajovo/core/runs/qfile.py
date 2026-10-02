@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import jsonschema
+
 from ..contracts import ContractError
 from ..openai_client import OpenAIClient
 from ..orchestration.work_order import freeze_order
@@ -48,6 +50,10 @@ def _evidence() -> dict[str, list[Any]]:
 
 
 def _validate_qfile_plan(value: dict[str, Any]) -> dict[str, Any]:
+    try:
+        jsonschema.Draft202012Validator(qfile_plan_format()["format"]["schema"]).validate(value)
+    except jsonschema.ValidationError as exc:
+        raise ContractError(f"QFILE_PLAN_V1: plán porušuje response masku: {exc.message}") from exc
     result = value.get("result")
     if not isinstance(result, dict):
         raise ContractError("QFILE_PLAN_V1: chybí result.")
@@ -178,6 +184,8 @@ def _run_qfile(
     if fmt not in QFILE_FORMATS or Path(target_path).suffix.lower().lstrip(".") != fmt:
         raise ContractError("QFILE: schválená cesta a formát si neodpovídají.")
 
+    if self.cfg.qfile_plan is not None and not isinstance(self.cfg.qfile_plan, dict):
+        raise ContractError("QFILE_PLAN_V1: uložený plán musí být objekt.")
     plan = dict(self.cfg.qfile_plan or {})
     if plan:
         proposed = validate_relative_path(plan.get("proposed_path"))
@@ -185,6 +193,8 @@ def _run_qfile(
             # Uživatel smí návrh ručně změnit; tím vzniká nové explicitní schválení,
             # nikoli tiché převzetí modelové cesty.
             plan = {}
+        else:
+            plan = _validate_qfile_plan({"result": {"status": "ready", "data": plan}})
     if not plan:
         plan = {
             "proposed_path": target_path,

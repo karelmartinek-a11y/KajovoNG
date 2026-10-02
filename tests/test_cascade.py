@@ -28,7 +28,7 @@ def test_schema_validates_nested_content():
     worker = CascadeRunExecutor(CascadeRunConfig("test", CascadeDefinition("test"), "", "out"), AppSettings(), "test")
     import jsonschema
     with pytest.raises(jsonschema.ValidationError):
-        worker._validate_json_output({"x": [3]}, {"type": "object", "properties": {"x": {"type": "array", "items": {"type": "string"}}}})
+        worker._validate_json_output({"x": [3]}, {"type": "object", "properties": {"x": {"type": "array", "items": {"type": "string"}}}, "required": ["x"], "additionalProperties": False})
 
 
 def test_missing_expected_file_does_not_overwrite_output(tmp_path):
@@ -139,14 +139,13 @@ def test_missing_custom_schema_is_prepared_automatically(tmp_path):
     import json
     from unittest.mock import patch
 
-    from kajovo.core.structured_output import obj
     definition = CascadeDefinition("test", steps=[CascadeStep(model="gpt-5.6-luna", input_text="Vrať answer",
         output_type="json", output_schema_kind="custom")])
     worker = CascadeRunExecutor(CascadeRunConfig("test", definition, "", str(tmp_path / "out")),
                               AppSettings(log_dir=str(tmp_path / "LOG")), "test")
     client = _client()
     client.create_response.side_effect = [
-        {"id": "resp_schema", "status": "completed", "output_text": json.dumps({"schema_json": json.dumps(obj({"answer": {"type": "string"}}))})},
+        {"id": "resp_schema", "status": "completed", "output_text": json.dumps({"schema": {"kind": "object", "nullable": False, "fields": [{"name": "answer", "schema": {"kind": "string", "nullable": False, "choices": None}}]}})},
         {"id": "resp_result", "status": "completed", "output_text": '{"answer":"hotovo"}'}]
     results, errors = [], []
     worker.finished_ok.connect(results.append)

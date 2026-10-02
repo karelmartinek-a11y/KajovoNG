@@ -1,5 +1,6 @@
 """Dokument kaskády přes Responses a Containers HTTP, přerušení a nový proces."""
 import copy
+from native_provider_fixtures import native_fixture
 import io
 import json
 import os
@@ -82,7 +83,7 @@ class DocumentHttp:
         response = requests.Response()
         response.status_code = code
         response.headers['Content-Type'] = 'application/json' if raw is None else 'application/octet-stream'
-        response._content = json.dumps(value).encode() if raw is None else raw
+        response._content = json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode() if raw is None else raw
         return response
 
 

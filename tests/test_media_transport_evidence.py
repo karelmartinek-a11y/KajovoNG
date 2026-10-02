@@ -1,5 +1,6 @@
 """Textová příprava médií prochází reálnou evidencí transportu bez sítě."""
 import json
+from native_provider_fixtures import native_fixture
 
 import pytest
 import requests
@@ -36,7 +37,7 @@ def test_media_preparation_links_transport_to_existing_step(tmp_path, monkeypatc
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
-        response._content = json.dumps(data).encode()
+        response._content = json.dumps(native_fixture(method, request.url.split("/v1", 1)[1], data, kwargs.get("json"))).encode()
         response.request = request
         return response
 

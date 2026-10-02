@@ -1,6 +1,8 @@
 """Stažení dávky hlásí skutečný lokální výsledek z produkčního workeru."""
 import json
 
+from native_provider_fixtures import native_fixture
+
 import pytest
 import requests
 
@@ -31,7 +33,7 @@ def test_download_action_does_not_announce_unaccepted_result(qtbot, tmp_path, re
                 value = {'id': 'batch_notice', 'status': remote_status,
                          'output_file_id': 'file_bad' if remote_status == 'completed' else None}
                 response.headers['Content-Type'] = 'application/json'
-                response._content = json.dumps(value).encode()
+                response._content = json.dumps(native_fixture(method, path, value, options.get("json"))).encode()
             elif path == '/files/file_bad/content':
                 response.headers['Content-Type'] = 'application/octet-stream'
                 if expected == 'partial':

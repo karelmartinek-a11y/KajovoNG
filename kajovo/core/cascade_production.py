@@ -22,6 +22,12 @@ TEXT_TYPES = {"txt", "md", "json", "csv"}
 IMAGE_TYPES = {"png", "jpg", "jpeg"}
 
 
+def document_artifact_format(filename):
+    return response_format("CASCADE_DOCUMENT_ARTIFACT_V1", obj({
+        "filename": {"type": "string", "enum": [Path(filename).name]},
+    }))
+
+
 def _cached(logger, name):
     path = logger.find_json("manifests", name)
     if path is None and getattr(logger, "_cascade_resume_root", ""):
@@ -114,7 +120,6 @@ def _image(worker, client, step, output, descriptor, bindings, seed, name):
 def _document(worker, client, step, idx, output, descriptor, input_payload, bindings, seed, name):
     if "code_interpreter" not in model_spec(step.model).get("features", []):
         raise ContractError("Zvolený model nepodporuje výrobu dokumentu nástrojem.")
-    artifact_schema = obj({"filename": {"type": "string", "enum": [Path(output.file_name).name]}})
     payload = {
         "model": step.model,
         "instructions": "Použij Code Interpreter pro skutečné vytvoření souboru. "
@@ -125,7 +130,7 @@ def _document(worker, client, step, idx, output, descriptor, input_payload, bind
         "tools": [{"type": "code_interpreter", "container": {
             "type": "auto", "file_ids": list(dict.fromkeys(row["file_id"] for row in bindings)),
         }}],
-        "tool_choice": "required", "text": response_format("CASCADE_DOCUMENT_ARTIFACT_V1", artifact_schema),
+        "tool_choice": "required", "text": document_artifact_format(output.file_name),
         "truncation": "disabled", "max_output_tokens": model_spec(step.model)["max_output_tokens"],
     }
     saved = _cached(worker.logger, name + "_response")

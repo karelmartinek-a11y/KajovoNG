@@ -11,6 +11,10 @@ from kajovo.core.notifications import send_smtp_notification
 def test_smtp_verifies_server_certificate(use_ssl):
     settings = SMTPSettings(host="smtp.example.test", to_email="user@example.test", use_ssl=use_ssl)
     client = MagicMock()
+    server = client.__enter__.return_value
+    server.ehlo.return_value = (250, b"OK")
+    server.starttls.return_value = (220, b"TLS ready")
+    server.send_message.return_value = {}
     with patch("kajovo.core.notifications.smtplib.SMTP", return_value=client), patch(
         "kajovo.core.notifications.smtplib.SMTP_SSL", return_value=client
     ) as ssl_factory:

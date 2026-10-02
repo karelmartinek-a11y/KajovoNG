@@ -4,6 +4,8 @@ import base64
 import hashlib
 import io
 import json
+
+from native_provider_fixtures import native_fixture
 import threading
 from types import SimpleNamespace
 
@@ -35,15 +37,18 @@ class MailTransport:
 
     def ehlo(self):
         self.calls.append(('ehlo', None))
+        return 250, b'OK'
 
     def starttls(self, **kwargs):
         self.calls.append(('tls', bool(kwargs['context'])))
+        return 220, b'TLS ready'
 
     def login(self, name, password):
         self.calls.append(('login', name))
         assert password == 'synthetic-password'
         if self.fault == 'auth':
             raise OSError('syntetická chyba autentizace')
+        return 235, b'Authenticated'
 
     def send_message(self, message):
         self.messages.append(message.as_bytes())
@@ -53,6 +58,7 @@ class MailTransport:
             assert self.release.wait(20), 'SMTP bariéra nebyla uvolněna'
         if self.fault == 'send':
             raise ConnectionResetError('syntetické přerušení SMTP')
+        return {}
 
 
 @pytest.mark.parametrize('security,fault', [('tls', ''), ('ssl', ''), ('plain', ''), ('tls', 'connect'), ('tls', 'auth'), ('tls', 'send')])
@@ -148,14 +154,14 @@ class DiagnosticsHttp(WorkflowHttp):
             response = requests.Response()
             response.status_code = 200
             response.headers["Content-Type"] = "application/json"
-            response._content = json.dumps({'id':'file_diag','filename':'diagnostics.json','bytes':len(binary),'purpose':'user_data'}).encode()
+            response._content = json.dumps(native_fixture(method, path, {"id": "file_diag", "filename": "diagnostics.json", "bytes": len(binary), "purpose": "user_data"}, kwargs["data"])).encode()
             return response
         if path == '/files/file_diag':
             import requests
             response = requests.Response()
             response.status_code = 200
             response.headers["Content-Type"] = "application/json"
-            response._content = b'{"id":"file_diag","filename":"diagnostics.json","bytes":128,"purpose":"user_data"}'
+            response._content = json.dumps(native_fixture(method, path, {"id": "file_diag", "filename": "diagnostics.json", "bytes": 128, "purpose": "user_data"})).encode()
             return response
         if path.startswith('/vector_stores'):
             import requests
@@ -175,7 +181,7 @@ class DiagnosticsHttp(WorkflowHttp):
             response = requests.Response()
             response.status_code = 200
             response.headers['Content-Type'] = 'application/json'
-            response._content = json.dumps(value).encode()
+            response._content = json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode()
             return response
         return super().request(method, url, **kwargs)
 

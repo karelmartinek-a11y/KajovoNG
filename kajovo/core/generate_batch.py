@@ -20,7 +20,7 @@ from .contracts import (
     validate_paths,
 )
 from .request_rules import uses_reasoning_defaults, validate_response_payload
-from .structured_output import file_content_format, validate_output
+from .structured_output import file_content_format, prepare_payload, validate_output
 from .orchestration.contracts import canonical_bytes, canonical_sha256
 from .orchestration.work_order import freeze_order, validate_work_order_v2
 from .utils import atomic_write_text, is_versing_snapshot_dir, safe_join_under_root
@@ -662,6 +662,10 @@ def encode_requests(manifest, *, archived=False):
     validate_paths([{"path": p} for p in manifest["expected"].values()])
     compiler = ContextCompiler(manifest["snapshot"]) if manifest.get("version") == 3 and not archived else None
     for row in rows:
+        try:
+            prepare_payload(row["body"])
+        except (ValueError, TypeError) as exc:
+            raise ContractError(f"Dávková úloha nemá explicitní response masku: {exc}") from exc
         if not archived or manifest.get("version") != 3:
             validate_response_payload(row["body"], batch=True)
         else:
@@ -712,8 +716,8 @@ def encode_requests(manifest, *, archived=False):
             if context["file"] not in files:
                 raise ContractError("Souborová úloha mění kanonickou specifikaci souboru.")
             if manifest.get("version") == 3:
-                properties = row["body"]["text"]["format"]["schema"]["properties"]
-                if set(properties) != {"content"} or row["body"]["text"]["format"].get("name") != "FILE_CONTENT_V1":
+                wire = row["body"]["text"]["format"]
+                if wire.get("name") != "FILE_CONTENT_V1" or wire["schema"] != file_content_format()["format"]["schema"]:
                     raise ContractError("V3 souborová úloha musí používat FILE_CONTENT_V1.")
                 order = (manifest.get("work_orders") or {}).get(row["custom_id"])
                 if not isinstance(order, dict):
@@ -836,7 +840,7 @@ def import_results(manifest, raw_files, target, previous_hashes=None, overwrite_
                 )
             request_body = request_bodies[cid]
             if manifest.get("version") == 3:
-                payload = validate_output(body, {"text": request_body.get("text") or file_content_format()})
+                payload = validate_output(body, {"text": request_body["text"]})
                 if not isinstance(payload.get("content"), str):
                     raise ContractError("FILE_CONTENT_V1 vyžaduje content:string.")
             else:

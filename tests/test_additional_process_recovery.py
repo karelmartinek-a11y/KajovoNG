@@ -2,6 +2,7 @@
 
 import base64
 import json
+from native_provider_fixtures import native_fixture
 import hashlib
 import os
 from pathlib import Path
@@ -35,7 +36,7 @@ def response_process(root, finish):
             response = requests.Response()
             response.status_code = 200
             response.headers["Content-Type"] = "application/json"
-            response._content = b'{"data":[{"id":"gpt-5.4"}]}'
+            response._content = json.dumps(native_fixture(method, path, {"data": [{"id": "gpt-5.4"}]})).encode()
             return response
         if method == "POST":
             assert not finish and path == "/responses"
@@ -98,7 +99,7 @@ class ComicHttp:
         if path == "/models":
             value = {"data": self.provider.list_models(), "has_more": False}
         elif path == "/responses/input_tokens":
-            value = self.provider.count_input_tokens(body)
+            value = {"input_tokens": self.provider.count_input_tokens(body)["input_tokens"]}
         elif path == "/responses":
             assert method == "POST" and body["background"] is True and body["text"]["format"]["strict"] is True
             value = self.provider.create_response(body)
@@ -139,7 +140,7 @@ class ComicHttp:
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/octet-stream" if value is None else "application/json"
-        response._content = raw if value is None else json.dumps(value).encode()
+        response._content = raw if value is None else json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode()
         return response
 
 

@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 import requests
+from native_provider_fixtures import native_fixture
 
 from change_v2_fixtures import V2Responder, _file_input_json, response, scenario
 from kajovo.core.openai_client import OpenAIClient
@@ -125,7 +126,7 @@ class RecordingHttp:
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/octet-stream" if raw is not None else "application/json"
-        response._content = raw if raw is not None else json.dumps(value).encode()
+        response._content = raw if raw is not None else json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode()
         return response
 
 

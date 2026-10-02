@@ -7,7 +7,7 @@ import re
 
 import jsonschema
 
-from .contracts import ContractError, ValidationIssue, _load_json, extract_text_from_response
+from .contracts import ContractError, ValidationIssue, extract_text_from_response
 from .orchestration.contracts import parse_json_strict
 from .orchestration.errors import OrchestrationError
 
@@ -38,6 +38,58 @@ def text_format():
 def file_content_format():
     """Canonical CHANGE wire contract: provider returns content only."""
     return response_format("FILE_CONTENT_V1", obj({"content": {"type": "string"}}))
+
+
+def schema_preparation_format():
+    """Typovaný strom návrhu; strukturu schématu neschovává do řetězce."""
+    common = {"nullable": {"type": "boolean"}}
+    ref = {"$ref": "#/$defs/node"}
+    fields = array(obj({"name": {"type": "string", "pattern": r"\S"}, "schema": ref}))
+    object_node = obj({"kind": {"type": "string", "enum": ["object"]},
+                       **common, "fields": fields})
+    variants = [object_node,
+                obj({"kind": {"type": "string", "enum": ["array"]}, **common,
+                     "items": ref}),
+                obj({"kind": {"type": "string", "enum": ["string"]}, **common,
+                     "choices": {"anyOf": [array({"type": "string"}), {"type": "null"}]}})]
+    variants.extend(obj({"kind": {"type": "string", "enum": [kind]}, **common})
+                    for kind in ("integer", "number", "boolean", "null"))
+    schema = obj({"schema": {"$ref": "#/$defs/object"}})
+    schema["$defs"] = {"node": {"anyOf": variants}, "object": object_node}
+    return response_format("SCHEMA_PREPARATION_V2", schema)
+
+
+def schema_from_proposal(proposal):
+    """Převede konečnou gramatiku návrhu a znovu ověří skutečnou wire masku."""
+    jsonschema.Draft202012Validator(schema_preparation_format()["format"]["schema"]).validate(proposal)
+
+    def convert(node, depth=0):
+        if depth > 10:
+            raise ValueError("Návrh schématu překračuje povolenou hloubku.")
+        kind = node["kind"]
+        if kind == "object":
+            names = [field["name"] for field in node["fields"]]
+            if len(set(names)) != len(names):
+                raise ValueError("Návrh schématu obsahuje duplicitní jména polí.")
+            result = obj({field["name"]: convert(field["schema"], depth + 1)
+                          for field in node["fields"]})
+        elif kind == "array":
+            result = array(convert(node["items"], depth + 1))
+        else:
+            result = {"type": kind}
+            if kind == "string" and node["choices"] is not None:
+                if not node["choices"] or len(set(node["choices"])) != len(node["choices"]):
+                    raise ValueError("Výčet návrhu schématu musí být neprázdný a jedinečný.")
+                result["enum"] = node["choices"]
+        if node["nullable"] and kind != "null":
+            result = {"anyOf": [result, {"type": "null"}]}
+        return result
+
+    if proposal["schema"]["nullable"]:
+        raise ValueError("Kořen návrhu schématu nesmí být null.")
+    schema = convert(proposal["schema"])
+    validate_schema(schema)
+    return schema
 
 
 def clarification_question_schema():
@@ -127,6 +179,26 @@ def validate_schema(schema):
     properties_count = 0
     enum_count = 0
 
+    def concrete_type(node, ancestors=()):
+        if id(node) in ancestors:
+            raise ValueError("Větve lokálních odkazů tvoří cyklus bez konkrétního datového typu.")
+        ancestors = (*ancestors, id(node))
+        if "$ref" in node:
+            ref = node["$ref"]
+            if not isinstance(ref, str) or not (ref == "#" or ref.startswith("#/$defs/")):
+                raise ValueError("Schéma smí odkazovat jen na své lokální definice.")
+            target = schema
+            try:
+                for part in ref.split("/")[1:]:
+                    target = target[part.replace("~1", "/").replace("~0", "~")]
+            except (KeyError, TypeError):
+                raise ValueError("Schéma obsahuje neexistující lokální odkaz.") from None
+            if not isinstance(target, dict):
+                raise ValueError("Lokální odkaz musí vést na explicitní definici typu.")
+            concrete_type(target, ancestors)
+        for child in node.get("anyOf", []):
+            concrete_type(child, ancestors)
+
     def visit(node, depth=0):
         nonlocal properties_count, enum_count
         if not isinstance(node, dict) or depth > 10:
@@ -144,14 +216,38 @@ def validate_schema(schema):
                     target = target[part.replace("~1", "/").replace("~0", "~")]
             except (KeyError, TypeError):
                 raise ValueError("Schéma obsahuje neexistující lokální odkaz.") from None
+            if not isinstance(target, dict) or not any(key in target for key in ("type", "$ref", "anyOf")):
+                raise ValueError("Lokální odkaz musí vést na explicitní definici typu.")
+            # Cyklus pouhých aliasů nemá datový tvar. Rekurze přes vlastnost
+            # objektu či položku pole je naopak konkrétní strukturou.
+            aliases = {ref}
+            while "$ref" in target:
+                following = target["$ref"]
+                if following in aliases:
+                    raise ValueError("Lokální odkazy tvoří cyklus bez konkrétního datového typu.")
+                aliases.add(following)
+                if not isinstance(following, str) or not (following == "#" or following.startswith("#/$defs/")):
+                    raise ValueError("Schéma smí odkazovat jen na své lokální definice.")
+                target = schema
+                try:
+                    for part in following.split("/")[1:]:
+                        target = target[part.replace("~1", "/").replace("~0", "~")]
+                except (KeyError, TypeError):
+                    raise ValueError("Schéma obsahuje neexistující lokální odkaz.") from None
+                if not isinstance(target, dict):
+                    raise ValueError("Lokální odkaz musí vést na definici schématu.")
         kind = node.get("type")
         kinds = kind if isinstance(kind, list) else [kind]
+        if isinstance(kind, list) and (len(set(kind) - {"null"}) != 1 or len(kind) > 2):
+            raise ValueError("Seznam typů smí vyjádřit pouze jeden konkrétní typ a volitelné null; varianty vyžadují explicitní anyOf.")
         if any(k not in (None, "object", "array", "string", "number", "integer", "boolean", "null") for k in kinds):
             raise ValueError("Neznámý datový typ schématu.")
         if kind is None and not any(k in node for k in ("$ref", "anyOf")):
             raise ValueError("Schéma musí určit datový typ.")
         if "object" in kinds:
-            props = node.get("properties", {})
+            props = node.get("properties")
+            if not isinstance(props, dict) or "required" not in node:
+                raise ValueError("Objekt vyžaduje explicitní properties a required.")
             if node.get("additionalProperties") is not False or set(node.get("required", [])) != set(props):
                 raise ValueError("Strict objekt vyžaduje všechny vlastnosti a additionalProperties=false.")
             properties_count += len(props)
@@ -163,6 +259,7 @@ def validate_schema(schema):
             visit(child, depth + 1)
         for child in node.get("$defs", {}).values():
             visit(child, depth + 1)
+        concrete_type(node)
         if "format" in node and node["format"] not in ("date-time", "time", "date", "duration", "email", "hostname", "ipv4", "ipv6", "uuid"):
             raise ValueError("Nepodporovaný formát řetězce ve strict schématu.")
         values = node.get("enum", [])
@@ -194,6 +291,8 @@ def compile_schema(schema):
             node.setdefault("type", "object")
             if "properties" not in node:
                 raise ValueError("Objekt vyžaduje konkrétní vlastnosti.")
+            if node.get("additionalProperties") is not False:
+                raise ValueError("Otevřený objekt nelze nahradit uzavřenou response maskou.")
             required = set(node.get("required", []))
             for key, value in node["properties"].items():
                 visit(value)
@@ -214,8 +313,9 @@ def compile_schema(schema):
 
 
 def prepare_payload(payload):
-    """Doplní textový kontrakt; existující kontrakt nikdy potichu nenahradí."""
-    payload.setdefault("text", text_format())
+    """Ověří explicitní kontrakt volajícího bez doplnění náhradní masky."""
+    if not isinstance(payload, dict) or "text" not in payload:
+        raise ValueError("Každé volání vyžaduje explicitní response schéma v text.format.")
     if not isinstance(payload["text"], dict) or set(payload["text"]) != {"format"}:
         raise ValueError("Program vyžaduje jednoznačný text.format bez dalších voleb.")
     fmt = payload["text"].get("format", {}) if isinstance(payload["text"], dict) else {}
@@ -238,6 +338,10 @@ def validate_output(response, payload):
 
 
 def _validate_output(response, payload):
+    try:
+        prepare_payload(payload)
+    except (ValueError, TypeError, jsonschema.SchemaError) as exc:
+        raise OutputContractError(f"Neplatná uložená response maska: {exc}", response) from exc
     if not isinstance(response, dict):
         raise ContractError("Odpověď API musí být objekt.")
     if response.get("status") != "completed":
@@ -295,18 +399,17 @@ def resolve_schema(
     generativní návrh vlastním WorkOrder/recovery kontraktem.
     """
 
-    if original:
-        try:
-            return compile_schema(original)
-        except ValueError:
-            pass
+    if original is not None:
+        return compile_schema(original)
     error = ""
     for _attempt in range(3):
-        payload = {"model": model, "text": response_format("SCHEMA_PREPARATION", obj({"schema_json": {"type": "string"}})),
-            "instructions": "Navrhni přesné JSON Schema výstupu pracovního kroku. Vrať je jako JSON text v schema_json. "
-                "Kořen object; všechny objekty mají properties, required všech polí a additionalProperties=false. "
-                "Každé pole má konkrétní typ, pole items. Používej jen type, properties, required, additionalProperties, "
-                "items, enum, description, anyOf a lokální $defs/$ref. Zachovej požadované názvy a návaznosti.",
+        payload = {"model": model, "text": schema_preparation_format(),
+            "instructions": "Navrhni přesný typovaný strom kontraktu výstupu pracovního kroku. "
+                "Kořen schema má kind=object, nullable=false a fields se jménem a vnořeným schema. "
+                "Každý uzel určuje kind a nullable. Pole má items; string má choices (výčet nebo null). "
+                "Všechny objekty jsou uzavřené a všechna pole povinná. Nevkládej JSON do textového pole. "
+                "Zachovej požadované názvy, význam dat a návaznosti. Podmínky mimo tuto gramatiku "
+                "musí ověřit následný doménový validátor.",
             "input": json.dumps({"instructions": instructions, "original_schema": original, "downstream": context, "validation_error": error}, ensure_ascii=False)}
         if max_output_tokens is not None:
             if type(max_output_tokens) is not int or max_output_tokens <= 0:
@@ -320,8 +423,7 @@ def resolve_schema(
         )
         try:
             proposal = validate_output(response, payload)
-            schema = _load_json(proposal["schema_json"])
-            validate_schema(schema)
+            schema = schema_from_proposal(proposal)
             return schema
         except (ValueError, ContractError, jsonschema.SchemaError) as exc:
             error = str(exc)
@@ -330,6 +432,8 @@ def resolve_schema(
 
 def restore_optional_fields(value, original):
     """Převede nepřítomná volitelná pole z nullable drátového tvaru."""
+    wire = compile_schema(original)
+    jsonschema.Draft202012Validator(wire, format_checker=jsonschema.FormatChecker()).validate(value)
     validator = jsonschema.Draft202012Validator(original)
 
     def resolve(schema):
@@ -362,15 +466,22 @@ def restore_optional_fields(value, original):
                 raise ContractError("Volitelné hodnoty nemají jednoznačnou platnou větev anyOf.")
             return candidates[0]
         if isinstance(item, dict):
+            properties = schema.get("properties")
+            if not isinstance(properties, dict) or set(item) - set(properties):
+                raise ContractError("Objekt neodpovídá této explicitní větvi schématu.")
             result = {}
             for key, child in item.items():
-                definition = schema.get("properties", {}).get(key, {})
+                definition = properties[key]
                 if child is None and key not in schema.get("required", []) and not validator.evolve(schema=definition).is_valid(None):
                     continue
                 result[key] = restore(child, definition)
             return result
         if isinstance(item, list):
-            return [restore(child, schema.get("items", {})) for child in item]
+            if "items" not in schema:
+                raise ContractError("Pole neodpovídá této explicitní větvi schématu.")
+            return [restore(child, schema["items"]) for child in item]
         return item
 
-    return restore(value, original)
+    restored = restore(value, original)
+    validator.validate(restored)
+    return restored

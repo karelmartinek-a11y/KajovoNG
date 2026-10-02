@@ -3,9 +3,19 @@ from __future__ import annotations
 import smtplib
 import ssl
 from email.message import EmailMessage
+from email.utils import getaddresses
 from typing import Tuple
 
 from .config import SMTPSettings
+
+
+def _validate_smtp_reply(reply, codes, operation):
+    """SMTP reply je dvojice stavového kódu a skutečných protokolových bytes."""
+    if (not isinstance(reply, tuple) or len(reply) != 2
+            or type(reply[0]) is not int or not isinstance(reply[1], bytes)):
+        raise ValueError(f"{operation}: neplatný kontrakt SMTP odpovědi.")
+    if reply[0] not in codes:
+        raise smtplib.SMTPResponseException(*reply)
 
 
 def send_smtp_notification(
@@ -38,13 +48,20 @@ def send_smtp_notification(
         else:
             client = smtplib.SMTP(host=host, port=port, timeout=20)
         with client as server:
-            server.ehlo()
+            _validate_smtp_reply(server.ehlo(), {250}, "EHLO")
             if smtp.use_tls and not smtp.use_ssl:
-                server.starttls(context=context)
-                server.ehlo()
+                _validate_smtp_reply(server.starttls(context=context), {220}, "STARTTLS")
+                _validate_smtp_reply(server.ehlo(), {250}, "EHLO po TLS")
             if username:
-                server.login(username, password)
-            server.send_message(msg)
+                _validate_smtp_reply(server.login(username, password), {235, 503}, "AUTH")
+            refused = server.send_message(msg)
+            recipients = {address for _, address in getaddresses([to_email])}
+            if not isinstance(refused, dict) or set(refused) - recipients:
+                raise ValueError("SMTP vrátilo nepopsané odmítnuté příjemce.")
+            for reply in refused.values():
+                _validate_smtp_reply(reply, set(range(400, 600)), "RCPT odmítnutí")
+            if refused:
+                raise smtplib.SMTPRecipientsRefused(refused)
         return True, "Notification sent."
     except Exception as exc:  # pragma: no cover - záložní záznam chyby
         if raise_errors:

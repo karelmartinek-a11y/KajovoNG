@@ -26,7 +26,8 @@ def test_response_submit_uses_transport_even_when_sdk_exists():
     client._sdk = Mock()
     result = {"id": "resp_1", "status": "completed", "output": []}
     with patch.object(client, "_req", return_value=result) as request:
-        assert client._send_response({"model": "gpt-4.1", "input": "test"}) == result
+        from kajovo.core.structured_output import text_format
+        assert client._send_response({"model": "gpt-4.1", "input": "test", "text": text_format()}) == result
     client._sdk.responses.create.assert_not_called()
     request.assert_called_once()
 
@@ -80,11 +81,11 @@ class OpenAIClientErrorMappingTests(unittest.TestCase):
         client = OpenAIClient("k")
         client._sdk = None
         ok = Mock(status_code=200, headers={"content-type": "application/json"})
-        ok.json.return_value = {"data": []}
+        ok.json.return_value = {"object": "list", "data": []}
         client.session.request = Mock(side_effect=[requests.Timeout("t"), ok])
         client._transport.sleeper = lambda _seconds: None
         out = client._req("GET", "/models")
-        self.assertEqual(out, {"data": []})
+        self.assertEqual(out, {"object": "list", "data": []})
 
 
 @pytest.mark.parametrize("raw", [

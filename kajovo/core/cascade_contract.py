@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Set, Tuple
+
+import jsonschema
 
 from .cascade_types import (
     CASCADE_FILE_TYPES,
@@ -13,11 +16,74 @@ from .cascade_types import (
     CascadeOutput,
     CascadeStep,
 )
-from .structured_output import validate_schema
+from .structured_output import compile_schema, validate_schema
+from .cascade_schemas import legacy_schema_for_step
+from .utils import validate_relative_path
 
 
 class CascadeValidationError(ValueError):
     pass
+
+
+STEP_REFERENCE_RE = re.compile(
+    r"\{\{\s*step\.(\d+)\.(response_id|json|text|out_file_path|out_file_id)(?::([^}]+))?\s*\}\}"
+)
+
+
+def _legacy_references(step):
+    """Odkazy ve všech skutečně substituovaných vstupních polích."""
+    def visit(value, role):
+        if isinstance(value, str):
+            for expression in re.finditer(r"\{\{\s*step\.[^}]*\}\}", value):
+                match = STEP_REFERENCE_RE.fullmatch(expression.group(0))
+                if match is None:
+                    raise CascadeValidationError(f"Neplatný odkaz návazného kroku: {expression.group(0)}.")
+                if role in {"files_existing_ids", "input_content_json.file_id", "previous_response_id_expr"} and value.strip() != expression.group(0):
+                    raise CascadeValidationError("Provider identifikátor vyžaduje jediný úplný odkaz bez přidaného textu.")
+                yield role, match
+        elif isinstance(value, list):
+            for child in value:
+                yield from visit(child, role)
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                child_role = "input_content_json.file_id" if role.startswith("input_content_json") and key == "file_id" else role
+                yield from visit(child, child_role)
+
+    for role in ("instructions", "input_text", "input_content_json", "files_existing_ids", "files_local_paths", "previous_response_id_expr"):
+        yield from visit(getattr(step, role), role)
+
+
+def _validate_legacy_references(definition, target_index, dominators):
+    step = definition.steps[target_index]
+    for role, match in _legacy_references(step):
+        source_index = int(match.group(1)) - 1
+        kind, path = match.group(2), (match.group(3) or "").strip()
+        expected_kind = {"files_existing_ids": "out_file_id", "input_content_json.file_id": "out_file_id",
+                         "files_local_paths": "out_file_path", "previous_response_id_expr": "response_id"}.get(role)
+        if expected_kind is not None and kind != expected_kind:
+            raise CascadeValidationError(f"Krok {target_index + 1}: vstup {role} vyžaduje {expected_kind}, nikoli {kind}.")
+        if not 0 <= source_index < target_index:
+            raise CascadeValidationError(f"Krok {target_index + 1}: odkaz musí vést do existujícího předchozího kroku.")
+        if source_index not in dominators.get(target_index, set()):
+            raise CascadeValidationError(f"Krok {target_index + 1}: odkaz není dostupný na všech možných cestách.")
+        source = definition.steps[source_index]
+        if kind in {"out_file_path", "out_file_id"}:
+            try:
+                validate_relative_path(path)
+            except ValueError as exc:
+                raise CascadeValidationError(f"Krok {target_index + 1}: neplatná cesta návazného souboru.") from exc
+            paths = {output.file_name for output in source.outputs if output.kind == "file"} if source.deterministic else set(source.expected_out_files)
+            available = path in paths
+        elif kind == "response_id":
+            available = not path
+        else:
+            output_kinds = {output.kind for output in source.outputs} if source.deterministic else {source.output_type}
+            available = not path and (kind in output_kinds or kind == "json" and "decision" in output_kinds)
+            if source.deterministic:
+                matching = [output for output in source.outputs if output.kind == kind or kind == "json" and output.kind == "decision"]
+                available = available and len(matching) == 1
+        if not available:
+            raise CascadeValidationError(f"Krok {target_index + 1}: předchozí response kontrakt neposkytuje {match.group(0)}.")
 
 
 def _machine_key(prefix: str, raw_id: str) -> str:
@@ -28,6 +94,35 @@ def _machine_key(prefix: str, raw_id: str) -> str:
 
 def output_machine_key(output: CascadeOutput) -> str:
     return _machine_key("out", output.id)
+
+
+def validate_output_binding(output: CascadeOutput, value: Any) -> None:
+    """Ověří typovanou předávku i po obnovení z uloženého mezistavu."""
+    if not isinstance(value, dict) or value.get("kind") != output.kind:
+        raise CascadeValidationError(f"Výstup „{output.name}“ má nekompatibilní typ návazného vstupu.")
+    if output.kind == "file":
+        if set(value) != {"kind", "path", "file_id", "file_type"} or any(
+            not isinstance(value.get(key), str) or not value[key].strip()
+            for key in ("path", "file_id", "file_type")
+        ) or value["file_type"] != output.file_type:
+            raise CascadeValidationError(f"Výstup „{output.name}“ má nekompatibilní souborovou předávku.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", value["file_id"]):
+            raise CascadeValidationError("Souborová předávka obsahuje neplatný provider identifikátor.")
+        return
+    if set(value) != {"kind", "value"}:
+        raise CascadeValidationError(f"Výstup „{output.name}“ má neznámá pole předávky.")
+    raw = value["value"]
+    if output.kind in {"text", "decision"}:
+        if not isinstance(raw, str) or output.kind == "decision" and raw not in {option.value for option in output.decision_options}:
+            raise CascadeValidationError(f"Výstup „{output.name}“ má neplatnou textovou hodnotu.")
+    elif output.kind == "json":
+        compile_schema(output.json_schema)
+        try:
+            jsonschema.Draft202012Validator(output.json_schema, format_checker=jsonschema.FormatChecker()).validate(raw)
+        except jsonschema.ValidationError as exc:
+            raise CascadeValidationError(f"Výstup „{output.name}“ porušuje původní JSON masku: {exc.message}") from exc
+    else:
+        raise CascadeValidationError(f"Neznámý typ předávky: {output.kind}.")
 
 
 def _validate_output_keys(step: CascadeStep) -> None:
@@ -311,7 +406,10 @@ def validate_cascade_definition(
                 raise CascadeValidationError(
                     f"Krok {index}: typované vstupy a výstupy neodpovídají legacy kontraktu; zvolte deterministický krok."
                 )
-            # Staré kaskády zůstávají spustitelné bez vynucení nového UI kontraktu.
+            try:
+                legacy_schema_for_step(step)
+            except (ValueError, TypeError) as exc:
+                raise CascadeValidationError(f"Krok {index}: neplatná explicitní response maska: {exc}") from exc
             continue
         if not step.title.strip():
             raise CascadeValidationError(f"Krok {index}: vyplňte název.")
@@ -367,7 +465,15 @@ def validate_cascade_definition(
             )
 
         dom = _dominators(definition)
+        guaranteed_contexts: Dict[int, Set[str]] = {}
         for target_index, step in enumerate(definition.steps):
+            predecessors = [source for source, targets in edges.items() if target_index in targets]
+            contexts = set.intersection(*(guaranteed_contexts[source] for source in predecessors)) if predecessors else set()
+            if step.deterministic and step.use_conversation_context and step.context_id not in contexts:
+                raise CascadeValidationError(f"Krok {target_index + 1}: konverzační dependency není dostupná na všech možných cestách.")
+            guaranteed_contexts[target_index] = contexts | ({step.context_id} if step.deterministic else set())
+            if not step.deterministic:
+                _validate_legacy_references(definition, target_index, dom)
             for item in step.inputs:
                 if item.source != "output":
                     continue

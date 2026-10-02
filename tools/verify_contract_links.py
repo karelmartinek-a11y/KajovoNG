@@ -131,7 +131,7 @@ def schema_inventory():
     from kajovo.core.cascade_contract import runtime_schema_for_step
     from kajovo.core.photo_prompt import professionalize_payload
     from kajovo.core.contracts import file_response_format, historical_file_response_format, structure_response_format
-    from kajovo.core.structured_output import builtin_format
+    from kajovo.core.structured_output import builtin_format, schema_preparation_format
     from kajovo.core.generate_batch import plan_format as legacy_plan_format, structure_format as legacy_structure_format
     from kajovo.core.comic_types import BIBLE_SCHEMA, DESCRIPTOR_SCHEMA, STORY_SCHEMA, SCRIPT_SCHEMA, STORYBOARD_SCHEMA, CONTINUITY_SCHEMA
 
@@ -198,7 +198,7 @@ def schema_inventory():
         lambda stage=stage: file_response_format(stage, "audit.txt", 0)
         for stage in ("A3_FILE", "B3_FILE")
     )
-    explicit_formats.append(lambda: response_format("SCHEMA_PREPARATION", obj({"schema_json": {"type": "string"}})))
+    explicit_formats.append(schema_preparation_format)
     explicit_formats.extend(
         lambda name=name, schema=schema: response_format(name, schema)
         for name, schema in (

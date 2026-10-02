@@ -1,5 +1,6 @@
 """Stop na přijatém HTTP požadavku zachová odpověď, ale nepokračuje ve výrobě."""
 import json
+from native_provider_fixtures import native_fixture
 import threading
 import hashlib
 from pathlib import Path
@@ -29,7 +30,7 @@ def test_stop_after_http_acceptance_preserves_id_and_blocks_success(qtbot, monke
             pass
         def do_GET(self):
             assert self.path == '/v1/models'
-            raw = json.dumps({'data': [{'id': 'gpt-4o-mini'}], 'has_more': False}).encode()
+            raw = json.dumps(native_fixture('GET', '/models', {'data': [{'id': 'gpt-4o-mini'}], 'has_more': False})).encode()
             self.send_response(200)
             self.send_header('Content-Length', str(len(raw)))
             self.send_header('Content-Type', 'application/json')
@@ -48,7 +49,7 @@ def test_stop_after_http_acceptance_preserves_id_and_blocks_success(qtbot, monke
                 value = {'id': 'resp_barrier', 'status': 'completed', 'model': 'gpt-4o-mini',
                          'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps(answer)}]}],
                          'usage': {'input_tokens': 128, 'output_tokens': 32}}
-            raw = json.dumps(value).encode()
+            raw = json.dumps(native_fixture("POST", self.path.removeprefix("/v1"), value, body)).encode()
             self.send_response(200)
             self.send_header('Content-Length', str(len(raw)))
             self.send_header('Content-Type', 'application/json')

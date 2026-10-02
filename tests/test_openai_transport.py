@@ -56,20 +56,20 @@ def transport(session):
 
 
 def test_net_001_safe_get_timeout_then_success_retries_once():
-    session = FakeSession(requests.Timeout("lost"), FakeResponse(payload={"data": []}))
+    session = FakeSession(requests.Timeout("lost"), FakeResponse(payload={"object": "list", "data": []}))
     result = transport(session).request(LIST_MODELS, "GET", "/models")
-    assert result == {"data": []}
+    assert result == {"object": "list", "data": []}
     assert len(session.calls) == 2
 
 
 def test_net_002_safe_get_429_then_success_retries_once():
-    session = FakeSession(FakeResponse(429), FakeResponse(payload={"data": []}))
+    session = FakeSession(FakeResponse(429), FakeResponse(payload={"object": "list", "data": []}))
     transport(session).request(LIST_MODELS, "GET", "/models")
     assert len(session.calls) == 2
 
 
 def test_net_003_safe_get_500_then_success_retries_once():
-    session = FakeSession(FakeResponse(500), FakeResponse(payload={"data": []}))
+    session = FakeSession(FakeResponse(500), FakeResponse(payload={"object": "list", "data": []}))
     transport(session).request(LIST_MODELS, "GET", "/models")
     assert len(session.calls) == 2
 
@@ -113,12 +113,15 @@ def test_net_007_response_500_is_single_unknown_submit():
 )
 def test_net_008_009_010_side_effect_timeout_is_never_retried(spec, path):
     session = FakeSession(requests.Timeout("lost"))
+    body = {"upload_file": {"purpose": "user_data"},
+            "create_vector_store": {"name": "Test"},
+            "attach_vector_store_file": {"file_id": "file_x"}}[spec.name]
     with pytest.raises(SubmissionOutcomeUnknown):
-        transport(session).request(spec, "POST", path, json_body={})
+        transport(session).request(spec, "POST", path, json_body=body)
     assert len(session.calls) == 1
 
 
-def test_net_011_explicit_retry_safe_operation_uses_policy_attempt_count():
+def test_net_011_unregistered_retry_safe_operation_cannot_bypass_contract_boundary():
     spec = OperationSpec(
         name="safe_compute",
         effect=OperationEffect.RETRY_SAFE,
@@ -126,11 +129,11 @@ def test_net_011_explicit_retry_safe_operation_uses_policy_attempt_count():
         retry_http_statuses=frozenset({503}),
         retry_transport_errors=True,
     )
-    session = FakeSession(FakeResponse(503), FakeResponse(payload={"ok": True}))
-    assert transport(session).request(spec, "POST", "/safe-compute", json_body={}) == {
-        "ok": True
-    }
-    assert len(session.calls) == 2
+    session = FakeSession()
+    with pytest.raises(OpenAIError) as caught:
+        transport(session).request(spec, "POST", "/safe-compute", json_body={})
+    assert caught.value.request_sent is False
+    assert session.calls == []
 
 
 def test_net_012_sdk_auto_retry_is_explicitly_disabled():
@@ -190,8 +193,10 @@ def test_retry_after_invalid_falls_back_and_safe_read_error_is_normalized():
     assert transport(session)._delay(1, "invalid") == 0.8
 
 
-def test_binary_content_response():
+def test_binary_content_response_is_only_valid_for_file_download():
     response = FakeResponse(headers={"content-type": "application/octet-stream"})
     response.content = b"file bytes"
     session = FakeSession(response)
-    assert transport(session).request(LIST_MODELS, "GET", "/models") == b"file bytes"
+    from kajovo.core.openai_transport import FILE_CONTENT
+
+    assert transport(session).request(FILE_CONTENT, "GET", "/files/file_1/content") == b"file bytes"

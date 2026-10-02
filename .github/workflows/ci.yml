@@ -59,6 +59,15 @@ jobs:
           path: closure-junit.xml
           if-no-files-found: error
 
+      - name: Compiled response masks and source inventory
+        run: python tools/verify_response_contracts.py
+      - name: Response contract regressions
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests/test_response_schema_exactness.py tests/test_response_handoff_exactness.py tests/test_native_provider_contracts.py tests/test_response_inventory.py tests/test_smtp_response_contracts.py
+      - name: Complete response contract coverage gate
+        run: python tools/verify_response_contracts.py --require-complete
+
   python312-contract:
     runs-on: ubuntu-latest
     env:

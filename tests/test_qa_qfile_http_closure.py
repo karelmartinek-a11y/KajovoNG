@@ -1,6 +1,7 @@
 """QA/QFILE přes HTTP hranici, produkční Qt akci a restart procesu."""
 
 import copy
+from native_provider_fixtures import native_fixture
 import json
 import os
 import subprocess
@@ -80,7 +81,7 @@ class WorkflowHttp:
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
-        response._content = json.dumps(value, ensure_ascii=False).encode()
+        response._content = json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data")), ensure_ascii=False).encode()
         return response
 
 
@@ -328,13 +329,13 @@ def test_qa_search_evidence_requires_selected_store_completed_membership(qtbot, 
                     value = {'error':{'message':'syntetická chybějící vazba'}} if member_state == 'missing' else {'id':'file_qa','vector_store_id':identity,'status':member_state}
                 else:
                     raise AssertionError(path)
-                response._content = json.dumps(value).encode()
+                response._content = json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode()
                 return response
             response = super().request(method,url,**kwargs)
             if path == '/responses':
                 value = response.json()
                 value['output'].insert(0, {'type':'file_search_call','status':'completed','results':[{'file_id':'file_qa','filename':'podklad.txt','text':'Původ podkladu'}]})
-                response._content = json.dumps(value).encode()
+                response._content = json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode()
             return response
     transport = SearchHttp(tmp_path, answer=qa_value('file_qa'))
     page, operations = page_fixture(qtbot, monkeypatch, tmp_path, 'QA', transport)

@@ -1,5 +1,6 @@
 """Lokální příčina musí zůstat rozlišitelná od neurčitého submitu."""
 import json
+from native_provider_fixtures import native_fixture
 from pathlib import Path
 from unittest.mock import Mock
 from urllib.parse import urlsplit
@@ -30,7 +31,7 @@ def test_generate_through_real_client_and_request_evidence(tmp_path):
         else:
             raise AssertionError(f"Neočekávaný HTTP požadavek: {method} {path}")
         return Mock(status_code=200, headers={"content-type": "application/json"},
-                    content=json.dumps(body).encode("utf-8"))
+                    content=json.dumps(native_fixture(method, path.removeprefix("/v1"), body, kwargs.get("json"))).encode("utf-8"))
 
     # Nahrazena je pouze síť; klient, validace a evidence zůstávají skutečné.
     client.session.request = Mock(side_effect=request)

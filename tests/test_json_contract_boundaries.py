@@ -74,6 +74,7 @@ def test_projection_verifies_content_not_declared_hash():
 
 def test_optional_fields_through_refs_anyof_arrays_and_legitimate_null():
     schema = {"type": "object", "properties": {"rows": {"type": "array", "items": {"$ref": "#/$defs/row"}}},
+              "required": ["rows"], "additionalProperties": False,
               "$defs": {"row": {"anyOf": [
                   {"type": "object", "properties": {"name": {"type": "string"}, "optional": {"type": "string"}, "nullable": {"type": ["string", "null"]}}, "required": ["name"], "additionalProperties": False},
                   {"type": "string"}]}}}
@@ -84,12 +85,12 @@ def test_optional_fields_through_refs_anyof_arrays_and_legitimate_null():
 
 
 def test_optional_anyof_does_not_choose_ambiguous_branch():
-    schema = {"anyOf": [
+    schema = {"type": "object", "properties": {"value": {"anyOf": [
         {"type": "object", "properties": {"x": {"type": "string"}}, "additionalProperties": False},
         {"type": "object", "properties": {"x": {"type": "null"}}, "additionalProperties": False},
-    ]}
+    ]}}, "required": ["value"], "additionalProperties": False}
     with pytest.raises(ContractError, match="jednoznačnou"):
-        restore_optional_fields({"x": None}, schema)
+        restore_optional_fields({"value": {"x": None}}, schema)
 
 
 def test_cascade_refs_are_namespaced_including_recursive_root():

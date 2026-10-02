@@ -81,7 +81,7 @@ def test_delete_requires_matching_identity_and_deleted_true(qtbot, monkeypatch, 
 def test_member_ack_cannot_belong_to_other_store(qtbot, tmp_path):
     transport = AckHttp(tmp_path, 'member')
     transport.state['files']['file_1'] = {'id':'file_1', 'filename':'zdroj.txt', 'content':'original'}
-    transport.state['stores']['vs_one'] = {'id':'vs_one', 'name':'Testovací úložiště', 'file_counts':{}}
+    transport.state['stores']['vs_one'] = {'id':'vs_one', 'name':'Testovací úložiště', 'file_counts':{'completed':0, 'failed':0, 'cancelled':0, 'in_progress':0, 'total':0}}
     page, _ = page_fixture(qtbot, tmp_path, transport)
     for kind in ['files', 'stores']:
         click(page, f'resources.{kind}.refresh')

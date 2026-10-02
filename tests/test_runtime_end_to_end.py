@@ -1,6 +1,7 @@
 """Celé offline životní cesty s novým procesem a skutečnými soubory."""
 
 import base64
+from native_provider_fixtures import native_fixture
 import json
 import os
 from pathlib import Path
@@ -75,7 +76,7 @@ class PhotoTransport:
                                    content=raw, text=raw.decode(), json=lambda: value)
         else:
             raise AssertionError(f"Neočekávaná síťová operace: {method} {path}")
-        raw = json.dumps(value).encode()
+        raw = json.dumps(native_fixture(method, path, value, kwargs.get("json") or kwargs.get("data"))).encode()
         return SimpleNamespace(status_code=200, headers={"content-type": "application/json"},
                                content=raw, text=raw.decode(), json=lambda: value)
 

@@ -16,6 +16,7 @@ from kajovo.core.contracts import ContractError
 from kajovo.core.response_journal import ResponseJournal, ResponsePending, SubmissionUnknown
 from kajovo.core.runlog import RunLogger
 from kajovo.core.runs.executor import RunExecutor as RunWorker
+from kajovo.core.structured_output import text_format
 
 
 class Clock:
@@ -36,7 +37,7 @@ def journal(tmp_path):
 
 
 def execute(journal, client, **kwargs):
-    return journal.execute(client, {"model": "gpt-5.4", "input": "test"},
+    return journal.execute(client, {"model": "gpt-5.4", "input": "test", "text": text_format()},
                            stopped=kwargs.get("stopped", lambda: False),
                            cancelled=kwargs.get("cancelled", lambda: False), progress=Mock())
 
@@ -160,7 +161,7 @@ def test_client_background_does_not_validate_unfinished_output(sdk):
     result = {"id": "resp_test", "status": "queued", "output": []}
     client._sdk = Mock() if sdk else None
     client._req = Mock(return_value=result)
-    assert client.create_response({"model": "gpt-5.4", "input": "x", "background": True, "store": True})["status"] == "queued"
+    assert client.create_response({"model": "gpt-5.4", "input": "x", "background": True, "store": True, "text": text_format()})["status"] == "queued"
     assert client.retrieve_response("resp_test")["id"] == "resp_test"
     assert client.cancel_response("resp_test")["id"] == "resp_test"
     assert client._req.call_count == 3

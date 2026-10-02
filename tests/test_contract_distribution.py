@@ -31,7 +31,7 @@ def test_all_physical_contracts_have_distribution_and_runtime_bindings():
     assert "Cascade:mixed_refs_decision" in schema_names
     contracts = {item.get("contract") for item in inventory["schemas"] if item["kind"] == "provider_mask"}
     assert {
-        "A1_PLAN", "A2_STRUCTURE_V2", "A3_FILE", "B3_FILE", "SCHEMA_PREPARATION",
+        "A1_PLAN", "A2_STRUCTURE_V2", "A3_FILE", "B3_FILE", "SCHEMA_PREPARATION_V2",
         "COMIC_BIBLE", "COMIC_ENTITY", "COMIC_STORY", "COMIC_SCRIPT",
         "COMIC_STORYBOARD", "COMIC_CONTINUITY", "CASCADE_DOCUMENT_ARTIFACT_V1",
     } <= contracts

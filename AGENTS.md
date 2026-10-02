@@ -20,6 +20,16 @@ Zachovávejte uživatelské změny. Nenahrávejte klíče, runtime logy, databá
 
 Po změně spusťte `python -m pytest -q`, `python -m ruff check --select F,B,E9 kajovo kajovong utf8nobom tests Build` a `python -m pip check`. Nově nalezenou chybu zajistěte regresním testem. Změny kontraktů promítněte do SSOT.
 
+## Kontrakty odpovědí a jejich návaznosti
+
+Každé dosažitelné API volání, jeho kontraktová varianta a předávka vyžaduje konkrétní kontrakt a runtime validaci před použitím. Platí to i pro chyby, refusal, neúplný výsledek, timeout, opakování, fallback, obnovu a ne-JSON odpovědi. Transportní obálku a doménový výsledek ověřujte odděleně.
+
+Nepoužívejte `{}`, `true`, objekt bez popsaného obsahu, pole bez přesných položek, neomezené `additionalProperties`, `Any` ani jejich přejmenované obdoby jako masku odpovědi nebo předávaných doménových dat. Strukturovaná data se nesmí schovat do textu. Pevné objekty musí odmítat nepopsaná pole; všechny reference a alternativy musí vést na konkrétní definice. Dynamické klíče vyžadují doložený doménový význam, omezení klíčů a přesný rekurzivní typ hodnot. Předem známé klíče určují masku konkrétního volání. Chybná maska nebo odpověď zastaví krok; nesmí aktivovat obecný fallback ani vymyšlenou výchozí hodnotu.
+
+Udržujte `docs/response-contract-inventory.json` a skutečné sestavené masky v `docs/response-runtime-schemas.json`. Zachovávejte stabilní ID míst volání, podmínky dosažitelnosti, všechny příjemce, mapování polí a testové důkazy. AST inventura a otisky nenahrazují úplné čtení ani sémantický audit. Změna zdroje, registru, volání nebo větve vyžaduje aktualizaci důkazů; pouhé přepsání otisku není audit.
+
+Spusťte také `python tools/verify_response_contracts.py`, `python tools/verify_response_contracts.py --require-complete` a regresní testy `test_response_schema_exactness.py`, `test_response_handoff_exactness.py`, `test_native_provider_contracts.py`, `test_response_inventory.py` a `test_smtp_response_contracts.py`. Přísný průchod musí odmítnout neověřené položky inventáře. Celkový PASS nevydávejte při zbývajícím nepokrytém volání, neurčené variantě nebo neověřené předávce, ani když ostatní testy prošly. Rozsah a otevřené položky popisuje `docs/RESPONSE_CONTRACTS.md`.
+
 Používejte projektové prostředí `.venv` s Pythonem 3.12 nebo novějším. Na Windows lze příkazy spustit přes `.venv\Scripts\python.exe`; systémový `python` nemusí splňovat požadavky projektu. Testy musí nahrazovat síťové služby a pracovat s dočasnými soubory, nikoli s provozními daty a přihlašovacími údaji.
 
 Testy členěte podle ověřované oblasti. Užitečné regresní testy zachovávejte bez ohledu na jejich stáří; odstraňujte pouze testy nesouvisející s aplikací nebo s prokazatelně neplatným kontraktem. Dokumentace a komentáře popisují platné chování, účel a omezení, nikoli historii oprav. Výsledky konkrétního ověření uvádějte v předání změny; nevytvářejte v repozitáři datované auditní zprávy. README popisuje obsluhu, `Build/README.md` sestavení a SSOT systémové kontrakty.
