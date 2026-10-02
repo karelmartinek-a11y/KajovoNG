@@ -675,8 +675,8 @@
       "sha256": "6f0f235866b7b0ec245637ca05abfd5ba032393112d366e9b969eb6b9d948907",
       "lines": 12,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Rozlišení zdrojového, instalovaného a zmrazeného umístění runtime prostředků."
       }
     },
     {
@@ -1557,8 +1557,8 @@
       "sha256": "b5f839233da0f2e107db71b489bb313c39b37b3682d709f7895d97ef73c69b68",
       "lines": 173,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Předstartovní runtime kontrola, přesná identita fyzických masek a obsah distribuovaných prostředků."
       }
     },
     {
@@ -1674,13 +1674,13 @@
       "sha256": "c91c89621fab9fe324b5ab24ca5f1455ce571d2521c5caebaa903b4bc26c7dab",
       "lines": 201,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Vazba referenčního progress inventáře na produkční vlastníky a markery."
       }
     },
     {
       "path": "tools/verify_response_contracts.py",
-      "sha256": "9aeddd3b45a89cece2f923dd1ba5321c38da54d2ea1c5a49680fb6e6a4a175a3",
+      "sha256": "a102848451d3e7ccef1c63b449643f65080df9d17919a5fd41f4f015620ab609",
       "lines": 277,
       "review": {
         "status": "full_read",
@@ -1692,8 +1692,8 @@
       "sha256": "409f95e585440dfcf165e90c633928053a9dce7be4843dd881561a1fb74014a5",
       "lines": 588,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Nezávislý runtime index procesních rodin a orchestrace offline regresí."
       }
     },
     {
@@ -25242,7 +25242,7 @@
       "call": "getattr",
       "expression": "getattr(openai_transport, value.id)",
       "call_sha256": "3c2bb9aeda1062ff738fe11c588bad4794e77ac4c8b90f6535a0a4cffe05037e",
-      "caller_sha256": "dc7d7c7c5716da7cb81f7013891334faa212ea0998acd7bcb522cf0a0e920304",
+      "caller_sha256": "22db10f1593414b0865a63f21fd620bf12a4bb6da28d32ec513a74f54ca66e6f",
       "process": "transport_registry",
       "reachability": {
         "status": "unproven",
@@ -25279,7 +25279,7 @@
       "call": "getattr",
       "expression": "getattr(openai_transport, node.elts[2].id)",
       "call_sha256": "ce3cd792a92cf3c652075be6338cb300d7c87dd31a7daeb058c31e7c30a82402",
-      "caller_sha256": "dc7d7c7c5716da7cb81f7013891334faa212ea0998acd7bcb522cf0a0e920304",
+      "caller_sha256": "22db10f1593414b0865a63f21fd620bf12a4bb6da28d32ec513a74f54ca66e6f",
       "process": "transport_registry",
       "reachability": {
         "status": "unproven",
@@ -25464,6 +25464,34 @@
         "tests/test_native_provider_contracts.py::test_page_handoff_rejects_a_resource_repeated_on_another_page"
       ],
       "status": "repaired_regression_tests_present"
+    },
+    {
+      "id": "RC14",
+      "finding": "Windows restart četl UTF-8 run_state pomocí lokálního CP1252; stejnou nejednoznačnost obsahovalo načtení runtime masek v regresi a AST načtení transportního registru.",
+      "repair_files": [
+        "tests/test_runtime_end_to_end.py",
+        "tests/test_response_inventory.py",
+        "tools/verify_response_contracts.py"
+      ],
+      "tests": [
+        "tests/test_runtime_end_to_end.py::test_delivery_restart_and_explicit_take_to_final_file",
+        "tests/test_response_inventory.py::test_call_sites_and_transport_registry_match_current_code"
+      ],
+      "status": "repaired_regression_tests_present"
+    },
+    {
+      "id": "RC15",
+      "finding": "Sémantická Windows CI lane předávala runtime kontrole textové LFS ukazatele místo fontových bytes, takže šest startup regresí selhalo před ověřením zamýšlených návazností.",
+      "repair_files": [
+        ".github/workflows/contract-links.yml",
+        "tests/test_startup_resource_integrity.py"
+      ],
+      "tests": [
+        "tests/test_startup_resource_integrity.py::test_check_only_rejects_corrupt_required_resource",
+        "tests/test_startup.py::test_prepare_repairs_only_when_needed",
+        "tests/test_startup_sanity.py::test_runtime_sanity_does_not_migrate_or_read_credentials"
+      ],
+      "status": "repaired_regression_tests_present"
     }
   ],
   "coverage_limits": [
@@ -25511,11 +25539,11 @@
     },
     {
       "path": ".github/workflows/contract-links.yml",
-      "sha256": "fc5b65756a72921a03811c715299b810d79d8736e9e3be19e709cbf00559cb5c",
-      "lines": 144,
+      "sha256": "19b46e17a4d4b7c4a45067e022455a71dee1a1172bbfced4df2627e3dbd5594f",
+      "lines": 145,
       "review": {
-        "status": "indexed_only",
-        "purpose": "Fyzický zdroj indexován; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "CI a projektové prostředí."
       }
     },
     {

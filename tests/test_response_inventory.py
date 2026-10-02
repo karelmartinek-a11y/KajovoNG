@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -22,12 +23,20 @@ def inventory():
     return json.loads(INVENTORY.read_text(encoding="utf-8"))
 
 
-def test_call_sites_and_transport_registry_match_current_code():
+@pytest.mark.parametrize("default_encoding", [None, "cp1252"])
+def test_call_sites_and_transport_registry_match_current_code(monkeypatch, default_encoding):
+    if default_encoding:
+        original = Path.read_text
+
+        def local_read_text(path, encoding=None, errors=None):
+            return original(path, encoding=encoding or default_encoding, errors=errors)
+
+        monkeypatch.setattr(Path, "read_text", local_read_text)
     value = inventory()
     verify_inventory(value, response_call_sites())
     verify_source_index(value)
     assert value["transport_registry"] == transport_registry()
-    assert json.loads(RUNTIME_SCHEMAS.read_text()) == runtime_catalog()
+    assert json.loads(RUNTIME_SCHEMAS.read_text(encoding="utf-8")) == runtime_catalog()
 
 
 def test_new_call_or_removed_call_fails_inventory_gate():
@@ -65,7 +74,7 @@ def test_unknown_network_code_changes_source_gate(tmp_path):
     value = inventory()
     path = tmp_path / "kajovo/core/openai_client.py"
     path.parent.mkdir(parents=True)
-    path.write_text((ROOT / "kajovo/core/openai_client.py").read_text() + "\n# nová transportní větev\n")
+    path.write_text((ROOT / "kajovo/core/openai_client.py").read_text(encoding="utf-8") + "\n# nová transportní větev\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Změna vlastních zdrojů"):
         verify_source_index(value, root=tmp_path)
 
@@ -74,6 +83,6 @@ def test_unknown_network_code_changes_source_gate(tmp_path):
 def test_non_python_network_or_contract_addition_requires_an_audit(tmp_path, path):
     new = tmp_path / path
     new.parent.mkdir(parents=True)
-    new.write_text("# nový síťový skript nebo kontrakt\n")
+    new.write_text("# nový síťový skript nebo kontrakt\n", encoding="utf-8")
     with pytest.raises(ValueError, match="skriptů nebo fyzických kontraktů"):
         verify_source_index({"sources": [], "source_assets": []}, root=tmp_path)

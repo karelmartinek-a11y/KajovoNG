@@ -184,7 +184,7 @@ def response_call_sites(root=ROOT):
 def transport_registry(root=ROOT):
     """Endpointy získá z obou skutečných dispatch tabulek transportu."""
     from kajovo.core import openai_transport
-    source = ast.parse((root / "kajovo/core/openai_transport.py").read_text())
+    source = ast.parse((root / "kajovo/core/openai_transport.py").read_text(encoding="utf-8"))
     function = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "operation_spec")
     assignments = {node.target.id: node.value for node in function.body
                    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)}

@@ -11,6 +11,7 @@ from test_startup_sanity import launcher as launcher
 @pytest.mark.parametrize("name,content", [
     ("studio-symbol.png", b"neni obraz"),
     ("montserrat_regular.ttf", b"neni font"),
+    ("montserrat_regular.ttf", b"version https://git-lfs.github.com/spec/v1\noid sha256:" + b"0" * 64 + b"\nsize 263192\n"),
     ("orchestration/contracts/local/BATCH_MANIFEST_V4.schema.json", b'{"type": "object"}'),
     ("orchestration/contracts/local/RUN_CONFIG_V2.schema.json", b'{"type": 19}'),
     ("orchestration/contracts/wire/FILE_CONTENT_V1.schema.json", b'{"type":"object","type":"object"}'),

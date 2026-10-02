@@ -384,6 +384,8 @@ Editor kaskády ověřuje model, teplotu, strukturovaný vstup a dostupnost vlas
 
 Wheel obsahuje balíčky `kajovo`, `kajovong`, `utf8nobom`, diagnostický skript, logo a oba fonty. Testy nejsou distribuovanými balíčky. Fonty ve zdrojovém stromu používají Git LFS. Windows sestavení vytváří `dist/Kajovo/Kajovo.exe`, macOS sestavení `dist/Kajovo.app`; název lze předat sestavovacímu skriptu. Sestavení provádí instalaci závislostí, generování ikon a PyInstaller. Generované adresáře a binární distribuce nejsou zdrojovým kódem.
 
+CI lane provádějící skutečnou kontrolu runtime prostředků musí stáhnout obsah Git LFS. Textový LFS ukazatel není font a předstartovní kontrola jej odmítá. JSON checkpointy a uložené runtime masky jsou UTF-8; jejich čtení i ověřování nezávisí na systémovém kódování Windows.
+
 Repozitář neobsahuje placené `verify_*_live.py` nástroje, které by kvůli samotnému ověření automaticky odesílaly generativní Responses nebo zkušební dávky. CI a standardní validační postupy jsou offline vůči placeným generativním endpointům: používají mocky, lokální validátory a statické kontroly. Ruční spuštění skutečné pracovní funkce aplikace samozřejmě může vytvořit placený pracovní požadavek; ten není validačním preflightem.
 
 | Testy | Ověřované chování |

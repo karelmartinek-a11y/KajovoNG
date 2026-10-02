@@ -14,7 +14,17 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def child(code, root):
+def child(code, root, default_encoding=None):
+    if default_encoding:
+        # Simulace lokálního Windows kódování musí odhalit čtení UTF-8 bez
+        # explicitního encoding také v novém procesu na Linux runneru.
+        code = (
+            "from pathlib import Path\n"
+            "original_read_text = Path.read_text\n"
+            "def local_read_text(self, encoding=None, errors=None):\n"
+            f"    return original_read_text(self, encoding=encoding or {default_encoding!r}, errors=errors)\n"
+            "Path.read_text = local_read_text\n" + code
+        )
     environment = dict(os.environ, QT_QPA_PLATFORM="offscreen", KAJOVO_LIVE_ACCEPTANCE="0")
     environment["PYTHONPATH"] = os.pathsep.join([str(ROOT), str(ROOT / "tests")])
     result = subprocess.run(
@@ -142,7 +152,7 @@ def delivery_stage(root, mode, batch, finish):
         data = json.loads(info.read_text())
         run_dir = Path(data["run"])
         if batch:
-            state = json.loads((run_dir / "run_state.json").read_text())
+            state = json.loads((run_dir / "run_state.json").read_text(encoding="utf-8"))
             client = Mock()
             client.file_content.return_value = raw_jsonl(batch_output_rows(state["generate_batch"]))
             result = process_saved_batch(client, run_dir, "batch_work", AppSettings(), batch={
@@ -163,10 +173,11 @@ def delivery_stage(root, mode, batch, finish):
 
 @pytest.mark.parametrize("mode", ["GENERATE", "MODIFY"])
 @pytest.mark.parametrize("batch", [False, True])
-def test_delivery_restart_and_explicit_take_to_final_file(tmp_path, mode, batch):
+@pytest.mark.parametrize("default_encoding", [None, "cp1252"])
+def test_delivery_restart_and_explicit_take_to_final_file(tmp_path, mode, batch, default_encoding):
     for finish in (False, True):
         child("from pathlib import Path; import sys; from test_runtime_end_to_end import delivery_stage; "
-              f"delivery_stage(Path(sys.argv[1]), {mode!r}, {batch!r}, {finish!r})", tmp_path)
+              f"delivery_stage(Path(sys.argv[1]), {mode!r}, {batch!r}, {finish!r})", tmp_path, default_encoding)
 
 
 def response_stage(root, finish):
