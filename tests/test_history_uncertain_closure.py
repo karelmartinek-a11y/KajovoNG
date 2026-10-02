@@ -21,7 +21,7 @@ def verify_uncertain(root, relation):
     with pytest.raises(ValueError, match='odeslání není potvrzen'):
         launcher.preview(adapter, checkpoint['checkpoint_id'], relation)
     assert before == {str(p.relative_to(adapter.root)): p.read_bytes() for p in adapter.root.rglob('*') if p.is_file()}
-    calls = [json.loads(line) for line in (root / 'workflow-http.jsonl').read_text().splitlines()]
+    calls = [json.loads(line) for line in (root / 'workflow-http.jsonl').read_text(encoding="utf-8").splitlines()]
     assert sum(row['path'] == '/responses' for row in calls) == 1
 
 

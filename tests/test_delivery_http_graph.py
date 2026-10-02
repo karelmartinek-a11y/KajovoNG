@@ -43,7 +43,7 @@ class RecordingHttp:
     def __init__(self, root, mode):
         self.root, self.mode = root, mode
         self.path = root / "http-provider.json"
-        self.state = json.loads(self.path.read_text()) if self.path.exists() else {"files": {}, "batches": {}, "responses": 0}
+        self.state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {"files": {}, "batches": {}, "responses": 0}
         self.responder = V2Responder(mode, files=graph_files(mode))
         self.calls = []
 
@@ -156,10 +156,10 @@ def delivery_process(root, mode, batch, phase):
         info_path.write_text(json.dumps(info), encoding="utf-8")
         assert not list(Path(info["out"]).glob("*.txt"))
     else:
-        info = json.loads(info_path.read_text())
+        info = json.loads(info_path.read_text(encoding="utf-8"))
         run_dir = Path(info["run"])
         if phase == "wave":
-            state = json.loads((run_dir / "run_state.json").read_text())
+            state = json.loads((run_dir / "run_state.json").read_text(encoding="utf-8"))
             batch_id = state.get("pending_followup_batch_id") or info.get("batch_id") or state["batch_id"]
             # Aktuální neimportovaná wave se vybírá z kanonické evidence.
             pending = [identifier for identifier in state.get("generate_batches", {})
@@ -195,7 +195,7 @@ def test_graph_http_three_content_waves_restart_and_publish(tmp_path, mode, batc
         result = subprocess.run([sys.executable, "-c", code, str(tmp_path)], cwd=tmp_path,
                                 env=environment, capture_output=True, text=True, timeout=90)
         assert result.returncode == 0, result.stdout + result.stderr
-    calls = [json.loads(line) for line in (tmp_path / "http-calls.jsonl").read_text().splitlines()]
+    calls = [json.loads(line) for line in (tmp_path / "http-calls.jsonl").read_text(encoding="utf-8").splitlines()]
     submits = [row for row in calls if row["method"] == "POST" and row["path"] == "/batches"]
     assert len(submits) == (3 if batch else 0)
     requests_ = [row["body"] for row in calls if row["method"] == "POST" and row["path"] == "/responses"]

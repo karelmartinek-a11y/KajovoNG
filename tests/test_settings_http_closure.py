@@ -113,7 +113,7 @@ def test_settings_saved_new_process_and_real_catalog_consumer(qtbot, monkeypatch
     assert record.terminal == "completed"
     assert (tmp_path / "new-cache" / "model_catalog.json").is_file()
     assert not (tmp_path / "old-cache" / "model_catalog.json").exists()
-    raw = (tmp_path / "settings.json").read_text()
+    raw = (tmp_path / "settings.json").read_text(encoding="utf-8")
     assert "synthetic-" not in raw
     assert json.loads(raw)["smtp"]["password"] == ""
     child("from pathlib import Path; import sys; from test_settings_http_closure import settings_restart; settings_restart(Path(sys.argv[1]))", tmp_path)

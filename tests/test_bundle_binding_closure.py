@@ -18,7 +18,7 @@ def test_sealed_bundle_rejects_foreign_or_missing_control_binding(tmp_path, fiel
     bundle.seal()
     assert bundle.verify_integrity()['valid']
     original = bundle.checksums_path.read_bytes()
-    metadata = json.loads(bundle.bundle_path.read_text())
+    metadata = json.loads(bundle.bundle_path.read_text(encoding="utf-8"))
     if value is None:
         metadata.pop(field)
     else:
@@ -40,11 +40,11 @@ def test_history_new_process_blocks_foreign_bundle_before_submit(tmp_path, field
 
     child("from pathlib import Path; import sys; from test_delivery_http_graph import delivery_process; "
           "delivery_process(Path(sys.argv[1]), 'GENERATE', False, 'prepare')", tmp_path)
-    info = json.loads((tmp_path/'delivery-info.json').read_text())
+    info = json.loads((tmp_path/'delivery-info.json').read_text(encoding="utf-8"))
     from pathlib import Path
     root = Path(info['run'])
     metadata_path = root/'bundle.json'
-    metadata = json.loads(metadata_path.read_text())
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata[field] = 'foreign_identity'
     metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
     original = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
@@ -56,6 +56,6 @@ def test_history_new_process_blocks_foreign_bundle_before_submit(tmp_path, field
           " assert 'Zdrojový Run Bundle neprošel kontrolou integrity' in str(error), str(error)\n"
           " (root/'blocked-result.txt').write_text(str(error), encoding='utf-8')\n"
           "else:\n raise AssertionError('Foreign bundle metadata allowed History submit')", tmp_path)
-    assert 'kontrolou integrity' in (tmp_path/'blocked-result.txt').read_text()
+    assert 'kontrolou integrity' in (tmp_path/'blocked-result.txt').read_text(encoding="utf-8")
     assert (tmp_path/'http-calls.jsonl').read_bytes() == requests
     assert {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()} == original

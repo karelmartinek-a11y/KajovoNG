@@ -22,7 +22,7 @@ class ResourcesHttp:
     def __init__(self, root):
         self.root = root
         path = root / "remote-resources.json"
-        self.state = json.loads(path.read_text()) if path.exists() else {"files": {}, "stores": {}, "members": {}}
+        self.state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"files": {}, "stores": {}, "members": {}}
         self.calls = []
         self.block = ""
         self.entered, self.release = threading.Event(), threading.Event()
@@ -91,7 +91,7 @@ class ResourcesHttp:
             value = {"data": [{"id": "gpt-4o-mini"}], "has_more": False}
         else:
             raise AssertionError(f"Neočekávaný HTTP {method} {path}")
-        (self.root / "remote-resources.json").write_text(json.dumps(self.state))
+        (self.root / "remote-resources.json").write_text(json.dumps(self.state), encoding="utf-8")
         with (self.root / "resources-http.jsonl").open("a") as stream:
             stream.write(json.dumps(row) + "\n")
         if path == self.fail and method == "POST":
@@ -257,7 +257,7 @@ def test_uncertain_resource_create_is_one_submit_then_safe_refresh(qtbot, monkey
     transport.fail = path
     page, _ = page_fixture(qtbot, tmp_path, transport)
     source = tmp_path / "input.txt"
-    source.write_text("Původní obsah")
+    source.write_text("Původní obsah", encoding="utf-8")
     monkeypatch.setattr("kajovo.studio.resources.get_open_file_names", lambda *a: ([str(source)], ""))
     def accept(dialog):
         dialog.value = "Testovací úložiště"

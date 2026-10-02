@@ -855,8 +855,8 @@
       "sha256": "0913e2d504fbae961ecd81047f8f75a2b0331d8565d7263e73c4832a33efbc27",
       "lines": 80,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Skutečný procesní lock: rozdíl Windows byte locking a POSIX flock; oddělení řídicího zámku od artefaktů."
       }
     },
     {
@@ -1662,11 +1662,11 @@
     },
     {
       "path": "tools/verify_dependency_contract.py",
-      "sha256": "f40625c337c794657ed004c7c8855a703907ea4ae8d3a431424ba2dbad5764cc",
+      "sha256": "faa0c968b5ba12613c4325c96e80b94f1e99ef7687517fa502c2455c478bb696",
       "lines": 104,
       "review": {
-        "status": "ast_index_only",
-        "purpose": "AST průchod a otisk; úplné sémantické čtení nedoloženo."
+        "status": "full_read",
+        "purpose": "Kanonicita auditních cest a vlastní dependency kontrola na Windows/Linux."
       }
     },
     {
@@ -25501,6 +25501,38 @@
       ],
       "tests": [
         "tests/test_startup_sanity.py::test_runtime_sanity_closes_sqlite_before_probe_directory_cleanup"
+      ],
+      "status": "repaired_regression_tests_present"
+    },
+    {
+      "id": "RC17",
+      "finding": "Offline předávací testy závisely na CP1252, case-insensitive globu, Git autocrlf, Windows inicializaci lock byte a POSIX exit sign; dependency audit vracel nekanonické oddělovače cest.",
+      "repair_files": [
+        "tests/test_portability_closure.py",
+        "tests/test_batch_bundle_integrity_closure.py",
+        "tests/test_local_tools_qt_closure.py",
+        "tests/test_lock_process_closure.py",
+        "tests/test_qa_qfile_http_closure.py",
+        "tools/verify_dependency_contract.py"
+      ],
+      "tests": [
+        "tests/test_portability_closure.py::test_closure_text_files_have_explicit_encoding",
+        "tests/test_batch_bundle_integrity_closure.py::test_batch_import_rejects_damaged_sealed_bundle_before_provider",
+        "tests/test_local_tools_qt_closure.py::test_git_milestone_restore_and_local_remote_real_ui",
+        "tests/test_lock_process_closure.py::test_execution_lock_two_processes_and_killed_owner",
+        "tests/test_dependency_metadata_closure.py::test_dependency_audit_keeps_ordinary_scripts",
+        "tests/test_qa_qfile_http_closure.py::test_qa_invalid_output_never_reports_completed_or_retries"
+      ],
+      "status": "repaired_regression_tests_present"
+    },
+    {
+      "id": "RC18",
+      "finding": "SSH potvrzovací test nechával časovač bez rodiče běžet po selhání a odstraňoval jeho Workbench příjemce; výjimky kontaminovaly další Qt procesní regrese.",
+      "repair_files": [
+        "tests/test_ssh_repair_qt_closure.py"
+      ],
+      "tests": [
+        "tests/test_ssh_repair_qt_closure.py::test_confirmed_ssh_repair_actual_dialog_worker_bytes_and_context"
       ],
       "status": "repaired_regression_tests_present"
     }

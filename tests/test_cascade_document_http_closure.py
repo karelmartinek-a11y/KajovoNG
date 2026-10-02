@@ -91,9 +91,9 @@ def document_process(root, phase, fault=''):
     path = root / 'definition.json'
     if not path.exists():
         value = CascadeDefinition('Dokument HTTP', steps=[CascadeStep(title='Dokument', model=MODEL, input_text='Vyrob archiv', deterministic=True, outputs=[CascadeOutput(kind='file', file_type='zip', file_name='obsah.zip')])])
-        path.write_text(json.dumps(value.to_dict()))
+        path.write_text(json.dumps(value.to_dict()), encoding="utf-8")
     else:
-        value = CascadeDefinition.from_dict(json.loads(path.read_text()))
+        value = CascadeDefinition.from_dict(json.loads(path.read_text(encoding="utf-8")))
         value.run_from_step_id = value.steps[0].id
     transport = DocumentHttp(root, value.steps[0].outputs[0], fault)
     worker = CascadeRunExecutor(CascadeRunConfig('Dokument', value, '', str(root / 'OUT')), AppSettings(log_dir=str(root / 'LOG')), 'synthetic')
@@ -110,7 +110,7 @@ def document_process(root, phase, fault=''):
         worker.execute()
     if fault:
         assert errors and not results, (errors, results)
-        state = json.loads(Path(worker.logger.state_path).read_text())
+        state = json.loads(Path(worker.logger.state_path).read_text(encoding="utf-8"))
         expected = {'foreign':'kontejneru', 'missing':'identitu artefaktu', 'empty':'obsah souboru', 'expired':'Expired synthetic container'}[fault]
         assert expected in state['error'], state['error']
         assert not (root / 'OUT' / 'obsah.zip').exists()
@@ -131,7 +131,7 @@ def test_cascade_document_actual_transport_and_second_process(tmp_path, fault):
     else:
         child(f"from pathlib import Path; import sys; from test_cascade_document_http_closure import document_process; document_process(Path(sys.argv[1]), 'first', {fault!r})", tmp_path)
     child(f"from pathlib import Path; import sys; from test_cascade_document_http_closure import document_process; document_process(Path(sys.argv[1]), 'restart', {fault!r})", tmp_path)
-    rows = [json.loads(line) for line in (tmp_path / 'document-http.jsonl').read_text().splitlines()]
+    rows = [json.loads(line) for line in (tmp_path / 'document-http.jsonl').read_text(encoding="utf-8").splitlines()]
     assert sum(r['path'] == '/responses' for r in rows) == 2
     assert sum(r['path'] == '/files' for r in rows) == (0 if fault else 1)
     if fault in {'foreign','missing'}:

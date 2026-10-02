@@ -28,7 +28,7 @@ def source_process(root, mode, complete=False):
     adapter = LegacyRunAdapter(worker.log.paths.run_dir)
     assert adapter.bundle.verify_integrity()['valid']
     assert complete or not any(row['body']['text']['format']['name'] == 'FILE_CONTENT_V1' for row in transport.calls if row['path'] == '/responses')
-    (root / 'history-source.json').write_text(json.dumps({'run':str(adapter.root),'out':worker.cfg.out_dir}))
+    (root / 'history-source.json').write_text(json.dumps({'run':str(adapter.root),'out':worker.cfg.out_dir}), encoding="utf-8")
 
 
 def branch_process(root, mode, suffix, relation="continue", partial=False, crashed=False):
@@ -51,7 +51,7 @@ def branch_process(root, mode, suffix, relation="continue", partial=False, crash
     workbench = Workbench(context)
     manager.setParent(workbench)
     history = HistoryPage(context,workbench,workbench)
-    info = json.loads((root / 'history-source.json').read_text())
+    info = json.loads((root / 'history-source.json').read_text(encoding="utf-8"))
     adapter = LegacyRunAdapter(info['run'])
     before = {str(p.relative_to(adapter.root)):p.read_bytes() for p in adapter.root.rglob('*') if p.is_file()}
     checkpoint_type = suffix if suffix in {'plan_ready','files_downloaded_validated','input_ready'} else ('A' if mode == 'GENERATE' else 'B') + suffix

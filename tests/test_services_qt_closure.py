@@ -85,7 +85,7 @@ def test_smtp_settings_action_real_worker_and_transport(qtbot, monkeypatch, tmp_
         assert len(transport.messages) == 1
         assert b'To: test@example.invalid' in transport.messages[0]
         assert ('tls', True) in transport.calls if security == 'tls' else not any(c[0] == 'tls' for c in transport.calls)
-    assert not any('synthetic-password' in p.read_text(errors='replace') for p in tmp_path.rglob('*.json'))
+    assert not any('synthetic-password' in p.read_text(errors='replace', encoding="utf-8") for p in tmp_path.rglob('*.json'))
 
 
 def test_smtp_old_result_does_not_confirm_changed_configuration(qtbot, monkeypatch, tmp_path):
@@ -209,7 +209,7 @@ def test_qa_ssh_diagnostics_ui_transport_archive_and_request(qtbot, monkeypatch,
             assert not any(isinstance(c, tuple) and c[0] == 'command' for c in ssh.calls)
     else:
         assert record.terminal == 'completed', record.error
-        state = json.loads((tmp_path / 'LOG' / record.identifier / 'run_state.json').read_text())
+        state = json.loads((tmp_path / 'LOG' / record.identifier / 'run_state.json').read_text(encoding="utf-8"))
         assert state['diagnostics_delivery'] == {'requested':True, 'delivered':True, 'file_ids':['file_diag']}
         request = next(c['body'] for c in transport.calls if c['path'] == '/responses')
         assert 'file_diag' in json.dumps(request['input'])

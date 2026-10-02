@@ -11,7 +11,7 @@ def test_dependency_audit_ignores_valid_metadata_and_generated_build(tmp_path, m
     (build / '._start.sh').write_bytes(metadata([(9, 38, 4)], b'\xff\x80\xb0\xfe'))
     generated = build / 'lib'
     generated.mkdir()
-    (generated / 'copied.sh').write_text('pip install obsolete\n')
+    (generated / 'copied.sh').write_text('pip install obsolete\n', encoding="utf-8")
     monkeypatch.setattr(contract, 'ROOT', tmp_path)
     assert contract.ad_hoc_install_lines() == []
 
@@ -20,6 +20,6 @@ def test_dependency_audit_ignores_valid_metadata_and_generated_build(tmp_path, m
 def test_dependency_audit_keeps_ordinary_scripts(tmp_path, monkeypatch, name):
     build = tmp_path / 'Build'
     build.mkdir()
-    (build / name).write_text('pip install forbidden\n')
+    (build / name).write_text('pip install forbidden\n', encoding="utf-8")
     monkeypatch.setattr(contract, 'ROOT', tmp_path)
     assert contract.ad_hoc_install_lines() == [f'Build/{name}:1: pip install forbidden']

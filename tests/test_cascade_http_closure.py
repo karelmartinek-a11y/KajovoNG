@@ -126,7 +126,7 @@ def test_cascade_actual_ui_worker_http_branch_repair_and_final_state(qtbot, monk
     adapter = LegacyRunAdapter(tmp_path / "LOG" / record.identifier)
     if fault != "timeout":
         assert set(record.result["executed_step_ids"]) == {value.steps[i].id for i in [0, 1, 3]}
-        state = json.loads((adapter.root / "run_state.json").read_text())
+        state = json.loads((adapter.root / "run_state.json").read_text(encoding="utf-8"))
         assert state["cascade_runtime"]["values"][value.steps[3].id + "|" + value.steps[3].outputs[0].id]["value"] == "PŮVOD: přesná česká hodnota"
         assert adapter.bundle.verify_integrity()["valid"]
         assert any(row["checkpoint_type"] == "cascade_step_completed" for row in adapter.checkpoints())
@@ -139,9 +139,9 @@ def cascade_process(root, phase):
     path = root / "definition.json"
     if phase in {"accepted", "dispatch"}:
         value = definition()
-        path.write_text(json.dumps(value.to_dict(), ensure_ascii=False))
+        path.write_text(json.dumps(value.to_dict(), ensure_ascii=False), encoding="utf-8")
     else:
-        value = CascadeDefinition.from_dict(json.loads(path.read_text()))
+        value = CascadeDefinition.from_dict(json.loads(path.read_text(encoding="utf-8")))
         value.run_from_step_id = value.steps[0].id
     transport = CascadeHttp(root, value, "dispatch" if phase == "dispatch" else "")
     worker = CascadeRunExecutor(CascadeRunConfig("HTTP test", value, "", str(root / "OUT")),
@@ -163,7 +163,7 @@ def cascade_process(root, phase):
         assert errors and not results and transport.calls == []
     else:
         assert not errors and results, errors
-        assert json.loads(Path(worker.logger.state_path).read_text())["status"] == "completed"
+        assert json.loads(Path(worker.logger.state_path).read_text(encoding="utf-8"))["status"] == "completed"
         assert transport.submits == 2
         assert LegacyRunAdapter(worker.logger.paths.run_dir).bundle.verify_integrity()["valid"]
 
@@ -175,7 +175,7 @@ def test_cascade_http_hard_exit_reuses_accepted_or_blocks_unknown(tmp_path, phas
     proc = subprocess.run([sys.executable, "-c", code, str(tmp_path)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
     assert proc.returncode == exit_code, proc.stdout + proc.stderr
     child("from pathlib import Path; import sys; from test_cascade_http_closure import cascade_process; cascade_process(Path(sys.argv[1]), " + repr("recover_" + phase) + ")", tmp_path)
-    calls = [json.loads(line) for line in (tmp_path / "cascade-http.jsonl").read_text().splitlines()]
+    calls = [json.loads(line) for line in (tmp_path / "cascade-http.jsonl").read_text(encoding="utf-8").splitlines()]
     posts = [row for row in calls if row["path"] == "/responses"]
     assert len(posts) == (3 if phase == "accepted" else 1)
 
@@ -214,7 +214,7 @@ def test_cascade_stop_during_http_retains_paid_result_without_next_submit(qtbot,
     qtbot.addWidget(record.dialog)
     assert record.terminal == 'cancelled', (record.terminal,record.error)
     assert transport.submits == 1
-    state = json.loads(Path(record.worker.logger.state_path).read_text()) if isValid(record.worker) else json.loads((tmp_path/'LOG'/record.identifier/'run_state.json').read_text())
+    state = json.loads(Path(record.worker.logger.state_path).read_text(encoding="utf-8")) if isValid(record.worker) else json.loads((tmp_path/'LOG'/record.identifier/'run_state.json').read_text(encoding="utf-8"))
     assert state['status'] == 'cancelled'
     assert state['cascade_runtime']['executed_step_ids'] == [value.steps[0].id]
     key = value.steps[0].id + '|' + value.steps[0].outputs[0].id

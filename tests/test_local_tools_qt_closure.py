@@ -43,6 +43,7 @@ def test_git_real_ui_init_edit_hash_guard_and_symlink(qtbot, monkeypatch, tmp_pa
     assert finished(qtbot, context.operations).terminal == 'completed'
     assert (root / '.git').is_dir() and not page.busy
     service = ProjectGit(root)
+    service.command('config','core.autocrlf','false')
     service.command('config','user.name','Offline test')
     service.command('config','user.email','test@example.invalid')
     service.command('add','.')
@@ -149,6 +150,7 @@ def test_git_milestone_restore_and_local_remote_real_ui(qtbot, monkeypatch, tmp_
     click(qtbot, page,'git.init')
     finished(qtbot,context.operations)
     service = ProjectGit(root)
+    service.command('config','core.autocrlf','false')
     service.command('config','user.name','Offline test')
     service.command('config','user.email','test@example.invalid')
     service.command('add','.')

@@ -185,7 +185,7 @@ def run_phase(root, url, mode, batch, phase):
                     adapter = select(run)
                     assert history._state['status'] == ('batch_pending' if wave < 2 else 'waiting_manual_resource')
             assert not list((root/'OUT').rglob('*')) if (root/'OUT').exists() else True
-            state = json.loads((adapter.root/'run_state.json').read_text())
+            state = json.loads((adapter.root/'run_state.json').read_text(encoding="utf-8"))
             assert len(state['staged_files']) == 6
             assert state['source_pack_id'] == state['source_pack']['pack_id']
             from kajovo.core.orchestration.contracts import canonical_sha256
@@ -200,9 +200,9 @@ def run_phase(root, url, mode, batch, phase):
             assert adapter.bundle.verify_control_bindings() == []
             for row in state['staged_files']:
                 assert hashlib.sha256((adapter.root/row['staged_path']).read_bytes()).hexdigest() == row['sha256']
-            (root/'phase.json').write_text(json.dumps({'run': run, 'pid': os.getpid(), 'status': state['status']}))
+            (root/'phase.json').write_text(json.dumps({'run': run, 'pid': os.getpid(), 'status': state['status']}), encoding="utf-8")
         else:
-            before = json.loads((root/'phase.json').read_text())
+            before = json.loads((root/'phase.json').read_text(encoding="utf-8"))
             assert before['pid'] != os.getpid()
             run = before['run']
             adapter = select(run)
@@ -281,7 +281,7 @@ def run_phase(root, url, mode, batch, phase):
             assert publish_staged_run(str(adapter.root))['status'] == 'committed'
             assert sealed == {str(p.relative_to(adapter.root)): p.read_bytes() for p in adapter.root.rglob('*') if p.is_file()}
             (root/'result.json').write_text(json.dumps({'run': run, 'pid': os.getpid(), 'status': history._state['status'],
-                                                       'hashes': {p: hashlib.sha256(v).hexdigest() for p, v in expected.items()}}))
+                                                       'hashes': {p: hashlib.sha256(v).hexdigest() for p, v in expected.items()}}), encoding="utf-8")
     for record in manager.records.values():
         if record.dialog:
             record.dialog.close()
@@ -320,7 +320,7 @@ def test_mixed_resources_three_waves_restart_and_history_publish(tmp_path, mode,
                 body, status = response.content, response.status_code
             except Exception as exc:
                 row['error'] = repr(exc)
-                (tmp_path/'http-errors.json').write_text(json.dumps(accepted, default=str))
+                (tmp_path/'http-errors.json').write_text(json.dumps(accepted, default=str), encoding="utf-8")
                 body, status = json.dumps({'error': {'message': repr(exc)}}).encode(), 500
             self.send_response(status)
             self.send_header('Content-Length', str(len(body)))
@@ -341,15 +341,15 @@ def test_mixed_resources_three_waves_restart_and_history_publish(tmp_path, mode,
             code = 'from pathlib import Path; import sys; from test_mixed_resource_http_closure import run_phase; run_phase(Path(sys.argv[1]),sys.argv[2],sys.argv[3],sys.argv[4]=="True",sys.argv[5])'
             child = subprocess.run([sys.executable, '-c', code, str(tmp_path), f'http://127.0.0.1:{server.server_port}/v1', mode, str(batch), phase],
                                    cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
-            (tmp_path/(phase+'-stdout.txt')).write_text(child.stdout+child.stderr)
+            (tmp_path/(phase+'-stdout.txt')).write_text(child.stdout+child.stderr, encoding="utf-8")
             assert child.returncode == 0, child.stdout+child.stderr
             if phase == 'resume':
                 assert sum(r['method'] == 'POST' for r in accepted) == posts_before
         assert sum(r['path'] == '/v1/images/generations' for r in accepted) == 1
         assert sum(r['method'] == 'POST' and r['path'] == '/v1/batches' for r in accepted) == (3 if batch else 0)
-        assert json.loads((tmp_path/'result.json').read_text())['status'] == 'completed_unverified'
-        (tmp_path/'transport-calls.json').write_text(json.dumps(transport.calls, ensure_ascii=False, indent=2))
-        (tmp_path/'accepted.json').write_text(json.dumps(accepted, ensure_ascii=False, indent=2))
+        assert json.loads((tmp_path/'result.json').read_text(encoding="utf-8"))['status'] == 'completed_unverified'
+        (tmp_path/'transport-calls.json').write_text(json.dumps(transport.calls, ensure_ascii=False, indent=2), encoding="utf-8")
+        (tmp_path/'accepted.json').write_text(json.dumps(accepted, ensure_ascii=False, indent=2), encoding="utf-8")
     finally:
         server.shutdown()
         server.server_close()

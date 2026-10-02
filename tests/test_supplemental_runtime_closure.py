@@ -71,11 +71,11 @@ def test_history_corrupt_evidence_blocks_before_worker_and_submit(qtbot,monkeypa
         message='Provider evidenci'
     else:
         path=adapter.root/'checkpoints'/f"{checkpoint['checkpoint_id']}.json"
-        data=json.loads(path.read_text());data['state_snapshot']['ui_state']['prompt']='foreign input'
-        path.write_text(json.dumps(data));message='Zdrojový Run Bundle neprošel kontrolou integrity'
+        data=json.loads(path.read_text(encoding="utf-8"));data['state_snapshot']['ui_state']['prompt']='foreign input'
+        path.write_text(json.dumps(data), encoding="utf-8");message='Zdrojový Run Bundle neprošel kontrolou integrity'
     with pytest.raises(ValueError,match=message):launcher.preview(adapter,checkpoint['checkpoint_id'],'rerun')
     assert len(operations.records)==1
-    rows=[json.loads(line) for line in (tmp_path/'workflow-http.jsonl').read_text().splitlines()]
+    rows=[json.loads(line) for line in (tmp_path/'workflow-http.jsonl').read_text(encoding="utf-8").splitlines()]
     assert sum(row['path']=='/responses' for row in rows)==1
 
 
@@ -85,8 +85,8 @@ def test_old_catalog_keeps_cache_provenance_until_ui_http_refresh(qtbot, monkeyp
     page, context, _, transport = fixture(qtbot, monkeypatch, tmp_path)
     context._model_cache.save(context.api_key,[{'id':'gpt-4o-mini'}])
     path=context._model_cache.path
-    data=json.loads(path.read_text());data['fetched_at']=1.0
-    path.write_text(json.dumps(data));context._load_cached_models()
+    data=json.loads(path.read_text(encoding="utf-8"));data['fetched_at']=1.0
+    path.write_text(json.dumps(data), encoding="utf-8");context._load_cached_models()
     from kajovo.studio.workbench import Workbench
     from PySide6.QtWidgets import QPushButton
     workbench=Workbench(context);qtbot.addWidget(workbench)
@@ -199,7 +199,7 @@ def test_batch_panel_photo_http_refresh_against_download_preserves_bytes(qtbot,m
     assert all(method=='GET' for method,path in transport.calls)
     assert ('GET','/files/file_output/content') in transport.calls
     assert any(row['method']=='GET' and '/batches?limit=' in row['url'] for row in transport.wire_calls)
-    (tmp_path/'exact-wire-calls.json').write_text(json.dumps(transport.wire_calls))
+    (tmp_path/'exact-wire-calls.json').write_text(json.dumps(transport.wire_calls), encoding="utf-8")
     for record in operations.records.values():record.dialog.close()
 
 
@@ -217,7 +217,7 @@ def test_converter_ambiguous_cp1250_keeps_original_and_backup(qtbot,tmp_path):
     assert target.read_bytes()==raw
     assert "Opravené soubory: 0" in page.result.toPlainText()
     log=next(backup.rglob("*.jsonl"))
-    events=[json.loads(line) for line in log.read_text().splitlines()]
+    events=[json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert any(row["event"]=="file_skipped_encoding" and "není validní UTF-8" in row["reason"] for row in events)
     with zipfile.ZipFile(next(backup.rglob('*.zip'))) as archive:assert archive.read('český text.txt')==raw
     record.dialog.close()

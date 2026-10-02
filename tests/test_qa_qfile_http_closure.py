@@ -133,7 +133,7 @@ def test_qa_actual_button_http_request_semantics_and_ui(qtbot, monkeypatch, tmp_
     record = next(iter(operations.records.values()))
     assert record.terminal == "completed" and (not isValid(record.worker) or not record.worker.isRunning())
     manifests = list((tmp_path / "LOG" / record.identifier / "manifests").glob("*QA_answer*.json"))
-    assert len(manifests) == 1 and json.loads(manifests[0].read_text())["answer"] == result["text"]
+    assert len(manifests) == 1 and json.loads(manifests[0].read_text(encoding="utf-8"))["answer"] == result["text"]
     assert page.widgets["qa_continue_conversation"].isChecked() is False
 
 
@@ -147,7 +147,7 @@ def test_qa_invalid_output_never_reports_completed_or_retries(qtbot, monkeypatch
     assert record.terminal == ("submission_unknown" if fault == "timeout" else "failed")
     assert record.error and not record.result
     assert sum(row["path"] == "/responses" for row in transport.calls) == 1
-    assert not list((tmp_path / "LOG").rglob("*QA_answer*.json"))
+    assert not [p for p in (tmp_path / "LOG").rglob("*.json") if "QA_answer" in p.name]
 
 
 def test_qfile_button_plan_confirmation_staging_and_publish_bytes(qtbot, monkeypatch, tmp_path):
@@ -201,7 +201,7 @@ def test_foreground_crash_after_dispatch_new_process_never_resubmits(tmp_path, m
     before = subprocess.run([sys.executable, "-c", code, str(tmp_path)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
     assert before.returncode == 77, before.stdout + before.stderr
     child("from pathlib import Path; import sys; from test_qa_qfile_http_closure import foreground_process; foreground_process(Path(sys.argv[1]), " + repr(mode) + ", 'recover')", tmp_path)
-    calls = [json.loads(line) for line in (tmp_path / "workflow-http.jsonl").read_text().splitlines()]
+    calls = [json.loads(line) for line in (tmp_path / "workflow-http.jsonl").read_text(encoding="utf-8").splitlines()]
     assert sum(row["path"] == "/responses" for row in calls) == 1
 
 
@@ -244,7 +244,7 @@ def qfile_approved_restart(root):
     context.models = ["gpt-4o-mini"]
     page = Workbench(context)
     operations.setParent(page)
-    page.apply_state(json.loads((root / "approved-input.json").read_text()))
+    page.apply_state(json.loads((root / "approved-input.json").read_text(encoding="utf-8")))
     assert transport.calls == []
     assert not (root / "OUT" / "výsledek/navrh.md").exists()
     assert page.saved_extras["qfile_plan"] == plan_value()["result"]["data"]
@@ -274,10 +274,10 @@ def test_qfile_real_plan_survives_new_process_without_automatic_manufacture(qtbo
     page, operations = page_fixture(qtbot, monkeypatch, tmp_path, "QFILE", transport)
     page.start_button.click()
     settle(qtbot, operations, page)
-    (tmp_path / "approved-input.json").write_text(json.dumps(page.state(), ensure_ascii=False))
+    (tmp_path / "approved-input.json").write_text(json.dumps(page.state(), ensure_ascii=False), encoding="utf-8")
     assert sum(row["path"] == "/responses" for row in transport.calls) == 1
     child("from pathlib import Path; import sys; from test_qa_qfile_http_closure import qfile_approved_restart; qfile_approved_restart(Path(sys.argv[1]))", tmp_path)
-    posts = [json.loads(line) for line in (tmp_path / "workflow-http.jsonl").read_text().splitlines() if json.loads(line)["path"] == "/responses"]
+    posts = [json.loads(line) for line in (tmp_path / "workflow-http.jsonl").read_text(encoding="utf-8").splitlines() if json.loads(line)["path"] == "/responses"]
     assert [row["body"]["text"]["format"]["name"] for row in posts] == ["QFILE_PLAN_V1", "FILE_CONTENT_V1"]
 
 

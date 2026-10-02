@@ -1,4 +1,4 @@
-"""Procesní zámek musí odmítnout druhého vlastníka a přežít SIGKILL bez blokace."""
+"""Procesní zámek musí odmítnout druhého vlastníka a přežít ukončení vlastníka bez blokace."""
 import os
 import subprocess
 import sys
@@ -14,7 +14,8 @@ def test_execution_lock_two_processes_and_killed_owner(tmp_path):
         assert first.stdout.readline().strip() == 'LOCKED'
         child("from pathlib import Path; import sys; from kajovo.core.runs.locking import ExecutionLock; assert not ExecutionLock(Path(sys.argv[1])/'execution.lock').acquire()",tmp_path)
         first.kill()
-        assert first.wait(timeout=10) < 0
+        exit_code = first.wait(timeout=10)
+        assert exit_code == 1 if sys.platform == "win32" else exit_code < 0
         child("from pathlib import Path; import sys; from kajovo.core.runs.locking import ExecutionLock; lock=ExecutionLock(Path(sys.argv[1])/'execution.lock'); assert lock.acquire(); lock.release(); assert lock.acquire(); lock.release()",tmp_path)
     finally:
         if first.poll() is None:

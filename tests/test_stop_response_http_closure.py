@@ -22,7 +22,7 @@ from test_qa_qfile_http_closure import qa_value, plan_value
 @pytest.mark.parametrize('mode', ['QA', 'QFILE'])
 def test_stop_after_http_acceptance_preserves_id_and_blocks_success(qtbot, monkeypatch, tmp_path, mode):
     import kajovo.core.runs.response_execution as implementation
-    (tmp_path/'provenance.json').write_text(json.dumps({'module': implementation.__file__, 'source_sha256': hashlib.sha256(Path(implementation.__file__).read_bytes()).hexdigest()}))
+    (tmp_path/'provenance.json').write_text(json.dumps({'module': implementation.__file__, 'source_sha256': hashlib.sha256(Path(implementation.__file__).read_bytes()).hexdigest()}), encoding="utf-8")
     entered, release = threading.Event(), threading.Event()
     accepted = []
     class Handler(BaseHTTPRequestHandler):
@@ -89,10 +89,10 @@ def test_stop_after_http_acceptance_preserves_id_and_blocks_success(qtbot, monke
         assert not record.result and not record.result_received
         assert sum(r['path'] == '/v1/responses' for r in accepted) == 1
         root = tmp_path/'LOG'/record.identifier
-        state = json.loads((root/'run_state.json').read_text())
+        state = json.loads((root/'run_state.json').read_text(encoding="utf-8"))
         assert state['status'] == 'stopped'
         raw = list((root/'responses').glob('*received_resp_barrier_*.json'))
-        assert len(raw) == 1 and json.loads(raw[0].read_text())['id'] == 'resp_barrier'
+        assert len(raw) == 1 and json.loads(raw[0].read_text(encoding="utf-8"))['id'] == 'resp_barrier'
         assert not list(root.glob('manifests/*QA_answer*.json'))
         assert not list((tmp_path/'OUT').rglob('*'))
         assert record.events[-1].state == 'cancelled'

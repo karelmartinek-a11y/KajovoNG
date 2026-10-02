@@ -57,7 +57,7 @@ def test_history_new_process_rejects_lost_sealed_manifest_before_submit(tmp_path
 
     child("from pathlib import Path; import sys; from test_delivery_http_graph import delivery_process; "
           "delivery_process(Path(sys.argv[1]), 'GENERATE', False, 'prepare')", tmp_path)
-    run = Path(json.loads((tmp_path / "delivery-info.json").read_text())["run"])
+    run = Path(json.loads((tmp_path / "delivery-info.json").read_text(encoding="utf-8"))["run"])
     assert RunBundle(run).verify_integrity()["valid"]
     (run / "checksums.json").unlink()
     before = {str(path.relative_to(run)): path.read_bytes() for path in run.rglob("*") if path.is_file()}

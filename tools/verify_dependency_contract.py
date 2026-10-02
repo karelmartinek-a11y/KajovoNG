@@ -70,10 +70,10 @@ def ad_hoc_install_lines() -> list[str]:
                 if "pip install" not in lower:
                     continue
                 if "requirements/constraints.txt" not in lower:
-                    violations.append(f"{path.relative_to(ROOT)}:{number}: {line}")
+                    violations.append(f"{path.relative_to(ROOT).as_posix()}:{number}: {line}")
                     continue
                 if ".[build]" not in lower and ".[dev,build]" not in lower and ".[build,dev]" not in lower:
-                    violations.append(f"{path.relative_to(ROOT)}:{number}: {line}")
+                    violations.append(f"{path.relative_to(ROOT).as_posix()}:{number}: {line}")
     return violations
 
 

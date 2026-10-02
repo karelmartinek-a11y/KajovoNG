@@ -86,5 +86,5 @@ def test_cascade_image_http_validates_exact_format_before_publish(tmp_path, raw,
         assert LegacyRunAdapter(worker.logger.paths.run_dir).bundle.verify_integrity()["valid"]
     else:
         assert not target.exists()
-        state = json.loads((tmp_path / "LOG" / worker.logger.run_id / "run_state.json").read_text())
+        state = json.loads((tmp_path / "LOG" / worker.logger.run_id / "run_state.json").read_text(encoding="utf-8"))
         assert state["status"] == "failed"

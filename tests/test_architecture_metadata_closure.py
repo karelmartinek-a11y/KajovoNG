@@ -11,7 +11,7 @@ def test_architecture_ignores_valid_metadata_without_decoding(tmp_path):
 
 def test_architecture_keeps_ordinary_named_source(tmp_path,monkeypatch):
     path = tmp_path/'._ordinary.py'
-    path.write_text('from PySide6.QtCore import QThread\n')
+    path.write_text('from PySide6.QtCore import QThread\n', encoding="utf-8")
     monkeypatch.setattr(architecture,'ROOT',tmp_path)
     assert list(architecture._python_files('.')) == [path]
     assert architecture._violations(architecture._python_files('.'),('PySide6',)) == ['._ordinary.py -> PySide6.QtCore']

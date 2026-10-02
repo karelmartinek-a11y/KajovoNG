@@ -39,5 +39,5 @@ def test_progress_audit_detects_named_source_with_unsupported_dialog(tmp_path, m
     monkeypatch.setattr(progress, 'ROOT', tmp_path)
     monkeypatch.setattr(sys, 'argv', ['audit', '--output', str(output)])
     assert progress.main() == (0 if sidecar else 1)
-    errors = json.loads(output.read_text())['errors']
+    errors = json.loads(output.read_text(encoding="utf-8"))['errors']
     assert errors == ([] if sidecar else [{'path': 'kajovo/studio/._ordinary.py', 'error': 'Produkční Studio znovu používá starý QProgressDialog.'}])

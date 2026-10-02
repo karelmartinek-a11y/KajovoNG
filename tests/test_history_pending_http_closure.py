@@ -27,7 +27,7 @@ class PendingHttp(RecordingHttp):
             response = requests.Response()
             response.headers['Content-Type'] = 'application/json'
             response.status_code = 404 if self.pending else 200
-            value = {'error':{'message':'synteticky čeká'}} if self.pending else json.loads((self.root / 'accepted-response.json').read_text())
+            value = {'error':{'message':'synteticky čeká'}} if self.pending else json.loads((self.root / 'accepted-response.json').read_text(encoding="utf-8"))
             assert path.endswith(value.get('id', path.rsplit('/',1)[1]))
             response._content = json.dumps(value).encode()
             return response
@@ -35,7 +35,7 @@ class PendingHttp(RecordingHttp):
         body = kwargs.get('json') or {}
         if self.pending and path == '/responses' and body['text']['format']['name'].endswith('1_PLAN_V2'):
             value = response.json()
-            (self.root / 'accepted-response.json').write_text(json.dumps(value))
+            (self.root / 'accepted-response.json').write_text(json.dumps(value), encoding="utf-8")
             response._content = json.dumps({'id':value['id'], 'model':value['model'], 'status':'queued'}).encode()
         return response
 
@@ -61,11 +61,11 @@ def source(root, mode):
         worker.run()
     assert not results and errors
     adapter = LegacyRunAdapter(worker.log.paths.run_dir)
-    state = json.loads((adapter.root / 'run_state.json').read_text())
+    state = json.loads((adapter.root / 'run_state.json').read_text(encoding="utf-8"))
     assert state['status'] == 'response_pending'
-    assert state['response_pending']['id'] == json.loads((root / 'accepted-response.json').read_text())['id']
+    assert state['response_pending']['id'] == json.loads((root / 'accepted-response.json').read_text(encoding="utf-8"))['id']
     assert adapter.bundle.verify_integrity()['status'] == 'unsealed'
-    (root / 'pending-parent.json').write_text(json.dumps({'run':str(adapter.root)}))
+    (root / 'pending-parent.json').write_text(json.dumps({'run':str(adapter.root)}), encoding="utf-8")
 
 
 def continued(root, mode):
@@ -86,7 +86,7 @@ def continued(root, mode):
     workbench = Workbench(context)
     manager.setParent(workbench)
     history = HistoryPage(context,workbench,workbench)
-    adapter = LegacyRunAdapter(json.loads((root/'pending-parent.json').read_text())['run'])
+    adapter = LegacyRunAdapter(json.loads((root/'pending-parent.json').read_text(encoding="utf-8"))['run'])
     before = {str(p.relative_to(adapter.root)):p.read_bytes() for p in adapter.root.rglob('*') if p.is_file()}
     def wait(predicate):
         loop,poll,limit = QEventLoop(),QTimer(),QTimer()
@@ -124,7 +124,7 @@ def continued(root, mode):
     prefix = 'A' if mode == 'GENERATE' else 'B'
     assert posts == [prefix+'2_SPINE_V2', *[prefix+'2_FILE_SPEC_V1']*3, prefix+'2Q_QUALITY_GATE_V3'], posts
     gets = [r for r in transport.calls if r['method']=='GET' and r['path'].startswith('/responses/')]
-    assert len(gets) == 1 and gets[0]['path'].endswith(json.loads((root/'accepted-response.json').read_text())['id'])
+    assert len(gets) == 1 and gets[0]['path'].endswith(json.loads((root/'accepted-response.json').read_text(encoding="utf-8"))['id'])
     assert before == {str(p.relative_to(adapter.root)):p.read_bytes() for p in adapter.root.rglob('*') if p.is_file()}
     for record in manager.records.values():
         if record.dialog:

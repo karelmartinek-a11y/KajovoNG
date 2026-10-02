@@ -45,20 +45,20 @@ def partial_source(root, mode, crash=False):
     def saved(run_dir, name, data):
         value = save_artifact(run_dir, name, data)
         if crash == 'before_staging' and name.startswith('generated/'):
-            (root / 'history-source.json').write_text(json.dumps({'run': str(run_dir), 'out': worker.cfg.out_dir}))
+            (root / 'history-source.json').write_text(json.dumps({'run': str(run_dir), 'out': worker.cfg.out_dir}), encoding="utf-8")
             os._exit(90)
         return value
     def archived(bundle, path, **kwargs):
         value = original(bundle, path, **kwargs)
         if crash is True and kwargs.get('role') == 'staged_output':
-            (root / 'history-source.json').write_text(json.dumps({'run': str(bundle.root), 'out': worker.cfg.out_dir}))
+            (root / 'history-source.json').write_text(json.dumps({'run': str(bundle.root), 'out': worker.cfg.out_dir}), encoding="utf-8")
             os._exit(89)
         return value
     with patch('kajovo.core.runs.executor.OpenAIClient', lambda *a, **k: http_client(transport)), patch.object(RunBundle, 'archive_artifact', archived), patch('kajovo.core.recoverable_artifacts.save_artifact', saved):
         worker.run()
     assert errors and not results
     adapter = LegacyRunAdapter(worker.log.paths.run_dir)
-    state = json.loads((adapter.root / 'run_state.json').read_text())
+    state = json.loads((adapter.root / 'run_state.json').read_text(encoding="utf-8"))
     assert state['status'] == 'failed'
     rows = state['staged_files']
     assert [row['path'] for row in rows] == ['middle.txt', 'seed.txt']
@@ -66,7 +66,7 @@ def partial_source(root, mode, crash=False):
         assert (adapter.root / row['staged_path']).read_bytes() == expected_content(mode, row['path']).encode()
     assert not list(Path(worker.cfg.out_dir).glob('*.txt'))
     assert adapter.bundle.verify_integrity()['valid']
-    (root / 'history-source.json').write_text(json.dumps({'run': str(adapter.root), 'out': worker.cfg.out_dir}))
+    (root / 'history-source.json').write_text(json.dumps({'run': str(adapter.root), 'out': worker.cfg.out_dir}), encoding="utf-8")
 
 
 @pytest.mark.parametrize('mode', ['GENERATE', 'MODIFY'])
@@ -95,11 +95,11 @@ def test_uncommitted_read_model_cannot_import_foreign_artifact_binding(tmp_path,
     code = "from pathlib import Path; import sys; from test_history_partial_http_closure import partial_source; partial_source(Path(sys.argv[1]), 'GENERATE', True)"
     first = subprocess.run([sys.executable, '-c', code, str(tmp_path)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
     assert first.returncode == 89, first.stdout + first.stderr
-    root = Path(json.loads((tmp_path / 'history-source.json').read_text())['run'])
+    root = Path(json.loads((tmp_path / 'history-source.json').read_text(encoding="utf-8"))['run'])
     from kajovo.core.run_bundle import RunBundle
     bundle = RunBundle(root)
     path = bundle.artifact_index_path
-    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     artifact = next(row for row in rows if row.get('role') == 'staged_output')
     binary = (root / artifact['path_in_bundle']).read_bytes()
     if field == 'response':
@@ -107,7 +107,7 @@ def test_uncommitted_read_model_cannot_import_foreign_artifact_binding(tmp_path,
     else:
         key = {'graph': 'implementation_graph_hash', 'target': 'expected_target_hash', 'checksum': 'sha256'}[field]
         artifact['metadata'][key] = 'foreign'
-    path.write_text('\n'.join(json.dumps(row) for row in rows) + '\n')
+    path.write_text('\n'.join(json.dumps(row) for row in rows) + '\n', encoding="utf-8")
     with pytest.raises(ContractError, match='nepatří původnímu'):
         recoverable_staged_files(root)
     assert (root / artifact['path_in_bundle']).read_bytes() == binary

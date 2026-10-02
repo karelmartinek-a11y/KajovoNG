@@ -13,7 +13,7 @@ def test_import_invalid_field_keeps_previous_form_and_signals(qtbot, monkeypatch
     page, operations = page_fixture(qtbot,monkeypatch,tmp_path,'QA',transport)
     before = page.state(secrets=True)
     source = tmp_path/'invalid.json'
-    source.write_text(json.dumps({'project':'Cizí projekt', 'prompt':'Cizí zadání', **patch}))
+    source.write_text(json.dumps({'project':'Cizí projekt', 'prompt':'Cizí zadání', **patch}), encoding="utf-8")
     monkeypatch.setattr('kajovo.studio.workbench.get_open_file_name',lambda *a:(str(source),''))
     page.findChild(QPushButton,'run.load').click()
     assert page.state(secrets=True) == before

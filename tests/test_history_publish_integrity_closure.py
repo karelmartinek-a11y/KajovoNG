@@ -21,14 +21,14 @@ def test_actual_history_publish_rejects_corrupt_source_without_disk_mutation(qtb
     bundle = RunBundle(tmp_path / "LOG" / run)
     assert bundle.verify_integrity()["valid"]
     if damage == "foreign_metadata":
-        data = json.loads(bundle.bundle_path.read_text())
+        data = json.loads(bundle.bundle_path.read_text(encoding="utf-8"))
         data["run_id"] = "RUN_FOREIGN"
         bundle.bundle_path.write_text(json.dumps(data), encoding="utf-8")
     elif damage == "missing_manifest":
         bundle.checksums_path.unlink()
     else:
         path = bundle.root / "run_state.json"
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         data["out_dir"] = str(tmp_path / "FOREIGN_OUT")
         path.write_text(json.dumps(data), encoding="utf-8")
     before = {str(p.relative_to(bundle.root)): p.read_bytes() for p in bundle.root.rglob("*") if p.is_file()}
@@ -80,7 +80,7 @@ def test_publication_new_process_after_bytes_before_bundle_update(qtbot, monkeyp
     target = tmp_path / "OUT/výsledek/navrh.md"
     assert target.read_bytes() == "# Výsledek\nPřesné bytes.\n".encode()
     if damage == "foreign_metadata":
-        metadata = json.loads(bundle.bundle_path.read_text())
+        metadata = json.loads(bundle.bundle_path.read_text(encoding="utf-8"))
         metadata["bundle_id"] = "bundle_foreign"
         bundle.bundle_path.write_text(json.dumps(metadata), encoding="utf-8")
     elif damage == "missing_manifest":
@@ -102,7 +102,7 @@ def publication_restart(root, blocked):
     from kajovo.core.orchestration.errors import OrchestrationError
     from kajovo.core.orchestration.publish import publish_staged_run, recover_publish_journal
 
-    run = Path((root / "publish-run.txt").read_text())
+    run = Path((root / "publish-run.txt").read_text(encoding="utf-8"))
     if blocked:
         with pytest.raises(OrchestrationError, match="PUBLISH_BUNDLE_INTEGRITY"):
             recover_publish_journal(run)

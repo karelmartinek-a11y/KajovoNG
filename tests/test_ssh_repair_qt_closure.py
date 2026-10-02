@@ -59,7 +59,7 @@ def test_confirmed_ssh_repair_actual_dialog_worker_bytes_and_context(qtbot, monk
     root.mkdir()
     script = root / 'run_this_script_repairme_kajovo.sh'
     script.write_bytes(b'echo synthetic approved\n')
-    (root / 'readmerepair.txt').write_text('Popis potvrzené opravy\n')
+    (root / 'readmerepair.txt').write_text('Popis potvrzené opravy\n', encoding="utf-8")
     cfg = page.config()
     cfg.ssh_host, cfg.ssh_user = 'offline.invalid', 'synthetic'
     cfg.ssh_pin = 'SHA256:' + base64.b64encode(hashlib.sha256(b'synthetic host key').digest()).decode().rstrip('=')
@@ -70,7 +70,7 @@ def test_confirmed_ssh_repair_actual_dialog_worker_bytes_and_context(qtbot, monk
         constructions.append(True)
         return transport
     monkeypatch.setattr('kajovo.core.diagnostics.ssh.paramiko.SSHClient', connect)
-    timer = QTimer()
+    timer = QTimer(page)
     confirmations = []
     def confirm():
         dialogs = page.findChildren(DetailDialog)
@@ -83,7 +83,10 @@ def test_confirmed_ssh_repair_actual_dialog_worker_bytes_and_context(qtbot, monk
         timer.stop()
     timer.timeout.connect(confirm)
     timer.start(10)
-    page.offer_repair(cfg, True)
+    try:
+        page.offer_repair(cfg, True)
+    finally:
+        timer.stop()
     assert len(confirmations) == 1
     if case == 'rejected':
         assert not operations.records and not constructions
@@ -103,7 +106,7 @@ def test_confirmed_ssh_repair_actual_dialog_worker_bytes_and_context(qtbot, monk
     assert transport.written == [b'echo synthetic approved\n']
     assert ('sh -s 2>&1', 120) in transport.calls and 'RejectPolicy' in transport.calls
     assert transport.closed
-    log = (root / '_repair_ssh_exec_log.txt').read_text()
+    log = (root / '_repair_ssh_exec_log.txt').read_text(encoding="utf-8")
     assert 'Přesný výsledek opravného procesu\n' in log and 'Popis potvrzené opravy' in log
     if case == 'stale':
         assert page.result.value == {'status': 'waiting', 'text': 'Výsledek nového kontextu'}

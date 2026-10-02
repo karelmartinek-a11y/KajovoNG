@@ -8,6 +8,7 @@ from kajovo.core.batch_completion import complete_saved_batch
 from kajovo.core.config import AppSettings
 from kajovo.core.contracts import ContractError
 from kajovo.core.run_bundle import RunBundle
+from kajovo.core.runs.locking import ExecutionLock
 
 
 @pytest.mark.parametrize('damage', ['changed_artifact', 'foreign_metadata', 'missing_manifest'])
@@ -15,8 +16,9 @@ def test_batch_import_rejects_damaged_sealed_bundle_before_provider(tmp_path, da
     bundle = RunBundle(tmp_path/'RUN_BATCH', 'RUN_BATCH', create=True)
     state = {'mode': 'GENERATE', 'status': 'batch_pending', 'batch_id': 'batch_owned',
              'out_dir': str(tmp_path/'OUT'), 'ui_state': {}, 'batch_records': {}, 'batch_imports': {}}
-    (bundle.root/'run_state.json').write_text(json.dumps(state))
-    (bundle.root/'execution.lock').touch()
+    (bundle.root/'run_state.json').write_text(json.dumps(state), encoding="utf-8")
+    with ExecutionLock(bundle.root/'execution.lock'):
+        pass
     source = bundle.root/'artifacts/inputs/source.txt'
     source.write_bytes(b'schvaleny obsah')
     bundle.seal()
@@ -24,9 +26,9 @@ def test_batch_import_rejects_damaged_sealed_bundle_before_provider(tmp_path, da
     if damage == 'changed_artifact':
         source.write_bytes(b'zameneny obsah')
     elif damage == 'foreign_metadata':
-        metadata = json.loads(bundle.bundle_path.read_text())
+        metadata = json.loads(bundle.bundle_path.read_text(encoding="utf-8"))
         metadata['run_id'] = 'RUN_FOREIGN'
-        bundle.bundle_path.write_text(json.dumps(metadata))
+        bundle.bundle_path.write_text(json.dumps(metadata), encoding="utf-8")
     else:
         bundle.checksums_path.unlink()
     before = {str(p.relative_to(bundle.root)): p.read_bytes() for p in bundle.root.rglob('*') if p.is_file()}
@@ -64,7 +66,7 @@ def test_refresh_of_sealed_batch_preserves_manifest(tmp_path):
     bundle = RunBundle(tmp_path/'RUN_REFRESH', 'RUN_REFRESH', create=True)
     state = {'mode': 'GENERATE', 'status': 'batch_pending', 'batch_id': 'batch_owned',
              'ui_state': {}, 'batch_records': {}, 'batch_imports': {}}
-    (bundle.root/'run_state.json').write_text(json.dumps(state))
+    (bundle.root/'run_state.json').write_text(json.dumps(state), encoding="utf-8")
     bundle.seal()
     assert bundle.verify_integrity()['valid']
     assert remember_remote_batch_state(bundle.root, {'id': 'batch_owned', 'status': 'completed'})
@@ -81,12 +83,12 @@ def test_batch_panel_keeps_healthy_run_when_other_bundle_is_corrupt(qtbot, tmp_p
         bundle = RunBundle(tmp_path/'LOG'/('RUN_'+suffix), 'RUN_'+suffix, create=True)
         state = {'mode': 'GENERATE', 'status': 'batch_pending', 'batch_id': 'batch_'+suffix,
                  'ui_state': {}, 'batch_records': {}, 'batch_imports': {}}
-        (bundle.root/'run_state.json').write_text(json.dumps(state))
+        (bundle.root/'run_state.json').write_text(json.dumps(state), encoding="utf-8")
         bundle.seal()
         bundles.append(bundle)
-    metadata = json.loads(bundles[0].bundle_path.read_text())
+    metadata = json.loads(bundles[0].bundle_path.read_text(encoding="utf-8"))
     metadata['run_id'] = 'RUN_FOREIGN'
-    bundles[0].bundle_path.write_text(json.dumps(metadata))
+    bundles[0].bundle_path.write_text(json.dumps(metadata), encoding="utf-8")
     bad_before = {str(p.relative_to(bundles[0].root)): p.read_bytes() for p in bundles[0].root.rglob('*') if p.is_file()}
     client = Mock()
     client.list_batches.return_value = [{'id': 'batch_'+s, 'status': 'completed'} for s in ['BAD', 'GOOD']]
